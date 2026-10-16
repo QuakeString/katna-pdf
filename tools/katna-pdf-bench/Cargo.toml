@@ -1,0 +1,15 @@
+[package]
+name = "katna-pdf-bench"
+description = "Times opening and drawing PDFs, against the speed budgets in docs/PLAN.md §2.4."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+katna-pdf-render.workspace = true
+
+[lints]
+workspace = true

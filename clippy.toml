@@ -1,0 +1,5 @@
+# Lengths go through katna_ui::px, which applies Settings > Appearance >
+# Scaling, as in Katna Mail.
+disallowed-methods = [
+    { path = "gpui::px", reason = "use katna_ui::px, which applies the interface scale" },
+]
