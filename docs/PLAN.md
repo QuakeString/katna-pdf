@@ -1,6 +1,6 @@
 # katna-pdf: Product and Engineering Plan
 
-*Draft 4, 2026-10-16 (adds the SumatraPDF speed study, the pure-Rust signing stack and the CAD drawing pipeline). No repository exists yet; this is the starting plan.*
+*Draft 5, 2026-10-16. Separate repository in the Katna family; see §2.2 and §2.6.*
 
 katna-pdf is a cross-platform PDF **viewer, editor, signer and library manager** written in Rust with a GPUI interface. The targets are:
 
@@ -47,15 +47,13 @@ Platform priority: **Linux and Windows first**, with macOS supported from the sa
 
 ### 2.2 Workspace and crate layout
 
-katna-pdf lives **inside the Katna repository** (decided 2026-10-16), as an app beside Katna Mail and Katna Calendar. It shares one workspace, one GPUI pin, one CI, one `deny.toml` and one Setup.
+katna-pdf lives in **its own repository**, `QuakeString/katna-pdf`, separate from Katna Mail (decided 2026-10-16). It still reuses Katna's shared UI crates so the two apps look alike (§2.6).
 
 ```
-katna/                               (QuakeString/katna)
+katna-pdf/                           (QuakeString/katna-pdf)
 ├─ apps/
-│  ├─ katna-mail/  katna-calendar/  katna-daemon/   (existing)
 │  └─ katna-pdf/                     # the app: GPUI window, tabs, modes, settings, single-instance
 ├─ crates/
-│  ├─ katna-ui/  katna-chrome/  katna-platform/  katna-i18n/  katna-dbus/   (existing, shared)
 │  ├─ katna-pdf-ui/                  # PDF views: page canvas, thumbnails, sidebars, organizer grid
 │  ├─ katna-pdf-core/                # Document model, command bus, undo/redo, selection, autosave
 │  ├─ katna-pdf-cos/                 # PDF object layer: parser, xref (streams), object streams,
@@ -77,10 +75,19 @@ katna/                               (QuakeString/katna)
 │  └─ katna-pdf-cli/                 # headless merge/split/sign/verify/ocr/optimize
 ├─ server/
 │  └─ katna-pdf-esign-gateway/       # Aadhaar eSign ASP gateway (§4.4)
-└─ docs/PDF.md                       # this plan
+├─ parity/features.toml              # machine-checked feature checklist (§6)
+└─ docs/PLAN.md                      # this plan
+
+Shared with Katna (git dependency on QuakeString/katna, pinned to a revision):
+  katna-ui, katna-chrome, katna-platform, katna-i18n, katna-dbus
 ```
 
-GPUI stays limited to `katna-ui`, `katna-chrome`, `katna-pdf-ui` and the `katna-pdf` app (added to Katna's `deny.toml` wrappers list). Katna's rule that "only `katna-daemon` writes the databases and talks to the network" covers mail data. katna-pdf keeps its own library database and does its own TSA, OCSP and eSign requests. It uses the daemon only for what the daemon already owns: accounts and cloud drives (§4.6).
+**How the sharing works.**
+- `Cargo.toml` takes Katna's shared crates as git dependencies pinned to one Katna revision.
+- Cargo applies `[patch]` sections only from the top-level workspace, so Katna's patched GPUI (`gpui-pre` under `vendor/`) does not come along automatically. katna-pdf copies Katna's `[patch.crates-io]` entries and points them at the same Katna revision's `vendor/` folders, so both apps build against identical GPUI.
+- A small CI job bumps the Katna revision on purpose and checks that both still build.
+
+Katna's own rules are adopted as house rules (§2.6). GPUI is allowed only in `katna-pdf-ui` and the app. katna-pdf keeps its own library database and makes its own TSA, OCSP and eSign requests. It talks to `katna-daemon` only for what the daemon owns: accounts and cloud drives (§4.6). That part is optional; without Katna Mail installed, katna-pdf works fully on local files.
 
 ### 2.3 Core internals
 
@@ -195,7 +202,7 @@ katna-pdf is part of the Katna family and must look and feel like Katna Mail on 
   - `area: summary` commit messages
   - Fluent translations through `katna_i18n::tr!`
 
-**Work needed in Katna first.** Katna Mail's `Theme` (`apps/katna-mail/src/theme.rs`) and its shared controls (`widgets.rs`: buttons, fields, menus, dialogs, cards, tiles, switches) still live inside the Mail app. Katna's design doc already plans to move them into `katna-ui` "as they are shared beyond Mail". katna-pdf is that moment: Phase 0 moves `Theme` and the widgets into `katna-ui`, one PR per control as Katna's design doc asks. Living in the same repository, katna-pdf always builds against the current versions.
+**Work needed in Katna first.** Katna Mail's `Theme` (`apps/katna-mail/src/theme.rs`) and its shared controls (`widgets.rs`: buttons, fields, menus, dialogs, cards, tiles, switches) still live inside the Mail app. Katna's design doc already plans to move them into `katna-ui` "as they are shared beyond Mail". katna-pdf is that moment: Phase 0 moves `Theme` and the widgets into `katna-ui`, one PR per control as Katna's design doc asks. katna-pdf then picks them up by bumping its pinned Katna revision.
 
 ---
 
@@ -522,7 +529,7 @@ PDF/A and PDF/UA, conversions, batch "Actions", JavaScript subset, a hayro backe
 | Risk | Impact | Mitigation |
 |---|---|---|
 | **GPUI is pre-1.0**: API churn, thin docs, and Zed's needs come first | Medium | Use Katna's vendored, patched `gpui-pre` pin, which Katna Mail already ships on Linux and Windows. Upgrade both apps together. Keep GPUI code inside the `katna-pdf` app and `katna-pdf-ui`; the core crates stay GUI-agnostic. |
-| **A shared-crate change breaks katna-pdf** (one repo, many apps) | Low | Katna's CI builds and tests every app on each PR, so a break is caught before merge. |
+| **A Katna shared-crate change breaks katna-pdf** (two repos) | Medium | Pin Katna by revision and bump deliberately, with a CI job that builds katna-pdf against Katna's latest `main` and warns early. |
 | **GPUI accessibility** (screen readers) is still immature | Medium | Track the upstream AccessKit work. Make keyboard-only use and high contrast solid now. Contribute upstream if needed. |
 | **GPUI printing / IME / file dialogs** have gaps on some platforms | Medium | Use `rfd` for dialogs and platform-native print code paths. Test Indic IME input early. |
 | **In-place text editing is hard**: subset fonts, odd encodings, missing glyphs | High | Scope it per text block. Fall back to font substitution with a visible warning. Build a large regression corpus. Ship it last (Phase 4). |
@@ -546,4 +553,4 @@ PDF/A and PDF/UA, conversions, batch "Actions", JavaScript subset, a hayro backe
 2. ~~**Repository:**~~ Done: github.com/QuakeString/katna-pdf.
 3. **DSC hardware on hand:** which token(s) do you own? That decides the first native driver we build (ePass2003 is the easiest) or the first vendor module we test against.
 4. ~~**Aadhaar eSign:**~~ Yes, in scope (§4.4). Still open: who will register as the ASP and which ESP to contract with. This is needed before eSign goes live, not before development starts.
-5. ~~**Where katna-pdf's code lives:**~~ Inside the Katna repo as `apps/katna-pdf` (§2.2). The `QuakeString/katna-pdf` repo keeps only a pointer.
+5. ~~**Where katna-pdf's code lives:**~~ Its own repo, `QuakeString/katna-pdf`, reusing Katna's UI crates by git (§2.2).
