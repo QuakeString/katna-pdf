@@ -1,6 +1,6 @@
 # katna-pdf: Product and Engineering Plan
 
-*Draft 2, 2026-10-16 (adds the SumatraPDF speed study). No repository exists yet; this is the starting plan.*
+*Draft 3, 2026-10-16 (adds the SumatraPDF speed study and the pure-Rust signing stack). No repository exists yet; this is the starting plan.*
 
 katna-pdf is a cross-platform PDF **viewer, editor, signer and library manager** written in Rust with a GPUI interface. The targets are:
 
@@ -37,7 +37,7 @@ Platform priority: **Linux and Windows first**, with macOS supported from the sa
 │         ▼                                                                        │
 │  Tile cache (GPU textures) ◄── render client ──IPC──► katna-render-worker (xN)   │
 │                                                        PDFium, sandboxed,        │
-│  Signing service (PKCS#11 / CNG / Keychain)            restartable on crash      │
+│  Signing service (pure Rust; token via APDU or vendor PKCS#11) restartable       │
 │  Library service (SQLite + Tantivy + file watcher)                               │
 └──────────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -64,10 +64,11 @@ katna-pdf/
 │  ├─ katna-annot/        # all annotation types: model, appearance-stream generation
 │  ├─ katna-forms/        # AcroForm fill, field designer, calculations (JS subset)
 │  ├─ katna-sign/         # CMS/PAdES builder, signature appearances, DocMDP/FieldMDP, TSA client
-│  │  ├─ keystore-pkcs11  # cryptoki: USB tokens / smart cards (Indian DSC)
-│  │  ├─ keystore-cng     # Windows certificate store / CNG / smart-card minidrivers
-│  │  ├─ keystore-macos   # Keychain / CryptoTokenKit
-│  │  └─ keystore-file    # PKCS#12 (.pfx/.p12)
+│  │  ├─ token-apdu       # pure-Rust card drivers (ePass2003, PIV, OpenPGP) over PC/SC or USB CCID
+│  │  ├─ token-pkcs11     # fallback: load the token vendor's PKCS#11 module directly (cryptoki)
+│  │  ├─ keystore-file    # pure-Rust PKCS#12 (.pfx/.p12)
+│  │  ├─ trust-store      # katna's own trust store (bundled CCA India roots)
+│  │  └─ keystore-os      # optional, off by default: Windows CNG store, macOS Keychain
 │  ├─ katna-validate/     # signature validation: chain, OCSP/CRL, LTV/DSS, trust lists
 │  ├─ katna-ocr/          # OCR backend trait: Tesseract (leptess) + ocrs (pure Rust)
 │  ├─ katna-convert/      # images ⇄ PDF, PDF → text/HTML/Markdown, Office via LibreOffice (optional)
@@ -156,10 +157,11 @@ SumatraPDF is the benchmark for "opens instantly, big file or small". We studied
 | Need | Choice |
 |---|---|
 | GUI | `gpui` (Zed, Apache-2.0), pinned to a git revision; **`gpui-component`** (Longbridge, Apache-2.0) for inputs, tables, docks, menus and color pickers |
-| PKCS#11 | `cryptoki` (Apache/MIT) |
-| Windows certificate store | `windows` crate (NCrypt/CNG, CertStore) |
-| macOS keychain | `security-framework` |
-| HTTP (TSA/OCSP/CRL) | `reqwest` with rustls; platform root certificates via `rustls-platform-verifier` |
+| Signing crypto (all pure Rust) | RustCrypto `cms`, `x509-cert`, `der`, `pkcs12`, `rsa`, `p256`/`p384`, `sha2`; no OpenSSL, no NSS |
+| Smart-card transport | `pcsc` (talks to the OS smart-card service) and `nusb` (pure-Rust USB, for a built-in CCID reader driver on Linux) |
+| Vendor-token fallback | `cryptoki` (loads the token vendor's PKCS#11 module directly; no p11-kit, no NSS) |
+| Optional OS stores | `windows` crate (CNG), `security-framework` (macOS); off by default |
+| HTTP (TSA/OCSP/CRL) | `reqwest` with rustls (pure Rust TLS); katna's own root store, no system crypto library |
 | OCR | `leptess` (Tesseract 5, with `hin`, `ben`, `tam` and other Indic traineddata) with `ocrs` as a pure-Rust fallback |
 | Catalog | `rusqlite` (bundled), `tantivy` (full-text search), `notify` (folder watcher), `blake3` (deduplication) |
 | Text-to-speech | `tts` crate (SAPI / Speech Dispatcher / AVSpeech) |
@@ -231,23 +233,41 @@ Priority tags: **P0** = MVP, **P1** = v1.0, **P2** = after v1.0.
 
 This is a first-class feature, built for India and international use alike.
 
-**Keystores**
-- **PKCS#11 (all platforms).** Probe the known module paths for Indian DSC tokens. Let the user add a custom `.so`, `.dll` or `.dylib`. Known modules:
+**Everything is built in and pure Rust**
 
-  | Token | Windows | Linux |
-  |---|---|---|
-  | ePass2003 (Feitian) | `eps2003csp11.dll` | `libcastle.so.1.0.0` |
-  | ProxKey (Watchdata) | `SignatureP11.dll` / `wdpkcs.dll` | `libwdpkcs_*.so` |
-  | mToken (Longmai) | `CryptoIDA_pkcs11.dll` | `libcryptoid_pkcs11.so` |
-  | HYP2003 / HyperPKI | `HypersecurP11.dll` | `libhyp2003*.so` |
-  | SafeNet eToken 5110 | `eTPKCS11.dll` | `libeToken.so` |
-  | Generic smart cards | — | OpenSC `opensc-pkcs11.so`; `p11-kit-proxy.so` |
+katna depends on no external key store or crypto library. That means no Firefox/NSS database (which Okular uses), no OpenSSL, no Java signer and no browser extension. Everything below is katna's own Rust code:
 
-  *Filenames vary by driver version, so ship them as a data file that is easy to update, not hard-coded.*
-- **Windows certificate store / CNG.** Many Indian users already see their DSC in `certmgr` through the vendor's CSP or minidriver. Signing through CNG supports them with zero setup.
-- **macOS:** Keychain and CryptoTokenKit, plus PKCS#11.
-- **PKCS#12 files** (`.pfx`/`.p12`) for software certificates.
-- **UX:** an auto-detected token list, certificate picker (subject, issuer, validity, key usage, class), secure PIN entry, and clear errors for "token locked", "wrong PIN, N tries left" and "driver not found, install from…".
+- The CMS/PAdES signature builder, hashing and RSA/ECDSA verification
+- PKCS#12 (`.pfx`/`.p12`) parsing and software-key signing
+- katna's own trust store, shipped with the CCA India roots and managed inside the app
+- TSA, OCSP and CRL clients over rustls
+- All validation logic, and the PIN entry dialog
+
+**Talking to the USB token: the one unavoidable boundary**
+
+A DSC token's private key never leaves the token. The token signs a hash itself, so katna must speak to it. katna does this in three tiers, tried in order:
+
+1. **Native token drivers, pure Rust (preferred).** katna talks to the token directly with smart-card commands (APDUs). This needs no vendor software at all. It works for tokens whose card protocol is known:
+   - **ePass2003** (Feitian): the protocol, including its secure-messaging layer, is publicly documented through the OpenSC project. We reimplement it in Rust from the documentation, not by copying OpenSC's LGPL code.
+   - **Standard PIV and OpenPGP cards**, such as YubiKey and Nitrokey.
+
+   The transport is the operating system's own smart-card service. That is WinSCard, part of Windows; pcsc-lite on Linux; and the built-in smart-card framework on macOS. These are OS components, not apps. On Linux, katna can also drive the USB reader directly through a built-in pure-Rust CCID driver, for systems without `pcscd`.
+
+2. **The token vendor's PKCS#11 driver (fallback).** ProxKey, mToken, HyperPKI and SafeNet eToken use closed, undocumented card protocols. For them, katna loads the vendor's driver library directly in-process. This is the same driver that ships on the token and that every signing app needs. katna uses no p11-kit, no NSS and no middleware in between. Known modules:
+
+   | Token | Windows | Linux |
+   |---|---|---|
+   | ePass2003 (Feitian) | `eps2003csp11.dll` | `libcastle.so.1.0.0` |
+   | ProxKey (Watchdata) | `SignatureP11.dll` / `wdpkcs.dll` | `libwdpkcs_*.so` |
+   | mToken (Longmai) | `CryptoIDA_pkcs11.dll` | `libcryptoid_pkcs11.so` |
+   | HYP2003 / HyperPKI | `HypersecurP11.dll` | `libhyp2003*.so` |
+   | SafeNet eToken 5110 | `eTPKCS11.dll` | `libeToken.so` |
+
+   *Filenames vary by driver version, so they live in an easily updated data file, not in code. Users can also point katna at a custom module.* Each token moved into tier 1 removes one vendor dependency. Adding native drivers for more Indian tokens is ongoing work after v1.0 and depends on how open each vendor's protocol is.
+
+3. **The OS certificate store (optional, off by default).** Windows CNG and the macOS Keychain, for users who prefer them. katna never requires them.
+
+**UX:** an auto-detected token list that shows which tier each token uses, a certificate picker (subject, issuer, validity, key usage, class), secure PIN entry, and clear errors for "token locked", "wrong PIN, N tries left" and "no driver for this token: built-in support planned / install the vendor driver".
 
 **Creating signatures**
 - **P0:** Approval signatures, **PAdES B-B**: `ETSI.CAdES.detached` CMS with the signing-certificate-v2 attribute, SHA-256/384/512, and RSA PKCS#1 v1.5, RSA-PSS or ECDSA keys. Draw a new field or sign an existing one. Saved incrementally.
@@ -317,7 +337,7 @@ The aim is Okular's functionality with a cleaner, modern design:
 
 | Platform | Packages | Notes |
 |---|---|---|
-| **Linux** | Flatpak (Flathub), AppImage, `.deb`, `.rpm`, AUR | GPUI renders with Vulkan (Blade) on Wayland and X11. **Flatpak and USB tokens:** needs `--device=all` or pcscd socket access plus host PKCS#11 modules through `p11-kit`. Document that native packages are the smoothest route for DSC users. |
+| **Linux** | Flatpak (Flathub), AppImage, `.deb`, `.rpm`, AUR | GPUI renders with Vulkan (Blade) on Wayland and X11. **Flatpak and USB tokens:** needs `--device=all` or pcscd socket access. Native-driver tokens then work inside the sandbox; vendor PKCS#11 tokens also need the host's driver library exposed. Document that native packages are the smoothest route for DSC users. |
 | **Windows 10/11** | MSI (WiX) and MSIX, winget | GPUI's DirectX 11 backend. Code-sign the installer with an OV/EV certificate (SmartScreen). Register as a PDF handler and add a thumbnail provider (P2). |
 | **macOS 12+** | Notarized `.dmg`, Homebrew cask | Metal backend. Universal binary. |
 
@@ -331,7 +351,7 @@ The aim is Okular's functionality with a cleaner, modern design:
 - **Golden-image tests** for rendering and recolor filters, using a perceptual diff threshold.
 - **Round-trip tests:** after each edit, the result must re-open in PDFium, `qpdf --check` and Acrobat. Signed output must validate in Adobe Acrobat, EU DSS and pyHanko.
 - **Fuzzing:** `cargo-fuzz` on the `katna-cos` lexer and parser, content-stream parser, CMS parser and xref repair.
-- **Hardware matrix for DSC:** at least ePass2003, ProxKey and mToken on Windows and Ubuntu, tested manually per release. SoftHSM2 runs in CI for automated PKCS#11 tests.
+- **Hardware matrix for DSC:** at least ePass2003, ProxKey and mToken on Windows and Ubuntu, tested manually per release. SoftHSM2 runs in CI for automated PKCS#11 tests, and a virtual smart card (vsmartcard / jCardSim with a PIV applet) tests the native APDU path.
 
 ---
 
@@ -363,7 +383,7 @@ Durations below assume 1–2 full-time developers and are rough sizing, not comm
 - **Milestone M2 (v0.3):** a daily driver for reading and reviewing.
 
 ### Phase 3: Signing (≈8–10 weeks)
-- PKCS#11 (Indian DSC), Windows certificate store, PKCS#12.
+- Pure-Rust signing core, PKCS#12, native ePass2003 and PIV drivers, vendor PKCS#11 fallback for other Indian tokens.
 - PAdES B-B and B-T, visible appearances, signature panel and validation (integrity, chain, revocation, CCA roots).
 - Batch signing, and `katna sign` / `katna verify` in the CLI.
 - Interop sign-off against Acrobat, EU DSS and pyHanko.
@@ -398,7 +418,8 @@ PDF/A and PDF/UA, conversions, batch "Actions", JavaScript subset, Aadhaar eSign
 | **In-place text editing is hard**: subset fonts, odd encodings, missing glyphs | High | Scope it per text block. Fall back to font substitution with a visible warning. Build a large regression corpus. Ship it last (Phase 4). |
 | **PDFium is slower than MuPDF and single-threaded per process** | Medium | §2.4 techniques plus a worker-process pool. The Phase 0 bake-off decides whether to switch engines. |
 | **PDFium crashes or is not thread-safe** | Medium | Out-of-process workers with automatic restart. Never share an instance across threads. |
-| **DSC driver quirks** (vendor PKCS#11 bugs, 32/64-bit DLL mismatch, missing Linux drivers) | High for the Indian market | Data-driven module list, a "Diagnose token" tool, the Windows certificate-store path as a fallback, and a real-hardware test matrix. |
+| **DSC driver quirks** (vendor PKCS#11 bugs, 32/64-bit DLL mismatch, missing Linux drivers) | High for the Indian market | Native pure-Rust drivers where the protocol is known, a data-driven vendor module list otherwise, a "Diagnose token" tool, and a real-hardware test matrix. |
+| **Closed token protocols** keep some tokens tied to the vendor driver | Medium | Tier 2 fallback always works. Native drivers are added token by token, only from public documentation or the vendor's cooperation. |
 | **Flatpak sandbox blocks USB tokens** | Medium | Document the needed permissions. Recommend native `.deb`/`.rpm` for signers. Test p11-kit forwarding. |
 | **Signature interop** (Acrobat shows "validity unknown" and similar) | High | Strict PAdES conformance and validation against Acrobat, DSS and pyHanko in CI. Embed the full chain and revocation data by default. |
 | **Feature scope is enormous** | High | Strict P0/P1/P2 gates. Each phase ships something usable. The CLI allows early automated testing. |
@@ -411,5 +432,5 @@ PDF/A and PDF/UA, conversions, batch "Actions", JavaScript subset, Aadhaar eSign
 
 1. **App license and engine:** Apache-2.0/MIT with PDFium, or AGPL-3.0 with MuPDF? *Recommendation: let the Phase 0 bake-off decide. Default is Apache/MIT with PDFium; switch to AGPL with MuPDF only if it is clearly faster and you are fine with AGPL.*
 2. ~~**Repository:**~~ Done: github.com/QuakeString/katna-pdf.
-3. **DSC hardware on hand:** which token(s) do you own? That decides the first PKCS#11 module we test against.
+3. **DSC hardware on hand:** which token(s) do you own? That decides the first native driver we build (ePass2003 is the easiest) or the first vendor module we test against.
 4. **Aadhaar eSign:** is it wanted at all? It needs a commercial ESP agreement.
