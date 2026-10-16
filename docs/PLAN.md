@@ -1,6 +1,6 @@
 # katna-pdf: Product and Engineering Plan
 
-*Draft 6, 2026-10-16 (adds the 838-feature comparison, §4.8). Separate repository in the Katna family; see §2.2 and §2.6.*
+*Draft 7, 2026-10-16 (adds OCR and Live Text, §4.9). Separate repository in the Katna family; see §2.2 and §2.6.*
 
 katna-pdf is a cross-platform PDF **viewer, editor, signer and library manager** written in Rust with a GPUI interface. The targets are:
 
@@ -67,7 +67,7 @@ katna-pdf/                           (QuakeString/katna-pdf)
 │  ├─ katna-pdf-sign/                # CMS/PAdES builder, appearances, DocMDP/FieldMDP, TSA client,
 │  │                                 #   token-apdu, token-pkcs11, keystore-file, trust-store, keystore-os
 │  ├─ katna-pdf-validate/            # validation: chain, OCSP/CRL, LTV/DSS, trust lists
-│  ├─ katna-pdf-ocr/                 # OCR: Tesseract + ocrs
+│  ├─ katna-pdf-ocr/                 # OCR and Live Text: ocrs/rten models, Tesseract optional
 │  ├─ katna-pdf-convert/             # images ⇄ PDF, PDF → text/HTML/Markdown
 │  └─ katna-pdf-library/             # catalog (SQLite), full-text index (Tantivy), watcher, thumbnails
 ├─ tools/
@@ -246,7 +246,7 @@ The fastest engine that renders the test corpus correctly wins. One may be used 
 | Vendor-token fallback | `cryptoki` (loads the token vendor's PKCS#11 module directly; no p11-kit, no NSS) |
 | Optional OS stores | `windows` crate (CNG), `security-framework` (macOS); off by default |
 | HTTP (TSA/OCSP/CRL) | `reqwest` with rustls (pure Rust TLS); katna's own root store, no system crypto library |
-| OCR | `leptess` (Tesseract 5, with `hin`, `ben`, `tam` and other Indic traineddata) with `ocrs` as a pure-Rust fallback |
+| OCR | Pure Rust first: `ocrs` (detection and recognition on the `rten` runtime) for Latin script, plus PaddleOCR (PP-OCR) recognition models run on `rten` for Indic scripts. Tesseract 5 through `leptess` is an optional, off-by-default backend for scripts no Rust-run model covers well. Phase 0 measures accuracy per script on our own scans and picks per script (§4.9) |
 | Catalog | `rusqlite` (bundled), `tantivy` (full-text search), `notify` (folder watcher), `blake3` (deduplication) |
 | Text-to-speech | `tts` crate (SAPI / Speech Dispatcher / AVSpeech) |
 | Settings | `serde` + TOML in XDG / AppData / Application Support |
@@ -304,7 +304,7 @@ Priority tags: **P0** = MVP, **P1** = v1.0, **P2** = after v1.0.
 - **P1:** Security: password-protect (AES-256), change permissions, remove protection when the password is known.
 - **P1: True redaction.** Search-and-redact and pattern redaction (PAN, Aadhaar, phone numbers, email). It removes the underlying text, image pixels and vector content, not just draws boxes on top. It also sanitizes metadata, hidden layers, JavaScript and attachments.
 - **P1:** Forms designer: text, checkbox, radio, combo, list, button and signature fields. Tab order. Calculation scripts. Import and export form data (FDF/XFDF/JSON/CSV).
-- **P1:** OCR scanned documents into an invisible searchable text layer. Deskew and despeckle.
+- **P0:** OCR scanned documents and photos into an invisible searchable text layer, and select text inside pictures without changing the file (§4.9).
 - **P1:** Optimize and compress: downsample images, recompress with JPEG/JPEG2000/JBIG2, subset fonts, remove unused objects, linearize for fast web view.
 - **P2:** Layer (OCG) editing. Edit embedded files. Document JavaScript editor.
 - **P2:** PDF/A-1b/2b/3b conversion and validation. Validation can call veraPDF when it is installed. PDF/UA checks.
@@ -479,6 +479,22 @@ We checked the plan against a full list of 838 PDF workbench features (`parity/f
 - **Printing:** print preview (Windows has none built in), booklet, n-up, grayscale, print as image, and print selected thumbnails.
 - **Family touches:** "Send with Katna Mail", disabled commands that explain why, and new document from the clipboard or blank.
 
+### 4.9 OCR and Live Text (asked for by Mozammel)
+
+Two things, both on the device, nothing uploaded:
+
+1. **OCR a scan or a photo.** Scanned PDFs, and photos opened directly (JPG, PNG, WebP, TIFF, HEIC where the OS decodes it), get a text layer. For photos taken with a phone: find the page edges, straighten the perspective, deskew, despeckle and whiten the background before recognition. "Make searchable" writes the text as an invisible layer (text render mode 3) under the page image, so the file looks the same but search, copy and screen readers work. It can save as a new PDF from photos, several photos as several pages.
+2. **Live Text: select text in any picture, without OCRing the file first.** Like Live Text on a phone: point at a picture in any PDF, such as a scanned page, a photo of a signboard inside a report, or a chart with labels, and the cursor turns into a text cursor where words are. Drag to select, copy, search, look up, or read aloud.
+   - It runs in the background on the visible pages, picture by picture, at low priority, so scrolling and zooming never wait for it.
+   - Results are cached by the picture's hash in Katna's cache folder, not written into the PDF, so a signed file stays unchanged. Opening the same file again, or the same picture in another file, is instant.
+   - Search in a document includes text found in pictures, marked as "found in a picture".
+   - Text in pictures has the same selection colours and handles as real text, so people don't need to know the difference. A small "Text found in picture" chip appears the first time, with "Make searchable" to save it into the file.
+   - Pages that already have real text are skipped, except for pictures on them.
+
+**Languages:** English and Hindi first, then Bengali, Tamil, Telugu, Marathi, Gujarati, Kannada, Malayalam, Punjabi and Odia. Mixed-language pages (English and a regional language on one page, common in Indian forms) are detected per line.
+
+**Speed budget:** text in a visible picture becomes selectable within 1 s on a mid-range laptop, and a 100-page scan is made searchable in under 1 minute using all cores (measured in Phase 0 and tracked in `katna-pdf-bench`).
+
 **What we skip:** Adobe cloud services, prepress (PDF/X, separations, trapping), 3D, dynamic XFA, and AI features.
 
 ---
@@ -525,6 +541,7 @@ Durations below assume 1–2 full-time developers and are rough sizing, not comm
 - Single-instance handoff, lazy open (page sizes only), LIFO render queue with cancellation.
 - Move Katna Mail's `Theme` and shared widgets into `katna-ui` (PRs in the Katna repo). Then build the katna-pdf window from them, with Katna's chrome, schemes and shared appearance settings.
 - `katna-pdf-cos` v0: parse, xref streams, incremental append writer.
+- OCR bake-off: `ocrs` and PP-OCR models on `rten` against Tesseract, per script, on our own scans and phone photos (English, Hindi, Bengali first), for accuracy and speed (§4.9).
 - **Milestone M0:** open a PDF and scroll it smoothly on Linux and Windows, in light and dark themes, within the §2.4 budgets. Engine and license decided from the bake-off.
 
 ### Phase 1: MVP viewer (≈8–10 weeks)
@@ -540,6 +557,7 @@ Durations below assume 1–2 full-time developers and are rough sizing, not comm
 - Page operations: organizer grid, merge, split, insert, rotate, crop.
 - Render workers moved to separate processes.
 - `katna` CLI (merge, split, info).
+- OCR and Live Text (§4.9) for English and Hindi: text in pictures is selectable and searchable; "Make searchable"; photos open as pages.
 - **Milestone M2 (v0.3):** a daily driver for reading and reviewing.
 
 ### Phase 3: Signing (≈8–10 weeks)
@@ -557,7 +575,7 @@ Durations below assume 1–2 full-time developers and are rough sizing, not comm
 
 ### Phase 5: Library, OCR and polish to v1.0 (≈8–10 weeks)
 - Library view, watched folders, tags, smart collections, full-text search, duplicate detection.
-- OCR with Indic languages. Optimize and compress.
+- OCR and Live Text for the other Indic languages (§4.9). Optimize and compress.
 - PAdES B-LT/B-LTA, certification signatures.
 - Compare documents, measuring tools with CAD snapping, read aloud, presentation mode.
 - Aadhaar eSign: client flow and `katna-pdf-esign-gateway`, first tested in an ESP's sandbox (production needs the ASP agreement).
@@ -599,3 +617,4 @@ PDF/A and PDF/UA, conversions, batch "Actions", JavaScript subset, a hayro backe
 3. **DSC hardware on hand:** which token(s) do you own? That decides the first native driver we build (ePass2003 is the easiest) or the first vendor module we test against.
 4. ~~**Aadhaar eSign:**~~ Yes, in scope (§4.4). Still open: who will register as the ASP and which ESP to contract with. This is needed before eSign goes live, not before development starts.
 5. ~~**Where katna-pdf's code lives:**~~ Its own repo, `QuakeString/katna-pdf`, reusing Katna's UI crates by git (§2.2).
+6. **OCR languages:** English and Hindi come first (§4.9). Which regional language matters most to you after those?
