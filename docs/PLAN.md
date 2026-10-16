@@ -1,6 +1,6 @@
 # katna-pdf: Product and Engineering Plan
 
-*Draft 1, 2026-10-16. No repository exists yet; this is the starting plan.*
+*Draft 2, 2026-10-16 (adds the SumatraPDF speed study). No repository exists yet; this is the starting plan.*
 
 katna-pdf is a cross-platform PDF **viewer, editor, signer and library manager** written in Rust with a GPUI interface. The targets are:
 
@@ -86,6 +86,47 @@ katna-pdf/
 - **Tiles.** Pages are rendered as 256 or 512 px tiles at device scale and grouped into zoom buckets. An LRU cache keeps tiles as GPU textures under a memory budget. While the user zooms, the view shows the scaled lower-resolution tiles until crisp ones arrive.
 - **Async work.** GPUI's executor runs async tasks. CPU-heavy jobs (OCR, compression, indexing) run on a rayon pool and report progress through a job center UI that can cancel them.
 
+### 2.4 Speed design (lessons from SumatraPDF)
+
+SumatraPDF is the benchmark for "opens instantly, big file or small". We studied its source (commit `9edfa44`, Oct 2026). Its speed comes from a set of deliberate habits, not from one trick. katna adopts each of them. *SumatraPDF is GPLv3, so we copy ideas, not code.*
+
+**Startup**
+- One small native binary with everything statically linked. No runtime to boot, no plugins scanned, no fonts enumerated at launch.
+- The window appears first. Everything else is deferred to background tasks: update checks, recent-file thumbnails, folder scans, printer lists.
+- **Single instance.** A second launch (for example double-clicking another PDF) hands the path to the already-running process and exits immediately, so a new tab opens with no process start cost. katna does the same over a local socket or named pipe.
+
+**Opening a document**
+- Files under 32 MB are read into memory in one go. Larger files are streamed from disk on demand, so a 2 GB scan opens as fast as a 2 MB one.
+- At open time, only the cross-reference table and the page tree are read, plus each page's size from its page dictionary. **No page content is parsed until that page is about to be shown.** Outline, links, text and annotations are also loaded lazily.
+- Opening runs off the UI thread. The tab appears immediately with page placeholders at their correct sizes, and the password prompt is asynchronous.
+
+**Rendering**
+- **Parse once, draw many times.** Each visible page's parsed content is cached (MuPDF "display lists"). Zooming, tiling and re-rendering then replay that cache instead of re-parsing the content stream. In PDFium the equivalent is keeping `FPDF_PAGE` objects loaded for visible and nearby pages in an LRU.
+- **A small LIFO render queue.** At most 8 pending requests; the newest request (what is on screen now) is rendered first and the oldest is dropped when the queue is full. Visible pages are queued both before and after the predictive ones, so they always win.
+- **Cancel aggressively.** Each in-flight render carries an abort flag. When the user scrolls or zooms away, the render stops mid-page. PDFium supports this through progressive rendering with a pause callback (`FPDF_RenderPageBitmap_Start`).
+- **Predictive pre-render:** next and previous page, plus one more each way in two-page modes, at most 4 pages, anchored to what is visible.
+- **Never show a blank page.** While the crisp tile renders, the cache paints the nearest bitmap it has at another zoom, stretched. Zoom feels instant and sharpens a moment later.
+- Tiles are sized relative to the screen. If memory runs short, tile size is halved and rendering retried, instead of failing.
+- A bounded bitmap cache (Sumatra uses 128 entries) evicts off-screen tiles first.
+- **Parallelism:** up to 8 render threads, each with its own cloned engine context sharing the parsed document. PDFium cannot do this inside one process (see §3.1), which is why katna uses a pool of worker processes.
+
+**Night mode**
+- Sumatra's "smart" dark mode classifies each embedded image before deciding whether to recolor it. Page-sized images that look like scans (mostly bright paper) are recolored with the page; artwork and photos keep their colors. This confirms the smart night mode in §4.5 and gives us a tested heuristic: check border uniformity, brightness and bounding-box size.
+
+**Performance budgets for katna** (measured in CI on a reference corpus, on a mid-range laptop):
+
+| Metric | Budget |
+|---|---|
+| Cold start to empty window | < 250 ms |
+| Open a 1,000-page PDF to first page visible | < 300 ms |
+| Open a 1 GB scanned PDF to first page visible | < 500 ms |
+| Second file via single-instance handoff | < 100 ms |
+| Zoom change: stretched preview | next frame |
+| Zoom change: sharp | < 150 ms per visible page |
+| Idle memory with a 1,000-page PDF open | < 150 MB |
+
+**Also notable:** SumatraPDF's new cross-platform edition ("ng", targeting Linux, macOS and WebAssembly) is built on **GPUI**, through a C++ port of it. A mature, speed-obsessed PDF reader picking GPUI is a strong signal that GPUI suits this kind of app.
+
 ---
 
 ## 3. Engine choices
@@ -99,7 +140,9 @@ katna-pdf/
 | hayro (pure Rust) | Apache/MIT | Young but improving fast; no forms | None | Watch it. It is the long-term option for a pure-Rust renderer behind the same trait |
 | pdf.js / Poppler | Apache / GPL | — | — | Poppler is GPL and C++; not a good fit |
 
-**Decision:** use PDFium. Prebuilt binaries come from `bblanchon/pdfium-binaries`, are fetched by `xtask`, and ship next to the executable. Build without V8 or XFA at first (smaller, safer). A `RenderBackend` trait keeps hayro and MuPDF possible later.
+**Speed note.** MuPDF is the engine behind SumatraPDF's speed. It is faster and lighter than PDFium, its parsed-page cache can be replayed from many threads in one process, and its editing, redaction and signing APIs are richer. PDFium is single-threaded per process, so katna needs a worker-process pool to match. The price of MuPDF is the AGPL license (§3.4).
+
+**Decision:** use PDFium by default, and settle it with data. Phase 0 benchmarks both engines behind the `RenderBackend` trait against the §2.4 budgets. If MuPDF wins clearly and you are happy for katna to be AGPL, we switch to it. Prebuilt binaries come from `bblanchon/pdfium-binaries`, are fetched by `xtask`, and ship next to the executable. Build without V8 or XFA at first (smaller, safer). A `RenderBackend` trait keeps hayro and MuPDF possible later.
 
 ### 3.2 Object-level and writing libraries
 
@@ -125,7 +168,12 @@ katna-pdf/
 
 ### 3.4 Licensing recommendation
 
-License the app itself as **Apache-2.0 OR MIT**, or **GPL-3.0** if you want copyleft. Both work with PDFium. Choosing MuPDF would force AGPL or a paid license. That is the single biggest licensing fork in the plan, and this plan avoids it.
+The license and the engine are now one decision:
+
+- **Apache-2.0 OR MIT with PDFium:** anyone can reuse katna's code, including in closed products. Speed comes from the §2.4 techniques plus worker processes.
+- **AGPL-3.0 with MuPDF** (the SumatraPDF route): katna stays fully open source and anyone distributing a modified version must publish it. It gets the fastest engine and the richest editing API.
+
+Without benchmark data, the default is to license the app itself as **Apache-2.0 OR MIT**, or **GPL-3.0** if you want copyleft. Both work with PDFium. Choosing MuPDF would force AGPL or a paid license. That is the single biggest licensing fork in the plan, and this plan avoids it.
 
 ---
 
@@ -294,9 +342,11 @@ Durations below assume 1–2 full-time developers and are rough sizing, not comm
 ### Phase 0: Foundations (≈4–6 weeks)
 - Workspace, CI, `xtask` fetching PDFium binaries, `cargo deny`.
 - GPUI spike: window, tabs, a scrolling page list with tiled images on **Linux and Windows**. **This confirms the GUI choice early.**
+- Engine bake-off: PDFium and MuPDF behind `RenderBackend`, measured against the §2.4 budgets on the same corpus.
+- Single-instance handoff, lazy open (page sizes only), LIFO render queue with cancellation.
 - Design tokens, light and dark themes, base components.
 - `katna-cos` v0: parse, xref streams, incremental append writer.
-- **Milestone M0:** open a PDF and scroll it smoothly on Linux and Windows, in light and dark themes.
+- **Milestone M0:** open a PDF and scroll it smoothly on Linux and Windows, in light and dark themes, within the §2.4 budgets. Engine and license decided from the bake-off.
 
 ### Phase 1: MVP viewer (≈8–10 weeks)
 - Tile renderer and cache, zoom modes, page display modes, thumbnails, outline, links, search, text selection and copy.
@@ -346,6 +396,7 @@ PDF/A and PDF/UA, conversions, batch "Actions", JavaScript subset, Aadhaar eSign
 | **GPUI accessibility** (screen readers) is still immature | Medium | Track the upstream AccessKit work. Make keyboard-only use and high contrast solid now. Contribute upstream if needed. |
 | **GPUI printing / IME / file dialogs** have gaps on some platforms | Medium | Use `rfd` for dialogs and platform-native print code paths. Test Indic IME input early. |
 | **In-place text editing is hard**: subset fonts, odd encodings, missing glyphs | High | Scope it per text block. Fall back to font substitution with a visible warning. Build a large regression corpus. Ship it last (Phase 4). |
+| **PDFium is slower than MuPDF and single-threaded per process** | Medium | §2.4 techniques plus a worker-process pool. The Phase 0 bake-off decides whether to switch engines. |
 | **PDFium crashes or is not thread-safe** | Medium | Out-of-process workers with automatic restart. Never share an instance across threads. |
 | **DSC driver quirks** (vendor PKCS#11 bugs, 32/64-bit DLL mismatch, missing Linux drivers) | High for the Indian market | Data-driven module list, a "Diagnose token" tool, the Windows certificate-store path as a fallback, and a real-hardware test matrix. |
 | **Flatpak sandbox blocks USB tokens** | Medium | Document the needed permissions. Recommend native `.deb`/`.rpm` for signers. Test p11-kit forwarding. |
@@ -358,7 +409,7 @@ PDF/A and PDF/UA, conversions, batch "Actions", JavaScript subset, Aadhaar eSign
 
 ## 9. Open decisions for Mozammel
 
-1. **App license:** permissive (Apache-2.0/MIT) or copyleft (GPL-3.0)? *Recommendation: Apache-2.0 OR MIT.*
+1. **App license and engine:** Apache-2.0/MIT with PDFium, or AGPL-3.0 with MuPDF? *Recommendation: let the Phase 0 bake-off decide. Default is Apache/MIT with PDFium; switch to AGPL with MuPDF only if it is clearly faster and you are fine with AGPL.*
 2. ~~**Repository:**~~ Done: github.com/QuakeString/katna-pdf.
 3. **DSC hardware on hand:** which token(s) do you own? That decides the first PKCS#11 module we test against.
 4. **Aadhaar eSign:** is it wanted at all? It needs a commercial ESP agreement.
