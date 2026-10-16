@@ -1,6 +1,6 @@
 # katna-pdf: Product and Engineering Plan
 
-*Draft 3, 2026-10-16 (adds the SumatraPDF speed study and the pure-Rust signing stack). No repository exists yet; this is the starting plan.*
+*Draft 4, 2026-10-16 (adds the SumatraPDF speed study, the pure-Rust signing stack and the CAD drawing pipeline). No repository exists yet; this is the starting plan.*
 
 katna-pdf is a cross-platform PDF **viewer, editor, signer and library manager** written in Rust with a GPUI interface. The targets are:
 
@@ -127,6 +127,50 @@ SumatraPDF is the benchmark for "opens instantly, big file or small". We studied
 | Idle memory with a 1,000-page PDF open | < 150 MB |
 
 **Also notable:** SumatraPDF's new cross-platform edition ("ng", targeting Linux, macOS and WebAssembly) is built on **GPUI**, through a C++ port of it. A mature, speed-obsessed PDF reader picking GPUI is a strong signal that GPUI suits this kind of app.
+
+### 2.5 CAD drawings and other vector-heavy pages
+
+AutoCAD, Revit, SolidWorks and similar exports are small files that hold hundreds of thousands to millions of tiny line segments. In these files zooming in and out is the main thing users do, so it must feel instant.
+
+**Why Okular struggles.** Okular (through Poppler) re-renders the whole page from scratch at every new zoom level. Each time, it re-parses the content stream and rasterizes every path, even the ones far off-screen, on a single thread. The cost grows with the number of paths, not with what is visible, so each zoom step on a dense drawing takes seconds.
+
+**katna's approach: a dedicated drawing pipeline**
+
+1. **Detect it automatically.** While a page loads, katna counts path operators. Above a threshold (for example 50,000 segments, or a high path-to-text ratio), the page is flagged "vector-heavy" and switches to the drawing pipeline. Ordinary documents never pay for it.
+2. **Parse once into a scene.** The content stream is interpreted once into katna's own in-memory scene: paths (flattened to segments), fills, strokes, glyphs and images, each with its bounding box and layer (OCG). The scene is built in a background thread. It is pure Rust, using `hayro-interpret` (or our own content parser) as the interpreter.
+3. **Spatial index.** Every scene item goes into an R-tree (the `rstar` crate). Drawing a tile at 3200 % then visits only the few thousand items inside that tile, not the million on the page. Deep zoom becomes faster, not slower.
+4. **Level of detail.** For zoomed-out views, katna precomputes simplified versions of the scene:
+   - Segments shorter than a pixel at that zoom are merged or dropped.
+   - Dense hatching collapses to a filled tone.
+   - Polylines are simplified with the Douglas–Peucker algorithm.
+
+   An overview of a full A0 sheet draws from a few thousand items instead of millions, and looks the same.
+5. **Map-style tile pyramid.** Tiles are rendered in parallel on all CPU cores, as in an online map. During pinch or wheel zoom, katna shows the nearest ready level immediately, scaled, then sharpens only the visible tiles. Tiles at the current zoom level and at one level above and below are pre-rendered in the background.
+6. **A fast rasterizer.** Tiles are drawn with Linebender's `vello_cpu` (pure Rust, multithreaded, built for many small paths). `vello_cpu` is also what hayro renders with. Two later steps are planned:
+   - `vello_hybrid` or GPU `vello` rendering straight to the screen. Zoom then becomes a pure GPU transform, as in real CAD viewers.
+   - GPU-tessellated hairlines through `lyon`.
+7. **Interaction quality vs final quality.** While a zoom gesture is in motion, tiles render without anti-aliasing and with simplified line caps. When motion stops, they re-render at full quality, typically within the next 100–200 ms.
+8. **Drawing controls:**
+   - Toggle layers (most CAD PDFs carry OCG layers per CAD layer). Hiding a layer also skips it in the index.
+   - "Line weights" on/off, like Acrobat: thin hairlines draw faster and are often easier to read.
+   - Black-on-white, white-on-black and monochrome modes for plotting styles.
+
+**Features this unlocks for drawings** (P1):
+- Measuring tools that **snap** to line endpoints, midpoints and intersections, found through the R-tree.
+- Scale calibration from the drawing's title block.
+- Area and perimeter from a clicked closed shape.
+- Coordinates readout.
+- Compare two revisions of a drawing as a colored overlay.
+
+**Budgets for vector-heavy pages** (reference: a 1-million-segment A0 drawing):
+
+| Metric | Budget |
+|---|---|
+| Open to first full-sheet view | < 600 ms |
+| Any zoom step: scaled preview | next frame |
+| Any zoom step: sharp visible tiles | < 250 ms |
+| Pan at 3200 % | 60 fps, no blank tiles |
+| Scene and index memory | < 300 MB |
 
 ---
 
@@ -347,7 +391,7 @@ The aim is Okular's functionality with a cleaner, modern design:
 
 ## 6. Testing strategy
 
-- **Corpus:** pdf.js and PDFium test PDFs, the Isartor and veraPDF corpora, Arlington PDF Model checks, plus a private folder of real-world Indian PDFs (government forms, e-filing acknowledgements, signed GST and MCA documents).
+- **Corpus:** CAD exports (AutoCAD, Revit, SolidWorks, QCAD, LibreCAD) with segment counts from 100k to 5M, pdf.js and PDFium test PDFs, the Isartor and veraPDF corpora, Arlington PDF Model checks, plus a private folder of real-world Indian PDFs (government forms, e-filing acknowledgements, signed GST and MCA documents).
 - **Golden-image tests** for rendering and recolor filters, using a perceptual diff threshold.
 - **Round-trip tests:** after each edit, the result must re-open in PDFium, `qpdf --check` and Acrobat. Signed output must validate in Adobe Acrobat, EU DSS and pyHanko.
 - **Fuzzing:** `cargo-fuzz` on the `katna-cos` lexer and parser, content-stream parser, CMS parser and xref repair.
@@ -363,6 +407,7 @@ Durations below assume 1–2 full-time developers and are rough sizing, not comm
 - Workspace, CI, `xtask` fetching PDFium binaries, `cargo deny`.
 - GPUI spike: window, tabs, a scrolling page list with tiled images on **Linux and Windows**. **This confirms the GUI choice early.**
 - Engine bake-off: PDFium and MuPDF behind `RenderBackend`, measured against the §2.4 budgets on the same corpus.
+- CAD prototype: render a real AutoCAD-exported drawing through the §2.5 pipeline (scene, R-tree, `vello_cpu` tiles) and compare its zoom times against PDFium, MuPDF and Okular.
 - Single-instance handoff, lazy open (page sizes only), LIFO render queue with cancellation.
 - Design tokens, light and dark themes, base components.
 - `katna-cos` v0: parse, xref streams, incremental append writer.
@@ -371,6 +416,7 @@ Durations below assume 1–2 full-time developers and are rough sizing, not comm
 ### Phase 1: MVP viewer (≈8–10 weeks)
 - Tile renderer and cache, zoom modes, page display modes, thumbnails, outline, links, search, text selection and copy.
 - Night-reading filters (all Okular modes) plus smart night mode.
+- Vector-heavy drawing pipeline (§2.5): detection, scene with R-tree, level of detail, parallel tile pyramid.
 - Form filling and save, basic printing, password-protected files.
 - Recent files and reading progress.
 - **Milestone M1, public alpha (v0.1):** "the prettiest PDF reader on Linux".
@@ -399,7 +445,7 @@ Durations below assume 1–2 full-time developers and are rough sizing, not comm
 - Library view, watched folders, tags, smart collections, full-text search, duplicate detection.
 - OCR with Indic languages. Optimize and compress.
 - PAdES B-LT/B-LTA, certification signatures.
-- Compare documents, measuring tools, read aloud, presentation mode.
+- Compare documents, measuring tools with CAD snapping, read aloud, presentation mode.
 - Packaging and installers on all three platforms, auto-update, crash reporting (opt-in).
 - **Milestone M5: v1.0.**
 
@@ -417,6 +463,7 @@ PDF/A and PDF/UA, conversions, batch "Actions", JavaScript subset, Aadhaar eSign
 | **GPUI printing / IME / file dialogs** have gaps on some platforms | Medium | Use `rfd` for dialogs and platform-native print code paths. Test Indic IME input early. |
 | **In-place text editing is hard**: subset fonts, odd encodings, missing glyphs | High | Scope it per text block. Fall back to font substitution with a visible warning. Build a large regression corpus. Ship it last (Phase 4). |
 | **PDFium is slower than MuPDF and single-threaded per process** | Medium | §2.4 techniques plus a worker-process pool. The Phase 0 bake-off decides whether to switch engines. |
+| **Our drawing pipeline renders differently from the main engine** (blend modes, patterns, shading edge cases) | Medium | Use it only on flagged vector-heavy pages, fall back to the main engine for any unsupported feature on that page, and compare golden images against PDFium in CI. |
 | **PDFium crashes or is not thread-safe** | Medium | Out-of-process workers with automatic restart. Never share an instance across threads. |
 | **DSC driver quirks** (vendor PKCS#11 bugs, 32/64-bit DLL mismatch, missing Linux drivers) | High for the Indian market | Native pure-Rust drivers where the protocol is known, a data-driven vendor module list otherwise, a "Diagnose token" tool, and a real-hardware test matrix. |
 | **Closed token protocols** keep some tokens tied to the vendor driver | Medium | Tier 2 fallback always works. Native drivers are added token by token, only from public documentation or the vendor's cooperation. |
