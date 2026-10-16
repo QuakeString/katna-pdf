@@ -445,6 +445,14 @@ The aim is Okular's functionality with a cleaner, modern design:
 
 ## 6. Testing strategy
 
+**Lessons adopted from PdfCraft** ([storytold/pdfcraft](https://github.com/storytold/pdfcraft), an MIT/Apache, pure-Rust, AI-agent-built Acrobat clone, studied 2026-10-16). We write our own engine (decided 2026-10-16) and use PdfCraft only as a reference and as one more output to compare against. Its working methods are worth copying:
+- **A machine-checked parity checklist** (`parity/features.toml`) listing every Acrobat Reader, Master PDF Editor and Okular feature we target, with status and tests. "Shipped" means it exists and is tested, and the plan's progress numbers come from this file.
+- **Corpus sweeps on every change:** open, render, edit and save round trips over the pdf.js corpus, reporting crash and failure counts.
+- **External reference tools in CI** (qpdf, hayro, poppler, and PdfCraft's CLI), run as separate processes and never linked in.
+- **Never panic:** every file, setting and keystroke is untrusted, so the code returns errors instead of crashing, and clippy denies `unwrap`/`expect`/`panic` outside tests.
+- **An agent-friendly CLI** (`katna-pdf-cli`) whose JSON tools reach every engine feature, so tests and AI agents drive the engine without the GUI.
+
+
 - **Corpus:** CAD exports (AutoCAD, Revit, SolidWorks, QCAD, LibreCAD) with segment counts from 100k to 5M, pdf.js and PDFium test PDFs, the Isartor and veraPDF corpora, Arlington PDF Model checks, plus a private folder of real-world Indian PDFs (government forms, e-filing acknowledgements, signed GST and MCA documents).
 - **Golden-image tests** for rendering and recolor filters, using a perceptual diff threshold.
 - **Round-trip tests:** after each edit, the result must re-open in PDFium, `qpdf --check` and Acrobat. Signed output must validate in Adobe Acrobat, EU DSS and pyHanko.
