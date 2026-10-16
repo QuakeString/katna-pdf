@@ -31,11 +31,11 @@ Platform priority: **Linux and Windows first**, with macOS supported from the sa
 
 ```
 ┌───────────────────────── katna-pdf (GPUI app process) ───────────────────────────┐
-│  UI (GPUI views) ── App state / Commands / Undo ── Document model (kpdf-core)    │
+│  UI (GPUI views) ── App state / Commands / Undo ── Document model (katna-pdf-core)    │
 │         │                         │                                              │
-│         │                   kpdf-cos (object layer, incremental writer)          │
+│         │                   katna-pdf-cos (object layer, incremental writer)          │
 │         ▼                                                                        │
-│  Tile cache (GPU textures) ◄── render client ──IPC──► kpdf-render-worker (xN)   │
+│  Tile cache (GPU textures) ◄── render client ──IPC──► katna-pdf-render-worker (xN)   │
 │                                                        PDFium, sandboxed,        │
 │  Signing service (pure Rust; token via APDU or vendor PKCS#11) restartable       │
 │  Library service (SQLite + Tantivy + file watcher)                               │
@@ -43,48 +43,44 @@ Platform priority: **Linux and Windows first**, with macOS supported from the sa
 ```
 
 - **Render workers** are separate processes, each holding one PDFium instance. PDFium is not thread-safe, and it can crash on malformed files. A worker pool gives true parallelism and crash isolation. The MVP can start with one in-process render thread behind the same trait, then move to workers in Phase 2.
-- **The object layer (`kpdf-cos`) is our own Rust code.** We parse and write PDF objects ourselves for anything that touches file structure: incremental saves, signing byte ranges, page operations, metadata, forms data and redaction. PDFium is used for rasterizing, text extraction, form rendering and high-level page-object editing.
+- **The object layer (`katna-pdf-cos`) is our own Rust code.** We parse and write PDF objects ourselves for anything that touches file structure: incremental saves, signing byte ranges, page operations, metadata, forms data and redaction. PDFium is used for rasterizing, text extraction, form rendering and high-level page-object editing.
 
 ### 2.2 Workspace and crate layout
 
+katna-pdf lives **inside the Katna repository** (decided 2026-10-16), as an app beside Katna Mail and Katna Calendar. It shares one workspace, one GPUI pin, one CI, one `deny.toml` and one Setup.
+
 ```
-katna-pdf/
+katna/                               (QuakeString/katna)
+├─ apps/
+│  ├─ katna-mail/  katna-calendar/  katna-daemon/   (existing)
+│  └─ katna-pdf/                     # the app: GPUI window, tabs, modes, settings, single-instance
 ├─ crates/
-│  ├─ kpdf-app/          # binary: GPUI window, menus, routing, settings, single-instance
-│  ├─ kpdf-ui/           # PDF-specific views (page canvas, thumbnails, sidebars) on katna-ui
-│  ├─ kpdf-core/         # Document model, command bus, undo/redo, selection, autosave
-│  ├─ kpdf-cos/          # PDF object layer: lexer/parser, xref/xref-streams, object streams,
-│  │                      #   incremental writer, full rewrite, encryption (RC4/AES-128/AES-256 R6)
-│  ├─ kpdf-content/      # content stream parser/writer, graphics state, text runs, path ops
-│  ├─ kpdf-render/       # RenderBackend trait, PDFium backend, tile scheduler, recolor filters
-│  ├─ kpdf-render-worker/# worker binary (IPC: length-prefixed postcard/bincode over pipes)
-│  ├─ kpdf-text/         # extraction, search (incl. regex), reading order, font/shaping
-│  │                      #   (rustybuzz/harfrust, skrifa, subsetter), Indic script support
-│  ├─ kpdf-edit/         # text/image/vector editing, page ops, redaction, watermark, Bates
-│  ├─ kpdf-annot/        # all annotation types: model, appearance-stream generation
-│  ├─ kpdf-forms/        # AcroForm fill, field designer, calculations (JS subset)
-│  ├─ kpdf-sign/         # CMS/PAdES builder, signature appearances, DocMDP/FieldMDP, TSA client
-│  │  ├─ token-apdu       # pure-Rust card drivers (ePass2003, PIV, OpenPGP) over PC/SC or USB CCID
-│  │  ├─ token-pkcs11     # fallback: load the token vendor's PKCS#11 module directly (cryptoki)
-│  │  ├─ keystore-file    # pure-Rust PKCS#12 (.pfx/.p12)
-│  │  ├─ trust-store      # katna's own trust store (bundled CCA India roots)
-│  │  └─ keystore-os      # optional, off by default: Windows CNG store, macOS Keychain
-│  ├─ kpdf-validate/     # signature validation: chain, OCSP/CRL, LTV/DSS, trust lists
-│  ├─ kpdf-ocr/          # OCR backend trait: Tesseract (leptess) + ocrs (pure Rust)
-│  ├─ kpdf-convert/      # images ⇄ PDF, PDF → text/HTML/Markdown, Office via LibreOffice (optional)
-│  ├─ kpdf-library/      # SQLite catalog, Tantivy full-text index, watcher, thumbnails
-│  ├─ kpdf-cli/          # headless `kpdf` CLI: merge/split/sign/verify/ocr/optimize (CI + power users)
-│  └─ kpdf-testkit/      # corpus runners, golden-image diffs, fuzz targets
-│
-│  Shared with Katna (git dependency on QuakeString/katna, see §2.6):
-│  ├─ katna-ui            # tokens, motion, colour schemes, shared controls, px scaling
-│  ├─ katna-chrome        # window decorations: KDE server-side, GNOME client-side, Windows
-│  ├─ katna-platform      # portals, desktop colours and accent, blur, fonts, toasts, credentials
-│  └─ katna-i18n          # Fluent translations (`tr!`) and date/number formatting
-├─ assets/                # icons, fonts (Inter / Noto families)
-├─ xtask/                 # build, fetch pdfium binaries, packaging, release
-└─ docs/
+│  ├─ katna-ui/  katna-chrome/  katna-platform/  katna-i18n/  katna-dbus/   (existing, shared)
+│  ├─ katna-pdf-ui/                  # PDF views: page canvas, thumbnails, sidebars, organizer grid
+│  ├─ katna-pdf-core/                # Document model, command bus, undo/redo, selection, autosave
+│  ├─ katna-pdf-cos/                 # PDF object layer: parser, xref (streams), object streams,
+│  │                                 #   incremental writer, full rewrite, encryption (RC4/AES-128/AES-256 R6)
+│  ├─ katna-pdf-content/             # content stream parser/writer, graphics state, text runs, paths
+│  ├─ katna-pdf-render/              # RenderBackend trait, engines, tile scheduler, recolor, CAD pipeline
+│  ├─ katna-pdf-text/                # extraction, search, reading order, fonts and shaping, Indic scripts
+│  ├─ katna-pdf-edit/                # text/image/vector editing, page ops, redaction, watermark, Bates
+│  ├─ katna-pdf-annot/               # annotations: model and appearance-stream generation
+│  ├─ katna-pdf-forms/               # AcroForm fill, field designer, calculations
+│  ├─ katna-pdf-sign/                # CMS/PAdES builder, appearances, DocMDP/FieldMDP, TSA client,
+│  │                                 #   token-apdu, token-pkcs11, keystore-file, trust-store, keystore-os
+│  ├─ katna-pdf-validate/            # validation: chain, OCSP/CRL, LTV/DSS, trust lists
+│  ├─ katna-pdf-ocr/                 # OCR: Tesseract + ocrs
+│  ├─ katna-pdf-convert/             # images ⇄ PDF, PDF → text/HTML/Markdown
+│  └─ katna-pdf-library/             # catalog (SQLite), full-text index (Tantivy), watcher, thumbnails
+├─ tools/
+│  ├─ katna-pdf-render-worker/       # render worker process
+│  └─ katna-pdf-cli/                 # headless merge/split/sign/verify/ocr/optimize
+├─ server/
+│  └─ katna-pdf-esign-gateway/       # Aadhaar eSign ASP gateway (§4.4)
+└─ docs/PDF.md                       # this plan
 ```
+
+GPUI stays limited to `katna-ui`, `katna-chrome`, `katna-pdf-ui` and the `katna-pdf` app (added to Katna's `deny.toml` wrappers list). Katna's rule that "only `katna-daemon` writes the databases and talks to the network" covers mail data. katna-pdf keeps its own library database and does its own TSA, OCSP and eSign requests. It uses the daemon only for what the daemon already owns: accounts and cloud drives (§4.6).
 
 ### 2.3 Core internals
 
@@ -199,7 +195,7 @@ katna-pdf is part of the Katna family and must look and feel like Katna Mail on 
   - `area: summary` commit messages
   - Fluent translations through `katna_i18n::tr!`
 
-**Work needed in Katna first.** Katna Mail's `Theme` (`apps/katna-mail/src/theme.rs`) and its shared controls (`widgets.rs`: buttons, fields, menus, dialogs, cards, tiles, switches) still live inside the Mail app. Katna's design doc already plans to move them into `katna-ui` "as they are shared beyond Mail". katna-pdf is that moment: Phase 0 moves `Theme` and the widgets into `katna-ui` in the Katna repository, one PR per control as its design doc asks. katna-pdf then pins Katna by git revision.
+**Work needed in Katna first.** Katna Mail's `Theme` (`apps/katna-mail/src/theme.rs`) and its shared controls (`widgets.rs`: buttons, fields, menus, dialogs, cards, tiles, switches) still live inside the Mail app. Katna's design doc already plans to move them into `katna-ui` "as they are shared beyond Mail". katna-pdf is that moment: Phase 0 moves `Theme` and the widgets into `katna-ui`, one PR per control as Katna's design doc asks. Living in the same repository, katna-pdf always builds against the current versions.
 
 ---
 
@@ -222,11 +218,13 @@ katna-pdf is part of the Katna family and must look and feel like Katna Mail on 
 - **MuPDF**: GPL-compatible, see §3.4
 - **hayro**: pure Rust. Katna Mail already uses it for attachment previews, it fits Katna's no-`unsafe` rule best, and it shares `vello_cpu` with the CAD pipeline.
 
-The fastest engine that renders the test corpus correctly wins. One may be used for viewing and another as a fallback. Prebuilt binaries come from `bblanchon/pdfium-binaries`, are fetched by `xtask`, and ship next to the executable. Build without V8 or XFA at first (smaller, safer). A `RenderBackend` trait keeps hayro and MuPDF possible later.
+The fastest engine that renders the test corpus correctly wins. One may be used for viewing and another as a fallback.
+
+**Katna's "Rust only" goal.** Katna links only unavoidable system C libraries (`docs/ARCHITECTURE.md` §1). PDFium (C++) or MuPDF (C) would be the first large non-Rust library in the repository, so they win only if hayro clearly misses the speed or correctness budgets. If one is chosen, it is bundled and loaded at runtime, and the decision is recorded in Katna's §20 dependency policy. Prebuilt binaries come from `bblanchon/pdfium-binaries`, are fetched by `xtask`, and ship next to the executable. Build without V8 or XFA at first (smaller, safer). A `RenderBackend` trait keeps hayro and MuPDF possible later.
 
 ### 3.2 Object-level and writing libraries
 
-- **`kpdf-cos` (our own code)**, informed by `lopdf`. We want precise control over incremental updates and byte-exact signature ranges, plus repair of broken xref tables. `lopdf` is a good reference and a fallback for early prototypes.
+- **`katna-pdf-cos` (our own code)**, informed by `lopdf`. We want precise control over incremental updates and byte-exact signature ranges, plus repair of broken xref tables. `lopdf` is a good reference and a fallback for early prototypes.
 - **`pdf-writer`** (Typst) for generating new objects and **`krilla`** for building new PDFs from scratch (forms, conversions, PDF/A output).
 - **`subsetter`, `skrifa`, `ttf-parser`, `rustybuzz`/`harfrust`** for font subsetting, embedding and shaping. These are critical for text editing and for Indic scripts (Devanagari, Bengali, Tamil and others).
 - **RustCrypto**: `aes`, `cbc`, `sha2`, `rsa`, `p256`/`p384`, `cms`, `x509-cert`, `der`, `spki`, `x509-ocsp`, `x509-tsp`.
@@ -351,7 +349,7 @@ A DSC token's private key never leaves the token. The token signs a hash itself,
 - **P1:** **PAdES B-T** with an RFC 3161 timestamp. The timestamp server list is configurable, with free TSAs preset and an option for paid ones (eMudhra, Capricorn and others).
 - **P1:** **PAdES B-LT / B-LTA**: embed the DSS dictionary (certificates, OCSP responses, CRLs, VRI) and add document timestamps.
 - **P1:** **Certification signatures** (DocMDP with permission levels 1, 2 and 3). Field locking (FieldMDP). Signature-field "lock after signing".
-- **P1:** **Batch signing** of many files with a single PIN entry, from the GUI and from `kpdf sign` in the CLI.
+- **P1:** **Batch signing** of many files with a single PIN entry, from the GUI and from `katna-pdf-cli sign` in the CLI.
 - **P1: Aadhaar eSign.** See below.
 - **P2:** A local signing bridge for web portals (like emSigner) is a later candidate.
 
@@ -365,7 +363,7 @@ How it works in katna:
 3. katna opens the ESP's page in the user's browser (or an embedded webview). The user enters their Aadhaar number and OTP there. katna never sees the Aadhaar number or OTP.
 4. The ESP returns the signature to the gateway, katna fetches it, embeds it in the PDF and adds a timestamp. The result validates like any other PAdES signature.
 
-Why a gateway is needed: the eSign rules require requests to come from a registered **Application Service Provider (ASP)**, signed with the ASP's own certificate, with a server URL to receive the response. That private key cannot safely ship inside a desktop app. The gateway is small: a Rust service (`kpdf-esign-gateway`) that stores no documents, only transaction IDs and hashes.
+Why a gateway is needed: the eSign rules require requests to come from a registered **Application Service Provider (ASP)**, signed with the ASP's own certificate, with a server URL to receive the response. That private key cannot safely ship inside a desktop app. The gateway is small: a Rust service (`katna-pdf-esign-gateway`) that stores no documents, only transaction IDs and hashes.
 
 What it needs outside the code:
 - **A legal entity registered as an ASP** with one ESP: an agreement, KYC and a per-signature fee (typically a few rupees per signature, depending on the ESP).
@@ -373,7 +371,7 @@ What it needs outside the code:
 - **Bring-your-own-ASP:** organizations that already have an ESP agreement can point katna at their own gateway URL, so they don't depend on ours.
 
 
-**Validation (`kpdf-validate`)**
+**Validation (`katna-pdf-validate`)**
 - **P0:** Check integrity (byte range and digest). Detect changes made after signing by comparing revisions. Show the signature panel with a green, yellow or red status and a human-readable explanation.
 - **P1:** Build the certificate chain from embedded, DSS and AIA sources. Check revocation through OCSP, CRL and embedded responses. Evaluate at signing time or timestamp time. Check DocMDP permission violations. "View signed version" of any revision.
 - **Trust:** bundle the **CCA India root certificates** (Root CA of India 2011, 2014 and 2022), with optional system trust and optional AATL/EUTL import. The user can manage trusted roots. Never trust a self-signed certificate implicitly.
@@ -411,6 +409,9 @@ On top of the filters:
 
 - **P0:** Recent files with thumbnails. Reading progress (last page and zoom per document). Pinned and favorite files.
 - **P1:** **Library view.** Watched folders are indexed automatically. Grid and list layouts with cover thumbnails. Sort and filter by title, author, date, size, page count, tags, "signed", "has forms" or "scanned".
+- **P1: Cloud drives and mail attachments, through Katna.** katna-pdf asks `katna-daemon` over D-Bus (`CloudList`, `CloudFetch`, `CloudThumbnail`, `CloudUpload`, `CloudRename`, `CloudTrash`, `CloudLink`). It shows the Google Drive and OneDrive of every account already signed in to Katna Mail, with no second sign-in, and opens PDFs from them. The library also lists PDF attachments from mail (`Store::library_files`, read-only). Katna Mail's Files page cards, folder tiles and chips move to a shared crate so both apps show drives the same way.
+  - **Saving back to a drive:** the daemon can upload new files today. Overwriting an existing file as a new version needs one new daemon call (`CloudReplace`).
+  - **Requirements:** the Katna daemon must be installed and running, with at least one Google or Microsoft account. Without them, katna-pdf works fully on local files and simply hides the Drives group. Dropbox and others follow when Katna adds them.
 - **P1:** Tags, collections and **smart collections** (saved queries). Star ratings. Notes per document.
 - **P1:** Full-text search across the whole library (Tantivy, with OCR text included) and jump to the hit.
 - **P1:** Duplicate detection (content hash plus a fuzzy text hash). Missing-file relinking when files move.
@@ -447,7 +448,7 @@ The aim is Okular's functionality with a cleaner, modern design:
 - **Corpus:** CAD exports (AutoCAD, Revit, SolidWorks, QCAD, LibreCAD) with segment counts from 100k to 5M, pdf.js and PDFium test PDFs, the Isartor and veraPDF corpora, Arlington PDF Model checks, plus a private folder of real-world Indian PDFs (government forms, e-filing acknowledgements, signed GST and MCA documents).
 - **Golden-image tests** for rendering and recolor filters, using a perceptual diff threshold.
 - **Round-trip tests:** after each edit, the result must re-open in PDFium, `qpdf --check` and Acrobat. Signed output must validate in Adobe Acrobat, EU DSS and pyHanko.
-- **Fuzzing:** `cargo-fuzz` on the `kpdf-cos` lexer and parser, content-stream parser, CMS parser and xref repair.
+- **Fuzzing:** `cargo-fuzz` on the `katna-pdf-cos` lexer and parser, content-stream parser, CMS parser and xref repair.
 - **Hardware matrix for DSC:** at least ePass2003, ProxKey and mToken on Windows and Ubuntu, tested manually per release. SoftHSM2 runs in CI for automated PKCS#11 tests, and a virtual smart card (vsmartcard / jCardSim with a PIV applet) tests the native APDU path.
 
 ---
@@ -463,7 +464,7 @@ Durations below assume 1–2 full-time developers and are rough sizing, not comm
 - CAD prototype: render a real AutoCAD-exported drawing through the §2.5 pipeline (scene, R-tree, `vello_cpu` tiles) and compare its zoom times against PDFium, MuPDF and Okular.
 - Single-instance handoff, lazy open (page sizes only), LIFO render queue with cancellation.
 - Move Katna Mail's `Theme` and shared widgets into `katna-ui` (PRs in the Katna repo). Then build the katna-pdf window from them, with Katna's chrome, schemes and shared appearance settings.
-- `kpdf-cos` v0: parse, xref streams, incremental append writer.
+- `katna-pdf-cos` v0: parse, xref streams, incremental append writer.
 - **Milestone M0:** open a PDF and scroll it smoothly on Linux and Windows, in light and dark themes, within the §2.4 budgets. Engine and license decided from the bake-off.
 
 ### Phase 1: MVP viewer (≈8–10 weeks)
@@ -484,7 +485,7 @@ Durations below assume 1–2 full-time developers and are rough sizing, not comm
 ### Phase 3: Signing (≈8–10 weeks)
 - Pure-Rust signing core, PKCS#12, native ePass2003 and PIV drivers, vendor PKCS#11 fallback for other Indian tokens.
 - PAdES B-B and B-T, visible appearances, signature panel and validation (integrity, chain, revocation, CCA roots).
-- Batch signing, and `kpdf sign` / `kpdf verify` in the CLI.
+- Batch signing, and `katna-pdf-cli sign` / `katna-pdf-cli verify` in the CLI.
 - Interop sign-off against Acrobat, EU DSS and pyHanko.
 - **Milestone M3 (v0.5):** DSC signing works for real Indian workflows (GST, MCA, ITR attachments, tenders).
 
@@ -499,7 +500,7 @@ Durations below assume 1–2 full-time developers and are rough sizing, not comm
 - OCR with Indic languages. Optimize and compress.
 - PAdES B-LT/B-LTA, certification signatures.
 - Compare documents, measuring tools with CAD snapping, read aloud, presentation mode.
-- Aadhaar eSign: client flow and `kpdf-esign-gateway`, first tested in an ESP's sandbox (production needs the ASP agreement).
+- Aadhaar eSign: client flow and `katna-pdf-esign-gateway`, first tested in an ESP's sandbox (production needs the ASP agreement).
 - Packaging and installers on all three platforms, auto-update, crash reporting (opt-in).
 - **Milestone M5: v1.0.**
 
@@ -512,8 +513,8 @@ PDF/A and PDF/UA, conversions, batch "Actions", JavaScript subset, a hayro backe
 
 | Risk | Impact | Mitigation |
 |---|---|---|
-| **GPUI is pre-1.0**: API churn, thin docs, and Zed's needs come first | Medium | Use Katna's vendored, patched `gpui-pre` pin, which Katna Mail already ships on Linux and Windows. Upgrade both apps together. Keep GPUI code inside `kpdf-app`/`kpdf-ui`; the core crates stay GUI-agnostic. |
-| **Coupling to the Katna repository** (a `katna-ui` change breaks katna-pdf) | Medium | Pin Katna by git revision and bump deliberately. Run katna-pdf's build in Katna's CI once the shared controls move to `katna-ui`. |
+| **GPUI is pre-1.0**: API churn, thin docs, and Zed's needs come first | Medium | Use Katna's vendored, patched `gpui-pre` pin, which Katna Mail already ships on Linux and Windows. Upgrade both apps together. Keep GPUI code inside the `katna-pdf` app and `katna-pdf-ui`; the core crates stay GUI-agnostic. |
+| **A shared-crate change breaks katna-pdf** (one repo, many apps) | Low | Katna's CI builds and tests every app on each PR, so a break is caught before merge. |
 | **GPUI accessibility** (screen readers) is still immature | Medium | Track the upstream AccessKit work. Make keyboard-only use and high contrast solid now. Contribute upstream if needed. |
 | **GPUI printing / IME / file dialogs** have gaps on some platforms | Medium | Use `rfd` for dialogs and platform-native print code paths. Test Indic IME input early. |
 | **In-place text editing is hard**: subset fonts, odd encodings, missing glyphs | High | Scope it per text block. Fall back to font substitution with a visible warning. Build a large regression corpus. Ship it last (Phase 4). |
@@ -537,4 +538,4 @@ PDF/A and PDF/UA, conversions, batch "Actions", JavaScript subset, a hayro backe
 2. ~~**Repository:**~~ Done: github.com/QuakeString/katna-pdf.
 3. **DSC hardware on hand:** which token(s) do you own? That decides the first native driver we build (ePass2003 is the easiest) or the first vendor module we test against.
 4. ~~**Aadhaar eSign:**~~ Yes, in scope (§4.4). Still open: who will register as the ASP and which ESP to contract with. This is needed before eSign goes live, not before development starts.
-5. **Where katna-pdf's code lives:** its own repo with Katna's UI crates pinned by git (current plan), or as `apps/katna-pdf` inside the Katna repo (one CI, one GPUI pin, no version drift).
+5. ~~**Where katna-pdf's code lives:**~~ Inside the Katna repo as `apps/katna-pdf` (§2.2). The `QuakeString/katna-pdf` repo keeps only a pointer.

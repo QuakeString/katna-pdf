@@ -1,13 +1,6 @@
 # katna-pdf
 
-A fast, beautiful, cross-platform PDF viewer, editor, signer and library manager, written in Rust with [GPUI](https://www.gpui.rs/).
+Katna PDF is being built **inside the Katna repository** as `apps/katna-pdf`, so it shares Katna Mail's look, GPUI version, theme and cloud drives:
+https://github.com/QuakeString/katna
 
-- Acrobat Reader–class viewing and annotation
-- Master PDF Editor–class editing (text, images, pages, forms, redaction, OCR)
-- Digital signing: Indian DSC USB tokens (PKCS#11), Windows certificate store, PKCS#12; PAdES B-B → B-LTA with validation
-- Day/night themes and Okular-style page recoloring for night reading
-- A library to organize, tag and search all your PDFs
-
-Linux and Windows first; macOS supported.
-
-**Status:** planning. See [docs/PLAN.md](docs/PLAN.md) for architecture and roadmap.
+The plan is in Katna's [`docs/PDF.md`](https://github.com/QuakeString/katna/blob/main/docs/PDF.md) (proposed in [QuakeString/katna#889](https://github.com/QuakeString/katna/pull/889)). [`docs/PLAN.md`](docs/PLAN.md) here is a copy kept until that PR merges.
