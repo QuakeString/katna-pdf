@@ -7,4 +7,13 @@ A fast, beautiful PDF viewer, editor, signer and library manager in Rust and GPU
 - Day/night themes and Okular-style night reading, in Katna's look
 - Fast zoom for CAD drawings, a PDF library and cloud drives through Katna
 
-Linux and Windows first; macOS later. **Status:** planning. See [docs/PLAN.md](docs/PLAN.md).
+Linux and Windows first; macOS later. **Status:** Phase 0, a first window that opens, scrolls and zooms a PDF. See [docs/PLAN.md](docs/PLAN.md).
+
+## Build
+
+On Linux, install `libxkbcommon-dev libxkbcommon-x11-dev libfontconfig-dev libfreetype-dev libwayland-dev libx11-xcb-dev` (Debian/Ubuntu names), then:
+
+```sh
+cargo run -p katna-pdf -- file.pdf
+cargo run --release -p katna-pdf-bench -- file.pdf   # open and draw times
+```

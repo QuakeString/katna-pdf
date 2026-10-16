@@ -1,0 +1,5 @@
+# Katna always builds with the latest stable Rust.
+[toolchain]
+channel = "stable"
+components = ["rustfmt", "clippy"]
+profile = "minimal"
