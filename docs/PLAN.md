@@ -227,6 +227,8 @@ katna-pdf is part of the Katna family and must look and feel like Katna Mail on 
 
 The fastest engine that renders the test corpus correctly wins. One may be used for viewing and another as a fallback.
 
+**First results (October 2026):** [docs/bakeoff/2026-10-engines.md](bakeoff/2026-10-engines.md). On 994 real-world PDFs, hayro was as reliable and as fast as the C engines in everyday reading, and it drew pages correctly most often. Its weak spots are deep zoom on image-heavy pages and real CAD drawings. The recommendation is hayro only, with PDFium and MuPDF kept as yardsticks.
+
 **Katna's "Rust only" goal.** Katna links only unavoidable system C libraries (`docs/ARCHITECTURE.md` §1). PDFium (C++) or MuPDF (C) would be the first large non-Rust library in the repository, so they win only if hayro clearly misses the speed or correctness budgets. If one is chosen, it is bundled and loaded at runtime, and the decision is recorded in Katna's §20 dependency policy. Prebuilt binaries come from `bblanchon/pdfium-binaries`, are fetched by `xtask`, and ship next to the executable. Build without V8 or XFA at first (smaller, safer). A `RenderBackend` trait keeps hayro and MuPDF possible later.
 
 ### 3.2 Object-level and writing libraries
