@@ -1,0 +1,839 @@
+id	pdfcraft_tier	title	verdict	our_tier	where	note
+core.word-count	P2	Word and character count	missing	P2	-	Cheap stat from text extraction; Okular shows it
+core.open-pdf	P0	Open PDF files	covered	P0	§4.1	
+core.repair-broken-files	P0	Open damaged files by reconstructing the cross-reference table	covered	P0	§3.2	xref repair in katna-pdf-cos, fuzzed
+core.malformed-input-safety	P0	Reject garbage or hostile input without crashing	covered	P0	§1, §6	
+core.repair-log	P0	Record repairs and show them to the user	missing	P1	-	Tell users what was repaired before they save
+core.xref-streams	P0	Read cross-reference streams and compressed object streams	covered	P0	§2.2, Phase 0	
+core.hybrid-xref	P0	Hybrid-reference files (/XRefStm) and quirky xref subsections	partial	P0	§2.2	Xref streams named; hybrid/quirky subsections not stated
+core.revision-chain	P0	Follow /Prev revision chains with loop protection	partial	P0	§2.3	Revision chain modelled; loop protection unstated
+core.stream-filters	P0	Standard stream filters (Flate, LZW, ASCII85, ASCIIHex, RunLength, predictors)	partial	P0	§2.1	Implied by own cos parser; not listed
+core.image-filters	P0	Image codecs in the filters crate (DCT, JPX, JBIG2, CCITT)	partial	P0	§3.1	Engine decodes; cos-level codecs unstated
+core.decompression-limits	P0	Bounded decompression (filter bomb protection)	partial	P0	§1	Hostile-input principle; no explicit bomb limits
+core.open-rc4	P0	Open RC4-encrypted documents (40/128-bit)	covered	P0	§2.2	
+core.open-aes	P0	Open AES-128 and AES-256 encrypted documents (R4-R6)	covered	P0	§2.2	
+core.password-prompt	P0	Ask for the user or owner password, with retry	covered	P0	§2.4, §4.1	
+core.unicode-passwords	P0	Unicode passwords normalised with SASLprep	missing	P0	-	SASLprep required for AES-256 R6 correctness
+core.owner-password-unlock	P0	Owner password lifts document restrictions	partial	P0	§4.3	Only "remove protection when password known"
+core.permissions-enforced	P0	Honour document permissions (print, modify, assemble, copy)	partial	P0	§4.1	Open/print passwords only; permission flags unstated
+core.crypt-filters	P0	Crypt filters (Identity, /StmF, /StrF)	partial	P0	§2.2	Implied by AES support
+core.attachment-only-encryption	P1	Attachment-only encryption (/EFF) opens without a password	missing	P2	-	
+core.unencrypted-metadata	P1	Leave XMP metadata readable when /EncryptMetadata is false	missing	P1	-	Library can read metadata without password
+core.unsupported-handlers	P1	Clear message for unsupported security handlers	missing	P1	-	Clear error instead of generic open failure
+core.open-public-key	P1	Open certificate-encrypted (public-key handler) documents	missing	P2	-	Reuse DSC tokens/certificates to decrypt
+core.incremental-save	P0	Save as an incremental update (original bytes kept, atomic write)	covered	P0	§1, §2.3	
+core.save-as-full-rewrite	P0	Save as a new file with a full rewrite and garbage collection	covered	P0	§2.3	
+core.object-stream-compression	P0	Compress objects into object streams behind an xref stream on full save	covered	P1	§2.3, §4.3	Part of Save As optimized
+core.encrypted-save	P0	Save encrypted documents re-encrypted under the same keys	partial	P0	§2.2	Encryption in cos; re-encrypt on save unstated
+core.copy-on-write-fidelity	P0	Preserve untouched objects byte-for-byte (copy-on-write edits)	covered	P0	§1, §2.3	
+core.write-validity	P0	Written files pass qpdf --check	covered	P0	§6	qpdf --check in round-trip tests
+core.deterministic-save	P2	Deterministic full-save mode	missing	P2	-	Reproducible output helps golden tests
+core.linearization	P1	Linearized save (Fast Web View)	covered	P1	§4.3	
+core.revision-list	P1	List document revisions from the xref chain	partial	P1	§4.4	Only via signature panel revisions
+core.view-revision	P1	View an earlier revision as a read-only snapshot	partial	P1	§4.4	"View signed version"; generalise to any revision
+core.lazy-loading	P0	Lazy loading of very large (GB) files within a memory budget	covered	P0	§2.4	
+core.pdf20-utf8-strings	P1	PDF 2.0 UTF-8 text strings	missing	P1	-	PDF 2.0 files increasingly common
+core.pdf20-associated-files	P1	PDF 2.0 associated files (/AF)	partial	P2	§4.3	Implied by PDF/A-3 work
+core.pdf20-dpart	P2	PDF 2.0 document parts (DPart)	skip	-	-	Print-production niche
+core.pdf20-namespaces	P1	PDF 2.0 structure namespaces	missing	P2	-	Needed for PDF/UA-2 checks
+core.arlington-validation	P1	Structural validation against the Arlington PDF model	partial	P1	§6	Test corpus only, not user-facing
+core.undo-redo	P0	Undo and redo every document edit	covered	P0	§2.3	
+core.undo-labels	P1	Edit menu names the step to undo or redo	missing	P1	-	Commands exist; naming them is cheap
+core.undo-after-save	P1	Undo still works after saving	missing	P1	-	
+core.atomic-batch-edits	P1	Multi-step edits are one undo step and all-or-nothing	partial	P1	§2.3	Command bus; grouping/atomicity unstated
+core.history-panel	P2	History panel with named snapshots	missing	P2	-	
+core.autosave	P0	Autosave changed documents periodically	covered	P0	§2.3	
+core.crash-recovery	P0	Offer to recover unsaved work after a crash	partial	P0	§2.3	Autosave exists; recovery prompt unstated
+core.encrypted-autosave	P0	Autosaves of encrypted documents stay encrypted	missing	P0	-	Otherwise autosave leaks protected content
+core.web-recovery	P1	Crash recovery in the web app	skip	-	-	No web app planned
+core.unsaved-changes-prompt	P0	Ask before closing or quitting with unsaved changes	missing	P0	-	Basic data safety; not stated
+core.dirty-indicator	P1	Unsaved-changes marker on document tabs	partial	P1	§2.3	Modified state tracked; tab marker unstated
+core.close-document	P0	Close a document	covered	P0	§4.1	
+core.close-all	P1	Close all documents	missing	P1	-	
+core.revert	P1	Revert to the last saved version	missing	P1	-	
+core.reload-changed-files	P2	Reload a document when its file changes on disk	missing	P1	-	Okular feature; LaTeX/script users rely on it
+core.signed-save-policy	P0	Force incremental saves for signed documents	covered	P0	§1	
+core.drag-drop-open	P1	Open files by drag and drop	covered	P0	§4.7	
+core.recent-files	P1	Local recent-files list	covered	P0	§4.6	
+core.reopen-last-session	P2	Reopen the files from the last session at startup	missing	P1	-	Okular/Sumatra session restore; pairs with progress
+core.usage-rights-preserve	P3	Preserve usage-rights (UR3) signatures from Reader-extended files	partial	P2	§1	Incremental save keeps UR3; never strip it
+view.render-pages	P0	Render pages (text, vectors, images)	covered	P0	§3.1, §4.1	
+view.render-shadings-patterns	P0	Shadings, gradients and tiling patterns	covered	P0	§3.1	Engine-provided
+view.render-transparency	P0	Blend modes, soft masks and transparency groups	covered	P0	§3.1	Engine-provided
+view.render-knockout	P1	Knockout transparency groups	covered	P0	§3.1	Engine-provided
+view.render-type3	P0	Type 3 fonts	covered	P0	§3.1	Engine-provided
+view.render-cid-fonts	P0	CID fonts and CMaps incl. CJK without ToUnicode	covered	P0	§3.1	Engine-provided
+view.render-image-codecs	P0	JBIG2, JPEG 2000, CCITT and JPEG images	covered	P0	§3.1	Engine-provided
+view.render-annotation-appearances	P0	Annotation and widget appearances incl. appearance states	covered	P0	§4.1	
+view.render-error-isolation	P0	Per-page error isolation (a bad page never takes down the app)	covered	P0	§1, §2.1	Sandboxed render workers
+view.render-priority	P0	Render visible pages first, then neighbours and thumbnails	covered	P0	§2.4	
+view.deep-zoom-tiles	P0	Tiled rendering keeps deep zoom sharp	covered	P0	§2.3, §2.5	
+view.layout-continuous	P0	Single page continuous scrolling	covered	P0	§4.1	
+view.layout-single-page	P0	Single page view	covered	P0	§4.1	
+view.layout-two-up	P0	Two-page view	covered	P0	§4.1	
+view.layout-two-up-scrolling	P1	Two-page scrolling	partial	P0	§4.1	Continuous two-up not explicit
+view.cover-page	P1	Show cover page in two-page view	covered	P0	§4.1	
+view.page-gaps	P2	Show or hide gaps between pages	missing	P2	-	
+view.auto-scroll	P2	Automatic scrolling	covered	P1	§4.1	
+view.zoom-in-out	P0	Zoom in and out around the cursor (keys, wheel, pinch)	covered	P0	§4.1	
+view.zoom-to-percent	P0	Zoom to a chosen percentage	partial	P0	§4.1	Typed percentage not explicit
+view.zoom-actual-size	P0	Actual size	covered	P0	§4.1	
+view.zoom-fit-page	P0	Fit page	covered	P0	§4.1	
+view.zoom-fit-width	P0	Fit width	covered	P0	§4.1	
+view.zoom-fit-height	P1	Fit height	missing	P1	-	
+view.zoom-fit-visible	P1	Fit visible content	missing	P1	-	Okular "trim margins"; great for reading scans
+view.marquee-zoom	P1	Marquee zoom tool	covered	P0	§4.1	
+view.dynamic-zoom	P2	Dynamic zoom (drag to zoom)	missing	P2	-	
+view.loupe	P2	Loupe magnifier tool	covered	P1	§4.1	
+view.pan-and-zoom	P2	Pan and zoom overview window	missing	P2	-	Overview window helps large CAD sheets
+view.hand-tool	P0	Hand tool for panning	partial	P0	§4.1	Panning implied, not named
+view.rotate-view	P0	Rotate the view without changing the file	covered	P0	§4.1	
+view.read-mode	P0	Read mode (hide tool chrome)	covered	P1	§4.1	
+view.full-screen	P0	Full screen mode	covered	P1	§4.1	
+view.full-screen-presentation	P2	Full-screen presentation options (auto-advance, loop, click to advance)	partial	P1	§4.1	Transitions only; auto-advance/loop unstated
+view.reflow	P2	Reflow text to the window width	missing	P2	-	Small screens; Acrobat Reader has Liquid/reflow
+view.page-navigation	P0	Page navigation (next, previous, first, last, go to page)	covered	P0	§4.1, Phase 1	
+view.goto-page-label	P1	Go to a page by its label (logical page numbers)	partial	P1	§4.3	Labels edited; viewer use unstated
+view.view-history	P1	Previous view / next view	covered	P0	§4.1	
+view.follow-links	P0	Follow links and destinations	covered	P0	§4.1	
+view.annotation-hover	P1	Show comment text on hover	missing	P1	-	
+view.page-size-hover	P2	Page size on hover (bottom-left of the page view)	missing	P2	-	
+view.document-tabs	P1	Tabbed documents	covered	P0	§4.1	
+view.multiple-windows	P1	Multiple windows; drag a tab out into a window	covered	P0	§4.1	Tab drag-out not explicit
+view.split-window	P2	Split window (two panes on one document)	missing	P2	-	Compare two places in one long document
+view.spreadsheet-split	P2	Spreadsheet split (four synchronised panes)	skip	-	-	Niche Acrobat feature
+view.thumbnails-panel	P0	Page thumbnails panel	covered	P0	§4.1	
+view.thumbnail-context-ops	P1	Page operations from the thumbnails panel (drag reorder, context menu)	covered	P0	§4.3	
+view.bookmarks-panel	P0	Bookmarks panel with navigation	covered	P0	§4.1	
+view.highlight-current-bookmark	P2	Highlight the current bookmark	missing	P2	-	Okular does this
+view.attachments-panel	P0	Attachments panel: list, open and save embedded files	covered	P0	§4.1	
+view.layers-panel	P0	Layers panel: toggle optional content visibility	covered	P0	§4.1	
+view.layers-reset	P2	Reset layers to initial visibility; list for all or current pages	missing	P2	-	
+view.destinations-panel	P2	Named destinations panel	missing	P2	-	
+view.articles-panel	P3	Articles panel and article reading	missing	P2	-	Reader parity; rare in practice
+view.model-tree	P3	3D model tree panel	skip	-	-	3D out of scope (§4.1)
+view.page-labels-display	P0	Show page labels (i, ii, 1, 2...)	partial	P0	§4.3	Labels editable; display in viewer unstated
+view.find	P0	Find text across the document	covered	P0	§4.1	
+view.find-next-previous	P0	Find next / previous match	covered	P0	§4.1	
+view.find-options	P1	Find options: whole words, case-sensitive	covered	P0	§4.1	
+view.find-in-comments-bookmarks	P2	Find in comments and bookmarks	missing	P2	-	
+view.find-results-panel	P1	Find results list	covered	P0	§4.1	
+view.advanced-search	P1	Advanced search window	covered	P1	§4.1, §4.6	
+view.search-folder	P1	Search all PDFs in a folder	covered	P1	§4.1, §4.6	Via library index
+view.search-boolean	P2	Boolean, proximity and stemming search	partial	P2	§4.6	Tantivy supports it; not specified
+view.search-index	P2	Build and search a full-text index across files	covered	P1	§4.6	
+view.embedded-index	P2	Embedded search index	skip	-	-	Legacy Acrobat Catalog format
+view.text-select	P0	Select text in reading order	covered	P0	§4.1	
+view.column-select	P2	Column select (Alt/Option-drag a rectangle of text)	missing	P2	-	
+view.copy-text	P0	Copy selected text	covered	P0	§4.1	
+view.select-all	P1	Select all text on a page	missing	P1	-	
+view.copy-with-layout	P2	Copy text keeping layout	missing	P2	-	
+view.snapshot	P1	Snapshot tool (copy a region as an image)	covered	P1	§4.1	
+view.copy-image	P2	Select an image on the page and copy it	partial	P1	§4.3	Image export in editor only
+view.rulers	P2	Rulers	missing	P2	-	
+view.grid	P2	Grid and snap to grid	partial	P1	§4.3	Snapping in inspector; grid unstated
+view.guides	P2	Guides	partial	P1	§4.3	Guides in object inspector
+view.line-weights	P2	Show line weights	covered	P1	§2.5	
+view.cursor-coordinates	P2	Cursor coordinates	covered	P1	§2.5	
+view.theme-light-dark	P1	Light and dark themes	covered	P0	§4.5, Phase 0	
+view.theme-system	P1	Follow the system theme	covered	P0	§4.5	
+view.home-view	P1	Home view with recommended tools and recent files	partial	P0	§4.6	Recent files; no tools home
+view.all-tools	P0	All tools catalogue with milestone badges	skip	-	-	Mode switcher (§4.7) replaces it
+view.command-palette	P0	Command palette (⌘K) over every command	covered	P0	§4.7	
+view.keyboard-shortcuts	P0	Platform keyboard shortcuts for registered commands	covered	P0	§4.7	Remappable, Okular/Acrobat presets
+view.shortcuts-dialog	P1	Keyboard shortcuts reference dialog	missing	P1	-	
+view.menus-from-registry	P0	Menus generated from the command registry	partial	P1	§4.7	Palette over every action implies registry
+view.about-dialog	P2	About dialog	missing	P2	-	
+view.check-for-updates	P2	Help ▸ Check for updates	covered	P1	Phase 5	Auto-update
+view.single-key-accelerators	P2	Single-key tool accelerators	partial	P1	§4.7	Via shortcut presets
+view.customize-quick-tools	P2	Customise the quick-action toolbar and pinned tools	missing	P2	-	
+view.restriction-notice	P0	Message bar for restricted documents	missing	P0	-	Explain why editing/printing is blocked
+view.pdfa-view-mode	P2	Read-only view for PDF/A files with an Enable editing bar	missing	P2	-	
+view.show-page-boxes	P2	Show art, trim and bleed boxes	partial	P1	§4.3	Box editor exists; view overlay unstated
+view.web-app	P0	Run in the browser (WebAssembly)	skip	-	-	Desktop-only product
+view.large-document-performance	P0	Smooth scrolling on 500-page documents	covered	P0	§2.4	
+edit.text-edit	P0	Edit existing text in place	covered	P1	§4.3	
+edit.text-reflow	P0	Reflow edited text inside its paragraph box	covered	P1	§4.3	
+edit.text-move-resize	P0	Move and resize text boxes	partial	P1	§4.3	Implied by object editing
+edit.paragraph-detection	P0	Detect paragraphs and text blocks for editing	covered	P1	§4.3	Text-block scope
+edit.font-reuse-substitution	P0	Reuse embedded fonts or substitute with a warning	covered	P1	§4.3, §8	
+edit.text-format-font	P0	Change font, size and colour	covered	P1	§4.3	
+edit.text-format-style	P1	Bold, italic, underline	partial	P1	§4.3	Bold/italic needs font-variant lookup
+edit.text-super-subscript	P2	Superscript and subscript	missing	P2	-	
+edit.paragraph-alignment	P0	Paragraph alignment (left, centre, right, justify)	covered	P1	§4.3	
+edit.line-paragraph-spacing	P1	Line and paragraph spacing	partial	P1	§4.3	Only character spacing named
+edit.char-spacing-scale	P1	Character spacing and horizontal scaling	partial	P1	§4.3	Horizontal scaling unstated
+edit.lists	P1	Bulleted and numbered lists	missing	P2	-	
+edit.add-text	P0	Add a new text box as page content	covered	P1	§4.3	
+edit.find-replace	P2	Find and replace in edit mode	missing	P2	-	
+edit.rtl-cjk-editing	P1	Edit right-to-left and CJK text	partial	P1	§3.2	Indic shaping planned; RTL/CJK unstated
+edit.rotated-text-editing	P2	Edit rotated text	missing	P2	-	
+edit.keep-tags-on-edit	P1	Keep structure tags when editing	missing	P2	-	
+edit.image-add	P0	Add an image	covered	P1	§4.3	
+edit.image-replace	P0	Replace an image (keep position and size)	covered	P1	§4.3	
+edit.image-crop	P0	Crop an image	covered	P1	§4.3	
+edit.image-rotate-flip	P0	Rotate and flip images	partial	P1	§4.3	Rotate yes; flip unstated
+edit.image-move-resize	P0	Move and resize images	covered	P1	§4.3	
+edit.image-extract	P1	Save an image to a file	covered	P1	§4.3	
+edit.image-external-editor	P2	Edit an image in an external application	missing	P2	-	
+edit.arrange-objects	P1	Arrange objects (bring forward, send backward)	covered	P1	§4.3	
+edit.align-distribute-objects	P1	Align and distribute objects	covered	P1	§4.3	
+edit.vector-edit	P1	Select, move, scale, recolour and delete vector paths	covered	P1	§4.3	
+edit.edit-object-tool	P1	Edit object tool for any page object	covered	P1	§4.3	
+edit.object-properties	P2	Object properties (colour space, font, convert colour)	partial	P2	§4.3	Inspector; colour-space conversion unstated
+edit.link-create	P1	Create web and page links	covered	P1	§4.3	
+edit.link-properties	P1	Link appearance and properties	covered	P1	§4.3	
+edit.links-from-urls	P1	Create links from URLs in the text	missing	P1	-	Cheap with text extraction
+edit.remove-all-links	P2	Remove all links	missing	P2	-	
+edit.action-goto	P1	Go-to-page-view action (with named destinations)	covered	P1	§4.3	
+edit.action-uri	P1	Open-a-web-link action	covered	P1	§4.3	
+edit.action-launch	P2	Open-a-file action	missing	P2	-	Security risk; confirm before launching
+edit.action-named	P2	Execute-a-menu-item action (safe list)	missing	P2	-	
+edit.action-set-ocg-state	P2	Set-layer-visibility action	missing	P2	-	
+edit.action-show-hide-field	P1	Show/hide-a-field action	partial	P2	§4.3	Forms designer; action unstated
+edit.action-javascript	P1	Run-a-JavaScript action	partial	P2	§4.1	JS subset via boa
+edit.action-thread	P3	Read-an-article action	skip	-	-	Article threads rare
+edit.action-goto-embedded	P3	Go to a target in an embedded file (GoToE)	skip	-	-	Rare
+edit.action-media	P3	Play sound / media / rich-media actions	partial	P2	§4.1	Multimedia P2
+edit.header-footer-add	P0	Add header and footer	covered	P1	§4.3	
+edit.header-footer-update-remove	P0	Update or remove header and footer	partial	P1	§4.3	Needs tagging (PieceInfo) to update/remove
+edit.header-footer-tokens	P0	Page number and date tokens in header and footer	partial	P1	§4.3	Implied, not specified
+edit.header-footer-ranges	P1	Header and footer page ranges (all, range, odd, even)	partial	P1	§4.3	
+edit.header-footer-shrink	P2	Shrink document to avoid overwriting content	missing	P2	-	
+edit.watermark-add-text	P0	Add a text watermark	covered	P1	§4.3	
+edit.watermark-add-file	P1	Add a watermark from an image or PDF page	partial	P1	§4.3	
+edit.watermark-update-remove	P0	Update or remove watermarks	partial	P1	§4.3	
+edit.watermark-appearance	P1	Watermark rotation, opacity, scale, position, print/screen visibility	partial	P1	§4.3	
+edit.background-add	P0	Add a page background (colour or file)	covered	P1	§4.3	
+edit.background-update-remove	P0	Update or remove backgrounds	partial	P1	§4.3	
+edit.decoration-profiles	P2	Saved header/footer and watermark settings	missing	P2	-	
+edit.bates-numbering	P1	Bates numbering	covered	P1	§4.3	
+edit.bates-multi-file	P1	Bates numbering across multiple files	partial	P1	§4.3, §4.6	Library bulk ops
+edit.bates-remove	P1	Remove Bates numbering	partial	P1	§4.3	
+edit.spell-check	P2	Spell check in comments, form fields and edited text	missing	P2	-	
+edit.spell-dictionaries	P2	Spelling dictionaries per language and a user dictionary	missing	P2	-	Include Indic dictionaries
+edit.format-panel	P0	Format panel for edited text	partial	P1	§4.7	Right inspector while editing
+edit.adobe-express-edits	N/A	Adobe Express image edits (remove background, generative fill)	skip	-	-	Adobe cloud/generative
+organize.organize-grid	P0	Organize pages thumbnail grid	covered	P0	§4.3	
+organize.multi-select-pages	P0	Select pages with click, ⌘-click and ⇧-click	partial	P0	§4.3	Implied by grid
+organize.rotate-pages	P0	Rotate pages	covered	P0	§4.3	
+organize.rotate-filters	P1	Rotate by range with even/odd and orientation filters	missing	P1	-	
+organize.delete-pages	P0	Delete pages	covered	P0	§4.3	
+organize.move-pages	P0	Move pages earlier or later	covered	P0	§4.3	
+organize.drag-reorder	P0	Reorder pages by drag and drop	covered	P0	§4.3	
+organize.insert-blank	P0	Insert blank pages	covered	P0	§4.3	
+organize.insert-from-file	P0	Insert pages from another file	covered	P0	§4.3	
+organize.insert-from-clipboard	P1	Insert pages from the clipboard	missing	P2	-	
+organize.insert-from-scanner	P2	Insert pages from a scanner	missing	P2	-	SANE/WIA scan then OCR
+organize.insert-from-web	P2	Insert pages from a web page	skip	-	-	Web capture; outside goals
+organize.insert-by-drop	P1	Insert by dropping files onto the page grid	covered	P1	§4.7	
+organize.extract-pages	P0	Extract pages to a new document	covered	P0	§4.3	
+organize.extract-separate-files	P1	Extract pages as separate files	partial	P0	§4.3	Split by range is close
+organize.extract-and-delete	P1	Delete pages after extracting	missing	P1	-	
+organize.replace-pages	P0	Replace pages with pages from another file	missing	P1	-	Common: swap signed/scanned page
+organize.duplicate-pages	P0	Duplicate pages	covered	P0	§4.3	
+organize.reverse-pages	P2	Reverse page order	missing	P2	-	
+organize.cut-copy-paste-pages	P1	Cut, copy and paste pages	missing	P1	-	
+organize.drag-pages-between-documents	P2	Drag pages between documents	covered	P1	§4.7	
+organize.page-range-selection	P1	Select by range, odd/even, landscape/portrait	missing	P1	-	
+organize.thumbnail-size	P2	Thumbnail size slider	missing	P2	-	
+organize.split-every-n	P0	Split every N pages	covered	P0	§4.3	
+organize.split-before-pages	P0	Split before chosen pages	covered	P0	§4.3	
+organize.split-by-size	P1	Split by file size	covered	P0	§4.3	Portal upload limits (GST/MCA)
+organize.split-by-bookmarks	P1	Split by top-level bookmarks	covered	P0	§4.3	
+organize.split-naming	P2	Name split parts after bookmarks; never overwrite	missing	P2	-	
+organize.split-multiple-files	P2	Split multiple files in one run	partial	P2	§4.3	Batch Actions after v1.0
+organize.combine-files	P0	Combine files into one PDF	covered	P0	§4.3	
+organize.combine-bookmarks	P0	Combine adds a bookmark per file with its own bookmarks nested	missing	P0	-	Expected default when merging
+organize.combine-choose-pages	P1	Choose which pages of each file to combine	missing	P1	-	
+organize.combine-sort	P2	Sort and reorder files before combining	missing	P2	-	
+organize.combine-thumbnails	P2	Thumbnail (grid) view of the files before combining	missing	P2	-	
+organize.combine-options	P2	Combine options (file size, convert to PDF/A, include open files)	skip	-	-	Acrobat-specific options
+organize.resource-dedupe	P0	Store identical fonts and images once when combining or inserting	missing	P1	-	Avoid bloated merged files
+organize.preserve-links-dests	P0	Rewire links and named destinations to copied pages	missing	P0	-	Merge must not break links
+organize.preserve-fields	P0	Keep form fields interactive when copying pages	missing	P0	-	Merged forms must stay fillable
+organize.preserve-layers	P0	Keep layers and their default state when copying pages	missing	P1	-	CAD sheets carry layers
+organize.preserve-inherited	P0	Copy inherited page attributes with pages	missing	P0	-	Else copied pages lose rotation/resources
+organize.preserve-attachments	P1	Keep attachments when combining	missing	P1	-	
+organize.field-name-conflicts	P1	Rename or merge colliding field names when combining	missing	P1	-	
+organize.struct-tree-merge	P1	Merge structure trees when combining	missing	P2	-	
+organize.page-labels-edit	P1	Edit page labels (style, prefix, start)	covered	P1	§4.3	
+organize.page-boxes	P1	Set page boxes (crop, trim, bleed, art)	covered	P0	§4.3	
+organize.crop-tool	P1	Crop pages by dragging a rectangle	covered	P0	§4.3	
+organize.remove-white-margins	P2	Remove white margins	missing	P2	-	Better reading on small screens
+organize.change-page-size	P2	Change page size	missing	P2	-	
+organize.page-transitions	P2	Page transitions	partial	P2	§4.1	Shown in presentation; not editable
+organize.page-tab-order	P1	Page tab order property	covered	P1	§4.3	
+organize.page-actions	P2	Page open/close actions	missing	P2	-	
+organize.page-templates	P3	Page templates	skip	-	-	Rare, JavaScript-driven
+organize.bookmark-add	P0	Add a bookmark (⌘B)	covered	P1	§4.3	
+organize.bookmark-rename	P0	Rename bookmarks	covered	P1	§4.3	
+organize.bookmark-delete	P0	Delete bookmarks	covered	P1	§4.3	
+organize.bookmark-move	P0	Reorder and nest bookmarks	covered	P1	§4.3	
+organize.bookmark-set-destination	P0	Set a bookmark's destination	covered	P1	§4.3	
+organize.bookmark-appearance	P2	Bookmark style and colour	missing	P2	-	
+organize.bookmark-actions	P1	Bookmark actions	partial	P2	§4.3	
+organize.bookmark-expand-collapse	P1	Expand and collapse all bookmarks	missing	P1	-	
+organize.bookmarks-from-structure	P1	Generate bookmarks from headings or tags	missing	P2	-	Auto-outline for scanned/unbookmarked books
+organize.attachments-add	P2	Add file attachments	partial	P2	§4.3	Edit embedded files
+organize.attachments-delete	P2	Delete attachments	partial	P2	§4.3	
+organize.attachments-description	P2	Edit attachment descriptions	partial	P2	§4.3	
+organize.associated-files	P2	Associated files with relationships (PDF/A-3, PDF 2.0)	partial	P2	§4.3	PDF/A-3
+organize.portfolio-view	P2	View PDF Portfolios as a file list	covered	P1	§4.1	
+organize.portfolio-extract	P2	Extract files from a portfolio	covered	P1	§4.1	
+organize.portfolio-create	P3	Create PDF Portfolios	skip	-	-	Low demand
+organize.document-properties	P0	Document properties dialog (description, fonts, advanced)	covered	P1	§4.1	
+organize.edit-metadata	P0	Edit title, author, subject and keywords	covered	P1	§4.3	
+organize.fonts-list	P1	List fonts with type and embedding status	covered	P1	§4.1	
+organize.initial-view	P1	Edit initial view (layout, magnification, panels, window options)	covered	P1	§4.3	
+organize.custom-properties	P2	Custom document properties	partial	P1	§4.3	Info editor; custom keys unstated
+organize.xmp-editor	P2	Additional metadata (XMP) editor	covered	P1	§4.3	
+organize.document-language	P1	Set document language and binding	missing	P1	-	Accessibility and TTS language
+organize.print-presets	P2	Print dialog presets in document properties	missing	P2	-	
+organize.base-url	P3	Base URL for relative links	skip	-	-	
+comment.list-view	P0	Comments panel with threaded replies (read-only)	covered	P1	§4.2	plan has panel at P1, PdfCraft P0
+comment.appearance-generation	P0	Generate correct appearances for every markup type	covered	P0	§4.2	
+comment.sticky-note	P0	Sticky note comments	covered	P0	§4.2	
+comment.highlight	P0	Highlight text	covered	P0	§4.2	
+comment.underline	P0	Underline text	covered	P0	§4.2	
+comment.strikeout	P0	Strikethrough text	covered	P0	§4.2	
+comment.squiggly	P2	Squiggly underline	covered	P0	§4.2	
+comment.replace-text	P1	Replace-text proposal (strikeout + caret)	missing	P1	-	caret/replace proposals essential for proofreading review
+comment.insert-text	P1	Insert-text proposal (caret)	missing	P1	-	caret annotation not listed
+comment.typewriter	P0	Add text comment (typewriter)	covered	P0	§4.2	free text
+comment.text-box	P0	Text box comment with rich text	partial	P0	§4.2	free text listed; rich text not stated
+comment.callout	P1	Callout comment	covered	P1	§4.2	
+comment.pencil	P0	Freehand drawing (ink)	covered	P0	§4.2	
+comment.eraser	P1	Eraser for ink strokes	missing	P1	-	ink tool needs stroke eraser
+comment.line	P0	Line	covered	P0	§4.2	
+comment.arrow	P0	Arrow	covered	P0	§4.2	
+comment.rectangle	P0	Rectangle	covered	P0	§4.2	
+comment.oval	P0	Oval	covered	P0	§4.2	ellipse
+comment.polygon	P1	Polygon	covered	P0	§4.2	plan P0, PdfCraft P1
+comment.polyline	P1	Connected lines (polyline)	covered	P0	§4.2	
+comment.cloud	P1	Cloud shape	missing	P1	-	cloudy border; standard in CAD/engineering review
+comment.area-highlight	P1	Area highlight	missing	P1	-	highlight a region of scanned/image pages
+comment.attach-file-comment	P1	Attach a file as a comment	covered	P1	§4.2	
+comment.record-audio	P3	Sound comments	skip	-	-	sound annotations deprecated in PDF 2.0
+comment.image-comment	P2	Add an image as a comment	missing	P2	-	
+comment.line-endings	P1	All ten line-ending styles and dashed/cloudy borders	partial	P1	§4.2	arrow implied; ten endings and borders not stated
+comment.properties-dialog	P0	Comment properties (appearance, author, subject)	partial	P0	§4.7	right inspector while editing; author/subject unstated
+comment.properties-bar	P1	Comment properties bar	partial	P1	§4.7	mode toolbar/inspector
+comment.lock-comment	P1	Lock comments	missing	P2	-	
+comment.default-properties	P1	Make current properties the tool default	missing	P1	-	sticky tool styles; cheap, big UX win
+comment.author-identity	P1	Author name from identity preferences	missing	P1	-	replies need an author name setting
+comment.reply	P0	Reply to comments	covered	P1	§4.2	
+comment.set-status	P0	Set review status (accepted, rejected, cancelled, completed)	covered	P1	§4.2	
+comment.checkmark	P1	Mark comments with a checkmark	missing	P2	-	
+comment.delete-comment	P0	Delete comments	partial	P0	§4.2	implied by P0 annotations, not stated
+comment.edit-comment-text	P0	Edit comment text	partial	P0	§4.2	implied by P0 annotations, not stated
+comment.copy-comment-text	P1	Copy comment text	missing	P1	-	
+comment.filter-comments	P0	Filter comments (type, author, status, colour, checkmark)	covered	P1	§4.2	
+comment.sort-comments	P0	Sort comments (page, author, date, type, colour)	partial	P1	§4.2	filters listed, sorting not
+comment.search-comments	P1	Search comments	missing	P1	-	
+comment.show-hide-comments	P1	Show or hide all comments and pop-ups	missing	P1	-	declutter for reading mode
+comment.popups	P1	Open and reposition comment pop-ups	partial	P1	§4.2	sticky notes imply pop-ups
+comment.connector-lines	P2	Connector lines between markups and pop-ups	missing	P2	-	
+comment.review-history	P2	Review history of state changes	partial	P2	§4.2	statuses listed; history not
+comment.stamps-standard	P1	Standard business stamps	covered	P0	§4.2	built-in stamps
+comment.stamps-sign-here	P1	Sign-here stamps	covered	P0	§4.2	built-in stamps
+comment.stamps-dynamic	P1	Dynamic stamps (name and date)	partial	P1	§4.2	name/date stamps common in Indian office workflow
+comment.stamps-custom	P1	Custom stamps from images or PDF pages	covered	P0	§4.2	
+comment.stamps-manage	P2	Manage stamp categories and imports	partial	P2	§4.2	custom stamps imply some management
+comment.stamps-rotate	P2	Rotate stamps with a handle	missing	P2	-	
+comment.import-fdf-xfdf	P1	Import comments from FDF/XFDF	covered	P1	§4.2	
+comment.export-fdf-xfdf	P1	Export all comments to FDF/XFDF	covered	P1	§4.2	
+comment.export-selected	P2	Export selected comments	partial	P2	§4.2	
+comment.import-from-pdf	P2	Import comments from another PDF	missing	P2	-	merge reviewers' copies
+comment.summarize	P1	Summarize comments into a new PDF	covered	P1	§4.2	
+comment.flatten	P1	Flatten comments into page content	covered	P1	§4.2	
+comment.migrate	P3	Migrate comments to a revised document	missing	P2	-	
+comment.measure-distance	P2	Distance measuring tool	covered	P1	§4.1	
+comment.measure-perimeter	P2	Perimeter measuring tool	covered	P1	§4.1	
+comment.measure-area	P2	Area measuring tool	covered	P1	§4.1	
+comment.measure-scale	P2	Scale ratio and calibration per viewport	covered	P1	§4.1	plus title-block calibration §2.5
+comment.measure-snap	P2	Snap to paths, endpoints, midpoints and intersections	covered	P1	§2.5	R-tree snapping
+comment.measure-info-panel	P2	Measurement info panel	partial	P1	§2.5	coordinates readout only
+comment.measure-export	P3	Export measurements as CSV	missing	P2	-	
+comment.geospatial	P2	Geospatial location and measuring	missing	P2	-	Reader shows geo PDFs; niche
+comment.shared-review	N/A	Send for comments / shared review	skip	-	-	Adobe cloud
+comment.mentions-live-review	N/A	@mentions, presence and live co-review	skip	-	-	Adobe cloud
+comment.review-tracker	N/A	Review tracker	skip	-	-	Adobe cloud
+comment.enable-reader-commenting	N/A	Enable commenting and measuring in Reader (usage rights)	skip	-	-	Adobe usage rights; we allow all
+form.field-list	P0	Form fields panel listing every field and value	missing	P1	-	
+form.highlight-fields	P0	Highlight existing fields	missing	P0	-	Reader default; cheap
+form.field-appearance-display	P0	Display checkbox, radio, list and signature widgets as designed	covered	P0	§4.1	
+form.fill-text	P0	Fill text fields	covered	P0	§4.1	
+form.fill-checkbox-radio	P0	Toggle checkboxes and radio buttons (radios in unison)	covered	P0	§4.1	
+form.fill-choice	P0	Choose from combo boxes and list boxes	covered	P0	§4.1	
+form.push-buttons	P0	Push buttons run their actions	partial	P1	§4.1	actions need JS (P2)
+form.field-navigation	P0	Tab between fields	partial	P0	§4.1	implied by fill; tab order only in designer
+form.appearance-regeneration	P0	Regenerate field appearances (auto-size, comb, multiline, password)	partial	P0	§4.1	implied by fill and save
+form.rich-text-fields	P2	Rich-text field values	missing	P2	-	
+form.af-number	P0	Number and currency formatting (AFNumber)	partial	P1	§4.1	JS subset is P2; AF* widely used in govt forms
+form.af-percent	P0	Percentage formatting	partial	P1	§4.1	JS subset P2
+form.af-date-time	P0	Date and time formatting and parsing	partial	P1	§4.1	JS subset P2
+form.af-special	P0	Special formats (zip, phone, SSN, arbitrary mask)	partial	P1	§4.1	JS subset P2
+form.af-range-validate	P0	Range validation	partial	P1	§4.1	JS subset P2
+form.af-simple-calculate	P0	Sum, product, average, min, max calculations	partial	P1	§4.1	totals break without it; native Rust AF* possible
+form.simplified-notation	P0	Simplified field notation calculations	partial	P1	§4.1	JS subset P2
+form.custom-scripts	P0	Custom format, keystroke, validate and calculate scripts	partial	P2	§4.1	boa JS subset
+form.calculation-order	P0	Calculation order	partial	P1	§4.3	forms designer calc scripts
+form.event-order	P0	Keystroke, validate, calculate, format event order	partial	P2	§4.1	
+form.date-picker	P1	Date picker for date fields	missing	P1	-	
+form.auto-complete	P2	Auto-complete from previous entries	missing	P2	-	
+form.required-fields	P1	Required-field highlighting	missing	P1	-	
+form.reset-form	P0	Clear or reset a form	missing	P0	-	
+form.submit-form	P1	Submit form to a URL or email (with a prompt)	missing	P2	-	needs prompt; network from PDFs
+form.import-data	P1	Import form data (FDF, XFDF)	covered	P1	§4.3	
+form.export-data	P1	Export form data (FDF, XFDF)	covered	P1	§4.3	
+form.data-xml-csv-txt	P1	Form data as XML, CSV or tab-delimited text	partial	P1	§4.3	CSV/JSON listed; XML/tab text not
+form.merge-to-spreadsheet	P1	Merge form data files into a spreadsheet	missing	P2	-	
+form.flatten-fields	P1	Flatten form fields	partial	P1	§4.2	flatten annotations; form fields not stated
+form.prepare-form-mode	P0	Prepare a form mode	covered	P1	§4.3	forms designer; plan P1
+form.add-text-field	P0	Add text fields	covered	P1	§4.3	
+form.add-checkbox	P0	Add checkboxes	covered	P1	§4.3	
+form.add-radio	P0	Add radio buttons	covered	P1	§4.3	
+form.check-box-style	P1	Check box and radio button styles	partial	P1	§4.3	
+form.add-dropdown	P0	Add drop-down lists	covered	P1	§4.3	combo
+form.add-listbox	P0	Add list boxes	covered	P1	§4.3	
+form.add-button	P0	Add push buttons	covered	P1	§4.3	
+form.add-image-field	P1	Add image fields	missing	P2	-	photo fields in Indian applications
+form.add-date-field	P0	Add date fields	partial	P1	§4.3	text field + date format
+form.add-signature-field	P0	Add digital signature fields	covered	P1	§4.3	also draw-and-sign P0 §4.4
+form.add-barcode-field	P2	Barcode fields (PDF417, QR, Data Matrix)	missing	P2	-	
+form.props-general	P0	Field properties: general (name, tooltip, visibility, read-only, required)	partial	P1	§4.3	designer implies properties
+form.props-appearance	P0	Field properties: appearance (border, fill, font)	partial	P1	§4.3	
+form.props-position	P1	Field properties: position and size	partial	P1	§4.3	object inspector
+form.props-options	P0	Field properties: options per field type	partial	P1	§4.3	
+form.props-actions	P1	Field properties: actions per trigger	partial	P1	§4.3	
+form.props-format	P0	Field properties: format	partial	P1	§4.3	
+form.props-validate	P0	Field properties: validate	partial	P1	§4.3	
+form.props-calculate	P0	Field properties: calculate	covered	P1	§4.3	calculation scripts
+form.props-selection-change	P2	Field properties: selection change	missing	P2	-	
+form.props-signed	P1	Field properties: signed (lock fields when signed)	covered	P1	§4.4	lock after signing / FieldMDP
+form.align-distribute-fields	P1	Align, centre, distribute and match field sizes	partial	P1	§4.3	inspector guides for objects
+form.duplicate-fields	P1	Duplicate fields across pages	missing	P1	-	
+form.multiple-copies	P2	Create multiple copies of a field in a grid	missing	P2	-	
+form.rename-lock-fields	P1	Rename and lock fields	missing	P1	-	
+form.tab-order	P0	Tab order (row, column, structure, manual)	covered	P1	§4.3	
+form.show-tab-numbers	P2	Show tab numbers	missing	P2	-	
+form.preview-form	P1	Preview mode for testing a form	missing	P1	-	
+form.auto-detect-fields	P1	Automatic form field detection	missing	P1	-	turns flat scanned govt forms fillable
+form.auto-name-fields	P1	Name new fields from nearby labels	missing	P2	-	
+form.document-javascripts	P1	Document-level JavaScripts	covered	P2	§4.3	document JavaScript editor
+form.document-actions	P1	Document actions (will close, will save, did save, will print, did print)	missing	P2	-	
+form.js-host	P0	JavaScript engine with the Acrobat object model subset	partial	P2	§4.1	boa subset
+form.js-console	P1	JavaScript console	missing	P2	-	
+form.js-debugger	P1	JavaScript debugger	skip	-	-	low value for our users
+form.edit-all-javascripts	P2	Edit all JavaScripts in one editor	covered	P2	§4.3	
+form.js-security	P0	JavaScript enable switch and sandboxing	missing	P2	-	needed the day JS ships; off for untrusted
+form.folder-level-js	P3	Folder-level JavaScript	skip	-	-	
+form.xfa-static	P1	View and fill static XFA forms	partial	P2	§4.1	AcroForm fallback only
+form.xfa-dynamic	P1	View and fill dynamic XFA forms	skip	-	§4.1	explicitly out of scope
+form.xfa-formcalc	P1	FormCalc scripting	skip	-	§4.1	dynamic XFA out of scope
+form.xfa-data	P2	XFA XML data import and export	skip	-	-	
+form.xfa-flatten	P2	Flatten XFA forms	skip	-	-	
+form.fill-sign-text	P0	Fill & Sign: add text on flat forms	partial	P0	§4.2	free text covers it; no Fill & Sign flow
+form.fill-sign-marks	P0	Fill & Sign: check, cross, dot, line marks	partial	P0	§4.2	stamps; no quick check/cross/dot tool
+form.fill-sign-date	P0	Fill & Sign: today's date	missing	P1	-	
+form.fill-sign-signature	P0	Fill & Sign: typed, drawn, image or scanned signature and initials	partial	P0	§4.4	signature image only inside digital sig
+form.fill-sign-flatten	P0	Fill & Sign: flatten on save	partial	P1	§4.2	flatten exists
+form.autofill-profile	N/A	Autofill collection synced to an Adobe account	skip	-	-	Adobe account sync
+form.distribute-track	N/A	Distribute and track forms, collect responses	skip	-	-	Adobe cloud
+form.web-forms	N/A	Acrobat Sign web forms	skip	-	-	Acrobat Sign
+protect.security-properties	P0	Security properties (method, which password opened it, each permission)	partial	P1	§4.1	document properties: security
+protect.password-to-open	P0	Protect with a password to open	covered	P1	§4.3	
+protect.permissions-password	P0	Restrict editing and printing with a permissions password	covered	P1	§4.3	
+protect.permissions-matrix	P0	Choose printing, changes, copying and accessibility permissions	covered	P1	§4.3	change permissions
+protect.encryption-level	P1	Choose encryption compatibility (RC4 40/128, AES-128, AES-256)	partial	P1	§4.3	AES-256 only for writing; cos reads all
+protect.encrypt-except-metadata	P1	Encrypt everything except metadata	missing	P2	-	keeps library indexing working
+protect.encrypt-attachments-only	P2	Encrypt only file attachments	missing	P2	-	
+protect.password-strength	P2	Password strength meter	missing	P2	-	
+protect.remove-security	P0	Remove security	covered	P1	§4.3	
+protect.certificate-encryption	P1	Encrypt with certificates for recipients	missing	P2	-	DSC holders could encrypt to recipients' certs
+protect.recipient-permissions	P1	Per-recipient permissions for certificate security	missing	P2	-	
+protect.recipient-ldap	P3	Find recipients in a directory (LDAP)	skip	-	-	
+protect.security-policies	P2	Local security policies (saved presets)	missing	P2	-	
+protect.rights-management	N/A	Server-based rights management (AEM/LiveCycle)	skip	-	-	Adobe server
+protect.mip-labels	P3	Open Microsoft Purview-protected PDFs and apply labels	skip	-	-	Microsoft cloud
+protect.redact-text	P0	Mark text for redaction	covered	P1	§4.3	
+protect.redact-area	P0	Mark areas and images for redaction	partial	P1	§4.3	pixel removal implies area marks
+protect.redact-pages	P0	Mark whole pages for redaction	partial	P1	§4.3	
+protect.search-and-redact	P0	Find text and redact	covered	P1	§4.3	
+protect.redact-word-lists	P1	Redact lists of words or phrases	partial	P1	§4.3	
+protect.redact-patterns	P0	Redact patterns (phone, email, card, SSN, dates)	covered	P1	§4.3	PAN, Aadhaar, phone, email
+protect.redact-pattern-locales	P1	Pattern sets per locale	partial	P1	§4.3	Indian patterns only
+protect.redact-partial-words	P2	Redact part of a match (e.g. all but the last four digits)	missing	P2	-	e.g. keep last 4 of Aadhaar (masked Aadhaar norm)
+protect.redact-folder	P2	Search and redact across a folder	partial	P2	§4.6	library bulk ops / batch Actions
+protect.redaction-properties	P0	Redaction fill colour and overlay text	missing	P1	-	
+protect.redaction-codes	P1	Redaction code sets (e.g. FOIA exemptions)	missing	P2	-	
+protect.apply-redactions	P0	Apply redactions (remove underlying content)	covered	P1	§4.3	
+protect.redact-glyph-removal	P0	Remove redacted text glyphs from content streams	covered	P1	§4.3	
+protect.redact-image-pixels	P0	Remove redacted image pixels	covered	P1	§4.3	
+protect.redact-vectors	P0	Remove or cut redacted vector paths	covered	P1	§4.3	
+protect.redact-annots-fields	P0	Remove annotations and fields under redactions	partial	P1	§4.3	attachments/JS sanitized; annots under box not stated
+protect.redact-struct-tree	P0	Remove redacted content from tags and alternate text	missing	P1	-	tags/alt text leak redacted text
+protect.redaction-verification	P0	Verify no residue remains after redaction	missing	P1	-	post-apply residue check; testable
+protect.redact-filename-suffix	P3	Add a suffix to redacted file names	missing	P2	-	
+protect.redact-ai-suggestions	P2	Suggest sensitive content to redact via an AI provider	skip	-	-	external AI provider
+protect.remove-hidden-information	P1	Remove hidden information (selectable categories)	covered	P1	§4.3	sanitize metadata, layers, JS, attachments
+protect.sanitize	P1	Sanitize document (remove all hidden information)	covered	P1	§4.3	
+protect.audit-faux-redactions	P2	Audit: detect faux redactions (opaque covers over extractable text, unapplied marks)	missing	P2	-	black boxes over live text are common
+protect.remove-hidden-on-close	P3	Remove hidden information when closing or sending	missing	P2	-	
+protect.attachment-trust	P1	Block opening risky attachment types	missing	P1	-	fits hostile-input principle
+protect.url-access-control	P1	Control internet access from PDFs	missing	P1	-	links/submit phoning home
+protect.protected-view	P2	Open untrusted files in a restricted view	partial	P1	§2.1	sandboxed renderer, no restricted UI mode
+protect.security-envelope	P3	Security envelopes	skip	-	-	
+sign.pkcs12	P0	Sign with a PKCS#12 (.p12/.pfx) digital ID	covered	P0	§4.4	
+sign.macos-keychain	P0	Sign with macOS Keychain identities	partial	P2	§4.4	tier 3, optional, off by default
+sign.windows-cert-store	P0	Sign with the Windows certificate store	covered	P1	§4.4	tier 3 CNG, optional
+sign.encrypted-documents	P0	Sign and timestamp password-protected (encrypted) documents	missing	P1	-	incremental save must re-encrypt
+sign.pkcs11	P1	Sign with PKCS#11 tokens and smart cards	covered	P0	§4.4	vendor tokens tier 2
+sign.self-signed-id	P1	Create a self-signed digital ID	missing	P2	-	
+sign.export-certificate	P2	Export a public certificate	missing	P2	-	
+sign.visible-signature	P0	Visible signature by drawing a rectangle	covered	P0	§4.4	
+sign.sign-existing-field	P0	Sign an existing signature field	covered	P0	§4.4	
+sign.invisible-signature	P1	Invisible signature	partial	P0	§4.4	not stated
+sign.signature-appearance	P1	Configure signature appearance (text, graphic, name)	covered	P0	§4.4	
+sign.reason-location	P1	Reason, location and contact info	covered	P0	§4.4	contact info not stated
+sign.lock-after-signing	P1	Lock document or fields after signing	covered	P1	§4.4	
+sign.pkcs7-detached	P0	PKCS#7 detached signatures	partial	P0	§4.4	ETSI only; must validate adbe.pkcs7.* legacy
+sign.cades-pades-bb	P0	CAdES / PAdES B-B signatures	covered	P0	§4.4	
+sign.hash-algorithms	P0	SHA-256/384/512 hashes; no SHA-1 for new signatures	covered	P0	§4.4	
+sign.certify	P1	Certify a document (DocMDP)	covered	P1	§4.4	
+sign.certify-permissions	P1	Allowed changes after certifying	covered	P1	§4.4	
+sign.field-mdp	P1	Field locks (FieldMDP)	covered	P1	§4.4	
+sign.document-timestamp	P1	Add a document timestamp (RFC 3161)	covered	P1	§4.4	
+sign.timestamp-servers	P1	Configure timestamp servers	covered	P1	§4.4	
+sign.pades-bt	P1	PAdES B-T (signature timestamp)	covered	P1	§4.4	
+sign.ltv	P1	Long-term validation (DSS/VRI)	covered	P1	§4.4	
+sign.pades-blta	P1	PAdES B-LT and B-LTA	covered	P1	§4.4	
+sign.ocsp-crl	P1	Revocation checking (OCSP and CRL)	covered	P1	§4.4	
+sign.validate-all	P0	Validate all signatures	covered	P0	§4.4	
+sign.signatures-panel	P0	Signatures panel with per-revision tree	covered	P0	§4.4	
+sign.status-icons	P0	Signature status (valid, unknown, invalid)	covered	P0	§4.4	
+sign.validation-banner	P0	Signed/certified document message bar	partial	P0	§4.4	panel only; banner not stated
+sign.signature-properties	P0	Signature properties (validity summary, signer, time)	covered	P0	§4.4	
+sign.certificate-viewer	P1	Certificate viewer	partial	P1	§4.4	picker shows fields; no viewer
+sign.trust-store	P0	Trusted certificates store	covered	P0	§4.4	CCA roots
+sign.trust-import	P1	Import trusted certificates and set trust	covered	P1	§4.4	
+sign.eutl	P2	EU Trusted Lists	covered	P2	§4.4	optional EUTL import
+sign.os-trust	P1	Trust the operating system's root certificates	covered	P1	§4.4	optional system trust
+sign.verification-time	P1	Verification time (signing time, timestamp, now)	covered	P1	§4.4	
+sign.changes-after-signing	P0	List changes made after signing (MDP-aware diff)	covered	P0	§4.4	
+sign.view-signed-version	P1	View the signed version	covered	P1	§4.4	
+sign.compare-signed-version	P1	Compare signed version with the current one	partial	P1	§4.1	compare tool exists, not wired to revisions
+sign.verify-on-open	P1	Verify signatures when a document opens	missing	P1	-	
+sign.clear-signature	P2	Clear an unsaved signature; clear all signature fields	missing	P2	-	
+sign.seed-values	P2	Signature seed values	missing	P2	-	
+sign.preview-mode	P2	Preview document mode before signing	missing	P2	-	
+sign.qualified-labels	P2	Show qualified signature/seal labels	partial	P2	§4.4	EUTL import only
+sign.web-signing	P1	Sign in the browser with a PKCS#12 file	skip	-	-	browser product
+sign.aatl	N/A	Adobe Approved Trust List	covered	P2	§4.4	optional AATL import
+sign.request-esignatures	N/A	Request e-signatures (Acrobat Sign)	skip	-	-	Acrobat Sign
+sign.cloud-signatures	N/A	Cloud signature (CSC) digital IDs via Adobe	partial	P2	§4.4	generic CSC remote signing fits eSign gateway
+ocr.recognize-text	P0	Recognize text (OCR) in this file	covered	P1	§4.3	
+ocr.recognize-range	P0	Recognize text in the current page or a range	partial	P1	§4.3	Page-range scope not stated
+ocr.recognize-multiple	P1	Recognize text in multiple files	covered	P1	§4.6	Library bulk OCR
+ocr.ocr-languages	P0	OCR document language selection	covered	P1	§3.3	Tesseract with hin/ben/tam traineddata
+ocr.searchable-image	P0	Searchable image output (invisible text layer)	covered	P1	§4.3	Invisible searchable text layer
+ocr.searchable-image-exact	P1	Searchable image (exact): leave the image untouched	partial	P1	§4.3	State that OCR never alters page images
+ocr.editable-text-output	P1	Editable text and images output	missing	P2	-	Turn scans into editable text runs
+ocr.ocr-downsample	P2	Downsample images during OCR	partial	P2	§4.3	Optimizer downsamples; not tied to OCR
+ocr.skip-renderable-text	P1	Skip pages that already have text	missing	P1	-	Avoid duplicate text layers on mixed files
+ocr.rotation-detection	P1	Detect and fix page rotation	missing	P1	-	Auto-fix sideways scans before OCR
+ocr.deskew	P1	Deskew	covered	P1	§4.3	
+ocr.despeckle	P1	Despeckle	covered	P1	§4.3	
+ocr.background-removal	P1	Background removal	missing	P2	-	Clean phone scans of grey paper
+ocr.descreen	P2	Descreen	missing	P2	-	
+ocr.remove-halo	P3	Remove halos	missing	P2	-	Niche scan cleanup
+ocr.edge-shadow-removal	P2	Edge shadow removal	missing	P2	-	
+ocr.camera-perspective	P1	Enhance camera images (edges, perspective, contrast)	missing	P2	-	Phone photos of documents are common
+ocr.camera-document-type	P2	Camera image document types (whiteboard, card, form)	missing	P2	-	
+ocr.correct-recognized-text	P2	Correct recognized text (low-confidence suspects)	missing	P2	-	Review low-confidence words
+ocr.adaptive-compression	P2	Adaptive (MRC) compression of scans	partial	P2	§4.3	JBIG2 listed; MRC not
+ocr.scan-pdfa	P2	Make scans PDF/A compliant	partial	P2	§4.3	PDF/A conversion is P2
+ocr.ocr-engines	P1	Pluggable OCR engines (ocrs default; tesseract optional)	covered	P1	§3.3	Tesseract primary, ocrs fallback
+ocr.ocr-web	P1	OCR in the browser	skip	-	-	No web app planned
+ocr.scanner-acquire	P2	Scan from TWAIN/WIA/ICA/SANE scanners	missing	P2	-	SANE/WIA scanning
+ocr.scan-presets	P2	Scan presets	missing	P2	-	
+ocr.scan-append	P2	Append scans to an existing PDF or split into files	missing	P2	-	
+ocr.adobe-scan-sync	N/A	Adobe Scan mobile capture sync	skip	-	-	Adobe cloud
+create.from-images	P0	Create PDF from images (JPEG, PNG, TIFF, GIF, BMP, JPEG 2000)	covered	P2	§4.3	Images to PDF; insert-from-image is P0
+create.from-multipage-tiff	P0	Multi-page TIFF to multi-page PDF	partial	P2	§4.3	Implied by images to PDF
+create.from-text	P0	Create PDF from plain text	missing	P2	-	
+create.from-markdown	P2	Create PDF from Markdown	missing	P2	-	
+create.from-clipboard	P0	Create PDF from the clipboard	missing	P1	-	Cheap; paste image as new PDF
+create.from-screenshot	P1	Create PDF from a screen capture	missing	P2	-	
+create.blank	P0	Create a blank PDF	partial	P0	§4.3	Blank page insert; new blank document unstated
+create.from-html	P2	Create PDF from an HTML file	missing	P2	-	
+create.from-web-page	P2	Create PDF from a web page URL	skip	-	-	Browsers already print to PDF
+create.from-office	P2	Create PDF from Office documents (LibreOffice sidecar)	covered	P2	§4.3	Via installed LibreOffice
+create.create-multiple	P1	Convert many files to PDF in one run	partial	P2	§4.3	Batch Actions, after v1.0
+create.image-conversion-options	P2	Image compression options when converting	missing	P2	-	
+create.pdf-printer	P3	Print to PDF from other applications	skip	-	-	OS print-to-PDF exists on all platforms
+create.distiller	P3	PostScript/EPS to PDF (Distiller)	skip	-	-	
+create.job-options	P3	PDF settings presets (job options)	skip	-	-	
+create.export-docx	P1	Export to Word (.docx)	partial	P2	§4.3	Via LibreOffice; fidelity unknown
+create.export-rtf	P1	Export to RTF	partial	P2	§4.3	Via LibreOffice
+create.export-xlsx	P1	Export to Excel (.xlsx) with table detection	partial	P2	§4.3	Table detection not planned
+create.export-pptx	P1	Export to PowerPoint (.pptx)	partial	P2	§4.3	Via LibreOffice
+create.export-png	P0	Export pages as PNG	covered	P2	§4.3	Consider P1; trivial with renderer
+create.export-jpeg-tiff	P0	Export pages as JPEG or TIFF	covered	P2	§4.3	
+create.export-jpeg2000	P2	Export pages as JPEG 2000	missing	P2	-	Low demand
+create.export-all-images	P1	Export all embedded images	partial	P1	§4.3	Per-image export only
+create.export-html	P1	Export to HTML	covered	P2	§4.3	
+create.export-text	P0	Export to plain text	covered	P2	§4.3	
+create.export-accessible-text	P1	Export accessible text (from tags)	missing	P2	-	
+create.export-xml	P2	Export to XML	skip	-	-	
+create.export-svg	P1	Export to SVG	missing	P2	-	Useful for CAD drawings; scene exists
+create.export-ps	P2	Export to PostScript	skip	-	-	
+create.export-eps	P2	Export to EPS	skip	-	-	
+create.export-ocr	P1	Run OCR automatically when exporting scans	missing	P2	-	
+create.export-settings	P2	Per-format export settings	missing	P2	-	
+create.text-extraction	P0	Extract text in reading order (columns, RTL, CJK)	covered	P0	§2.2	katna-pdf-text reading order, Indic
+create.translate	P3	Translate documents	skip	-	-	
+create.cloud-office-conversion	N/A	Cloud conversion from the macOS Office add-in	skip	-	-	Adobe cloud
+optimize.reduce-file-size	P0	Reduce file size (one click)	covered	P1	§4.3	
+optimize.compatibility-level	P1	Make compatible with a chosen PDF version	missing	P2	-	
+optimize.optimizer	P1	Advanced optimization (PDF Optimizer)	covered	P1	§4.3	
+optimize.downsample-images	P1	Downsample colour, grey and mono images	covered	P1	§4.3	
+optimize.recompress-images	P1	Recompress images (JPEG, JPEG 2000, Flate)	covered	P1	§4.3	
+optimize.mono-compression	P1	Monochrome compression (JBIG2, CCITT G4)	covered	P1	§4.3	JBIG2; CCITT G4 unstated
+optimize.only-if-smaller	P1	Optimize images only if smaller	missing	P1	-	Guard against size growth
+optimize.unembed-fonts	P2	Unembed fonts	skip	-	-	Hurts fidelity, Indic text
+optimize.flatten-transparency	P1	Flatten transparency	missing	P2	-	
+optimize.discard-javascript	P1	Discard JavaScript actions	partial	P1	§4.3	Only as redaction sanitize
+optimize.discard-thumbnails	P1	Discard embedded thumbnails	missing	P1	-	Easy win in full rewrite
+optimize.discard-tags	P2	Discard document tags	missing	P2	-	
+optimize.discard-bookmarks	P2	Discard bookmarks	missing	P2	-	
+optimize.discard-search-index	P2	Discard embedded search index	missing	P2	-	
+optimize.discard-print-settings	P2	Discard embedded print settings	missing	P2	-	
+optimize.discard-alternate-images	P2	Discard alternate images	missing	P2	-	
+optimize.discard-form-actions	P2	Discard form submit, import and reset actions	missing	P2	-	
+optimize.flatten-form-fields	P1	Flatten form fields while optimizing	partial	P1	§4.2	Flatten annotations only
+optimize.discard-comments	P1	Discard comments, forms and multimedia	partial	P1	§4.3	Redaction sanitize, not optimizer
+optimize.discard-metadata	P1	Discard document information and metadata	partial	P1	§4.3	Redaction sanitize, not optimizer
+optimize.discard-attachments	P1	Discard file attachments	partial	P1	§4.3	Redaction sanitize, not optimizer
+optimize.discard-private-data	P2	Discard private application data (PieceInfo)	missing	P2	-	
+optimize.discard-external-refs	P2	Discard external cross-references	missing	P2	-	
+optimize.discard-hidden-layers	P2	Discard hidden layers and flatten visible ones	partial	P1	§4.3	Redaction sanitize hidden layers
+optimize.merge-image-fragments	P3	Detect and merge image fragments	skip	-	-	
+optimize.lines-to-curves	P3	Convert smooth lines to curves	skip	-	-	
+optimize.compress-structure	P1	Compress document structure (object streams)	covered	P1	§2.3	Object streams in full rewrite
+optimize.flate-unencoded	P1	Flate-encode unencoded streams; replace LZW with Flate	missing	P1	-	Cheap in katna-pdf-cos rewrite
+optimize.remove-invalid-links	P1	Remove invalid links, bookmarks and unreferenced destinations	missing	P2	-	
+optimize.optimize-content	P2	Optimize page content streams	missing	P2	-	
+optimize.audit-space	P1	Audit space usage	missing	P1	-	Shows what bloats a file before compressing
+optimize.optimizer-presets	P2	Optimizer presets	missing	P2	-	E.g. portal upload size limits
+optimize.batch-optimize	P2	Optimize multiple files	covered	P1	§4.6	Library bulk compress
+optimize.preflight	P1	Preflight analysis	partial	P2	§4.3	Only PDF/A and PDF/UA validation
+optimize.preflight-fix	P1	Preflight analyze and fix	skip	-	-	Prepress
+optimize.preflight-profiles	P1	Built-in preflight profiles	skip	-	-	Prepress
+optimize.preflight-single-checks	P1	Single checks	skip	-	-	Prepress
+optimize.preflight-single-fixups	P1	Single fixups	skip	-	-	Prepress
+optimize.preflight-custom-profiles	P2	Create and edit custom profiles	skip	-	-	Prepress
+optimize.preflight-profile-exchange	P2	Import, export and lock profiles	skip	-	-	Prepress
+optimize.preflight-results	P1	Preflight results tree with object details	skip	-	-	Prepress
+optimize.preflight-snap-view	P2	Snap view of a flagged object	skip	-	-	Prepress
+optimize.preflight-reports	P1	Preflight reports (PDF, XML, text)	skip	-	-	Prepress
+optimize.preflight-droplets	P2	Preflight droplets and batch preflight	skip	-	-	Prepress
+optimize.preflight-audit-trail	P3	Embed preflight audit trail	skip	-	-	Prepress
+optimize.pdfa-validate	P1	Verify PDF/A compliance (1-4)	covered	P2	§4.3	veraPDF when installed
+optimize.pdfa-convert	P1	Save as PDF/A (1b, 2b, 3b, 4)	covered	P2	§4.3	1b/2b/3b; PDF/A-4 unstated
+optimize.pdfa-accessible-levels	P1	PDF/A conformance levels a and u	missing	P2	-	
+optimize.pdfx-validate	P1	Verify PDF/X compliance	skip	-	-	Prepress
+optimize.pdfx-convert	P1	Save as PDF/X (1a, 3, 4)	skip	-	-	Prepress
+optimize.output-intents	P1	Choose output intents and conditions	skip	-	-	Prepress
+optimize.pdfe	P2	PDF/E	skip	-	-	
+optimize.pdfvt	P2	PDF/VT	skip	-	-	
+optimize.pdfua-validate	P1	Verify PDF/UA-1 and PDF/UA-2	covered	P2	§4.3	PDF/UA checks
+optimize.standards-panel	P1	Standards panel showing declared conformance	covered	P1	§4.1	Properties show PDF/A, PDF/UA flags
+optimize.remove-standards-id	P2	Remove PDF/A or PDF/X identification	missing	P2	-	
+optimize.pdfx5-reference-xobjects	P3	Show PDF/X-5 reference XObjects	skip	-	-	
+optimize.einvoice-pdfa3	P3	Embed e-invoice XML in PDF/A-3	skip	-	-	EU Factur-X; not our market
+print.print-dialog	P0	Print dialog	covered	P0	§4.1	Native dialog
+print.printer-selection	P0	Choose printer and properties	covered	P0	§4.1	Native dialog
+print.copies-collate	P0	Copies and collation	covered	P0	§4.1	Native dialog
+print.page-range	P0	Print all, current page or a range (labels allowed)	covered	P0	§4.1	Page labels unstated
+print.odd-even-reverse	P1	Odd/even pages and reverse order	partial	P0	§4.1	Depends on native dialog per OS
+print.scaling	P0	Fit, actual size, shrink oversized, custom scale	partial	P0	§4.1	Fit/shrink logic not specified
+print.paper-source-by-size	P2	Choose paper source by PDF page size	missing	P2	-	
+print.duplex	P1	Print on both sides	covered	P0	§4.1	Native dialog
+print.n-up	P0	Multiple pages per sheet	partial	P1	§4.1	GTK dialog has it; Windows does not
+print.booklet	P0	Booklet printing	missing	P1	-	
+print.poster	P1	Poster / tiled printing with overlap and cut marks	missing	P2	-	Tile A0 CAD sheets onto A4
+print.orientation	P0	Auto portrait/landscape	partial	P0	§4.1	Auto-rotate per page unstated
+print.comments-and-forms	P0	Print document, markups, stamps or form fields only	missing	P0	-	Print form data only / without markup
+print.print-with-comment-summary	P2	Print with a comments summary	partial	P2	§4.2	Comment summary exists, not in print
+print.print-preview	P0	Print preview	missing	P1	-	Windows native dialog lacks preview
+print.grayscale	P1	Print in grayscale	missing	P1	-	
+print.print-as-image	P1	Print as image	missing	P1	-	Workaround for printers choking on files
+print.page-setup	P1	Page setup	partial	P1	§4.1	Native dialog
+print.print-ready-pdf	P1	Produce a print-ready imposed PDF	skip	-	-	Prepress
+print.print-pages-from-thumbnails	P2	Print selected pages from thumbnails	missing	P1	-	Cheap from thumbnail selection
+print.postscript-output	P2	PostScript Level 3 output	skip	-	-	
+print.output-preview	P1	Output preview	skip	-	-	Prepress
+print.separations	P1	Separations preview with area coverage	skip	-	-	Prepress
+print.total-area-coverage	P1	Total area coverage warning	skip	-	-	Prepress
+print.color-warnings	P1	Overprint and rich-black warnings	skip	-	-	Prepress
+print.object-inspector	P1	Object inspector	partial	P1	§4.3	Editor object inspector, not print-oriented
+print.simulate-paper-ink	P2	Simulate paper colour and black ink	skip	-	-	Prepress
+print.overprint-preview	P1	Overprint preview	skip	-	-	Prepress
+print.convert-colors	P1	Convert colours	skip	-	-	Prepress
+print.ink-manager	P1	Ink manager	skip	-	-	Prepress
+print.ink-aliases	P2	Ink aliases and spot-to-process	skip	-	-	Prepress
+print.printer-marks	P1	Add printer marks (crop, bleed, registration, colour bars)	skip	-	-	Prepress
+print.fix-hairlines	P1	Fix hairlines	skip	-	-	Prepress
+print.flattener-preview	P2	Flattener preview	skip	-	-	Prepress
+print.color-management	P1	Colour management settings (working spaces, intents)	skip	-	-	Prepress
+print.advanced-print-separations	P2	Print separations and in-RIP separations	skip	-	-	Prepress
+print.print-marks-bleeds	P2	Marks and bleeds when printing	skip	-	-	Prepress
+print.trap-presets	P3	Trap presets (stored as data)	skip	-	-	Prepress
+print.jdf	P3	JDF job definitions (read-only)	skip	-	-	Prepress
+a11y.app-screen-reader	P0	Screen-reader support for the app (AccessKit)	partial	P1	§4.1	Blocked on GPUI AccessKit (§8)
+a11y.keyboard-only	P0	Full keyboard operation of the app	covered	P1	§4.1	
+a11y.checker	P1	Accessibility checker (full check)	partial	P2	§4.3	PDF/UA checks only
+a11y.checker-report	P1	Accessibility report	partial	P2	§4.3	
+a11y.checker-fix	P1	Fix, skip, explain and re-check rules	missing	P2	-	
+a11y.rule-permission-flag	P1	Rule: accessibility permission flag	partial	P2	§4.3	Under PDF/UA checks
+a11y.rule-image-only	P1	Rule: image-only PDF	partial	P2	§4.3	Under PDF/UA checks; could suggest OCR
+a11y.rule-tagged-pdf	P1	Rule: tagged PDF	partial	P2	§4.3	Under PDF/UA checks
+a11y.rule-logical-order	P1	Rule: logical reading order (manual)	partial	P2	§4.3	Manual check
+a11y.rule-primary-language	P1	Rule: primary language	partial	P2	§4.3	Under PDF/UA checks
+a11y.rule-title	P1	Rule: title shown in the window	partial	P2	§4.3	Under PDF/UA checks
+a11y.rule-bookmarks	P1	Rule: bookmarks in long documents	partial	P2	§4.3	Under PDF/UA checks
+a11y.rule-color-contrast	P1	Rule: colour contrast (manual)	partial	P2	§4.3	Manual check
+a11y.rule-tagged-content	P1	Rule: all content tagged or artifact	partial	P2	§4.3	Under PDF/UA checks
+a11y.rule-tagged-annotations	P1	Rule: tagged annotations	partial	P2	§4.3	Under PDF/UA checks
+a11y.rule-tab-order	P1	Rule: tab order follows structure	partial	P2	§4.3	Under PDF/UA checks
+a11y.rule-character-encoding	P1	Rule: reliable character encoding	partial	P2	§4.3	Under PDF/UA checks
+a11y.rule-tagged-multimedia	P1	Rule: tagged multimedia	partial	P2	§4.3	Under PDF/UA checks
+a11y.rule-screen-flicker	P1	Rule: screen flicker (manual)	partial	P2	§4.3	Manual check
+a11y.rule-scripts	P1	Rule: scripts (manual)	partial	P2	§4.3	Manual check
+a11y.rule-timed-responses	P1	Rule: timed responses (manual)	partial	P2	§4.3	Manual check
+a11y.rule-navigation-links	P1	Rule: navigation links (manual)	partial	P2	§4.3	Manual check
+a11y.rule-tagged-fields	P1	Rule: tagged form fields	partial	P2	§4.3	Under PDF/UA checks
+a11y.rule-field-descriptions	P1	Rule: field descriptions	partial	P2	§4.3	Under PDF/UA checks
+a11y.rule-figure-alt	P1	Rule: figures have alternate text	partial	P2	§4.3	Under PDF/UA checks
+a11y.rule-nested-alt	P1	Rule: no nested alternate text	partial	P2	§4.3	Under PDF/UA checks
+a11y.rule-alt-associated	P1	Rule: alternate text associated with content	partial	P2	§4.3	Under PDF/UA checks
+a11y.rule-alt-hides-annot	P1	Rule: alternate text does not hide annotations	partial	P2	§4.3	Under PDF/UA checks
+a11y.rule-other-alt	P1	Rule: other elements have alternate text	partial	P2	§4.3	Under PDF/UA checks
+a11y.rule-table-rows	P1	Rule: table rows	partial	P2	§4.3	Under PDF/UA checks
+a11y.rule-table-cells	P1	Rule: TH and TD in rows	partial	P2	§4.3	Under PDF/UA checks
+a11y.rule-table-headers	P1	Rule: tables have headers	partial	P2	§4.3	Under PDF/UA checks
+a11y.rule-table-regularity	P1	Rule: table regularity	partial	P2	§4.3	Under PDF/UA checks
+a11y.rule-table-summary	P1	Rule: table summary	partial	P2	§4.3	Under PDF/UA checks
+a11y.rule-list-items	P1	Rule: list items	partial	P2	§4.3	Under PDF/UA checks
+a11y.rule-lbl-lbody	P1	Rule: Lbl and LBody	partial	P2	§4.3	Under PDF/UA checks
+a11y.rule-heading-nesting	P1	Rule: heading nesting	partial	P2	§4.3	Under PDF/UA checks
+a11y.autotag	P1	Automatically tag a document	missing	P2	-	
+a11y.autotag-fields	P1	Autotag form fields	missing	P2	-	Forms designer could tag fields
+a11y.reading-order-tool	P1	Reading order tool	partial	P1	§4.1	View only; no editing
+a11y.tags-panel	P1	Tags panel (new, delete, find, change to artifact)	missing	P2	-	
+a11y.tag-properties	P1	Tag properties (type, title, actual text, alternate text, language)	missing	P2	-	
+a11y.role-map	P2	Role map editor	skip	-	-	Tag authoring niche
+a11y.class-map	P3	Class map editor	skip	-	-	
+a11y.order-panel	P1	Order panel	partial	P1	§4.1	Reading order view only
+a11y.content-panel	P2	Content panel	skip	-	-	
+a11y.create-tag-from-selection	P2	Create a tag from a selection	missing	P2	-	
+a11y.artifact-marking	P1	Mark content as artifact	missing	P2	-	
+a11y.find-untagged	P2	Find unmarked content, comments and links	missing	P2	-	
+a11y.table-editor	P2	Table editor (headers, scope, spans)	skip	-	-	
+a11y.alt-text-workflow	P1	Set alternate text figure by figure (with decorative option)	missing	P2	-	
+a11y.alt-text-suggestions	P2	Suggest alternate text via an AI provider	skip	-	-	AI; outside goals
+a11y.set-language	P1	Set document language	partial	P1	§4.3	Metadata editor; /Lang not named
+a11y.set-title-display	P1	Show the document title in the window	partial	P1	§4.3	Initial view settings (DisplayDocTitle)
+a11y.make-accessible-action	P1	Make Accessible guided action	missing	P2	-	
+a11y.setup-assistant	P2	Accessibility setup assistant	skip	-	-	
+a11y.read-aloud	P2	Read out loud (platform TTS)	covered	P1	§4.1	tts crate
+a11y.read-aloud-options	P2	Read-aloud voice, pitch and speed	partial	P1	§4.1	Voice/speed controls unstated
+a11y.replace-page-colors	P2	Replace page colours (high contrast)	covered	P0	§4.5	Night filters ship in Phase 1
+a11y.reflow-tagged	P2	Reflow tagged content	missing	P2	-	Reader parity; small screens
+a11y.keyboard-selection-cursor	P2	Always show the keyboard selection cursor	missing	P2	-	Caret browsing for keyboard users
+misc.compare-text	P1	Compare files: text differences	covered	P1	§4.1	
+misc.compare-visual	P1	Compare files: visual differences	covered	P1	§4.1	Diff overlay
+misc.compare-side-by-side	P1	Side-by-side compare view with synchronised scrolling	covered	P1	§4.1	Synchronised scrolling unstated
+misc.compare-report	P1	Compare summary report as PDF	missing	P2	-	
+misc.compare-filters	P2	Filter changes by type (text, images, formatting)	missing	P2	-	
+misc.compare-page-ranges	P2	Compare page ranges	missing	P2	-	
+misc.compare-scanned	P2	Compare scanned documents via OCR	missing	P2	-	
+misc.action-wizard-run	P1	Run guided actions on files	covered	P2	§4.3	Batch Actions after v1.0
+misc.action-wizard-create	P1	Create and edit actions	partial	P2	§4.3	
+misc.action-wizard-manage	P2	Import, export, copy and delete actions	partial	P2	§4.3	
+misc.action-prepare-distribution	P1	Built-in action: prepare for distribution	missing	P2	-	
+misc.action-optimize-scans	P1	Built-in action: optimize scanned documents	missing	P2	-	OCR+deskew+compress in one step
+misc.action-archive	P1	Built-in action: archive documents	missing	P2	-	
+misc.action-publish-web	P2	Built-in action: prepare for web publishing	skip	-	-	
+misc.batch-processing	P1	Batch processing over files and folders	covered	P1	§4.6	Library bulk ops and CLI
+misc.action-prompt-steps	P2	Prompt-user and instruction steps	skip	-	-	
+misc.action-javascript-step	P2	Execute JavaScript step	skip	-	-	
+misc.custom-commands	P1	Custom commands	missing	P2	-	
+misc.custom-tools	P2	Custom tool sets	missing	P2	-	Mode toolbars are fixed
+misc.command-registry	P0	One command registry for menus, shortcuts, palette and automation	covered	P0	§4.7	Command palette, remappable shortcuts
+misc.disabled-command-reasons	P1	Disabled commands explain why	missing	P1	-	E.g. why Edit is off on signed files
+misc.cli-inspect	P0	CLI: inspect, render and extract text	covered	P0	Phase 2	katna-pdf-cli info
+misc.cli-edit	P0	CLI: edit, combine, extract, split	covered	P0	Phase 2	merge, split
+misc.cli-run	P0	CLI run: call any automation tool or a JSON script	partial	P1	§6	JSON tools; scripts unstated
+misc.cli-completeness	P0	CLI covers every shipped command	covered	P1	§6	CLI reaches every engine feature
+misc.automation-tools	P0	Headless JSON-Schema tool table	covered	P1	§6	JSON tools
+misc.command-list-tool	P1	List commands with enablement and their tools	missing	P2	-	
+misc.mcp-server	P0	Opt-in MCP server over stdio	partial	P2	§6	Agent-friendly CLI; MCP not named
+misc.automation-root-confinement	P0	Confine automation file access to a root directory	missing	P1	-	Needed once agents drive the CLI
+misc.mcp-resources	P1	MCP resources for page images and text	missing	P2	-	
+misc.ui-control-channel	P0	UI control channel (inspect, click, type, keys, commands)	missing	P2	-	GUI test automation
+misc.ui-screenshots	P1	Screenshots of the window or a region via the control channel	missing	P2	-	
+misc.ai-provider	P2	AI provider interface (local model or own endpoint), off by default	skip	-	-	Outside goals
+misc.ai-summary	P2	Summarize a document	skip	-	-	
+misc.ai-ask	P2	Ask questions with citations to pages	skip	-	-	
+misc.ai-conversational-edit	P3	Natural-language editing through registry commands	skip	-	-	
+misc.ai-presentation	P3	Generate a presentation from documents	skip	-	-	
+misc.ai-podcast	P3	Generate an audio overview	skip	-	-	
+misc.ai-charts	P3	Charts from document data	skip	-	-	
+misc.contract-analysis	P3	Contract key terms and multi-contract compare	skip	-	-	
+misc.adobe-ai-assistant	N/A	Adobe AI Assistant	skip	-	-	Adobe cloud
+misc.pdf-spaces	N/A	PDF Spaces	skip	-	-	Adobe cloud
+misc.adobe-express	N/A	Adobe Express integration and generated images	skip	-	-	Adobe cloud
+misc.document-cloud-storage	N/A	Adobe Document Cloud storage	skip	-	-	Adobe cloud
+misc.share-links	N/A	Share links and invitations	skip	-	-	Adobe cloud
+misc.connected-storage	N/A	Connected third-party storage accounts in-app	covered	P1	§4.6	Google Drive/OneDrive via katna-daemon
+misc.cross-device-sync	N/A	Sync signatures, stamps and preferences across devices	partial	P2	§4.6	Catalog sync via cloud folder only
+misc.adobe-account	N/A	Adobe account sign-in	skip	-	-	Adobe cloud
+misc.rich-media-preserve	P3	Preserve 3D, video and sound content	partial	P2	§4.1	Multimedia P2; 3D out
+misc.rich-media-poster	P3	Show posters for rich media	partial	P2	§4.1	
+misc.rich-media-playback	P3	Play video and sound via the platform	covered	P2	§4.1	
+misc.3d-view	P3	View 3D (U3D/PRC) content	skip	-	-	Explicitly out of scope
+misc.legacy-multimedia	P3	Legacy multimedia (screen annotations, renditions)	partial	P2	§4.1	
+misc.flash-swf	N/A	Flash/SWF content	skip	-	-	
+misc.preferences-dialog	P1	Preferences dialog generated from a schema	partial	P1	§3.3	TOML settings; dialog unspecified
+misc.prefs-general	P1	Preferences: general	partial	P1	§3.3	
+misc.prefs-page-display	P1	Preferences: page display	partial	P1	§4.1	
+misc.prefs-documents	P1	Preferences: documents (autosave interval, recent count)	partial	P1	§2.3	Autosave exists
+misc.prefs-commenting	P1	Preferences: commenting	partial	P1	§4.2	
+misc.prefs-forms	P1	Preferences: forms	partial	P1	§4.1	
+misc.prefs-identity	P1	Preferences: identity	missing	P1	-	Author name for comments and stamps
+misc.prefs-full-screen	P2	Preferences: full screen	partial	P1	§4.1	
+misc.prefs-search	P2	Preferences: search	partial	P1	§4.1	
+misc.prefs-signatures	P1	Preferences: signatures	partial	P1	§4.4	Appearance templates, TSA list
+misc.prefs-security	P1	Preferences: security and trust	partial	P1	§4.4	Trust store management
+misc.prefs-spelling	P2	Preferences: spelling	missing	P2	-	For free text and form fields
+misc.prefs-language	P1	Preferences: language	partial	P1	§4.7	
+misc.prefs-reading	P2	Preferences: reading	partial	P1	§4.5	
+misc.prefs-accessibility	P1	Preferences: accessibility	partial	P1	§4.1	
+misc.prefs-color-management	P1	Preferences: colour management	skip	-	-	Prepress
+misc.prefs-javascript	P1	Preferences: JavaScript	partial	P2	§4.1	
+misc.prefs-measuring	P2	Preferences: measuring	partial	P1	§2.5	
+misc.prefs-units-guides	P2	Preferences: units and guides	missing	P2	-	
+misc.prefs-content-editing	P2	Preferences: content editing	missing	P2	-	
+misc.prefs-convert	P2	Preferences: convert to and from PDF	partial	P2	§4.3	
+misc.prefs-catalog	P3	Preferences: catalog / index	partial	P1	§4.6	Watched folders
+misc.admin-preferences	P2	Admin-deployable preference defaults	missing	P2	-	
+misc.localization	P1	Localization (Fluent catalogs)	covered	P0	§4.7	Fluent via katna-i18n
+misc.rtl-ui	P2	Right-to-left user interface	missing	P2	-	Urdu users in India
+misc.installers	P1	Signed installers for macOS, Windows and Linux	covered	P1	§5	
+misc.web-deploy	P1	Hosted web app deployment	skip	-	-	Desktop app only
+misc.performance-budgets	P0	Meet performance budgets on Tier-1 platforms	covered	P0	§2.4	
+misc.send-email	P3	Send the file by email (system mail client)	missing	P1	-	Hand off to Katna Mail compose
+misc.user-docs	P1	User documentation and keyboard reference	missing	P1	-	

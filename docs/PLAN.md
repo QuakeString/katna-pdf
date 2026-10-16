@@ -1,6 +1,6 @@
 # katna-pdf: Product and Engineering Plan
 
-*Draft 5, 2026-10-16. Separate repository in the Katna family; see §2.2 and §2.6.*
+*Draft 6, 2026-10-16 (adds the 838-feature comparison, §4.8). Separate repository in the Katna family; see §2.2 and §2.6.*
 
 katna-pdf is a cross-platform PDF **viewer, editor, signer and library manager** written in Rust with a GPUI interface. The targets are:
 
@@ -435,6 +435,51 @@ The aim is Okular's functionality with a cleaner, modern design:
 - Pages sit at Katna's elevation level 1, like Katna Mail's cards. Scrolling is smooth at 120 Hz, using Katna's springs and durations. Katna's fonts and icon set are used, plus Noto for Indic scripts.
 - Drag-and-drop everywhere: files onto the window, pages between documents, images into pages.
 - Localization from day one through `katna-i18n` (Fluent, `tr!`). Hindi and Bengali are good early additions.
+
+### 4.8 Additions from the 838-feature comparison
+
+We checked the plan against a full list of 838 PDF workbench features (`parity/features.tsv`, see `parity/README.md`). The plan already covers 272 and partly covers 214. Another 238 fit our goals but were missing, and 114 are out of scope. The items below are now part of the plan; the rest are tracked in the checklist as P2.
+
+**P0: needed for the MVP**
+- **Never lose work:**
+  - ask before closing with unsaved changes
+  - offer recovery after a crash
+  - keep autosaves of password-protected files encrypted
+  - re-encrypt with the same keys on save
+- **Passwords done right:**
+  - Unicode passwords (SASLprep), so Hindi or Bengali passwords work
+  - an owner password lifts restrictions
+  - print/copy/modify permissions are honoured, and a message bar explains why a tool is blocked
+- **Safe parsing:** hybrid and odd cross-reference tables, loop-safe revision chains, all stream filters and image codecs, and limits against "zip bomb" streams.
+- **Merging without damage:** pages keep inherited rotation and resources, links and bookmarks still work, form fields stay fillable, and each merged file gets its own bookmark.
+- **Forms basics:**
+  - highlight fields, tab between fields and reset a form
+  - built-in totals and number/date formatting (AFSimple/AFNumber/AFDate), written in Rust and not waiting for JavaScript, because Indian government forms depend on them
+- **Fill & Sign:** quick text, tick/cross/dot marks, today's date, and a typed, drawn or image signature on flat forms. It is not a digital signature, just the everyday "sign this form".
+- **Signatures:**
+  - validate the older `adbe.pkcs7.*` formats most existing Indian signed PDFs use
+  - invisible signatures
+  - a "Signed and valid" banner when a document opens
+- **Viewer basics:** two-page scrolling, typed zoom percentage, hand tool, page labels (i, ii, 1…).
+- **Printing:** with or without comments, form data only, sensible scaling (fit, shrink oversized, custom), auto orientation, odd/even and reverse order.
+
+**P1: by v1.0**
+- **Okular habits:** reload a file when it changes on disk, reopen the last session, fit visible content (trim margins), fit height, and a keyboard shortcuts sheet.
+- **Pages:** replace pages from another file; cut, copy and paste pages; select by range or odd/even; choose pages per file when combining; de-duplicate fonts and images so merged files stay under portal upload limits.
+- **Review:** insert/replace-text proposals, cloud shapes (standard in CAD review), area highlight, eraser, the author name from preferences, a remembered last style, and comment search.
+- **Forms designer:** a field list, date picker, required fields, duplicate across pages, preview mode, and **automatic field detection** to turn flat or scanned government forms into fillable ones.
+- **Redaction you can trust:**
+  - also remove redacted text from tags and alternate text
+  - verify that nothing remains underneath afterwards
+  - mask part of a word, such as showing only the last 4 digits of an Aadhaar number
+- **Safety:** block risky attachments and ask before a PDF contacts the internet.
+- **Signing:** sign encrypted documents, verify signatures on open, and a certificate viewer.
+- **OCR:** skip pages that already have text, and fix sideways or upside-down scans.
+- **Size:** audit what makes a file big, only recompress when it gets smaller, and a "make it under N MB" preset for upload portals.
+- **Printing:** print preview (Windows has none built in), booklet, n-up, grayscale, print as image, and print selected thumbnails.
+- **Family touches:** "Send with Katna Mail", disabled commands that explain why, and new document from the clipboard or blank.
+
+**What we skip:** Adobe cloud services, prepress (PDF/X, separations, trapping), 3D, dynamic XFA, and AI features.
 
 ---
 
