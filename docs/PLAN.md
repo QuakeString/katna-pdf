@@ -320,7 +320,26 @@ A DSC token's private key never leaves the token. The token signs a hash itself,
 - **P1:** **PAdES B-LT / B-LTA**: embed the DSS dictionary (certificates, OCSP responses, CRLs, VRI) and add document timestamps.
 - **P1:** **Certification signatures** (DocMDP with permission levels 1, 2 and 3). Field locking (FieldMDP). Signature-field "lock after signing".
 - **P1:** **Batch signing** of many files with a single PIN entry, from the GUI and from `katna sign` in the CLI.
-- **P2:** Aadhaar **eSign** through a licensed ESP's API (needs a commercial ESP agreement, so it is an optional plugin). A local signing bridge for web portals (like emSigner) is a later candidate.
+- **P1: Aadhaar eSign.** See below.
+- **P2:** A local signing bridge for web portals (like emSigner) is a later candidate.
+
+**Aadhaar eSign (P1, confirmed by Mozammel)**
+
+Aadhaar eSign is the CCA's online signing service (eSign API 2.1/3.x). The user signs with their Aadhaar number and an OTP (or biometric/face), with no token. A licensed **eSign Service Provider (ESP)** issues a one-time certificate and signs the document hash. ESPs include eMudhra, Protean (NSDL), C-DAC and Capricorn. The result is a legally valid signature under the IT Act.
+
+How it works in katna:
+1. katna prepares the PDF locally: it adds the signature field and placeholder and computes the PAdES hash. **The document itself never leaves the user's device; only its hash is sent.**
+2. katna sends the hash to the **katna eSign gateway**, a small server we run (see below). The gateway wraps the hash in the eSign XML request and signs that request with the ASP certificate.
+3. katna opens the ESP's page in the user's browser (or an embedded webview). The user enters their Aadhaar number and OTP there. katna never sees the Aadhaar number or OTP.
+4. The ESP returns the signature to the gateway, katna fetches it, embeds it in the PDF and adds a timestamp. The result validates like any other PAdES signature.
+
+Why a gateway is needed: the eSign rules require requests to come from a registered **Application Service Provider (ASP)**, signed with the ASP's own certificate, with a server URL to receive the response. That private key cannot safely ship inside a desktop app. The gateway is small: a Rust service (`katna-esign-gateway`) that stores no documents, only transaction IDs and hashes.
+
+What it needs outside the code:
+- **A legal entity registered as an ASP** with one ESP: an agreement, KYC and a per-signature fee (typically a few rupees per signature, depending on the ESP).
+- Hosting for the gateway.
+- **Bring-your-own-ASP:** organizations that already have an ESP agreement can point katna at their own gateway URL, so they don't depend on ours.
+
 
 **Validation (`katna-validate`)**
 - **P0:** Check integrity (byte range and digest). Detect changes made after signing by comparing revisions. Show the signature panel with a green, yellow or red status and a human-readable explanation.
@@ -446,11 +465,12 @@ Durations below assume 1–2 full-time developers and are rough sizing, not comm
 - OCR with Indic languages. Optimize and compress.
 - PAdES B-LT/B-LTA, certification signatures.
 - Compare documents, measuring tools with CAD snapping, read aloud, presentation mode.
+- Aadhaar eSign: client flow and `katna-esign-gateway`, first tested in an ESP's sandbox (production needs the ASP agreement).
 - Packaging and installers on all three platforms, auto-update, crash reporting (opt-in).
 - **Milestone M5: v1.0.**
 
 ### After v1.0
-PDF/A and PDF/UA, conversions, batch "Actions", JavaScript subset, Aadhaar eSign plugin, a hayro backend experiment, plugin API, and mobile or tablet layouts if GPUI grows touch support.
+PDF/A and PDF/UA, conversions, batch "Actions", JavaScript subset, a hayro backend experiment, plugin API, and mobile or tablet layouts if GPUI grows touch support.
 
 ---
 
@@ -470,6 +490,7 @@ PDF/A and PDF/UA, conversions, batch "Actions", JavaScript subset, Aadhaar eSign
 | **Flatpak sandbox blocks USB tokens** | Medium | Document the needed permissions. Recommend native `.deb`/`.rpm` for signers. Test p11-kit forwarding. |
 | **Signature interop** (Acrobat shows "validity unknown" and similar) | High | Strict PAdES conformance and validation against Acrobat, DSS and pyHanko in CI. Embed the full chain and revocation data by default. |
 | **Feature scope is enormous** | High | Strict P0/P1/P2 gates. Each phase ships something usable. The CLI allows early automated testing. |
+| **Aadhaar eSign depends on a business agreement** (ASP registration, ESP fees, CCA rule changes) | Medium | Build against the ESP sandbox early. Support bring-your-own-ASP gateways. Keep the eSign flow separate so that a change of ESP doesn't touch signing code. |
 | **Licensing drift** (one AGPL or GPL dependency slipping in) | Medium | `cargo deny` license policy in CI. |
 | **Code-signing and notarization costs** | Low | Budget for a Windows OV/EV certificate and an Apple Developer account before v1.0. |
 
@@ -480,4 +501,4 @@ PDF/A and PDF/UA, conversions, batch "Actions", JavaScript subset, Aadhaar eSign
 1. **App license and engine:** Apache-2.0/MIT with PDFium, or AGPL-3.0 with MuPDF? *Recommendation: let the Phase 0 bake-off decide. Default is Apache/MIT with PDFium; switch to AGPL with MuPDF only if it is clearly faster and you are fine with AGPL.*
 2. ~~**Repository:**~~ Done: github.com/QuakeString/katna-pdf.
 3. **DSC hardware on hand:** which token(s) do you own? That decides the first native driver we build (ePass2003 is the easiest) or the first vendor module we test against.
-4. **Aadhaar eSign:** is it wanted at all? It needs a commercial ESP agreement.
+4. ~~**Aadhaar eSign:**~~ Yes, in scope (§4.4). Still open: who will register as the ASP and which ESP to contract with. This is needed before eSign goes live, not before development starts.
