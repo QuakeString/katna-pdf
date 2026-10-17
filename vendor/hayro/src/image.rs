@@ -1,11 +1,17 @@
 use crate::Renderer;
 use fearless_simd::{Level, Select, Simd, SimdBase, SimdInto, mask8x32, u8x32, u16x16};
 use hayro_interpret::util::x_y_advances;
-use hayro_interpret::{FillRule, ImageData, ImageDrawProps, LumaData, Paint, RgbData};
+use hayro_interpret::{
+    CacheKey, FillRule, ImageData, ImageDrawProps, LumaData, Paint, RasterImage, RgbData,
+    StencilImage,
+};
+use hayro_interpret::hayro_syntax::object::Stream;
+use rustc_hash::FxHashMap;
 use kurbo::{Affine, Rect};
 use pic_scale::{
     ImageSize, ImageStore, ImageStoreMut, PicScaleError, Resampling, ResamplingFunction, Scaler,
 };
+use std::cell::RefCell;
 use std::sync::Arc;
 use vello_cpu::peniko::{Compose, Fill, ImageQuality, ImageSampler, Mix};
 use vello_cpu::{Image, ImageSource, Mask, PixelMetadata, Pixmap, peniko};
@@ -18,6 +24,113 @@ use vello_cpu::{Image, ImageSource, Mask, PixelMetadata, Pixmap, peniko};
 // to clamp, we instead use Hermite, which has similar quality but doesn't
 // have this problem.
 pub(super) const RESAMPLING_FUNCTION: ResamplingFunction = ResamplingFunction::Hermite;
+
+/// Katna PDF: images already decoded while drawing a page, by stream and
+/// the size they were decoded for. A page that draws one image many times
+/// (a logo on every slide of a handout, a scan used as a mask over and
+/// over) then decodes it once. Kept for one page only: a stream's cache
+/// key is a hash of its dictionary, so the object number is part of the
+/// key and inline images (no object number) are never kept.
+#[derive(Default)]
+pub(crate) struct DecodedCache {
+    entries: FxHashMap<ImageKey, Decoded>,
+    bytes: usize,
+}
+
+type ImageKey = (i32, i32, u128, u32, u32);
+
+#[derive(Clone)]
+enum Decoded {
+    Stencil(LumaData),
+    Raster(ImageData, Option<LumaData>),
+}
+
+/// The most decoded bytes kept for a page, and for one image.
+const DECODED_CACHE_BYTES: usize = 128 * 1024 * 1024;
+const DECODED_IMAGE_BYTES: usize = 32 * 1024 * 1024;
+
+impl DecodedCache {
+    fn key(stream: &Stream<'_>, target: (u32, u32)) -> Option<ImageKey> {
+        let id = stream.obj_id();
+        (id.obj_number > 0).then(|| {
+            (
+                id.obj_number,
+                id.gen_number,
+                stream.cache_key(),
+                target.0,
+                target.1,
+            )
+        })
+    }
+
+    fn get(&self, key: Option<ImageKey>) -> Option<Decoded> {
+        self.entries.get(&key?).cloned()
+    }
+
+    fn keep(&mut self, key: Option<ImageKey>, decoded: &Decoded) {
+        let Some(key) = key else { return };
+        let bytes = match decoded {
+            Decoded::Stencil(luma) => luma.data.len(),
+            Decoded::Raster(image, alpha) => {
+                let image = match image {
+                    ImageData::Rgb(rgb) => rgb.data.len(),
+                    ImageData::Luma(luma) => luma.data.len(),
+                };
+                image + alpha.as_ref().map_or(0, |a| a.data.len())
+            }
+        };
+        if bytes <= DECODED_IMAGE_BYTES && self.bytes + bytes <= DECODED_CACHE_BYTES {
+            self.bytes += bytes;
+            self.entries.insert(key, decoded.clone());
+        }
+    }
+}
+
+/// [`StencilImage::with_stencil`], decoding only the first time a page
+/// draws the image at this size.
+fn with_cached_stencil<'a>(
+    cache: &RefCell<DecodedCache>,
+    image: &StencilImage<'a, '_>,
+    target: (u32, u32),
+    func: impl FnOnce(LumaData, &Paint<'a>),
+) {
+    let key = DecodedCache::key(image.stream(), target);
+    if let Some(Decoded::Stencil(stencil)) = cache.borrow().get(key) {
+        return func(stencil, image.paint());
+    }
+    image.with_stencil(
+        |stencil, paint| {
+            cache
+                .borrow_mut()
+                .keep(key, &Decoded::Stencil(stencil.clone()));
+            func(stencil, paint);
+        },
+        Some(target),
+    );
+}
+
+/// [`RasterImage::with_rgba`], decoding only the first time a page draws
+/// the image at this size.
+fn with_cached_rgba(
+    cache: &RefCell<DecodedCache>,
+    image: &RasterImage<'_>,
+    target: (u32, u32),
+    func: impl FnOnce(ImageData, Option<LumaData>),
+) {
+    let key = DecodedCache::key(image.stream(), target);
+    if let Some(Decoded::Raster(data, alpha)) = cache.borrow().get(key) {
+        return func(data, alpha);
+    }
+    image.with_rgba(
+        |data, alpha| {
+            cache
+                .borrow_mut()
+                .keep(key, &Decoded::Raster(data.clone(), alpha.clone()));
+            func(data, alpha);
+        },
+        Some(target),
+    );
+}
 
 #[derive(Clone, Copy)]
 enum ImagePixelFormat {
@@ -515,7 +628,11 @@ impl Renderer<'_> {
 
         match image {
             hayro_interpret::Image::Stencil(s) => {
-                s.with_stencil(
+                let global = self.global;
+                with_cached_stencil(
+                    &global.decoded,
+                    &s,
+                    (target_width, target_height),
                     |stencil, paint| {
                         transform *= Affine::scale_non_uniform(
                             stencil.scale_factors.0 as f64,
@@ -613,18 +730,20 @@ impl Renderer<'_> {
                             }
                         };
                     },
-                    Some((target_width, target_height)),
                 );
             }
             hayro_interpret::Image::Raster(r) => {
-                r.with_rgba(
+                let global = self.global;
+                with_cached_rgba(
+                    &global.decoded,
+                    &r,
+                    (target_width, target_height),
                     |image, alpha| {
                         let (sx, sy) = image.scale_factors();
                         transform *= Affine::scale_non_uniform(sx as f64, sy as f64);
                         self.ctx.set_transform(transform);
                         self.draw_image(image, alpha);
                     },
-                    Some((target_width, target_height)),
                 );
             }
         }

@@ -45,13 +45,13 @@ fn decode_context<'a>(
         height: obj.height,
     };
 
-    let decoded = obj
+    let mut decoded = obj
         .stream
         .decoded_image(&decode_params)
         .map_err(|_| (obj.warning_sink)(InterpreterWarning::ImageDecodeFailure))
         .ok()?;
 
-    let (mut scale_x, mut scale_y) = (1.0, 1.0);
+    let (mut scale_x, mut scale_y) = (1.0_f32, 1.0_f32);
 
     let (width, height) = decoded
         .image_data
@@ -87,12 +87,37 @@ fn decode_context<'a>(
         8
     };
 
-    let bits_per_component = decoded
+    let mut bits_per_component = decoded
         .image_data
         .as_ref()
         .map(|i| i.bits_per_component)
         .or(dict_bpc)
         .unwrap_or(fallback_bpc);
+
+    // Katna PDF: an image drawn at a fraction of its size is averaged down
+    // here, before it is expanded to a byte a sample and resampled
+    // (vendor/hayro-interpret/KATNA.md).
+    let (mut width, mut height) = (width, height);
+    let factor = shrink_factor(width, height, target_dimension);
+    if factor >= 2
+        && !is_indexed
+        && dict.get::<Array<'_>>(MASK).is_none()
+        && let Some(shrunk) = average_down(
+            &decoded.data,
+            width,
+            height,
+            color_space.num_components() as usize,
+            bits_per_component,
+            factor,
+        )
+    {
+        scale_x *= width as f32 / shrunk.width as f32;
+        scale_y *= height as f32 / shrunk.height as f32;
+        width = shrunk.width;
+        height = shrunk.height;
+        bits_per_component = 8;
+        decoded.data = std::borrow::Cow::Owned(shrunk.data);
+    }
 
     let decode_arr = dict
         .get::<Array<'_>>(D)
@@ -109,6 +134,119 @@ fn decode_context<'a>(
         bits_per_component,
         decode_arr,
     })
+}
+
+/// Images smaller than this many pixels are never averaged down: the
+/// renderer's own resampling is fast enough for them.
+const SHRINK_FROM_PIXELS: u64 = 1 << 22;
+
+/// How many source pixels on a side one output pixel averages: the whole
+/// number of times the image is larger than it will be drawn on both axes,
+/// or 1 to keep it as it is.
+fn shrink_factor(width: u32, height: u32, target: Option<(u32, u32)>) -> u32 {
+    let Some((target_width, target_height)) = target else {
+        return 1;
+    };
+    if u64::from(width) * u64::from(height) < SHRINK_FROM_PIXELS {
+        return 1;
+    }
+    let x = width / target_width.max(1);
+    let y = height / target_height.max(1);
+    x.min(y).max(1)
+}
+
+struct Shrunk {
+    data: Vec<u8>,
+    width: u32,
+    height: u32,
+}
+
+/// Averages blocks of `factor`×`factor` samples of a `width`×`height`
+/// image with `components` samples of `bpc` bits a pixel (rows padded to
+/// whole bytes) into one 8-bit sample each. Edge blocks average what they
+/// have. `None` for bit depths other than 1, 2, 4 and 8, or when the data
+/// is too short (the usual decoding then handles it).
+fn average_down(
+    data: &[u8],
+    width: u32,
+    height: u32,
+    components: usize,
+    bpc: u8,
+    factor: u32,
+) -> Option<Shrunk> {
+    if !matches!(bpc, 1 | 2 | 4 | 8) || components == 0 || factor < 2 {
+        return None;
+    }
+    let (w, h, k) = (width as usize, height as usize, factor as usize);
+    let bits = bpc as usize;
+    let row_bytes = (w * components * bits).div_ceil(8);
+    if data.len() < row_bytes.checked_mul(h)? {
+        return None;
+    }
+    let (out_w, out_h) = (w.div_ceil(k), h.div_ceil(k));
+    let max = (1u32 << bits) - 1;
+    let mut sums = vec![0u64; out_w * components];
+    let mut out = Vec::with_capacity(out_w * out_h * components);
+    for band in 0..out_h {
+        sums.fill(0);
+        let rows = (band * k..((band + 1) * k).min(h)).map(|y| &data[y * row_bytes..][..row_bytes]);
+        let band_height = rows.len();
+        for row in rows {
+            if bits == 1 && components == 1 {
+                // One bit a pixel: count the set bits of each block.
+                for (column, sum) in sums.iter_mut().enumerate() {
+                    *sum += u64::from(count_ones(row, column * k, ((column + 1) * k).min(w)));
+                }
+            } else {
+                for x in 0..w {
+                    let column = x / k;
+                    for c in 0..components {
+                        sums[column * components + c] +=
+                            u64::from(sample(row, x * components + c, bits));
+                    }
+                }
+            }
+        }
+        for (column, chunk) in sums.chunks(components).enumerate() {
+            let block_width = ((column + 1) * k).min(w) - column * k;
+            let count = (block_width * band_height) as u64 * u64::from(max);
+            for &sum in chunk {
+                out.push(((sum * 255 + count / 2) / count) as u8);
+            }
+        }
+    }
+    Some(Shrunk {
+        data: out,
+        width: out_w as u32,
+        height: out_h as u32,
+    })
+}
+
+/// Sample `index` of a row of `bits`-bit samples, most significant first.
+fn sample(row: &[u8], index: usize, bits: usize) -> u32 {
+    if bits == 8 {
+        return u32::from(row[index]);
+    }
+    let bit = index * bits;
+    let byte = row[bit / 8];
+    let shift = 8 - bits - bit % 8;
+    u32::from((byte >> shift) & ((1u8 << bits) - 1))
+}
+
+/// The set bits of `row` from bit `start` up to `end`, most significant
+/// bit first.
+fn count_ones(row: &[u8], start: usize, end: usize) -> u32 {
+    if start >= end {
+        return 0;
+    }
+    let (first, last) = (start / 8, (end - 1) / 8);
+    let head = 0xffu8 >> (start % 8);
+    let tail = 0xffu8 << (7 - (end - 1) % 8);
+    if first == last {
+        return (row[first] & head & tail).count_ones();
+    }
+    let middle: u32 = row[first + 1..last].iter().map(|b| b.count_ones()).sum();
+    (row[first] & head).count_ones() + middle + (row[last] & tail).count_ones()
 }
 
 #[must_use]

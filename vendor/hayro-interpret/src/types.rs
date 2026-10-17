@@ -47,6 +47,18 @@ impl<'a, 'b> StencilImage<'a, 'b> {
         }
     }
 
+    /// The paint the stencil is filled with (Katna PDF: lets a renderer
+    /// that kept the decoded stencil draw it again without decoding).
+    pub fn paint(&self) -> &Paint<'a> {
+        &self.paint
+    }
+
+    /// Return the underlying stream object (Katna PDF, as for
+    /// [`RasterImage::stream`]).
+    pub fn stream(&self) -> &Stream<'b> {
+        self.image_xobject.stream()
+    }
+
     // These are hidden since clients are supposed to call get the
     // width/height from `LumaData` instead.
     #[doc(hidden)]
