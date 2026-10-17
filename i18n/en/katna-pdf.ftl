@@ -3,7 +3,7 @@
 # variables written `{ $name }`.
 
 app-name = Katna PDF
-usage = Usage: katna-pdf [FILE.pdf]
+usage = Usage: katna-pdf [FILE.pdf…]
 
 ## The empty window
 empty-title = Open a PDF
@@ -17,6 +17,9 @@ zoom-out = Zoom out (Ctrl+-)
 zoom-fit-width = Fit width (Ctrl+1)
 zoom-actual = Actual size (Ctrl+0)
 open-file = Open a file (Ctrl+O)
+
+## Tabs
+tab-empty = New tab
 
 ## Opening
 opening = Opening { $name }…

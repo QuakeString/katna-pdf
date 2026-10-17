@@ -31,6 +31,8 @@ gpui-platform = { package = "gpui-pre-platform", version = "=0.3.6", features = 
 # add PDFium or MuPDF behind the same trait).
 hayro = "0.8.0"
 image = { version = "0.25", default-features = false }
+# Requests from later launches to the running app (already in GPUI's tree).
+async-channel = "2.5"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

@@ -7,6 +7,9 @@
 //! [`WORKERS`] at a time. A page whose zoom changed keeps showing its old
 //! bitmap, stretched, until the sharp one arrives, so no page is ever
 //! blank once drawn. Bitmaps far from the screen are freed.
+//!
+//! Each tab holds one viewer (`tabs.rs`); opening files is the tabs' job,
+//! so the viewer only says when it is asked to ([`ViewerEvent`]).
 
 use std::collections::HashMap;
 use std::ops::Range;
@@ -14,8 +17,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use gpui::{
-    AnyElement, App, ClickEvent, Context, ExternalPaths, FocusHandle, Focusable, FontWeight,
-    ImageSource, KeyBinding, ListAlignment, ListOffset, ListState, PathPromptOptions, RenderImage,
+    AnyElement, App, ClickEvent, Context, EventEmitter, ExternalPaths, FocusHandle, Focusable,
+    FontWeight, ImageSource, KeyBinding, ListAlignment, ListOffset, ListState, RenderImage,
     SharedString, Subscription, Window, actions, div, img, list, prelude::*, svg,
 };
 use image::{Frame, RgbaImage};
@@ -39,6 +42,9 @@ actions!(
         PreviousPage,
         ScrollDown,
         ScrollUp,
+        CloseTab,
+        NextTab,
+        PreviousTab,
         Quit
     ]
 );
@@ -72,6 +78,12 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("shift-space", PreviousPage, None),
         KeyBinding::new("down", ScrollDown, None),
         KeyBinding::new("up", ScrollUp, None),
+        KeyBinding::new("ctrl-w", CloseTab, None),
+        KeyBinding::new("ctrl-f4", CloseTab, None),
+        KeyBinding::new("ctrl-tab", NextTab, None),
+        KeyBinding::new("ctrl-pagedown", NextTab, None),
+        KeyBinding::new("ctrl-shift-tab", PreviousTab, None),
+        KeyBinding::new("ctrl-pageup", PreviousTab, None),
         KeyBinding::new("ctrl-q", Quit, None),
     ]);
     cx.on_action(|_: &Quit, cx| cx.quit());
@@ -85,6 +97,14 @@ enum Zoom {
     /// Points to logical pixels (1.0 is the page's printed size on a
     /// 96 dpi screen, as other readers count 100%).
     Fixed(f32),
+}
+
+/// What a viewer asks of the tabs around it.
+pub enum ViewerEvent {
+    /// The open button was pressed: choose files to open.
+    ChooseFiles,
+    /// Files were dropped on the viewer.
+    Dropped(Vec<PathBuf>),
 }
 
 /// Points to logical pixels at 100%: 96 pixels to the inch, 72 points.
@@ -114,6 +134,8 @@ struct Drawn {
 
 pub struct Viewer {
     focus: FocusHandle,
+    /// The file shown or being opened.
+    path: Option<PathBuf>,
     content: Content,
     zoom: Zoom,
     /// Points to logical pixels, as last laid out.
@@ -137,7 +159,6 @@ pub struct Viewer {
 impl Viewer {
     pub fn new(file: Option<PathBuf>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let focus = cx.focus_handle();
-        window.focus(&focus, cx);
         let appearance = cx.observe_window_appearance(window, |this, window, cx| {
             this.theme = Theme::for_appearance(window.appearance());
             cx.notify();
@@ -150,6 +171,7 @@ impl Viewer {
         });
         let mut this = Self {
             focus,
+            path: None,
             content: Content::Empty,
             zoom: Zoom::FitWidth,
             shown: 1.0,
@@ -164,16 +186,26 @@ impl Viewer {
             _appearance: appearance,
         };
         if let Some(file) = file {
-            this.open(file, window, cx);
+            this.open(file, cx);
         }
         this
     }
 
+    /// The file shown or being opened.
+    pub fn path(&self) -> Option<&Path> {
+        self.path.as_deref()
+    }
+
+    /// The tab's and the window's title: the file's name.
+    pub fn title(&self) -> Option<String> {
+        self.path.as_deref().map(file_name)
+    }
+
     /// Reads and opens `path` off the UI thread; the card says "Opening…"
     /// meanwhile.
-    fn open(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn open(&mut self, path: PathBuf, cx: &mut Context<Self>) {
         let name = file_name(&path);
-        window.set_window_title(&format!("{name} — {}", t("app-name", &[])));
+        self.path = Some(path.clone());
         self.generation += 1;
         let generation = self.generation;
         self.content = Content::Opening(name.clone());
@@ -218,30 +250,21 @@ impl Viewer {
         .detach();
     }
 
+    /// Frees every drawn page now: the tab is closing.
+    pub fn release(&mut self, window: &mut Window) {
+        self.generation += 1;
+        self.forget_pages();
+        for image in self.released.drain(..) {
+            window.drop_image(image).ok();
+        }
+    }
+
     fn forget_pages(&mut self) {
         self.released
             .extend(self.pages.drain().map(|(_, drawn)| drawn.image));
         self.drawing.clear();
         self.queue.clear();
         self.list.reset(0);
-    }
-
-    fn choose_file(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let chosen = cx.prompt_for_paths(PathPromptOptions {
-            files: true,
-            directories: false,
-            multiple: false,
-            prompt: None,
-        });
-        cx.spawn_in(window, async move |this, cx| {
-            if let Ok(Ok(Some(paths))) = chosen.await
-                && let Some(path) = paths.into_iter().next()
-            {
-                this.update_in(cx, |this, window, cx| this.open(path, window, cx))
-                    .ok();
-            }
-        })
-        .detach();
     }
 
     /// Points to logical pixels for the current zoom, in a card
@@ -445,7 +468,7 @@ impl Viewer {
                 "folder",
                 t("open-file", &[]),
                 th,
-                cx.listener(|this, _, window, cx| this.choose_file(window, cx)),
+                cx.listener(|_, _, _, cx| cx.emit(ViewerEvent::ChooseFiles)),
             ))
             .child(
                 div()
@@ -568,7 +591,7 @@ impl Viewer {
                         .text_color(th.on_accent)
                         .text_size(px(text::BODY))
                         .cursor_pointer()
-                        .on_click(cx.listener(|this, _, window, cx| this.choose_file(window, cx)))
+                        .on_click(cx.listener(|_, _, _, cx| cx.emit(ViewerEvent::ChooseFiles)))
                         .child(t("empty-open", &[])),
                 ),
         };
@@ -581,6 +604,8 @@ impl Viewer {
             .child(body)
     }
 }
+
+impl EventEmitter<ViewerEvent> for Viewer {}
 
 impl Focusable for Viewer {
     fn focus_handle(&self, _: &App) -> FocusHandle {
@@ -621,7 +646,6 @@ impl Render for Viewer {
             .id("katna-pdf")
             .track_focus(&self.focus)
             .key_context("Viewer")
-            .on_action(cx.listener(|this, _: &Open, window, cx| this.choose_file(window, cx)))
             .on_action(cx.listener(|this, _: &ZoomIn, _, cx| this.step_zoom(true, cx)))
             .on_action(cx.listener(|this, _: &ZoomOut, _, cx| this.step_zoom(false, cx)))
             .on_action(cx.listener(|this, _: &FitWidth, _, cx| this.set_zoom(Zoom::FitWidth, cx)))
@@ -644,30 +668,21 @@ impl Render for Viewer {
                 this.list.scroll_by(px(-48.0));
                 cx.notify();
             }))
-            .on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| {
-                if let Some(path) = paths.paths().first() {
-                    this.open(path.clone(), window, cx);
-                }
+            .on_drop(cx.listener(|_, paths: &ExternalPaths, _, cx| {
+                cx.emit(ViewerEvent::Dropped(paths.paths().to_vec()));
             }))
-            .size_full()
+            .flex_1()
+            .min_h_0()
+            .min_w_0()
             .flex()
-            .bg(th.page)
-            .p(px(space::S3))
-            .font_family(".SystemUIFont")
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .flex()
-                    .flex_col()
-                    .overflow_hidden()
-                    .rounded(px(radius::SM))
-                    .bg(th.card)
-                    .border_1()
-                    .border_color(th.line)
-                    .child(self.toolbar(cx))
-                    .child(pages),
-            )
+            .flex_col()
+            .overflow_hidden()
+            .rounded(px(radius::SM))
+            .bg(th.card)
+            .border_1()
+            .border_color(th.line)
+            .child(self.toolbar(cx))
+            .child(pages)
     }
 }
 
