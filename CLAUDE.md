@@ -26,7 +26,8 @@ cargo run --release -p katna-pdf-bench -- file.pdf
   (loads, page counts against hayro, update round trips).
 - `vendor/hayro`, `vendor/hayro-interpret` — hayro with our patches
   (`KATNA.md` in each).
-- `bakeoff/` — the engine bake-off, outside the workspace.
+- `bakeoff/` — the engine bake-off, outside the workspace; `bakeoff/ocr/`
+  the OCR bake-off (results in its README).
 - `tools/katna-pdf-bench` — open and draw timings against the budgets in
   `docs/PLAN.md` §2.4.
 - `i18n/en/katna-pdf.ftl` — English text people see.
