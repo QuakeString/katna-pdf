@@ -1,7 +1,7 @@
 [workspace]
 resolver = "3"
 members = ["crates/*", "apps/*", "tools/*"]
-exclude = ["bakeoff"]
+exclude = ["bakeoff", "vendor"]
 
 [workspace.package]
 version = "0.0.0"
@@ -49,6 +49,8 @@ strip = true
 # layout). Cargo applies patches only from the top-level workspace, so we
 # repeat Katna's [patch.crates-io] here, from the same commit as katna-ui.
 [patch.crates-io]
+# hayro with Katna PDF's fixes; vendor/hayro/KATNA.md lists them.
+hayro = { path = "vendor/hayro" }
 gpui-pre = { git = "https://github.com/QuakeString/katna", rev = "fc6069710d6a9ab214d0a995c3d5b8603c63b1c1" }
 gpui-pre-linux = { git = "https://github.com/QuakeString/katna", rev = "fc6069710d6a9ab214d0a995c3d5b8603c63b1c1" }
 gpui-pre-wgpu = { git = "https://github.com/QuakeString/katna", rev = "fc6069710d6a9ab214d0a995c3d5b8603c63b1c1" }
