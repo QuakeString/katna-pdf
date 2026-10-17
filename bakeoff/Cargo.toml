@@ -1,0 +1,18 @@
+[package]
+name = "katna-pdf-bakeoff"
+description = "Phase 0 engine bake-off: hayro, PDFium and MuPDF on the same PDFs (docs/PLAN.md §3.1)."
+version = "0.0.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+publish = false
+
+# Not part of the workspace: PDFium and MuPDF are C/C++ and stay out of
+# Katna PDF's own build, CI and dependency checks until the bake-off picks
+# an engine.
+[workspace]
+
+[dependencies]
+katna-pdf-render = { path = "../crates/katna-pdf-render" }
+pdfium-render = { version = "0.9.4", default-features = false, features = ["pdfium_latest", "thread_safe"] }
+mupdf = { version = "0.8.0", default-features = false, features = ["base14-fonts"] }
+serde_json = "1"
