@@ -15,6 +15,7 @@ publish = false
 
 [workspace.dependencies]
 katna-pdf-render = { path = "crates/katna-pdf-render" }
+katna-pdf-cos = { path = "crates/katna-pdf-cos" }
 
 # Katna's shared UI crates, at a pinned commit of the Katna repository
 # (docs/PLAN.md §2.2). Move the pin deliberately, together with the
@@ -31,6 +32,8 @@ gpui-platform = { package = "gpui-pre-platform", version = "=0.3.6", features = 
 # add PDFium or MuPDF behind the same trait).
 hayro = "0.8.0"
 image = { version = "0.25", default-features = false }
+# Flate for xref and object streams; the pure-Rust backend (miniz_oxide).
+flate2 = { version = "1.1", default-features = false, features = ["rust_backend"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

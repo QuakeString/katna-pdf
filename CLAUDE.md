@@ -19,7 +19,13 @@ cargo run --release -p katna-pdf-bench -- file.pdf
 
 - `crates/katna-pdf-render` — the page renderer behind an `Engine` trait
   (hayro today). No GPUI.
+- `crates/katna-pdf-cos` — our own PDF object layer: parsing, xref and
+  object streams, repair, incremental updates. No GPUI, no C.
 - `apps/katna-pdf` — the app window.
+- `tools/katna-pdf-cos-check` — runs katna-pdf-cos over a folder of PDFs
+  (loads, page counts against hayro, update round trips).
+- `vendor/hayro` — hayro with our patches (`vendor/hayro/KATNA.md`).
+- `bakeoff/` — the engine bake-off, outside the workspace.
 - `tools/katna-pdf-bench` — open and draw timings against the budgets in
   `docs/PLAN.md` §2.4.
 - `i18n/en/katna-pdf.ftl` — English text people see.
