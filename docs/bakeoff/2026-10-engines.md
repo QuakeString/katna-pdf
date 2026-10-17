@@ -2,7 +2,7 @@
 
 Phase 0 asks which engine draws Katna PDF's pages (docs/PLAN.md §3.1):
 PDFium, MuPDF or hayro. This is the first measurement. The final choice
-is recorded in PLAN.md once it is made.
+was made on 2026-10-17: **hayro only** (PLAN.md §3.1).
 
 ## Recommendation
 
