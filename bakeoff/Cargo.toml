@@ -17,6 +17,8 @@ pdfium-render = { version = "0.9.4", default-features = false, features = ["pdfi
 mupdf = { version = "0.8.0", default-features = false, features = ["base14-fonts"] }
 serde_json = "1"
 
-# The same patched hayro as the app (vendor/hayro/KATNA.md).
+# The same patched hayro as the app (vendor/hayro/KATNA.md,
+# vendor/hayro-interpret/KATNA.md).
 [patch.crates-io]
 hayro = { path = "../vendor/hayro" }
+hayro-interpret = { path = "../vendor/hayro-interpret" }

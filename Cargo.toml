@@ -56,6 +56,7 @@ strip = true
 [patch.crates-io]
 # hayro with Katna PDF's fixes; vendor/hayro/KATNA.md lists them.
 hayro = { path = "vendor/hayro" }
+hayro-interpret = { path = "vendor/hayro-interpret" }
 gpui-pre = { git = "https://github.com/QuakeString/katna", rev = "fc6069710d6a9ab214d0a995c3d5b8603c63b1c1" }
 gpui-pre-linux = { git = "https://github.com/QuakeString/katna", rev = "fc6069710d6a9ab214d0a995c3d5b8603c63b1c1" }
 gpui-pre-wgpu = { git = "https://github.com/QuakeString/katna", rev = "fc6069710d6a9ab214d0a995c3d5b8603c63b1c1" }
