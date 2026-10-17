@@ -1,0 +1,20 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+//! Katna PDF's own object layer, "COS" (docs/PLAN.md §3.2): reading a
+//! PDF's objects, finding them through cross-reference tables or streams,
+//! repairing files whose tables are broken, and appending incremental
+//! updates that leave the original bytes untouched, as signing needs.
+//!
+//! It knows objects, not pages' looks: drawing stays with the renderer.
+//! v0 reads encrypted files' structure but cannot decrypt or update them.
+
+mod document;
+mod filter;
+mod object;
+mod parse;
+mod write;
+
+pub use document::{Document, Entry, LoadError, XrefKind};
+pub use filter::{FilterError, decode};
+pub use object::{Dict, Name, Object, Ref, Stream};
+pub use write::{Update, UpdateError, write_object};
