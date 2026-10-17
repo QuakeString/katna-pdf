@@ -9,6 +9,7 @@ use std::borrow::Cow;
 use gpui::{AssetSource, SharedString};
 
 const ICONS: &[(&str, &[u8])] = &[
+    ("icons/close.svg", include_bytes!("../icons/close.svg")),
     (
         "icons/document.svg",
         include_bytes!("../icons/document.svg"),
