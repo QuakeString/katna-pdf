@@ -145,13 +145,28 @@ impl Renderer<'_> {
                         xs = xs.max(min_x_scale).min(max_x_scale);
                         ys = ys.max(min_y_scale).min(max_y_scale);
 
+                        // Katna PDF patch: the cell pixmap is one step wide
+                        // and high, and a step can be far larger than the
+                        // bbox (bug1795263.pdf: XStep 12108 for a 25-unit
+                        // bbox). At deep zoom that asked for 11,600² pixel
+                        // cells, 5 GB in all, and past 65,535 the `as u16`
+                        // below saturated. Draw such cells at a lower scale
+                        // instead, so one cell stays within MAX_CELL_SIZE.
+                        const MAX_CELL_SIZE: f32 = 2048.0;
+                        if (xs * t.x_step).abs() > MAX_CELL_SIZE {
+                            xs = MAX_CELL_SIZE / t.x_step.abs();
+                        }
+                        if (ys * t.y_step).abs() > MAX_CELL_SIZE {
+                            ys = MAX_CELL_SIZE / t.y_step.abs();
+                        }
+
                         let x_step = xs * t.x_step;
                         let y_step = ys * t.y_step;
 
                         let scaled_width = bbox.width() as f32 * xs;
                         let scaled_height = bbox.height() as f32 * ys;
-                        let pix_width = x_step.abs().round() as u16;
-                        let pix_height = y_step.abs().round() as u16;
+                        let pix_width = x_step.abs().round().max(1.0) as u16;
+                        let pix_height = y_step.abs().round().max(1.0) as u16;
 
                         let mut ctx = self.child_context(pix_width, pix_height);
                         let mut renderer = Renderer::new(&mut ctx, self.global);
