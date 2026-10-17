@@ -101,3 +101,72 @@ fn refuses_what_is_not_a_pdf() {
     let err = Hayro.open(Arc::new(b"hello".to_vec()), "").err();
     assert_eq!(err, Some(OpenError::Invalid));
 }
+
+/// A one-page PDF that draws a `width`×`height` one-bit image of vertical
+/// stripes (every other pixel white) with `content`.
+fn striped_image_pdf(width: u32, height: u32, content: &str) -> Vec<u8> {
+    let row = vec![0xaa_u8; width.div_ceil(8) as usize];
+    let data = row.repeat(height as usize);
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    let mut object = |out: &mut Vec<u8>, body: &[u8]| {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n", offsets.len()).as_bytes());
+        out.extend_from_slice(body);
+        out.extend_from_slice(b"\nendobj\n");
+    };
+    object(&mut out, b"<< /Type /Catalog /Pages 2 0 R >>");
+    object(&mut out, b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>");
+    object(
+        &mut out,
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] \
+          /Resources << /XObject << /Im1 5 0 R >> >> /Contents 4 0 R >>",
+    );
+    object(
+        &mut out,
+        format!(
+            "<< /Length {} >>\nstream\n{content}\nendstream",
+            content.len()
+        )
+        .as_bytes(),
+    );
+    let mut image = format!(
+        "<< /Type /XObject /Subtype /Image /Width {width} /Height {height} \
+         /ColorSpace /DeviceGray /BitsPerComponent 1 /Length {} >>\nstream\n",
+        data.len()
+    )
+    .into_bytes();
+    image.extend_from_slice(&data);
+    image.extend_from_slice(b"\nendstream");
+    object(&mut out, &image);
+    let xref = out.len();
+    out.extend_from_slice(
+        format!("xref\n0 {}\n0000000000 65535 f \n", offsets.len() + 1).as_bytes(),
+    );
+    for offset in &offsets {
+        out.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(
+        format!(
+            "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n",
+            offsets.len() + 1
+        )
+        .as_bytes(),
+    );
+    out
+}
+
+#[test]
+fn a_huge_image_drawn_small_averages_to_grey() {
+    // 8 megapixels drawn twice, at 200 × 100 and 100 × 50 points: averaged
+    // down while decoding (vendor/hayro-interpret/KATNA.md), once per size.
+    let content = "q 200 0 0 100 0 0 cm /Im1 Do Q q 100 0 0 50 0 0 cm /Im1 Do Q";
+    let pdf = striped_image_pdf(4096, 2048, content);
+    let doc = Hayro.open(Arc::new(pdf), "").unwrap();
+    let page = doc.render(0, 1.0).unwrap();
+    for (x, y) in [(150, 25), (50, 75), (100, 50)] {
+        let [r, g, b, _] = pixel(&page, x, y);
+        assert!((120..=136).contains(&r), "({x}, {y}) is {r}, not mid grey");
+        assert_eq!((r, g), (g, b), "grey");
+    }
+}

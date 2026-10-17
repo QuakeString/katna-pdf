@@ -73,6 +73,9 @@ pub(crate) struct GlobalState {
     outline_cache: Rc<RefCell<FxHashMap<u128, Rc<BezPath>>>>,
     scaler: Scaler,
     force_image_interpolation: bool,
+    /// Katna PDF: images decoded while drawing this page, so one drawn
+    /// many times is decoded once (`image::DecodedCache`).
+    pub(crate) decoded: RefCell<image::DecodedCache>,
 }
 
 impl GlobalState {
@@ -82,6 +85,7 @@ impl GlobalState {
             outline_cache: cache.outline_cache.clone(),
             scaler: Scaler::new(image::RESAMPLING_FUNCTION),
             force_image_interpolation: settings.force_image_interpolation,
+            decoded: RefCell::default(),
         }
     }
 }

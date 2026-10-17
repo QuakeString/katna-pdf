@@ -36,3 +36,26 @@ device scale (11,600² per cell for bug1795263.pdf at 8×), and the `as u16`
 cast in `paint.rs` saturates past 65,535. Capping the cell's scale so
 `step × scale ≤ 2048` fixes the memory and the crash with no visible change
 on pdf.js's corpus."
+
+## Images decoded once a page (src/image.rs, src/lib.rs)
+
+Every `Do` of an image decoded it again. A page that draws the same image
+many times paid for each one; `issue16263.pdf` draws its 151-megapixel mask
+40 times. `GlobalState` now keeps what a page has decoded
+(`image::DecodedCache`), keyed by object number, the stream's cache key and
+the size it was decoded for. It holds at most 128 MB, and no single image
+over 32 MB. The cache lives for one page only: a stream's cache key hashes
+its dictionary alone, so the object number is part of the key, and inline
+images, which have no object number, are never kept.
+
+Together with averaging huge images down while decoding
+(`vendor/hayro-interpret/KATNA.md`), the results on pdf.js's 994 test files
+(1,062 pages at 100%, before and after) are:
+
+- `issue16263.pdf`: 7,412 → 137 ms a page; an 8× tile 6.6 s → 0.3 s.
+- No file got slower beyond run-to-run noise, and none failed that did
+  not fail before.
+- 12 pages changed, all with big scanned images. On those, the box average
+  and the renderer's own filter differ by a few grey levels (mean 2 to 4).
+  There is no shift and no change in how dark the page is overall. The
+  only clear difference is the moiré on very fine hatching.

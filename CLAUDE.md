@@ -24,7 +24,8 @@ cargo run --release -p katna-pdf-bench -- file.pdf
 - `apps/katna-pdf` — the app window.
 - `tools/katna-pdf-cos-check` — runs katna-pdf-cos over a folder of PDFs
   (loads, page counts against hayro, update round trips).
-- `vendor/hayro` — hayro with our patches (`vendor/hayro/KATNA.md`).
+- `vendor/hayro`, `vendor/hayro-interpret` — hayro with our patches
+  (`KATNA.md` in each).
 - `bakeoff/` — the engine bake-off, outside the workspace.
 - `tools/katna-pdf-bench` — open and draw timings against the budgets in
   `docs/PLAN.md` §2.4.
