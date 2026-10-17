@@ -1,7 +1,7 @@
 [workspace]
 resolver = "3"
 members = ["crates/*", "apps/*", "tools/*"]
-exclude = ["vendor"]
+exclude = ["bakeoff", "vendor"]
 
 [workspace.package]
 version = "0.0.0"

@@ -212,7 +212,7 @@ katna-pdf is part of the Katna family and must look and feel like Katna Mail on 
 
 | Option | License | Quality / coverage | Editing support | Verdict |
 |---|---|---|---|---|
-| **PDFium** via `pdfium-render` | BSD-3 / Apache-2.0 (binding MIT/Apache) | Chrome-grade; AcroForm, annotations, text extraction, page objects | Page-object API: add, move or delete text, image and path objects; save | **Primary choice** |
+| **PDFium** via `pdfium-render` | BSD-3 / Apache-2.0 (binding MIT/Apache) | Chrome-grade; AcroForm, annotations, text extraction, page objects | Page-object API: add, move or delete text, image and path objects; save | Bake-off yardstick only (decided 2026-10-17) |
 | MuPDF (`mupdf` crate) | **AGPL-3.0** or paid commercial license | Excellent and fast; good redaction and OCR hooks | Good | Strong engine, but AGPL forces the whole app to be AGPL. Keep as an optional backend only if the app goes AGPL |
 | hayro (pure Rust) | Apache/MIT | Young but improving fast; no forms | None | Watch it. It is the long-term option for a pure-Rust renderer behind the same trait |
 | pdf.js / Poppler | Apache / GPL | — | — | Poppler is GPL and C++; not a good fit |
@@ -226,6 +226,10 @@ katna-pdf is part of the Katna family and must look and feel like Katna Mail on 
 - **hayro**: pure Rust. Katna Mail already uses it for attachment previews, it fits Katna's no-`unsafe` rule best, and it shares `vello_cpu` with the CAD pipeline.
 
 The fastest engine that renders the test corpus correctly wins. One may be used for viewing and another as a fallback.
+
+**First results (October 2026):** [docs/bakeoff/2026-10-engines.md](bakeoff/2026-10-engines.md). On 994 real-world PDFs, hayro was as reliable and as fast as the C engines in everyday reading, and it drew pages correctly most often. Its weak spots are deep zoom on image-heavy pages and real CAD drawings. The recommendation is hayro only, with PDFium and MuPDF kept as yardsticks.
+
+**Decided (Mozammel, 2026-10-17): hayro only.** Katna PDF draws pages with hayro; PDFium and MuPDF stay out of the app and live only in `bakeoff/` as yardsticks. Phase 1 takes on hayro's weak spots: deep zoom on image-heavy pages (draw images at screen size, cache decoded images across tiles, report upstream), the §2.5 vector pipeline for CAD, and upstream reports for the files that hang or panic it.
 
 **Katna's "Rust only" goal.** Katna links only unavoidable system C libraries (`docs/ARCHITECTURE.md` §1). PDFium (C++) or MuPDF (C) would be the first large non-Rust library in the repository, so they win only if hayro clearly misses the speed or correctness budgets. If one is chosen, it is bundled and loaded at runtime, and the decision is recorded in Katna's §20 dependency policy. Prebuilt binaries come from `bblanchon/pdfium-binaries`, are fetched by `xtask`, and ship next to the executable. Build without V8 or XFA at first (smaller, safer). A `RenderBackend` trait keeps hayro and MuPDF possible later.
 
@@ -612,7 +616,7 @@ PDF/A and PDF/UA, conversions, batch "Actions", JavaScript subset, a hayro backe
 
 ## 9. Open decisions for Mozammel
 
-1. ~~**App license:**~~ GPL-3.0-or-later, as Katna (§3.4). The engine is chosen by the Phase 0 benchmark.
+1. ~~**App license:**~~ GPL-3.0-or-later, as Katna (§3.4). ~~**Engine:**~~ hayro only, from the Phase 0 bake-off (§3.1).
 2. ~~**Repository:**~~ Done: github.com/QuakeString/katna-pdf.
 3. **DSC hardware on hand:** which token(s) do you own? That decides the first native driver we build (ePass2003 is the easiest) or the first vendor module we test against.
 4. ~~**Aadhaar eSign:**~~ Yes, in scope (§4.4). Still open: who will register as the ASP and which ESP to contract with. This is needed before eSign goes live, not before development starts.
