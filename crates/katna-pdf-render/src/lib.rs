@@ -8,10 +8,11 @@
 //! here: the app turns a [`Bitmap`] into a GPUI image itself.
 
 mod hayro_engine;
+pub mod scene;
 
 use std::sync::Arc;
 
-pub use hayro_engine::Hayro;
+pub use hayro_engine::{Hayro, HayroPlain};
 
 /// A page is never drawn larger than this many pixels on a side...
 pub const MAX_SIDE: u32 = 8192;
