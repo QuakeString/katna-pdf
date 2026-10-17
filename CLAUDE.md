@@ -18,7 +18,8 @@ cargo run --release -p katna-pdf-bench -- file.pdf
 ## Layout
 
 - `crates/katna-pdf-render` — the page renderer behind an `Engine` trait
-  (hayro today). No GPUI.
+  (hayro today); `scene.rs` draws vector-heavy pages such as CAD
+  drawings from an R-tree (`docs/bakeoff/2026-10-cad.md`). No GPUI.
 - `crates/katna-pdf-cos` — our own PDF object layer: parsing, xref and
   object streams, repair, incremental updates. No GPUI, no C.
 - `apps/katna-pdf` — the app window.
@@ -29,7 +30,7 @@ cargo run --release -p katna-pdf-bench -- file.pdf
 - `bakeoff/` — the engine bake-off, outside the workspace; `bakeoff/ocr/`
   the OCR bake-off (results in its README).
 - `tools/katna-pdf-bench` — open and draw timings against the budgets in
-  `docs/PLAN.md` §2.4.
+  `docs/PLAN.md` §2.4; `--cad` for zoom timings on drawings (§2.5).
 - `i18n/en/katna-pdf.ftl` — English text people see.
 
 ## Rules

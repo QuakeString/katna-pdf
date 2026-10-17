@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The pure-Rust engine: hayro (docs/PLAN.md §3.1).
+//! The pure-Rust engine: hayro (docs/PLAN.md §3.1), with vector-heavy
+//! pages drawn from a [`Scene`] (docs/PLAN.md §2.5).
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use hayro::hayro_interpret::InterpreterSettings;
 use hayro::hayro_interpret::util::TransformExt;
@@ -12,11 +13,18 @@ use hayro::vello_cpu::color::palette::css::WHITE;
 use hayro::vello_cpu::{Pixmap, RasterizerSettings, RenderContext, Resources, TargetInit};
 use hayro::{RenderCache, RenderSettings, render_into};
 
+use crate::scene::{Scene, is_vector_heavy};
 use crate::{Bitmap, Document, Engine, OpenError, Region, fit_scale};
 
-/// hayro, pure Rust, drawing on the CPU.
+/// hayro, pure Rust, drawing on the CPU. Vector-heavy pages, such as CAD
+/// drawings, are read once into a [`Scene`] and drawn from it.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct Hayro;
+
+/// [`Hayro`] drawing every page the usual way, never from a scene: for
+/// comparing the two.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct HayroPlain;
 
 impl Engine for Hayro {
     fn name(&self) -> &'static str {
@@ -24,32 +32,65 @@ impl Engine for Hayro {
     }
 
     fn open(&self, bytes: Arc<Vec<u8>>, password: &str) -> Result<Arc<dyn Document>, OpenError> {
-        let pdf = Pdf::new_with_password(bytes, password).map_err(|err| match err {
-            LoadPdfError::Decryption(_) => OpenError::Locked,
-            LoadPdfError::Invalid => OpenError::Invalid,
-        })?;
-        let sizes: Vec<_> = pdf
-            .pages()
-            .iter()
-            .map(|page| {
-                let (w, h) = page.render_dimensions();
-                (w.max(1.0), h.max(1.0))
-            })
-            .collect();
-        if sizes.is_empty() {
-            return Err(OpenError::Invalid);
-        }
-        Ok(Arc::new(HayroDocument { pdf, sizes }))
+        open(bytes, password, true)
     }
+}
+
+impl Engine for HayroPlain {
+    fn name(&self) -> &'static str {
+        "hayro-plain"
+    }
+
+    fn open(&self, bytes: Arc<Vec<u8>>, password: &str) -> Result<Arc<dyn Document>, OpenError> {
+        open(bytes, password, false)
+    }
+}
+
+fn open(bytes: Arc<Vec<u8>>, password: &str, scenes: bool) -> Result<Arc<dyn Document>, OpenError> {
+    let pdf = Pdf::new_with_password(bytes, password).map_err(|err| match err {
+        LoadPdfError::Decryption(_) => OpenError::Locked,
+        LoadPdfError::Invalid => OpenError::Invalid,
+    })?;
+    let sizes: Vec<_> = pdf
+        .pages()
+        .iter()
+        .map(|page| {
+            let (w, h) = page.render_dimensions();
+            (w.max(1.0), h.max(1.0))
+        })
+        .collect();
+    if sizes.is_empty() {
+        return Err(OpenError::Invalid);
+    }
+    let scenes = scenes.then(|| sizes.iter().map(|_| OnceLock::new()).collect());
+    Ok(Arc::new(HayroDocument { pdf, sizes, scenes }))
 }
 
 struct HayroDocument {
     pdf: Pdf,
     /// Each page's size in points, read once on open.
     sizes: Vec<(f32, f32)>,
+    /// Each page's scene, once a draw has asked: `None` for pages that
+    /// are not vector-heavy or hold something a scene cannot draw. `None`
+    /// altogether for [`HayroPlain`].
+    scenes: Option<Vec<OnceLock<Option<Arc<Scene>>>>>,
 }
 
 impl HayroDocument {
+    /// Page `page`'s scene, built on first use, if it should have one.
+    fn scene(&self, page: usize) -> Option<Arc<Scene>> {
+        let cell = self.scenes.as_ref()?.get(page)?;
+        cell.get_or_init(|| {
+            let pages = self.pdf.pages();
+            let pdf_page = pages.get(page)?;
+            if !is_vector_heavy(pdf_page) {
+                return None;
+            }
+            Scene::build(pdf_page).ok().map(Arc::new)
+        })
+        .clone()
+    }
+
     /// Draws page `page` through `transform` (from the page's own
     /// coordinates to pixels) into a `width`×`height` bitmap.
     fn draw(
@@ -63,6 +104,9 @@ impl HayroDocument {
         let (w16, h16) = (u16::try_from(width).ok()?, u16::try_from(height).ok()?);
         if w16 == 0 || h16 == 0 {
             return None;
+        }
+        if let Some(scene) = self.scene(page) {
+            return scene.render(scale, origin, size);
         }
         let pages = self.pdf.pages();
         let pdf_page = pages.get(page)?;

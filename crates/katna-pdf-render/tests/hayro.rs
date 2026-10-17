@@ -4,7 +4,8 @@
 
 use std::sync::Arc;
 
-use katna_pdf_render::{Engine, Hayro, OpenError, Region};
+use katna_pdf_render::scene::{HEAVY_SEGMENTS, Unsupported, page_scene};
+use katna_pdf_render::{Bitmap, Engine, Hayro, HayroPlain, OpenError, Region};
 
 /// A PDF with one 200 × 100 pt page per entry of `pages`, each a content
 /// stream; the xref offsets are worked out, so hayro reads it without
@@ -169,4 +170,82 @@ fn a_huge_image_drawn_small_averages_to_grey() {
         assert!((120..=136).contains(&r), "({x}, {y}) is {r}, not mid grey");
         assert_eq!((r, g), (g, b), "grey");
     }
+}
+
+/// A CAD-like page: more than [`HEAVY_SEGMENTS`] short hairlines spread
+/// over the page, a dashed thick line, a clip and a filled box. `extra` is
+/// appended, inside the clip.
+fn drawing(extra: &str) -> String {
+    let mut seed = 7u32;
+    let mut next = move |range: f32| {
+        seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        (seed >> 8) as f32 / (1 << 24) as f32 * range
+    };
+    let mut out = String::from("0.1 w 0 0 1 RG q 10 10 180 80 re W n\n");
+    for _ in 0..HEAVY_SEGMENTS + 1000 {
+        let (x, y) = (next(200.0), next(100.0));
+        let (dx, dy) = (next(6.0) - 3.0, next(6.0) - 3.0);
+        out.push_str(&format!(
+            "{x:.2} {y:.2} m {:.2} {:.2} l S\n",
+            x + dx,
+            y + dy
+        ));
+    }
+    out.push_str("1 0 0 rg 60 30 40 20 re f 2 w [4 2] 0 d 0 g 20 50 m 180 50 l S\n");
+    out.push_str(extra);
+    out.push_str("\nQ");
+    out
+}
+
+/// The share of pixels that differ clearly between two drawings.
+fn differs(a: &Bitmap, b: &Bitmap) -> f64 {
+    assert_eq!((a.width, a.height), (b.width, b.height));
+    let differ = a
+        .rgba
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(b.rgba.as_chunks::<4>().0)
+        .filter(|(p, q)| p.iter().zip(*q).any(|(x, y)| x.abs_diff(*y) > 64))
+        .count();
+    differ as f64 / (a.width * a.height) as f64
+}
+
+#[test]
+fn a_drawing_is_drawn_from_its_scene_as_hayro_draws_it() {
+    let bytes = Arc::new(pdf(&[&drawing("")]));
+    let scene = page_scene(bytes.clone(), 0).unwrap().unwrap();
+    assert!(scene.len() > HEAVY_SEGMENTS, "{} items", scene.len());
+    let fast = Hayro.open(bytes.clone(), "").unwrap();
+    let usual = HayroPlain.open(bytes, "").unwrap();
+    let a = fast.render(0, 2.0).unwrap();
+    let b = usual.render(0, 2.0).unwrap();
+    assert!(differs(&a, &b) < 0.005, "whole page: {}", differs(&a, &b));
+    // A deep tile over the red box and the dashed line.
+    let region = Region {
+        x: 1200,
+        y: 700,
+        width: 256,
+        height: 256,
+    };
+    let a = fast.render_region(0, 16.0, region).unwrap();
+    let b = usual.render_region(0, 16.0, region).unwrap();
+    assert!(differs(&a, &b) < 0.005, "deep tile: {}", differs(&a, &b));
+}
+
+#[test]
+fn a_drawing_with_an_image_is_drawn_the_usual_way() {
+    let image = "q 20 0 0 20 150 60 cm BI /W 2 /H 2 /BPC 8 /CS /G /F /AHx ID 00FFFF00> EI Q";
+    let bytes = Arc::new(pdf(&[&drawing(image)]));
+    assert_eq!(
+        page_scene(bytes.clone(), 0).unwrap().err(),
+        Some(Unsupported::Image)
+    );
+    let a = Hayro
+        .open(bytes.clone(), "")
+        .unwrap()
+        .render(0, 1.0)
+        .unwrap();
+    let b = HayroPlain.open(bytes, "").unwrap().render(0, 1.0).unwrap();
+    assert_eq!(a, b);
 }

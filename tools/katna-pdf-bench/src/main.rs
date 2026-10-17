@@ -2,13 +2,17 @@
 
 //! `katna-pdf-bench FILE…`: how long each PDF takes to open and draw,
 //! against the budgets in docs/PLAN.md §2.4. It prints one line per file;
-//! `--json` prints JSON lines instead, for CI to keep.
+//! `--json` prints JSON lines instead, for CI to keep. `--cad` measures
+//! zooming into drawings instead (`cad.rs`). `--plain` never draws pages
+//! from scenes, for comparison.
+
+mod cad;
 
 use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use katna_pdf_render::{Document, Engine, Hayro, Region};
+use katna_pdf_render::{Document, Engine, Hayro, HayroPlain, Region};
 
 /// "Open a 1,000-page PDF to first page visible": open plus first page.
 const FIRST_PAGE_BUDGET: Duration = Duration::from_millis(300);
@@ -32,22 +36,39 @@ struct Timing {
 
 fn main() -> ExitCode {
     let mut json = false;
+    let mut drawings = false;
+    let mut scene_check = false;
+    let mut plain = false;
     let mut files = Vec::new();
     for arg in std::env::args().skip(1) {
         match arg.as_str() {
             "--json" => json = true,
+            "--cad" => drawings = true,
+            "--scene-check" => scene_check = true,
+            "--plain" => plain = true,
             "-h" | "--help" => {
-                println!("usage: katna-pdf-bench [--json] FILE.pdf…");
+                println!("usage: katna-pdf-bench [--json | --cad] [--plain] FILE.pdf…");
                 return ExitCode::SUCCESS;
             }
             _ => files.push(arg),
         }
     }
     if files.is_empty() {
-        eprintln!("usage: katna-pdf-bench [--json] FILE.pdf…");
+        eprintln!("usage: katna-pdf-bench [--json | --cad] [--plain] FILE.pdf…");
         return ExitCode::FAILURE;
     }
-    let engine = Hayro;
+    if scene_check {
+        cad::check(&files);
+        return ExitCode::SUCCESS;
+    }
+    if drawings {
+        return if cad::run(&files) {
+            ExitCode::SUCCESS
+        } else {
+            ExitCode::FAILURE
+        };
+    }
+    let engine: &dyn Engine = if plain { &HayroPlain } else { &Hayro };
     let mut failed = false;
     if !json {
         println!(
@@ -56,7 +77,7 @@ fn main() -> ExitCode {
         );
     }
     for file in files {
-        match measure(&engine, &file) {
+        match measure(engine, &file) {
             Ok(t) => print(&t, json),
             Err(err) => {
                 eprintln!("{file}: {err}");

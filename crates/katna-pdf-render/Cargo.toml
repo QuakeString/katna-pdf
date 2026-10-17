@@ -10,6 +10,7 @@ publish.workspace = true
 
 [dependencies]
 hayro.workspace = true
+rstar.workspace = true
 
 [lints]
 workspace = true
