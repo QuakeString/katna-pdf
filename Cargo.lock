@@ -3311,6 +3311,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "katna-pdf-cos"
+version = "0.0.0"
+dependencies = [
+ "flate2",
+]
+
+[[package]]
+name = "katna-pdf-cos-check"
+version = "0.0.0"
+dependencies = [
+ "katna-pdf-cos",
+ "katna-pdf-render",
+]
+
+[[package]]
 name = "katna-pdf-render"
 version = "0.0.0"
 dependencies = [
