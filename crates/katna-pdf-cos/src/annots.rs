@@ -97,6 +97,9 @@ pub struct Annotation {
     pub modified: Option<String>,
     /// The annotation this one replies to.
     pub reply_to: Option<Ref>,
+    /// Its name, unique in the file (`/NM`); empty for one not yet
+    /// written, which is given one.
+    pub name: String,
 }
 
 impl Annotation {
@@ -114,6 +117,7 @@ impl Annotation {
             author: String::new(),
             modified: None,
             reply_to: None,
+            name: String::new(),
         };
         a.rect = a.bounds();
         a
@@ -296,6 +300,7 @@ impl Document {
             author: text("T").unwrap_or_default(),
             modified: text("M"),
             reply_to: d.get("IRT").and_then(Object::as_ref),
+            name: text("NM").unwrap_or_default(),
             kind,
         })
     }
@@ -511,7 +516,9 @@ fn write_dict(dict: &mut Dict, a: &Annotation, page: Ref) {
     if let Some(m) = &a.modified {
         dict.set("M", Object::string(m));
     }
-    if dict.get("NM").is_none() {
+    if !a.name.is_empty() {
+        dict.set("NM", text_object(&a.name));
+    } else if dict.get("NM").is_none() {
         dict.set("NM", Object::string(&unique_name()));
     }
     match a.reply_to {

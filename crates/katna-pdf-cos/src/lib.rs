@@ -18,6 +18,7 @@ mod outline;
 mod pages;
 mod parse;
 mod write;
+mod xfdf;
 
 pub use annots::{
     AnnotChanges, AnnotKind, Annotation, MarkupStyle, NOTE_SIZE, pdf_date, stamp_label,
@@ -30,3 +31,4 @@ pub use object::{Dict, Name, Object, Ref, Stream};
 pub use outline::{Destination, OutlineItem, text_string};
 pub use pages::{ComposeError, PageSource, compose};
 pub use write::{Update, UpdateError, write_object};
+pub use xfdf::{XfdfAnnotation, XfdfError, from_xfdf, to_xfdf};
