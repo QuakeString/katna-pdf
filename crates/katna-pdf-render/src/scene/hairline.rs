@@ -28,6 +28,10 @@ pub(super) struct Canvas {
     coverage: Vec<f32>,
     /// The pixels `coverage` holds anything for.
     touched: Vec<u32>,
+    /// A stroke's points and a curve being flattened, kept between
+    /// strokes so drawing one allocates nothing.
+    points: Vec<Point>,
+    flat: BezPath,
 }
 
 impl Canvas {
@@ -38,6 +42,8 @@ impl Canvas {
             rgb: vec![[1.0; 3]; width as usize * height as usize],
             coverage: vec![0.0; width as usize * height as usize],
             touched: Vec::new(),
+            points: Vec::new(),
+            flat: BezPath::new(),
         }
     }
 
@@ -57,11 +63,7 @@ impl Canvas {
         if x < clip.x0 || x >= clip.x1 || y < clip.y0 || y >= clip.y1 || coverage <= 0.0 {
             return;
         }
-        let i = y as usize * self.width + x as usize;
-        if self.coverage[i] == 0.0 {
-            self.touched.push(i as u32);
-        }
-        self.coverage[i] += coverage;
+        self.add(y as usize * self.width + x as usize, coverage);
     }
 
     /// Paints the path drawn since the last paint in `color`.
@@ -82,8 +84,8 @@ impl Canvas {
     /// Fills the rectangle `rect`, in pixels, with `color`.
     pub(super) fn fill_rect(&mut self, rect: Rect, color: [u8; 4], clip: Rect) {
         let clip = self.bounds(clip);
-        let (x0, x1) = (rect.x0.floor() as i64, rect.x1.ceil() as i64);
-        let (y0, y1) = (rect.y0.floor() as i64, rect.y1.ceil() as i64);
+        let (x0, x1) = (floor(rect.x0), ceil(rect.x1));
+        let (y0, y1) = (floor(rect.y0), ceil(rect.y1));
         for y in y0.max(clip.y0)..y1.min(clip.y1) {
             let h = overlap(rect.y0, rect.y1, y as f64);
             for x in x0.max(clip.x0)..x1.min(clip.x1) {
@@ -107,8 +109,9 @@ impl Canvas {
     ) {
         let clip = self.bounds(clip);
         // Each subpath's points, flattened, then drawn piece by piece.
-        let mut points: Vec<Point> = Vec::new();
-        let mut flat = BezPath::new();
+        let mut points = std::mem::take(&mut self.points);
+        let mut flat = std::mem::take(&mut self.flat);
+        points.clear();
         for el in path.elements() {
             match *el {
                 PathEl::MoveTo(p) => {
@@ -148,6 +151,7 @@ impl Canvas {
         }
         self.polyline(&points, false, cap, &clip);
         self.paint(color);
+        (self.points, self.flat) = (points, flat);
     }
 
     /// The pieces between `points`, with caps at the two ends unless
@@ -165,7 +169,8 @@ impl Canvas {
     /// `cap_a` and `cap_b` at its ends.
     fn line(&mut self, a: Point, b: Point, cap_a: f64, cap_b: f64, clip: &Bounds) {
         let (dx, dy) = (b.x - a.x, b.y - a.y);
-        let length = dx.hypot(dy);
+        // Not `hypot`: it guards against overflow we cannot meet, slowly.
+        let length = (dx * dx + dy * dy).sqrt();
         if length + cap_a + cap_b <= 0.0 || !length.is_finite() {
             return;
         }
@@ -201,13 +206,19 @@ impl Canvas {
         let slope = if u1 > u0 { (v1 - v0) / (u1 - u0) } else { 0.0 };
         // A one-pixel line is this thick along the minor axis.
         let thickness = (1.0 + slope * slope).sqrt();
-        let (lo, hi) = if swap {
-            (clip.y0, clip.y1)
+        let ((lo, hi), (v_lo, v_hi)) = if swap {
+            ((clip.y0, clip.y1), (clip.x0, clip.x1))
         } else {
-            (clip.x0, clip.x1)
+            ((clip.x0, clip.x1), (clip.y0, clip.y1))
         };
-        let first = (u0.floor() as i64).max(lo);
-        let last = (u1.ceil() as i64 - 1).min(hi - 1);
+        // A step along u and along v in `coverage`.
+        let (u_step, v_step) = if swap {
+            (self.width, 1)
+        } else {
+            (1, self.width)
+        };
+        let first = floor(u0).max(lo);
+        let last = (ceil(u1) - 1).min(hi - 1);
         for u in first..=last {
             let (s0, s1) = ((u as f64).max(u0), ((u + 1) as f64).min(u1));
             if s1 <= s0 {
@@ -216,21 +227,29 @@ impl Canvas {
             let along = s1 - s0;
             let mid = v0 + slope * ((s0 + s1) / 2.0 - u0);
             let (b0, b1) = (mid - thickness / 2.0, mid + thickness / 2.0);
-            for v in b0.floor() as i64..b1.ceil() as i64 {
+            // Both ranges are inside the tile, so the index is too.
+            let column = u as usize * u_step;
+            for v in floor(b0).max(v_lo)..ceil(b1).min(v_hi) {
                 let coverage = (overlap(b0, b1, v as f64) * along) as f32;
-                if swap {
-                    self.cover(v, u, coverage, clip);
-                } else {
-                    self.cover(u, v, coverage, clip);
+                if coverage > 0.0 {
+                    self.add(column + v as usize * v_step, coverage);
                 }
             }
         }
     }
 
+    /// Adds `coverage` of pixel `i` to the path being drawn.
+    fn add(&mut self, i: usize, coverage: f32) {
+        if self.coverage[i] == 0.0 {
+            self.touched.push(i as u32);
+        }
+        self.coverage[i] += coverage;
+    }
+
     /// `clip`, in pixels, as the pixels whose centres it holds, within the
     /// tile.
     fn bounds(&self, clip: Rect) -> Bounds {
-        let edge = |v: f64, max: usize| ((v - 0.5).ceil().max(0.0) as i64).min(max as i64);
+        let edge = |v: f64, max: usize| ceil(v - 0.5).clamp(0, max as i64);
         Bounds {
             x0: edge(clip.x0, self.width),
             y0: edge(clip.y0, self.height),
@@ -246,6 +265,19 @@ struct Bounds {
     y0: i64,
     x1: i64,
     y1: i64,
+}
+
+/// `v` rounded down. `f64::floor` is a call into the maths library on
+/// x86-64 CPUs without SSE4.1, which Arch builds for; this is inline.
+fn floor(v: f64) -> i64 {
+    let t = v as i64;
+    if (t as f64) > v { t - 1 } else { t }
+}
+
+/// `v` rounded up, as [`floor`].
+fn ceil(v: f64) -> i64 {
+    let t = v as i64;
+    if (t as f64) < v { t + 1 } else { t }
 }
 
 /// How much of the pixel span `[at, at + 1]` lies in `[from, to]`.
@@ -286,4 +318,17 @@ pub(super) fn as_rect(path: &BezPath) -> Option<Rect> {
                 r.union_pt(*p)
             })
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rounding_matches_the_standard_library() {
+        for v in [-2.5, -2.0, -0.5, -0.0, 0.0, 0.3, 1.0, 1.7, 1e12, -1e12] {
+            assert_eq!(floor(v), v.floor() as i64, "{v}");
+            assert_eq!(ceil(v), v.ceil() as i64, "{v}");
+        }
+    }
 }

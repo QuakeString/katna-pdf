@@ -54,6 +54,10 @@ pub const HEAVY_SEGMENTS: usize = 50_000;
 /// as a dot of its colour rather than stroked or filled (level of detail).
 const DOT: f64 = 0.75;
 
+/// A region larger than this many pixels is drawn as bands of about this
+/// size on every core (a 512-pixel tile is one band).
+const BAND_AREA: u64 = 512 * 512;
+
 /// Whether `page` is worth a [`Scene`]: it builds at least
 /// [`HEAVY_SEGMENTS`] path segments in its own content stream. A quick
 /// count of operators; it does not look inside form XObjects.
@@ -385,8 +389,56 @@ impl Scene {
 
     /// Draws the `width`×`height` pixel region whose top left is at
     /// `origin` pixels, of the page at `scale` pixels per point, on white.
-    /// It draws on the calling thread; callers draw tiles in parallel.
+    /// A large region is drawn as bands on every core: a whole page in
+    /// the reader is one region.
     pub fn render(&self, scale: f32, origin: (f64, f64), size: (u32, u32)) -> Option<Bitmap> {
+        let (width, height) = size;
+        let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
+        let bands = (u64::from(width) * u64::from(height) / BAND_AREA)
+            .min(threads as u64 * 2)
+            .min(u64::from(height)) as u32;
+        if bands < 2 || threads < 2 {
+            return self.render_band(scale, origin, size);
+        }
+        let band = height.div_ceil(bands);
+        let next = std::sync::atomic::AtomicU32::new(0);
+        let mut drawn: Vec<(u32, Option<Bitmap>)> = std::thread::scope(|s| {
+            let workers: Vec<_> = (0..threads.min(bands as usize))
+                .map(|_| {
+                    s.spawn(|| {
+                        let mut out = Vec::new();
+                        loop {
+                            let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            let top = i * band;
+                            if top >= height {
+                                return out;
+                            }
+                            let rows = band.min(height - top);
+                            let at = (origin.0, origin.1 + f64::from(top));
+                            out.push((i, self.render_band(scale, at, (width, rows))));
+                        }
+                    })
+                })
+                .collect();
+            workers
+                .into_iter()
+                .flat_map(|w| w.join().unwrap_or_default())
+                .collect()
+        });
+        drawn.sort_by_key(|(i, _)| *i);
+        let mut rgba = Vec::with_capacity(width as usize * height as usize * 4);
+        for (_, bitmap) in drawn {
+            rgba.extend_from_slice(&bitmap?.rgba);
+        }
+        Some(Bitmap {
+            width,
+            height,
+            rgba,
+        })
+    }
+
+    /// [`Scene::render`] on the calling thread.
+    fn render_band(&self, scale: f32, origin: (f64, f64), size: (u32, u32)) -> Option<Bitmap> {
         let (width, height) = size;
         let (w16, h16) = (u16::try_from(width).ok()?, u16::try_from(height).ok()?);
         if w16 == 0 || h16 == 0 {
