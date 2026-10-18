@@ -8,6 +8,7 @@
 //! It knows objects, not pages' looks: drawing stays with the renderer.
 //! v0 reads encrypted files' structure but cannot decrypt or update them.
 
+mod annots;
 mod document;
 mod filter;
 mod forms;
@@ -18,6 +19,9 @@ mod pages;
 mod parse;
 mod write;
 
+pub use annots::{
+    AnnotChanges, AnnotKind, Annotation, MarkupStyle, NOTE_SIZE, pdf_date, stamp_label,
+};
 pub use document::{Document, Entry, LoadError, XrefKind};
 pub use filter::{FilterError, decode};
 pub use forms::{Field, FieldKind, FieldValue, Widget};

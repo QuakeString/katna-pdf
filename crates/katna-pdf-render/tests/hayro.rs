@@ -427,3 +427,52 @@ fn maps_the_files_coordinates_to_the_page_shown() {
         [10.0, 70.0, 50.0, 80.0]
     );
 }
+
+#[test]
+fn annotations_are_drawn_from_the_appearances_written_for_them() {
+    use katna_pdf_cos::{AnnotChanges, AnnotKind, Annotation, Document, MarkupStyle};
+    let bytes = pdf(&["0 g 20 20 30 60 re f"]);
+    let doc = Document::load(bytes).unwrap();
+    // Highlight across the black bar and the white beside it, in yellow;
+    // a red rectangle; a blue pen stroke.
+    let mut highlight = Annotation::new(
+        0,
+        AnnotKind::Markup(
+            MarkupStyle::Highlight,
+            vec![[10.0, 70.0, 80.0, 70.0, 10.0, 50.0, 80.0, 50.0]],
+        ),
+    );
+    highlight.colour = [1.0, 1.0, 0.0];
+    let mut square = Annotation::new(0, AnnotKind::Square { fill: None });
+    square.rect = [100.0, 10.0, 190.0, 90.0];
+    square.colour = [1.0, 0.0, 0.0];
+    square.width = 4.0;
+    let mut ink = Annotation::new(0, AnnotKind::Ink(vec![vec![[110.0, 50.0], [180.0, 50.0]]]));
+    ink.colour = [0.0, 0.0, 1.0];
+    ink.width = 4.0;
+    let out = doc
+        .annotate(&AnnotChanges {
+            put: vec![highlight, square, ink],
+            remove: vec![],
+        })
+        .unwrap();
+    let page = Hayro
+        .open(Arc::new(out), "")
+        .unwrap()
+        .render(0, 1.0)
+        .unwrap();
+    // Pixels are from the top left; the page is 100 pt high.
+    let [r, g, b, _] = pixel(&page, 65, 40);
+    assert!(r > 200 && g > 200 && b < 60, "yellow on white: {r} {g} {b}");
+    let [r, g, b, _] = pixel(&page, 35, 40);
+    assert!(
+        r < 40 && g < 40 && b < 40,
+        "black stays black under it: {r} {g} {b}"
+    );
+    let [r, g, b, _] = pixel(&page, 102, 50);
+    assert!(r > 200 && g < 60 && b < 60, "red edge: {r} {g} {b}");
+    let [r, g, b, _] = pixel(&page, 145, 50);
+    assert!(r < 60 && g < 60 && b > 200, "blue stroke: {r} {g} {b}");
+    let [r, g, b, _] = pixel(&page, 145, 30);
+    assert!(r > 240 && g > 240 && b > 240, "white inside: {r} {g} {b}");
+}

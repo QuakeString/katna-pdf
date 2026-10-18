@@ -8,7 +8,9 @@
 //! - does an incremental update (a new /Info and a changed catalog) load
 //!   again, in both katna-pdf-cos and hayro, with the same pages;
 //! - how many form fields it has, and whether filling its text fields in
-//!   reads back.
+//!   reads back;
+//! - whether its pages can be reordered and turned, and an annotation
+//!   added.
 //!
 //! Each file runs in a child process with a time limit, so a hang or a
 //! crash is counted, not fatal.
@@ -107,6 +109,7 @@ fn check(file: &Path) -> String {
     out.push_str(&format!(" update={update}"));
     out.push_str(&format!(" form={}", form_check(&doc, pages)));
     out.push_str(&format!(" reorder={}", reorder_check(&doc, pages)));
+    out.push_str(&format!(" annots={}", annots_check(&doc, pages)));
     out
 }
 
@@ -155,6 +158,51 @@ fn reorder_check(doc: &Document, pages: usize) -> String {
         }
     }
     "ok".into()
+}
+
+/// How many annotations there are, and whether a highlight added to the
+/// first page, with every existing annotation written again unchanged,
+/// gives a file both readers open with one annotation more: e.g.
+/// `12/add=ok`.
+fn annots_check(doc: &Document, pages: usize) -> String {
+    let all = doc.annotations();
+    let count: usize = all.iter().map(Vec::len).sum();
+    if pages == 0 {
+        return format!("{count}/add=skipped");
+    }
+    let mut put: Vec<_> = all.into_iter().flatten().collect();
+    put.push(katna_pdf_cos::Annotation::new(
+        0,
+        katna_pdf_cos::AnnotKind::Markup(
+            katna_pdf_cos::MarkupStyle::Highlight,
+            vec![[10.0, 30.0, 100.0, 30.0, 10.0, 10.0, 100.0, 10.0]],
+        ),
+    ));
+    let changes = katna_pdf_cos::AnnotChanges {
+        put,
+        remove: Vec::new(),
+    };
+    let add = match doc.annotate(&changes) {
+        Err(_) => "skipped",
+        Ok(out) => {
+            let hayro = Hayro
+                .open(Arc::new(out.clone()), "")
+                .ok()
+                .map(|d| d.page_count());
+            match Document::load(out) {
+                Ok(again) if again.pages().len() == pages && hayro == Some(pages) => {
+                    let after: usize = again.annotations().iter().map(Vec::len).sum();
+                    if after == count + 1 {
+                        "ok"
+                    } else {
+                        "count_changed"
+                    }
+                }
+                _ => "reload_failed",
+            }
+        }
+    };
+    format!("{count}/add={add}")
 }
 
 /// How many form fields there are, and whether filling the text fields

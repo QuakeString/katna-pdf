@@ -526,7 +526,7 @@ fn parse_da(da: &str) -> (String, f32, String) {
 
 /// A text string to store: PDFDocEncoding when it is plain ASCII,
 /// otherwise UTF-16BE with a byte-order mark.
-fn text_object(text: &str) -> Object {
+pub(crate) fn text_object(text: &str) -> Object {
     let bytes = if text.chars().all(|c| (' '..='~').contains(&c) || c == '\n') {
         text.as_bytes().to_vec()
     } else {
@@ -541,7 +541,7 @@ fn text_object(text: &str) -> Object {
 
 /// `text` as a literal string in WinAnsi (Latin-1 for most letters);
 /// characters it lacks show as `?`.
-fn literal(text: &str) -> String {
+pub(crate) fn literal(text: &str) -> String {
     let mut out = String::from("(");
     for c in text.chars() {
         match c {
