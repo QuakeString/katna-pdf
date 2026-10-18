@@ -11,7 +11,7 @@ use std::sync::{Arc, OnceLock, RwLock};
 
 use gpui::{AnyElement, Context, Entity, Focusable as _, Subscription, Window, div, prelude::*};
 use katna_pdf_cos::{Coverage, Placement, SignRequest, SigningInfo};
-use katna_pdf_sign::{Certificate, Roots, Trust, common_name, pkcs11};
+use katna_pdf_sign::{Certificate, Revocation, Roots, Trust, common_name, pkcs11};
 use katna_ui::px;
 use katna_ui::scale::desktop_px;
 use katna_ui::text_input::{InputEvent, TextInput};
@@ -42,6 +42,8 @@ pub(super) struct SigRow {
     /// Whether who signed is vouched for, when the signature could be
     /// read.
     pub vouched: Option<Vouched>,
+    /// Whether their certificates were revoked, once asked online.
+    pub revocation: Option<Revocation>,
 }
 
 /// Whether a signer is who their certificate says.
@@ -123,20 +125,47 @@ fn trust_root(cert: &Certificate) -> std::io::Result<()> {
 
 /// The signatures of `doc`, checked.
 pub(super) fn check(doc: &katna_pdf_cos::Document) -> Vec<SigRow> {
-    katna_pdf_sign::check(doc, doc.bytes(), &roots())
+    rows(katna_pdf_sign::check(doc, doc.bytes(), &roots()))
+}
+
+/// The same, then checked further online: issuers the signatures did not
+/// send are fetched, and whether the signers' certificates were revoked
+/// is asked.
+pub(super) fn check_online(doc: &katna_pdf_cos::Document) -> Vec<SigRow> {
+    let roots = roots();
+    let fetch = katna_pdf_sign::revocation::Http::default();
+    let mut checks = katna_pdf_sign::check(doc, doc.bytes(), &roots);
+    for c in &mut checks {
+        katna_pdf_sign::check_online(c, &roots, &fetch);
+    }
+    rows(checks)
+}
+
+fn rows(checks: Vec<katna_pdf_sign::SignatureCheck>) -> Vec<SigRow> {
+    checks
         .into_iter()
-        .map(|c| SigRow {
-            name: c.signature.name.clone(),
-            signer: c.signer(),
-            time: c.time(),
-            reason: c.signature.info.reason.clone(),
-            location: c.signature.info.location.clone(),
-            page: c.signature.page,
-            intact: c.intact(),
-            whole: c.coverage == Coverage::Whole,
-            problem: c.problem(),
-            stamp: c.result.as_ref().ok().and_then(|r| r.timestamp.clone()),
-            vouched: c.trust.as_ref().map(vouched),
+        .map(|c| {
+            let problem = match &c.revocation {
+                Some(Revocation::Revoked { name, when }) if c.intact() => Some(t(
+                    "signer-revoked",
+                    &[("name", name), ("when", when.as_deref().unwrap_or("?"))],
+                )),
+                _ => c.problem(),
+            };
+            SigRow {
+                name: c.signature.name.clone(),
+                signer: c.signer(),
+                time: c.time(),
+                reason: c.signature.info.reason.clone(),
+                location: c.signature.info.location.clone(),
+                page: c.signature.page,
+                intact: c.intact(),
+                whole: c.coverage == Coverage::Whole,
+                problem,
+                stamp: c.result.as_ref().ok().and_then(|r| r.timestamp.clone()),
+                vouched: c.trust.as_ref().map(vouched),
+                revocation: c.revocation.clone(),
+            }
         })
         .collect()
 }
@@ -1109,7 +1138,7 @@ impl Viewer {
     pub(super) fn signatures_line(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let rows = self.signatures.as_ref().filter(|r| !r.is_empty())?;
         let th = self.theme;
-        let bad = rows.iter().filter(|r| !r.intact).count();
+        let bad = rows.iter().filter(|r| r.problem.is_some()).count();
         let unverified = rows.iter().any(SigRow::unverified);
         let changed = rows.last().is_some_and(|r| r.intact && !r.whole);
         let count = rows.len().to_string();
@@ -1197,7 +1226,7 @@ impl Viewer {
                     ("shield-check", colour, state)
                 }
             };
-            let (identity, root) = match (&row.vouched, row.intact) {
+            let (identity, root) = match (&row.vouched, row.problem.is_none()) {
                 (Some(Vouched::By(root)), true) => (
                     Some((t("signer-vouched", &[("root", root)]), th.valid)),
                     None,
@@ -1208,6 +1237,14 @@ impl Viewer {
                 _ => (None, None),
             };
             let mut details = Vec::new();
+            match &row.revocation {
+                Some(Revocation::Good) => details.push(t("signer-not-revoked", &[])),
+                Some(Revocation::Unknown { name, why }) => details.push(t(
+                    "signer-revocation-unknown",
+                    &[("name", name), ("why", why)],
+                )),
+                _ => {}
+            }
             if let Some(time) = &row.time {
                 details.push(t("signature-time", &[("time", time)]));
             }

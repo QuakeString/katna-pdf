@@ -39,8 +39,15 @@ pub const SIGNING_CERTIFICATE_V2: Oid = Oid::new_unwrap("1.2.840.113549.1.9.16.2
 pub const TIMESTAMP_TOKEN: Oid = Oid::new_unwrap("1.2.840.113549.1.9.16.2.14");
 pub const TST_INFO: Oid = Oid::new_unwrap("1.2.840.113549.1.9.16.1.4");
 
-// Certificate extensions (RFC 5280).
+// Certificate extensions (RFC 5280), and what they point to.
 pub const BASIC_CONSTRAINTS: Oid = Oid::new_unwrap("2.5.29.19");
+pub const CRL_DISTRIBUTION_POINTS: Oid = Oid::new_unwrap("2.5.29.31");
+pub const EXTENDED_KEY_USAGE: Oid = Oid::new_unwrap("2.5.29.37");
+pub const AUTHORITY_INFO_ACCESS: Oid = Oid::new_unwrap("1.3.6.1.5.5.7.1.1");
+pub const OCSP: Oid = Oid::new_unwrap("1.3.6.1.5.5.7.48.1");
+pub const CA_ISSUERS: Oid = Oid::new_unwrap("1.3.6.1.5.5.7.48.2");
+pub const OCSP_BASIC: Oid = Oid::new_unwrap("1.3.6.1.5.5.7.48.1.1");
+pub const OCSP_SIGNING: Oid = Oid::new_unwrap("1.3.6.1.5.5.7.3.9");
 
 // Names.
 pub const COMMON_NAME: Oid = Oid::new_unwrap("2.5.4.3");
