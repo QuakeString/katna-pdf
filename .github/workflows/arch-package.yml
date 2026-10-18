@@ -71,7 +71,8 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
           workspaces: ". -> ../katna-pdf-target"
       - name: Hand the restored cache to the build user
-        run: chown -R builder: "$RUSTUP_HOME" "$CARGO_HOME" "$CARGO_TARGET_DIR"
+        run: |
+          chown -R builder: "$RUSTUP_HOME" "$CARGO_HOME" "$CARGO_TARGET_DIR"
       - name: Build the package
         run: |
           runuser -u builder -- env HOME=/home/builder \
