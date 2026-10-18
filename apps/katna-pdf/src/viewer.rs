@@ -15,20 +15,23 @@ use std::collections::HashMap;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use gpui::{
-    AnyElement, App, ClickEvent, Context, EventEmitter, ExternalPaths, FocusHandle, Focusable,
-    FontWeight, ImageSource, KeyBinding, ListAlignment, ListOffset, ListState, RenderImage,
-    Subscription, Window, actions, div, img, list, prelude::*, svg,
+    AnyElement, App, ClickEvent, Context, Entity, EventEmitter, ExternalPaths, FocusHandle,
+    Focusable, FontWeight, ImageSource, KeyBinding, ListAlignment, ListOffset, ListState,
+    RenderImage, Subscription, Window, actions, div, img, list, prelude::*, svg,
 };
 use image::{Frame, RgbaImage};
 use katna_pdf_render::{Bitmap, Document, Engine, Hayro, OpenError};
 use katna_ui::scale::desktop_px;
+use katna_ui::text_input::{InputEvent, TextInput};
 use katna_ui::tokens::{radius, space, text};
 use katna_ui::widgets::{self, Tip};
 use katna_ui::{ScrollBar, px, unpx};
 
 use crate::contents::{self, Contents};
+use crate::search::{self, Found, Hit, Texts};
 use crate::text::t;
 use crate::theme::Theme;
 use crate::thumbnails::{self, Thumbs};
@@ -46,6 +49,9 @@ actions!(
         ScrollDown,
         ToggleContents,
         ToggleNight,
+        Find,
+        FindNext,
+        FindPrevious,
         ScrollUp,
         CloseTab,
         NextTab,
@@ -69,6 +75,9 @@ const MARGIN: f32 = 24.0;
 /// Room between pages.
 const GAP: f32 = 12.0;
 
+/// The viewer, when no text field in it has the keys.
+const READING: &str = "Viewer && !TextInput";
+
 pub fn bind_keys(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("ctrl-o", Open, None),
@@ -77,14 +86,18 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl--", ZoomOut, None),
         KeyBinding::new("ctrl-1", FitWidth, None),
         KeyBinding::new("ctrl-0", ActualSize, None),
-        KeyBinding::new("pagedown", NextPage, None),
-        KeyBinding::new("pageup", PreviousPage, None),
-        KeyBinding::new("space", NextPage, None),
-        KeyBinding::new("shift-space", PreviousPage, None),
-        KeyBinding::new("down", ScrollDown, None),
+        // Keys that mean something else while typing in a field.
+        KeyBinding::new("pagedown", NextPage, Some(READING)),
+        KeyBinding::new("pageup", PreviousPage, Some(READING)),
+        KeyBinding::new("space", NextPage, Some(READING)),
+        KeyBinding::new("shift-space", PreviousPage, Some(READING)),
+        KeyBinding::new("down", ScrollDown, Some(READING)),
+        KeyBinding::new("up", ScrollUp, Some(READING)),
+        KeyBinding::new("ctrl-f", Find, None),
+        KeyBinding::new("f3", FindNext, None),
+        KeyBinding::new("shift-f3", FindPrevious, None),
         KeyBinding::new("f7", ToggleContents, None),
         KeyBinding::new("ctrl-shift-n", ToggleNight, None),
-        KeyBinding::new("up", ScrollUp, None),
         KeyBinding::new("ctrl-w", CloseTab, None),
         KeyBinding::new("ctrl-f4", CloseTab, None),
         KeyBinding::new("ctrl-tab", NextTab, None),
@@ -104,6 +117,15 @@ enum Zoom {
     /// Points to logical pixels (1.0 is the page's printed size on a
     /// 96 dpi screen, as other readers count 100%).
     Fixed(f32),
+}
+
+/// The find bar: its field and what it has found.
+struct SearchBar {
+    input: Entity<TextInput>,
+    found: Found,
+    /// Bumped for each new search, so the last one stops.
+    generation: Arc<AtomicU64>,
+    _input: Subscription,
 }
 
 /// The side pane's tabs.
@@ -172,6 +194,10 @@ pub struct Viewer {
     generation: u64,
     /// The document's outline, once read, if it has one.
     contents: Option<Contents>,
+    /// Each page's text, read on first need, for search.
+    texts: Option<Texts>,
+    /// The find bar, while open.
+    search: Option<SearchBar>,
     /// Whether the side pane is shown, and which of its tabs.
     pane: bool,
     tab: PaneTab,
@@ -218,6 +244,8 @@ impl Viewer {
             released: Vec::new(),
             generation: 0,
             contents: None,
+            texts: None,
+            search: None,
             pane: false,
             tab: PaneTab::Pages,
             thumbs: Thumbs::new(),
@@ -251,6 +279,11 @@ impl Viewer {
         let generation = self.generation;
         self.content = Content::Opening(name.clone());
         self.contents = None;
+        self.texts = None;
+        if let Some(bar) = self.search.as_mut() {
+            bar.generation.fetch_add(1, Ordering::Relaxed);
+            bar.found = Found::default();
+        }
         self.forget_pages();
         cx.notify();
         self.read_outline(path.clone(), generation, cx);
@@ -281,6 +314,7 @@ impl Viewer {
                 match opened {
                     Ok(opened) => {
                         this.list.reset(opened.doc.page_count());
+                        this.texts = Some(search::texts(opened.doc.page_count()));
                         let old = this.thumbs.reset(opened.doc.page_count());
                         this.released.extend(old);
                         this.visible = 0..1;
@@ -338,6 +372,223 @@ impl Viewer {
             self.pane = !self.pane;
             cx.notify();
         }
+    }
+
+    /// Opens the find bar, or selects its text if it is open, and puts
+    /// the keys in it.
+    fn open_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !matches!(self.content, Content::Ready(_)) {
+            return;
+        }
+        let input = match &self.search {
+            Some(bar) => bar.input.clone(),
+            None => {
+                let input = cx.new(|cx| TextInput::new(t("search-placeholder", &[]), cx));
+                let sub =
+                    cx.subscribe_in(&input, window, |this, _, event, window, cx| match event {
+                        InputEvent::Changed => this.start_search(cx),
+                        InputEvent::Submit => this.step_search(true, cx),
+                        InputEvent::Cancel => this.close_search(window, cx),
+                    });
+                self.search = Some(SearchBar {
+                    input: input.clone(),
+                    found: Found::default(),
+                    generation: Arc::new(AtomicU64::new(0)),
+                    _input: sub,
+                });
+                input
+            }
+        };
+        input.update(cx, |input, cx| {
+            input.set_accent(gpui::rgba(self.theme.katna.accent).into());
+            input.select_all_text(cx);
+        });
+        window.focus(&input.focus_handle(cx), cx);
+        cx.notify();
+    }
+
+    fn close_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(bar) = self.search.take() {
+            bar.generation.fetch_add(1, Ordering::Relaxed);
+        }
+        window.focus(&self.focus, cx);
+        cx.notify();
+    }
+
+    /// Searches for what the find bar holds, from the page being read.
+    fn start_search(&mut self, cx: &mut Context<Self>) {
+        let from = self.current_page();
+        let (Some(bar), Some(texts), Content::Ready(opened)) =
+            (self.search.as_mut(), self.texts.clone(), &self.content)
+        else {
+            return;
+        };
+        let mine = bar.generation.fetch_add(1, Ordering::Relaxed) + 1;
+        let query = bar.input.read(cx).text().trim().to_owned();
+        bar.found = Found {
+            pages: if query.is_empty() { 0 } else { texts.len() },
+            ..Found::default()
+        };
+        cx.notify();
+        if query.is_empty() {
+            return;
+        }
+        let (doc, generation) = (opened.doc.clone(), bar.generation.clone());
+        let (sender, receiver) = async_channel::unbounded();
+        cx.background_executor()
+            .spawn(async move {
+                search::run(
+                    doc.as_ref(),
+                    &texts,
+                    &query,
+                    from,
+                    &generation,
+                    mine,
+                    |page, hits| sender.send_blocking((page, hits)).is_ok(),
+                );
+            })
+            .detach();
+        cx.spawn(async move |this, cx| {
+            while let Ok((page, hits)) = receiver.recv().await {
+                let going = this.update(cx, |this, cx| {
+                    let Some(bar) = this.search.as_mut() else {
+                        return false;
+                    };
+                    if bar.generation.load(Ordering::Relaxed) != mine {
+                        return false;
+                    }
+                    let first = bar.found.current.is_none();
+                    bar.found.add(page, hits);
+                    // The first match found is shown at once.
+                    if first && let Some(hit) = bar.found.current().cloned() {
+                        this.go_to_hit(&hit, cx);
+                    }
+                    cx.notify();
+                    true
+                });
+                if !matches!(going, Ok(true)) {
+                    break;
+                }
+            }
+        })
+        .detach();
+    }
+
+    /// Goes to the next match, or the one before.
+    fn step_search(&mut self, forward: bool, cx: &mut Context<Self>) {
+        let Some(hit) = self
+            .search
+            .as_mut()
+            .and_then(|bar| bar.found.step(forward).cloned())
+        else {
+            return;
+        };
+        self.go_to_hit(&hit, cx);
+        cx.notify();
+    }
+
+    /// Scrolls so `hit` shows a little below the top of the view.
+    fn go_to_hit(&mut self, hit: &Hit, cx: &mut Context<Self>) {
+        let Some(top) = hit.boxes.iter().map(|b| b[1]).reduce(f32::min) else {
+            return;
+        };
+        let gap = px(if hit.page == 0 { space::S5 } else { GAP / 2.0 });
+        let below = desktop_px((top * self.shown - 96.0).max(0.0));
+        self.list.scroll_to(ListOffset {
+            item_ix: hit.page,
+            offset_in_item: gap + below,
+        });
+        cx.notify();
+    }
+
+    /// The find bar under the toolbar.
+    fn find_bar(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let bar = self.search.as_ref()?;
+        let th = self.theme;
+        let found = &bar.found;
+        let status = if found.hits.is_empty() {
+            if bar.input.read(cx).text().trim().is_empty() {
+                String::new()
+            } else if found.done() {
+                t("search-none", &[])
+            } else {
+                t("search-searching", &[])
+            }
+        } else {
+            let current = found.current.map_or(0, |c| c + 1).to_string();
+            let total = found.hits.len().to_string();
+            let count = t("search-count", &[("current", &current), ("total", &total)]);
+            if found.done() {
+                count
+            } else {
+                format!("{count}…")
+            }
+        };
+        Some(
+            div()
+                .h(px(48.0))
+                .flex_shrink_0()
+                .flex()
+                .items_center()
+                .gap(px(space::S2))
+                .px(px(space::S3))
+                .border_b_1()
+                .border_color(th.line)
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .max_w(px(420.0))
+                        .h(px(32.0))
+                        .flex()
+                        .items_center()
+                        .gap(px(space::S2))
+                        .px(px(space::S3))
+                        .rounded(px(radius::FULL))
+                        .bg(th.field)
+                        .text_size(px(text::BODY))
+                        .text_color(th.text)
+                        .child(
+                            svg()
+                                .path("icons/search.svg")
+                                .size(px(16.0))
+                                .flex_shrink_0()
+                                .text_color(th.dim),
+                        )
+                        .child(bar.input.clone()),
+                )
+                .child(
+                    div()
+                        .min_w(px(72.0))
+                        .text_size(px(text::SMALL))
+                        .text_color(th.dim)
+                        .whitespace_nowrap()
+                        .child(status),
+                )
+                .child(icon_button(
+                    "find-previous",
+                    "chevron-up",
+                    t("search-previous", &[]),
+                    th,
+                    cx.listener(|this, _, _, cx| this.step_search(false, cx)),
+                ))
+                .child(icon_button(
+                    "find-next",
+                    "chevron-down",
+                    t("search-next", &[]),
+                    th,
+                    cx.listener(|this, _, _, cx| this.step_search(true, cx)),
+                ))
+                .child(div().flex_1())
+                .child(icon_button(
+                    "find-close",
+                    "close",
+                    t("search-close", &[]),
+                    th,
+                    cx.listener(|this, _, window, cx| this.close_search(window, cx)),
+                ))
+                .into_any_element(),
+        )
     }
 
     /// Whether pages are shown as night pages: as set by hand, otherwise
@@ -827,6 +1078,33 @@ impl Viewer {
         let image = self.pages.get(&page).map(|d| d.image.clone());
         self.laid_out(page);
         self.want(page, device, cx);
+        // Matches on this page, the current one stronger.
+        let accent = self.theme.katna.accent & 0xffff_ff00;
+        let mut marks = Vec::new();
+        if let Some(bar) = &self.search {
+            for (i, hit) in bar.found.hits.iter().enumerate() {
+                if hit.page != page {
+                    continue;
+                }
+                let alpha = if Some(i) == bar.found.current {
+                    0x77
+                } else {
+                    0x33
+                };
+                for b in &hit.boxes {
+                    marks.push(
+                        div()
+                            .absolute()
+                            .left(desktop_px(b[0] * shown))
+                            .top(desktop_px(b[1] * shown))
+                            .w(desktop_px((b[2] - b[0]) * shown))
+                            .h(desktop_px((b[3] - b[1]) * shown))
+                            .rounded(px(radius::XS / 2.0))
+                            .bg(gpui::rgba(accent | alpha)),
+                    );
+                }
+            }
+        }
         div()
             .w_full()
             .flex()
@@ -844,7 +1122,9 @@ impl Viewer {
                     .flex_shrink_0()
                     .bg(self.paper())
                     .shadow_sm()
-                    .children(image.map(|image| img(ImageSource::Render(image)).size_full())),
+                    .relative()
+                    .children(image.map(|image| img(ImageSource::Render(image)).size_full()))
+                    .children(marks),
             )
             .into_any_element()
     }
@@ -872,6 +1152,13 @@ impl Viewer {
                 t("side-pane-toggle", &[]),
                 th,
                 cx.listener(|this, _, _, cx| this.toggle_pane(cx)),
+            ));
+            bar = bar.child(icon_button(
+                "search",
+                "search",
+                t("search-open", &[]),
+                th,
+                cx.listener(|this, _, window, cx| this.open_search(window, cx)),
             ));
         }
         bar = bar
@@ -1042,6 +1329,7 @@ impl Render for Viewer {
             self.list.remeasure();
         }
         let pane = self.pane(window, cx);
+        let find_bar = self.find_bar(cx);
         let pages: AnyElement = match &self.content {
             Content::Ready(_) => {
                 let pages = list(
@@ -1086,6 +1374,9 @@ impl Render for Viewer {
             }))
             .on_action(cx.listener(|this, _: &ToggleContents, _, cx| this.toggle_pane(cx)))
             .on_action(cx.listener(|this, _: &ToggleNight, _, cx| this.toggle_night(cx)))
+            .on_action(cx.listener(|this, _: &Find, window, cx| this.open_search(window, cx)))
+            .on_action(cx.listener(|this, _: &FindNext, _, cx| this.step_search(true, cx)))
+            .on_action(cx.listener(|this, _: &FindPrevious, _, cx| this.step_search(false, cx)))
             .on_action(cx.listener(|this, _: &ScrollDown, _, cx| {
                 this.list.scroll_by(px(48.0));
                 cx.notify();
@@ -1115,6 +1406,7 @@ impl Render for Viewer {
                     .flex()
                     .flex_col()
                     .child(self.toolbar(cx))
+                    .children(find_bar)
                     .child(pages),
             )
     }
