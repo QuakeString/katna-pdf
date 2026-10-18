@@ -17,8 +17,12 @@ package on the
 pre-release, which each build replaces. It is x86_64 only and not signed.
 
 ```sh
-sudo pacman -U https://github.com/QuakeString/katna-pdf/releases/download/arch-latest/katna-pdf-git-x86_64.pkg.tar.zst
+curl -LO https://github.com/QuakeString/katna-pdf/releases/download/arch-latest/katna-pdf-git-x86_64.pkg.tar.zst
+sudo pacman -U katna-pdf-git-x86_64.pkg.tar.zst
 ```
+
+(`pacman -U` straight from the URL fails, because it then also asks for
+a signature file, which this package does not have.)
 
 For updates with `pacman -Syu`, add this to `/etc/pacman.conf`:
 

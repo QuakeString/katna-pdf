@@ -130,12 +130,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
-          notes="The newest build of main for Arch Linux. Install it with
-          \`sudo pacman -U https://github.com/$GH_REPO/releases/download/arch-latest/katna-pdf-git-x86_64.pkg.tar.zst\`,
-          or add the repository in the README to get updates with \`pacman -Syu\`."
+          notes="The newest build of main for Arch Linux. Download
+          katna-pdf-git-x86_64.pkg.tar.zst and install it with
+          \`sudo pacman -U katna-pdf-git-x86_64.pkg.tar.zst\`, or add the
+          repository in the README to get updates with \`pacman -Syu\`."
           if gh release view arch-latest > /dev/null 2>&1; then
             gh api -X PATCH "repos/$GH_REPO/git/refs/tags/arch-latest" \
               -f sha="$GITHUB_SHA" -F force=true > /dev/null
+            gh release edit arch-latest --notes "$notes"
           else
             gh release create arch-latest --prerelease --target "$GITHUB_SHA" \
               --title "Katna PDF for Arch Linux (latest)" --notes "$notes"
