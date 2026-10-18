@@ -406,3 +406,121 @@ fn digest_info_prefix(digest: Digest) -> &'static [u8] {
         ],
     }
 }
+
+/// What was found looking into why no token shows: a step of the way
+/// from the token to signing with it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Finding {
+    /// A smart card device is plugged in (USB, CCID): its name, and its
+    /// USB vendor and product ids.
+    Device { name: String, id: String },
+    /// No smart card device is plugged in, as far as USB tells.
+    NoDevice,
+    /// Whether the PC/SC service (pcscd), through which OpenSC and most
+    /// drivers reach tokens, is running. Linux only.
+    Service { running: bool },
+    /// A token driver: the tokens it reaches, each with how many
+    /// signing certificates it shows; or why it would not load.
+    Module {
+        path: PathBuf,
+        tokens: Result<Vec<(String, usize)>, String>,
+    },
+    /// No token driver is installed.
+    NoModule,
+}
+
+/// Looks into every step from a token plugged in to signing with it, so
+/// that the step that fails can be named.
+pub fn diagnose() -> Vec<Finding> {
+    let mut out = Vec::new();
+    #[cfg(target_os = "linux")]
+    {
+        // Without USB in /sys (a container), nothing is said of devices.
+        if let Some(devices) = smart_card_devices() {
+            if devices.is_empty() {
+                out.push(Finding::NoDevice);
+            }
+            out.extend(devices);
+        }
+        let socket = std::env::var_os("PCSCLITE_CSOCK_NAME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("/run/pcscd/pcscd.comm"));
+        out.push(Finding::Service {
+            running: socket.exists(),
+        });
+    }
+    let modules = known_modules();
+    if modules.is_empty() {
+        out.push(Finding::NoModule);
+    }
+    for path in modules {
+        let tokens = Module::load(&path)
+            .and_then(|m| {
+                let tokens = m.tokens()?;
+                Ok(tokens
+                    .iter()
+                    .map(|t| {
+                        let certs = m.certificates(t).map(|c| c.len()).unwrap_or(0);
+                        (t.label.clone(), certs)
+                    })
+                    .collect())
+            })
+            .map_err(|e| e.to_string());
+        out.push(Finding::Module { path, tokens });
+    }
+    out
+}
+
+/// The USB devices plugged in that are smart cards (interface class
+/// 0x0b, CCID), as tokens are; `None` when USB devices cannot be seen.
+#[cfg(target_os = "linux")]
+fn smart_card_devices() -> Option<Vec<Finding>> {
+    let read = |p: &Path| {
+        std::fs::read_to_string(p)
+            .map(|s| s.trim().to_owned())
+            .unwrap_or_default()
+    };
+    let mut out = Vec::new();
+    let entries = std::fs::read_dir("/sys/bus/usb/devices").ok()?;
+    let mut seen = Vec::new();
+    for entry in entries.flatten() {
+        // Interfaces are named like 1-2:1.0; their device is 1-2.
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let Some((device, _)) = name.split_once(':') else {
+            continue;
+        };
+        if read(&entry.path().join("bInterfaceClass")) != "0b" || seen.contains(&device.to_owned())
+        {
+            continue;
+        }
+        seen.push(device.to_owned());
+        let dir = Path::new("/sys/bus/usb/devices").join(device);
+        let (vendor, product) = (read(&dir.join("idVendor")), read(&dir.join("idProduct")));
+        let label = [read(&dir.join("manufacturer")), read(&dir.join("product"))]
+            .into_iter()
+            .filter(|s| !s.is_empty())
+            .collect::<Vec<_>>()
+            .join(" ");
+        out.push(Finding::Device {
+            name: if label.is_empty() {
+                known_device(&vendor).unwrap_or("smart card").to_owned()
+            } else {
+                label
+            },
+            id: format!("{vendor}:{product}"),
+        });
+    }
+    Some(out)
+}
+
+/// The maker of tokens with USB vendor id `vendor`, among those Indian
+/// certifying authorities issue.
+#[cfg(target_os = "linux")]
+fn known_device(vendor: &str) -> Option<&'static str> {
+    match vendor {
+        "096e" => Some("Feitian (ePass2003)"),
+        "163c" => Some("Watchdata (ProxKey)"),
+        "0529" => Some("SafeNet eToken"),
+        _ => None,
+    }
+}

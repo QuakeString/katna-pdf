@@ -58,6 +58,8 @@ usage: katna-pdf-cli COMMAND [--json] ...
                                   long-term validation data added to a signed file,
                                   and a document timestamp with --tsa (renews B-LTA)
   tokens [--module LIB]           the signing tokens plugged in (ePass2003 and others)
+  token-check                     why a token does not show: whether it is plugged
+                                  in, the card service runs, and each driver sees it
   verify FILE [--trust PATH] [--online] [--report OUT.pdf]
                                   the signatures, each checked: intact, what it covers,
                                   who signed, and whether their certificate chains to a
@@ -92,6 +94,7 @@ fn main() -> ExitCode {
         "add-field" => add_field(rest, json),
         "ltv" => ltv(rest, json),
         "tokens" => tokens(rest, json),
+        "token-check" => token_check(rest, json),
         "annots" => annots(rest, json),
         "xfdf-export" => xfdf_export(rest, json),
         "xfdf-import" => xfdf_import(rest, json),
@@ -1046,6 +1049,84 @@ fn tokens(args: &[String], json: bool) -> Done {
         Ok("no tokens plugged in\n".into())
     } else {
         Ok(out)
+    }
+}
+
+fn token_check(args: &[String], json: bool) -> Done {
+    let args = Args::parse(args)?;
+    let [] = args.words()?;
+    let mut lines = Vec::new();
+    let mut items = Vec::new();
+    for f in pkcs11::diagnose() {
+        match f {
+            pkcs11::Finding::Device { name, id } => {
+                lines.push(format!("ok      plugged in: {name} (USB {id})"));
+                items.push(format!(
+                    "{{\"step\":\"device\",\"ok\":true,\"name\":{},\"id\":{}}}",
+                    string(&name),
+                    string(&id)
+                ));
+            }
+            pkcs11::Finding::NoDevice => {
+                lines.push("problem no smart card device is plugged in".into());
+                items.push("{\"step\":\"device\",\"ok\":false}".into());
+            }
+            pkcs11::Finding::Service { running } => {
+                lines.push(if running {
+                    "ok      the PC/SC service (pcscd) is running".into()
+                } else {
+                    "problem the PC/SC service (pcscd) is not running: sudo systemctl enable --now pcscd.socket".into()
+                });
+                items.push(format!("{{\"step\":\"service\",\"ok\":{running}}}"));
+            }
+            pkcs11::Finding::NoModule => {
+                lines.push(
+                    "problem no token driver is installed: install OpenSC (Arch: sudo pacman -S opensc)"
+                        .into(),
+                );
+                items.push("{\"step\":\"driver\",\"ok\":false}".into());
+            }
+            pkcs11::Finding::Module { path, tokens } => {
+                let path = path.display().to_string();
+                match &tokens {
+                    Ok(t) if t.is_empty() => {
+                        lines.push(format!("problem driver {path} sees no token"));
+                    }
+                    Ok(t) => {
+                        for (label, certs) in t {
+                            lines.push(format!(
+                                "ok      driver {path} sees {label}, with {certs} signing certificate{}",
+                                if *certs == 1 { "" } else { "s" }
+                            ));
+                        }
+                    }
+                    Err(e) => lines.push(format!("problem driver {path} did not load: {e}")),
+                }
+                items.push(format!(
+                    "{{\"step\":\"driver\",\"path\":{},\"ok\":{},{}}}",
+                    string(&path),
+                    tokens.as_ref().is_ok_and(|t| !t.is_empty()),
+                    match &tokens {
+                        Ok(t) => format!(
+                            "\"tokens\":[{}]",
+                            t.iter()
+                                .map(|(l, c)| format!(
+                                    "{{\"label\":{},\"certificates\":{c}}}",
+                                    string(l)
+                                ))
+                                .collect::<Vec<_>>()
+                                .join(",")
+                        ),
+                        Err(e) => format!("\"error\":{}", string(e)),
+                    }
+                ));
+            }
+        }
+    }
+    if json {
+        Ok(format!("{{\"steps\":[{}]}}\n", items.join(",")))
+    } else {
+        Ok(lines.join("\n") + "\n")
     }
 }
 

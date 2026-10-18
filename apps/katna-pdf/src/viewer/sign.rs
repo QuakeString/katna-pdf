@@ -344,6 +344,9 @@ pub(super) struct Signing {
     tokens: Tokens,
     /// The token picked among those found.
     token: usize,
+    /// Why no token shows, a line each with whether that step is fine,
+    /// once looked into.
+    diagnosis: Option<Vec<(bool, String)>>,
     password: Entity<TextInput>,
     reason: Entity<TextInput>,
     location: Entity<TextInput>,
@@ -418,6 +421,7 @@ impl Viewer {
             certificate: remembered_certificate(),
             tokens: Tokens::NotLooked,
             token: 0,
+            diagnosis: None,
             password,
             reason,
             location,
@@ -1459,9 +1463,15 @@ impl Viewer {
             Tokens::NotLooked | Tokens::Looking => {
                 list = list.child(note(t("sign-looking", &[]), th.dim));
             }
-            Tokens::Failed(error) => list = list.child(note(error.clone(), th.error)),
+            Tokens::Failed(error) => {
+                list = list
+                    .child(note(error.clone(), th.error))
+                    .child(self.diagnosis(cx));
+            }
             Tokens::Found(found) if found.is_empty() => {
-                list = list.child(note(t("sign-no-tokens", &[]), th.dim));
+                list = list
+                    .child(note(t("sign-no-tokens", &[]), th.dim))
+                    .child(self.diagnosis(cx));
             }
             Tokens::Found(found) => {
                 for (i, f) in found.iter().enumerate() {
@@ -1581,11 +1591,123 @@ impl Viewer {
                 cx.listener(|this, _, _, cx| {
                     if let Some(signing) = this.signing.as_mut() {
                         signing.tokens = Tokens::NotLooked;
+                        signing.diagnosis = None;
                     }
                     this.look_for_tokens(cx);
                 }),
             ))
             .into_any_element()
+    }
+
+    /// Why no token shows: a button to look into it, then what was
+    /// found, step by step.
+    fn diagnosis(&self, cx: &mut Context<Self>) -> AnyElement {
+        let th = self.theme;
+        let Some(lines) = self.signing.as_ref().and_then(|s| s.diagnosis.clone()) else {
+            return div()
+                .flex()
+                .child(
+                    widgets::outlined_button("sign-diagnose", t("sign-diagnose", &[]), &th.katna)
+                        .on_click(cx.listener(|this, _, _, cx| this.diagnose(cx))),
+                )
+                .into_any_element();
+        };
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(space::S1))
+            .children(lines.into_iter().map(|(ok, line)| {
+                div()
+                    .flex()
+                    .items_start()
+                    .gap(px(space::S2))
+                    .child(widgets::icon(
+                        if ok { "check" } else { "close" },
+                        if ok { th.valid } else { th.katna.error },
+                        14.0,
+                    ))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .text_size(px(text::SMALL))
+                            .text_color(th.text)
+                            .child(line),
+                    )
+            }))
+            .into_any_element()
+    }
+
+    /// Looks into why no token shows, off the UI thread.
+    fn diagnose(&mut self, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            let findings = cx
+                .background_executor()
+                .spawn(async move { pkcs11::diagnose() })
+                .await;
+            let lines = findings
+                .into_iter()
+                .flat_map(|f| match f {
+                    pkcs11::Finding::Device { name, id } => {
+                        vec![(true, t("diagnose-device", &[("name", &name), ("id", &id)]))]
+                    }
+                    pkcs11::Finding::NoDevice => vec![(false, t("diagnose-no-device", &[]))],
+                    pkcs11::Finding::Service { running: true } => {
+                        vec![(true, t("diagnose-service", &[]))]
+                    }
+                    pkcs11::Finding::Service { running: false } => {
+                        vec![(false, t("diagnose-no-service", &[]))]
+                    }
+                    pkcs11::Finding::NoModule => vec![(false, t("sign-no-driver", &[]))],
+                    pkcs11::Finding::Module { path, tokens } => {
+                        let driver = path
+                            .file_name()
+                            .map(|n| n.to_string_lossy().into_owned())
+                            .unwrap_or_default();
+                        match tokens {
+                            Ok(t_) if t_.is_empty() => {
+                                vec![(false, t("diagnose-driver-empty", &[("driver", &driver)]))]
+                            }
+                            Ok(t_) => t_
+                                .into_iter()
+                                .map(|(label, certs)| {
+                                    (
+                                        certs > 0,
+                                        t(
+                                            if certs == 1 {
+                                                "diagnose-driver-token-one"
+                                            } else {
+                                                "diagnose-driver-token"
+                                            },
+                                            &[
+                                                ("driver", &driver),
+                                                ("token", &label),
+                                                ("count", &certs.to_string()),
+                                            ],
+                                        ),
+                                    )
+                                })
+                                .collect(),
+                            Err(e) => vec![(
+                                false,
+                                t(
+                                    "diagnose-driver-failed",
+                                    &[("driver", &driver), ("error", &e)],
+                                ),
+                            )],
+                        }
+                    }
+                })
+                .collect();
+            this.update(cx, |this, cx| {
+                if let Some(signing) = this.signing.as_mut() {
+                    signing.diagnosis = Some(lines);
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// The line over the pages of a signed file: whether its signatures
