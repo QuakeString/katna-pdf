@@ -28,9 +28,15 @@ depends=(
   'libxkbcommon-x11'
   'vulkan-icd-loader'
   'wayland'
+  # Open and save dialogs: the desktop's own, through its portal.
+  'xdg-desktop-portal'
 )
 makedepends=('cargo' 'git')
-optdepends=('vulkan-driver: GPU rendering with Vulkan instead of the OpenGL fallback')
+optdepends=(
+  'vulkan-driver: GPU rendering with Vulkan instead of the OpenGL fallback'
+  "xdg-desktop-portal-kde: KDE's file dialogs on Plasma"
+  "xdg-desktop-portal-gnome: GNOME's file dialogs on GNOME"
+)
 provides=('katna-pdf')
 conflicts=('katna-pdf')
 # Rust does its own LTO and the release profile strips the binary.
