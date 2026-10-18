@@ -145,7 +145,9 @@ sign-file-name = { $name } (signed).pdf
 pane-signatures = Signatures
 signatures-show = Signatures
 signed-by = Signed by { $name }. The signature is intact.
+signed-by-unverified = Signed by { $name }. The signature is intact, but who signed is not verified.
 signed-all = Signed { $count } times. Every signature is intact.
+signed-unverified = Signed { $count } times. The signatures are intact, but not every signer is verified.
 signed-changed = Signed. The file was changed after the last signature; the signatures still hold for what they signed.
 signed-bad-one = A signature in this file does not hold.
 signed-bad = { $count } signatures in this file do not hold.
@@ -157,7 +159,14 @@ signature-timestamp = Timestamped { $time } by { $authority }
 signature-timestamp-bad = Its timestamp is not valid.
 signature-reason = Reason: { $reason }
 signature-location = Location: { $location }
-signatures-trust = Whether each signer's certificate is trusted (issued under CCA India or another root you trust) is not checked yet.
+signer-vouched = Identity verified: issued under { $root }.
+signer-root-untrusted = Identity not verified: { $root } is not a root certificate you trust.
+signer-chain-incomplete = Identity not verified: the certificate that issued { $name } was not sent with the signature.
+signer-expired = Identity not verified: { $name } was not valid when it was signed.
+signer-forged = Identity not verified: { $name } was not issued by the certificate it names.
+signer-trust-root = Trust { $root }
+signer-trust-failed = The certificate could not be kept: { $error }
+signatures-roots = Signers are checked against your system's root certificates and the ones in { $folder } (put India's CCA root certificates there). Revocation is not checked yet.
 
 ## The menu bar (KDE's global menu)
 menu-file = _File

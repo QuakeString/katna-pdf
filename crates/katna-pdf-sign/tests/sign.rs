@@ -9,7 +9,7 @@ use std::io::Write as _;
 use katna_pdf_cos::{
     AnnotChanges, AnnotKind, Annotation, Coverage, Document, Placement, SignRequest, SigningInfo,
 };
-use katna_pdf_sign::{Digest, P12Error, Signer, check, common_name, p12, sign};
+use katna_pdf_sign::{Digest, P12Error, Roots, Signer, Trust, check, common_name, p12, sign};
 
 fn data(name: &str) -> Vec<u8> {
     std::fs::read(format!("{}/tests/data/{name}", env!("CARGO_MANIFEST_DIR"))).unwrap()
@@ -89,8 +89,21 @@ fn a_signed_file_checks_out_until_changed() {
     );
     let signed = sign(&doc, &request, &id, Digest::Sha256).unwrap();
     let doc = Document::load(signed.clone()).unwrap();
-    let checks = check(&doc, &signed);
+    let checks = check(&doc, &signed, &Roots::new());
     assert_eq!(checks.len(), 1);
+    // Nobody trusts the test root yet; once they do, Asha is vouched for.
+    assert!(matches!(
+        &checks[0].trust,
+        Some(Trust::Untrusted { complete: true, .. })
+    ));
+    let mut roots = Roots::new();
+    roots.add_file(&data("ca.pem"));
+    assert_eq!(
+        check(&doc, &signed, &roots)[0].trust,
+        Some(Trust::Trusted {
+            root: "Katna Test Root".into()
+        })
+    );
     let c = &checks[0];
     assert!(c.intact(), "{c:?}");
     assert_eq!(c.coverage, Coverage::Whole);
@@ -115,7 +128,7 @@ fn a_signed_file_checks_out_until_changed() {
         })
         .unwrap();
     let doc2 = Document::load(changed.clone()).unwrap();
-    let c = &check(&doc2, &changed)[0];
+    let c = &check(&doc2, &changed, &Roots::new())[0];
     assert!(c.intact());
     assert_eq!(c.coverage, Coverage::Revision(signed.len()));
 
@@ -123,7 +136,11 @@ fn a_signed_file_checks_out_until_changed() {
     let mut tampered = signed.clone();
     let at = tampered.windows(5).position(|w| w == b"/Page").unwrap();
     tampered[at + 1] = b'p';
-    let c = &check(&Document::load(tampered.clone()).unwrap(), &tampered)[0];
+    let c = &check(
+        &Document::load(tampered.clone()).unwrap(),
+        &tampered,
+        &Roots::new(),
+    )[0];
     assert!(!c.intact());
     assert!(!c.result.as_ref().unwrap().digest_matches);
 }
@@ -149,7 +166,7 @@ fn files_are_signed_again_and_with_every_key() {
     )
     .unwrap();
     let doc = Document::load(twice.clone()).unwrap();
-    let checks = check(&doc, &twice);
+    let checks = check(&doc, &twice, &Roots::new());
     assert_eq!(checks.len(), 2);
     assert!(checks.iter().all(|c| c.intact()), "{checks:?}");
     assert_eq!(checks[0].coverage, Coverage::Revision(once.len()));
