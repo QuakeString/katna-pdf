@@ -383,6 +383,7 @@ impl Viewer {
             return;
         }
         self.finish_typing(true, cx);
+        self.leave_text_edit(cx);
         self.tool = None;
         self.tools = false;
         self.cropping = false;

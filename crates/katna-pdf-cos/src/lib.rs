@@ -9,9 +9,12 @@
 //! v0 reads encrypted files' structure but cannot decrypt or update them.
 
 mod annots;
+mod content;
 mod document;
 mod dss;
+mod edit;
 mod filter;
+mod fonts;
 mod forms;
 mod links;
 mod mdp;
@@ -27,8 +30,10 @@ mod xfdf;
 pub use annots::{
     AnnotChanges, AnnotKind, Annotation, MarkupStyle, NOTE_SIZE, pdf_date, stamp_label,
 };
+pub use content::{Op, ops};
 pub use document::{Document, Entry, LoadError, XrefKind};
 pub use dss::Dss;
+pub use edit::{EditError, TextRun};
 pub use filter::{FilterError, decode};
 pub use forms::{Field, FieldKind, FieldValue, Widget};
 pub use links::{Link, LinkTarget};

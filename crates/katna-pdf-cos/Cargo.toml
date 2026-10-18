@@ -10,6 +10,8 @@ publish.workspace = true
 
 [dependencies]
 flate2.workspace = true
+hayro-cmap.workspace = true
+phf.workspace = true
 
 [dev-dependencies]
 flate2.workspace = true

@@ -116,7 +116,7 @@ impl Document {
 }
 
 /// `data` in a stream of its own, compressed.
-fn compressed(data: &[u8]) -> Stream {
+pub(crate) fn compressed(data: &[u8]) -> Stream {
     let mut e = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
     let packed = e.write_all(data).and_then(|_| e.finish());
     match packed {

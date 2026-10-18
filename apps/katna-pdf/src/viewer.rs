@@ -37,6 +37,7 @@ mod annots;
 mod crop;
 mod organizer;
 mod sign;
+mod textedit;
 
 use crate::annotate::Tool;
 use crate::contents::{self, Contents};
@@ -298,6 +299,10 @@ pub struct Viewer {
     /// Whether the row of annotation tools is shown, the tool in hand,
     /// and the colour picked (`annotate::COLOURS`).
     tools: bool,
+    /// Edit text is on: the pages' lines are boxes to click and type in.
+    text_editing: bool,
+    runs: textedit::Runs,
+    typing: Option<textedit::Typing>,
     tool: Option<Tool>,
     colour: usize,
     /// Each page's annotations, once read.
@@ -404,6 +409,9 @@ impl Viewer {
             edited: None,
             changing_pages: false,
             tools: false,
+            text_editing: false,
+            runs: Default::default(),
+            typing: None,
             tool: None,
             colour: 0,
             annots: None,
@@ -500,6 +508,9 @@ impl Viewer {
         self.picked.clear();
         self.organizer = false;
         self.cropping = false;
+        self.text_editing = false;
+        self.typing = None;
+        self.forget_runs();
         self.signatures = None;
         self.signable = Arc::default();
         self.signing = None;
@@ -987,6 +998,7 @@ impl Viewer {
         self.finish_typing(true, cx);
         window.focus(&self.focus, cx);
         if self.sign_press(event.position, cx)
+            || self.text_edit_press(cx)
             || self.crop_press(event.position, cx)
             || self.annot_press(event.position, cx)
         {
@@ -1743,6 +1755,7 @@ impl Viewer {
         };
         opened.doc = doc;
         self.revision += 1;
+        self.forget_runs();
         for page in pages {
             // Kept on screen until drawn again.
             if let Some(drawn) = self.pages.get_mut(page) {
@@ -2048,6 +2061,7 @@ impl Viewer {
             .unwrap_or_else(|| self.current_page())
             .min(count.saturating_sub(1));
         self.forget_pages();
+        self.forget_runs();
         self.revision += 1;
         self.list.reset(self.spread.rows(count));
         self.list.scroll_to(ListOffset {
@@ -2400,7 +2414,7 @@ impl Viewer {
         let links: Vec<AnyElement> = match (
             self.links
                 .as_ref()
-                .filter(|_| self.tool.is_none() && !self.cropping)
+                .filter(|_| self.tool.is_none() && !self.cropping && !self.text_editing)
                 .and_then(|l| l.get(page)),
             transform,
         ) {
@@ -2432,6 +2446,7 @@ impl Viewer {
         let mut overlays = self.annot_overlays(page, transform);
         overlays.extend(self.crop_overlay(page));
         overlays.extend(self.sign_overlay(page, cx));
+        overlays.extend(self.text_edit_overlay(page, transform, cx));
         // Matches on this page, the current one stronger, and the
         // selected text.
         let accent = self.theme.katna.accent & 0xffff_ff00;
@@ -2589,6 +2604,22 @@ impl Viewer {
                 .when(self.tools, |b| b.bg(th.field))
                 .tip(t("annotate", &[]), &th.katna)
                 .on_click(cx.listener(|this, _, _, cx| this.toggle_tools(cx))),
+            );
+            bar = bar.child(
+                widgets::icon_button_colored(
+                    "edit-text",
+                    "text-edit",
+                    18.0,
+                    if self.text_editing {
+                        th.katna.accent
+                    } else {
+                        th.katna.text_dim
+                    },
+                    &th.katna,
+                )
+                .when(self.text_editing, |b| b.bg(th.field))
+                .tip(t("edit-text", &[]), &th.katna)
+                .on_click(cx.listener(|this, _, _, cx| this.toggle_text_edit(cx))),
             );
             bar = bar.child(
                 widgets::icon_button_colored(
@@ -3091,6 +3122,8 @@ impl Render for Viewer {
             .on_action(cx.listener(|this, _: &PutToolDown, _, cx| {
                 if this.signing.is_some() {
                     this.toggle_signing(cx);
+                } else if this.text_editing {
+                    this.toggle_text_edit(cx);
                 } else if this.cropping {
                     this.toggle_crop(cx);
                 } else if this.organizer {

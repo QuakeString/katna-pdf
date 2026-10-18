@@ -77,6 +77,7 @@ impl Viewer {
     pub(super) fn toggle_organizer(&mut self, cx: &mut Context<Self>) {
         self.organizer = !self.organizer && matches!(self.content, Content::Ready(_));
         if self.organizer {
+            self.leave_text_edit(cx);
             self.cropping = false;
             self.signing = None;
             self.draft = None;

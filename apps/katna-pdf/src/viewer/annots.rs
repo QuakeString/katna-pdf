@@ -42,6 +42,7 @@ impl Viewer {
         self.tools = !self.tools;
         if self.tools {
             self.signing = None;
+            self.leave_text_edit(cx);
         }
         if !self.tools {
             self.tool = None;
@@ -520,7 +521,7 @@ impl Viewer {
     }
 
     /// Shows the file with its annotations changed, drawing `pages` again.
-    fn show_annotated(
+    pub(super) fn show_annotated(
         &mut self,
         bytes: Arc<Vec<u8>>,
         doc: Arc<dyn Document>,

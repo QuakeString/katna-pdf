@@ -3642,6 +3642,8 @@ name = "katna-pdf-cos"
 version = "0.0.0"
 dependencies = [
  "flate2",
+ "hayro-cmap",
+ "phf",
 ]
 
 [[package]]
