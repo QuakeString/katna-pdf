@@ -25,7 +25,8 @@ cargo run --release -p katna-pdf-bench -- file.pdf
 - `crates/katna-pdf-cos` — our own PDF object layer: parsing, xref and
   object streams, repair, incremental updates. No GPUI, no C.
 - `crates/katna-pdf-sign` — signing and checking signatures, pure
-  Rust: certificate files (`p12.rs`), CMS / PAdES B-B (`cms.rs`). The
+  Rust: certificate files (`p12.rs`), CMS / PAdES B-B (`cms.rs`),
+  timestamps for B-T (`tsa.rs`, RFC 3161 over ureq + rustls). The
   PDF side (fields, byte ranges) is `katna-pdf-cos`'s `sign.rs`.
 - `apps/katna-pdf` — the app window.
 - `apps/katna-pdf-cli` — the command line: info, merge, split, pages,

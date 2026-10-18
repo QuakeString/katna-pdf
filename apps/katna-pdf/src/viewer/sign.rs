@@ -37,6 +37,7 @@ pub(super) struct SigRow {
     /// It covers the whole file: nothing was added after it.
     pub whole: bool,
     pub problem: Option<String>,
+    pub stamp: Option<katna_pdf_sign::Stamp>,
 }
 
 /// The signatures of `doc`, checked.
@@ -49,14 +50,11 @@ pub(super) fn check(doc: &katna_pdf_cos::Document) -> Vec<SigRow> {
             time: c.time(),
             reason: c.signature.info.reason.clone(),
             location: c.signature.info.location.clone(),
-            // A signature not seen has a box of no size.
-            page: c.signature.page.filter(|_| {
-                let r = c.signature.rect;
-                (r[2] - r[0]).abs() > 0.0 && (r[3] - r[1]).abs() > 0.0
-            }),
+            page: c.signature.page,
             intact: c.intact(),
             whole: c.coverage == Coverage::Whole,
             problem: c.problem(),
+            stamp: c.result.as_ref().ok().and_then(|r| r.timestamp.clone()),
         })
         .collect()
 }
@@ -82,6 +80,9 @@ pub(super) struct Signing {
     password: Entity<TextInput>,
     reason: Entity<TextInput>,
     location: Entity<TextInput>,
+    /// Whether to timestamp the signature, and the server to ask.
+    timestamp: bool,
+    server: Entity<TextInput>,
     error: Option<String>,
     busy: bool,
     /// Put the keys in the password field on the next frame.
@@ -116,9 +117,12 @@ impl Viewer {
         let password = field(t("sign-password", &[]), true, cx);
         let reason = field(t("sign-reason", &[]), false, cx);
         let location = field(t("sign-location", &[]), false, cx);
+        let server = field(t("sign-timestamp-server", &[]), false, cx);
+        let (timestamp, url) = remembered_timestamp();
+        server.update(cx, |input, cx| input.set_text(url, cx));
         let accent = gpui::rgba(self.theme.katna.accent).into();
         let mut subs = Vec::new();
-        for input in [&password, &reason, &location] {
+        for input in [&password, &reason, &location, &server] {
             input.update(cx, |input, _| input.set_accent(accent));
             subs.push(cx.subscribe(input, |this, _, event, cx| match event {
                 InputEvent::Submit => this.sign_now(cx),
@@ -132,6 +136,8 @@ impl Viewer {
             password,
             reason,
             location,
+            timestamp,
+            server,
             error: None,
             busy: false,
             focus: false,
@@ -285,6 +291,7 @@ impl Viewer {
             Some(input.read(cx).text().trim().to_owned()).filter(|s| !s.is_empty())
         };
         let (reason, location) = (value(&signing.reason), value(&signing.location));
+        let tsa = value(&signing.server).filter(|_| signing.timestamp);
         let folder = path.parent().map(Path::to_path_buf).unwrap_or_default();
         let stem = path
             .file_stem()
@@ -373,11 +380,25 @@ impl Viewer {
                         },
                     );
                     request.time = time;
-                    let signed =
-                        katna_pdf_sign::sign(&doc, &request, &id, katna_pdf_sign::Digest::Sha256)
-                            .map_err(|e| e.to_string())?;
+                    let server = tsa.as_deref().map(katna_pdf_sign::tsa::Server::new);
+                    let signed = katna_pdf_sign::sign_with(
+                        &doc,
+                        &request,
+                        &id,
+                        katna_pdf_sign::Digest::Sha256,
+                        server
+                            .as_ref()
+                            .map(|s| s as &dyn katna_pdf_sign::tsa::Stamper),
+                    )
+                    .map_err(|e| e.to_string())?;
                     crate::viewer::save_over(&target, &signed).map_err(|e| e.to_string())?;
-                    remember_certificate(&certificate);
+                    write_note("certificate", &certificate.to_string_lossy());
+                    if let Some(url) = &tsa {
+                        write_note("timestamp", &format!("on\n{url}\n"));
+                    } else {
+                        let (_, url) = remembered_timestamp();
+                        write_note("timestamp", &format!("off\n{url}\n"));
+                    }
                     Ok::<_, String>(target)
                 })
                 .await;
@@ -544,6 +565,50 @@ impl Viewer {
                 .child(field(&signing.password))
                 .child(field(&signing.reason))
                 .child(field(&signing.location))
+                .child(
+                    div()
+                        .id("sign-timestamp")
+                        .flex()
+                        .items_center()
+                        .gap(px(space::S2))
+                        .py(px(space::S1))
+                        .cursor_pointer()
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            if let Some(signing) = this.signing.as_mut() {
+                                signing.timestamp = !signing.timestamp;
+                                cx.notify();
+                            }
+                        }))
+                        .child(
+                            div()
+                                .size(px(18.0))
+                                .flex_none()
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .rounded(px(radius::XS))
+                                .border_2()
+                                .border_color(gpui::rgba(if signing.timestamp {
+                                    th.katna.accent
+                                } else {
+                                    th.katna.text_dim
+                                }))
+                                .when(signing.timestamp, |d| {
+                                    d.bg(gpui::rgba(th.katna.accent)).child(widgets::icon(
+                                        "check",
+                                        th.katna.on_accent,
+                                        14.0,
+                                    ))
+                                }),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(text::SMALL))
+                                .text_color(th.text)
+                                .child(t("sign-timestamp", &[])),
+                        ),
+                )
+                .when(signing.timestamp, |d| d.child(field(&signing.server)))
                 .children(signing.error.clone().map(|error| {
                     div()
                         .text_size(px(text::SMALL))
@@ -655,6 +720,18 @@ impl Viewer {
             if let Some(time) = &row.time {
                 details.push(t("signature-time", &[("time", time)]));
             }
+            if let Some(stamp) = &row.stamp {
+                let time = stamp.time.clone().unwrap_or_default();
+                let by = stamp.authority.clone().unwrap_or_default();
+                details.push(if stamp.valid {
+                    t(
+                        "signature-timestamp",
+                        &[("time", &time), ("authority", &by)],
+                    )
+                } else {
+                    t("signature-timestamp-bad", &[])
+                });
+            }
             if let Some(reason) = &row.reason {
                 details.push(t("signature-reason", &[("reason", reason)]));
             }
@@ -721,27 +798,47 @@ impl Viewer {
     }
 }
 
-/// The file the last certificate chosen is remembered in (the path
-/// only, never the password).
-fn certificate_note() -> Option<PathBuf> {
+/// A free timestamp server, offered until another is given.
+const TSA: &str = "http://timestamp.digicert.com";
+
+/// What signing remembers between runs, as small files in Katna PDF's
+/// state folder: the certificate file last used (its path only, never
+/// the password), and whether to timestamp and with which server.
+fn note(name: &str) -> Option<PathBuf> {
     katna_core::paths::Paths::from_env()
         .ok()
-        .map(|paths| paths.state_dir().join("pdf").join("certificate"))
+        .map(|paths| paths.state_dir().join("pdf").join(name))
 }
 
-fn remembered_certificate() -> Option<PathBuf> {
-    let text = std::fs::read_to_string(certificate_note()?).ok()?;
-    let path = PathBuf::from(text.trim_end_matches('\n'));
-    path.is_file().then_some(path)
+fn read_note(name: &str) -> Option<String> {
+    std::fs::read_to_string(note(name)?).ok()
 }
 
-fn remember_certificate(path: &Path) {
-    if let Some(note) = certificate_note() {
+fn write_note(name: &str, text: &str) {
+    if let Some(note) = note(name) {
         if let Some(dir) = note.parent() {
             let _ = std::fs::create_dir_all(dir);
         }
-        let _ = std::fs::write(note, path.to_string_lossy().as_bytes());
+        let _ = std::fs::write(note, text);
     }
+}
+
+fn remembered_certificate() -> Option<PathBuf> {
+    let path = PathBuf::from(read_note("certificate")?.trim_end_matches('\n'));
+    path.is_file().then_some(path)
+}
+
+/// Whether to timestamp, and the server: `on` or `off`, then the URL.
+fn remembered_timestamp() -> (bool, String) {
+    let text = read_note("timestamp").unwrap_or_default();
+    let mut lines = text.lines();
+    let on = lines.next() == Some("on");
+    let url = lines
+        .next()
+        .map(str::trim)
+        .filter(|u| !u.is_empty())
+        .unwrap_or(TSA);
+    (on, url.to_owned())
 }
 
 /// The signatures of the file shown, checked.

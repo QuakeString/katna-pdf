@@ -154,6 +154,7 @@ impl Prepared {
 pub struct Signature {
     pub field: Ref,
     pub name: String,
+    /// The page it is shown on; none when it is not seen.
     pub page: Option<usize>,
     pub rect: [f32; 4],
     /// `/SubFilter`: how the signature is made, e.g.
@@ -248,7 +249,12 @@ impl Document {
             out.push(Signature {
                 field: field.id,
                 name: field.name.clone(),
-                page: widget.map(|w| w.page),
+                // A signature not seen has a box of no size: no page.
+                page: widget
+                    .filter(|w| {
+                        (w.rect[2] - w.rect[0]).abs() > 0.0 && (w.rect[3] - w.rect[1]).abs() > 0.0
+                    })
+                    .map(|w| w.page),
                 rect: widget.map_or([0.0; 4], |w| w.rect),
                 sub_filter: match self.resolve_key(&v, "SubFilter") {
                     Object::Name(n) => String::from_utf8_lossy(n.as_bytes()).into_owned(),

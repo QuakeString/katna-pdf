@@ -47,6 +47,10 @@ const-oid = { version = "0.9", features = ["db"] }
 der = { version = "0.7", features = ["alloc", "derive", "oid", "std"] }
 spki = { version = "0.7", features = ["alloc"] }
 x509-cert = { version = "0.2", default-features = false, features = ["std"] }
+x509-tsp = "0.1"
+# Timestamp servers (RFC 3161) over HTTP; TLS through rustls, trusting
+# the system's roots as Katna does.
+ureq = { version = "3", default-features = false, features = ["rustls", "platform-verifier"] }
 pkcs8 = { version = "0.10", features = ["alloc"] }
 pkcs12 = { version = "0.1", features = ["kdf"] }
 pkcs5 = { version = "0.7", features = ["pbes2", "alloc"] }

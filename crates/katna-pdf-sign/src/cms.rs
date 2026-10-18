@@ -75,6 +75,19 @@ impl From<der::Error> for BuildError {
 /// The CMS signature, DER, of a document whose signed bytes hash to
 /// `document` with `digest`.
 pub fn build(signer: &dyn Signer, digest: Digest, document: &[u8]) -> Result<Vec<u8>, BuildError> {
+    build_signed(signer, digest, oid::DATA, None, document)
+}
+
+/// A CMS signature over content of type `content_type` that hashes to
+/// `document`, carrying the content itself when `content` is given (as
+/// a timestamp token carries its TSTInfo).
+pub(crate) fn build_signed(
+    signer: &dyn Signer,
+    digest: Digest,
+    content_type: ObjectIdentifier,
+    content: Option<Vec<u8>>,
+    document: &[u8],
+) -> Result<Vec<u8>, BuildError> {
     let cert = signer.certificate();
     let kind = signer.kind();
     let cert_der = cert.to_der()?;
@@ -88,7 +101,7 @@ pub fn build(signer: &dyn Signer, digest: Digest, document: &[u8]) -> Result<Vec
         }),
     };
     let signed_attrs = SetOfVec::try_from(vec![
-        attribute(oid::CONTENT_TYPE, &oid::DATA)?,
+        attribute(oid::CONTENT_TYPE, &content_type)?,
         attribute(oid::MESSAGE_DIGEST, &OctetString::new(document)?)?,
         attribute(
             oid::SIGNING_CERTIFICATE_V2,
@@ -123,12 +136,22 @@ pub fn build(signer: &dyn Signer, digest: Digest, document: &[u8]) -> Result<Vec
             .cloned()
             .map(CertificateChoices::Certificate),
     );
+    let econtent = match content {
+        Some(c) => Some(Any::new(der::Tag::OctetString, c)?),
+        None => None,
+    };
     let data = SignedData {
-        version: CmsVersion::V1,
+        // Content of a type other than data takes version 3 (RFC 5652
+        // §5.1).
+        version: if content_type == oid::DATA {
+            CmsVersion::V1
+        } else {
+            CmsVersion::V3
+        },
         digest_algorithms: SetOfVec::try_from(vec![algorithm(digest.oid())])?,
         encap_content_info: EncapsulatedContentInfo {
-            econtent_type: oid::DATA,
-            econtent: None,
+            econtent_type: content_type,
+            econtent,
         },
         certificates: Some(CertificateSet(SetOfVec::try_from(certs)?)),
         crls: None,
@@ -139,6 +162,101 @@ pub fn build(signer: &dyn Signer, digest: Digest, document: &[u8]) -> Result<Vec
         content: Any::encode_from(&data)?,
     }
     .to_der()?)
+}
+
+/// The signature value of CMS signature `der`, which a timestamp is
+/// made over (RFC 3161 Appendix A).
+pub(crate) fn signature_value(der: &[u8]) -> Result<Vec<u8>, der::Error> {
+    let info = ContentInfo::from_der(der)?;
+    let data = info.content.decode_as::<SignedData>()?;
+    let signer = data.signer_infos.0.get(0).ok_or(der::ErrorKind::Failed)?;
+    Ok(signer.signature.as_bytes().to_vec())
+}
+
+/// CMS signature `der` with timestamp token `token` added to its
+/// signer as an unsigned attribute.
+pub(crate) fn add_timestamp(der: &[u8], token: &[u8]) -> Result<Vec<u8>, der::Error> {
+    let info = ContentInfo::from_der(der)?;
+    let mut data = info.content.decode_as::<SignedData>()?;
+    let mut infos: Vec<SignerInfo> = data.signer_infos.0.into_vec();
+    let signer = infos.first_mut().ok_or(der::ErrorKind::Failed)?;
+    signer.unsigned_attrs = Some(SetOfVec::try_from(vec![Attribute {
+        oid: oid::TIMESTAMP_TOKEN,
+        values: SetOfVec::try_from(vec![Any::from_der(token)?])?,
+    }])?);
+    data.signer_infos = SignerInfos(SetOfVec::try_from(infos)?);
+    ContentInfo {
+        content_type: oid::SIGNED_DATA,
+        content: Any::encode_from(&data)?,
+    }
+    .to_der()
+}
+
+/// A timestamp on a signature: when, by whom, and whether it holds.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Stamp {
+    /// When, as the timestamp authority states it (UTC).
+    pub time: Option<String>,
+    /// The timestamp authority, by its certificate's common name.
+    pub authority: Option<String>,
+    /// The token is the authority's, and is over this signature.
+    pub valid: bool,
+}
+
+/// The content timestamp token `token` (DER) carries: its TSTInfo.
+fn token_content(token: &[u8]) -> Option<Vec<u8>> {
+    let (info, _) = walk::read(token)?;
+    let [_, content] = walk::children(info.value)?[..] else {
+        return None;
+    };
+    let (signed_data, _) = walk::read(content.value)?;
+    let fields = walk::children(signed_data.value)?;
+    let encap = fields.get(2)?;
+    let [kind, wrapped] = walk::children(encap.value)?[..] else {
+        return None;
+    };
+    if walk::oid(&kind) != Some(oid::TST_INFO) {
+        return None;
+    }
+    let (octets, _) = walk::read(wrapped.value)?;
+    Some(octets.value.to_vec())
+}
+
+/// What timestamp token `token` (DER) states.
+pub(crate) fn token_info(token: &[u8]) -> Option<x509_tsp::TstInfo> {
+    x509_tsp::TstInfo::from_der(&token_content(token)?).ok()
+}
+
+/// Checks timestamp token `token` (DER) over `signature`, the signature
+/// value it should be made on.
+fn check_stamp(token: &[u8], signature: &[u8]) -> Stamp {
+    let none = Stamp {
+        time: None,
+        authority: None,
+        valid: false,
+    };
+    let Some(content) = token_content(token) else {
+        return none;
+    };
+    let Ok(tst) = x509_tsp::TstInfo::from_der(&content) else {
+        return none;
+    };
+    let time = katna_pdf_cos::pdf_date(tst.gen_time.to_system_time());
+    let time = crate::readable_pdf_date(&time);
+    let imprint = &tst.message_imprint;
+    let imprint_matches = Hash::from_oid(imprint.hash_algorithm.oid)
+        .is_some_and(|h| h.hash(&[signature]) == imprint.hashed_message.as_bytes());
+    match check(token, &[&content]) {
+        Ok(c) => Stamp {
+            time,
+            authority: Some(common_name(&c.signer.tbs_certificate.subject)),
+            valid: imprint_matches
+                && c.digest_matches
+                && c.signature_valid
+                && c.certificate_named != Some(false),
+        },
+        Err(_) => Stamp { time, ..none },
+    }
 }
 
 /// What a CMS signature says, and whether it holds.
@@ -157,8 +275,8 @@ pub struct Checked {
     pub certificate_named: Option<bool>,
     /// The signing time the signature itself states, if any (UTC).
     pub signing_time: Option<String>,
-    /// It carries a timestamp (not checked yet).
-    pub timestamped: bool,
+    /// The timestamp it carries, checked, if any.
+    pub timestamp: Option<Stamp>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -225,15 +343,20 @@ pub fn check(der: &[u8], parts: &[&[u8]]) -> Result<Checked, CheckError> {
     };
     let signature_alg = next;
     let signature = it.next().filter(|s| s.tag == 0x04).ok_or(Malformed)?;
-    let timestamped = it
+    let timestamp = it
         .next()
         .filter(|u| u.tag == 0xa1)
         .and_then(|u| walk::children(u.value))
-        .is_some_and(|attrs| {
-            attrs.iter().any(|a| {
-                walk::children(a.value)
-                    .and_then(|c| c.first().and_then(walk::oid))
-                    .is_some_and(|o| o == oid::TIMESTAMP_TOKEN)
+        .and_then(|attrs| {
+            attrs.into_iter().find_map(|a| {
+                let [kind, values] = walk::children(a.value)?[..] else {
+                    return None;
+                };
+                if walk::oid(&kind) != Some(oid::TIMESTAMP_TOKEN) {
+                    return None;
+                }
+                let token = walk::children(values.value)?.into_iter().next()?;
+                Some(check_stamp(token.raw, signature.value))
             })
         });
 
@@ -286,7 +409,7 @@ pub fn check(der: &[u8], parts: &[&[u8]]) -> Result<Checked, CheckError> {
         signature_valid,
         certificate_named,
         signing_time,
-        timestamped,
+        timestamp,
     })
 }
 

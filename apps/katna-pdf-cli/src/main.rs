@@ -32,8 +32,10 @@ usage: katna-pdf-cli COMMAND [--json] ...
                                   (M: all sides, or top,right,bottom,left); or uncrop
   sign FILE -o OUT --p12 CERT.pfx (--password-env VAR | --password-file F | --password PW)
           [--page N --rect L,B,R,T] [--reason R] [--location L] [--contact C] [--digest 256|384|512]
+          [--tsa URL]
                                   sign with the key in a certificate file (PAdES B-B);
-                                  visible in a box on page N when --rect is given
+                                  visible in a box on page N when --rect is given;
+                                  timestamped by the server at URL with --tsa (PAdES B-T)
   verify FILE                     the signatures, each checked: intact, what it covers,
                                   who signed (trust in the signer is not checked yet)
   annots FILE                     the annotations, page by page
@@ -138,6 +140,7 @@ impl<'a> Args<'a> {
                     | "--location"
                     | "--contact"
                     | "--digest"
+                    | "--tsa"
             ) {
                 let Some(value) = it.next() else {
                     return Err(Failure::Usage(format!("{a} needs a value")));
@@ -661,7 +664,11 @@ fn sign(args: &[String], json: bool) -> Done {
         },
     );
     request.time = time;
-    let signed = katna_pdf_sign::sign(&doc, &request, &id, digest).map_err(failed)?;
+    let server = args.option("--tsa").map(katna_pdf_sign::tsa::Server::new);
+    let stamper = server
+        .as_ref()
+        .map(|s| s as &dyn katna_pdf_sign::tsa::Stamper);
+    let signed = katna_pdf_sign::sign_with(&doc, &request, &id, digest, stamper).map_err(failed)?;
     write(&out, &signed)?;
     Ok(wrote(&[(out, doc.pages().len())], json))
 }
@@ -682,10 +689,11 @@ fn verify(args: &[String], json: bool) -> Done {
             Coverage::Broken => "broken".to_owned(),
         };
         let (signer, problem, time) = (c.signer(), c.problem(), c.time());
+        let stamp = c.result.as_ref().ok().and_then(|r| r.timestamp.clone());
         if json {
             let opt = |v: &Option<String>| v.as_deref().map_or("null".into(), string);
             items.push(format!(
-                "{{\"field\":{},\"page\":{},\"intact\":{},\"covers\":{},\"signer\":{},\"time\":{},\"reason\":{},\"location\":{},\"sub_filter\":{},\"problem\":{}}}",
+                "{{\"field\":{},\"page\":{},\"intact\":{},\"covers\":{},\"signer\":{},\"time\":{},\"reason\":{},\"location\":{},\"sub_filter\":{},\"timestamp\":{},\"problem\":{}}}",
                 string(&s.name),
                 s.page.map_or("null".into(), |p| (p + 1).to_string()),
                 c.intact(),
@@ -695,6 +703,12 @@ fn verify(args: &[String], json: bool) -> Done {
                 opt(&s.info.reason),
                 opt(&s.info.location),
                 string(&s.sub_filter),
+                stamp.as_ref().map_or("null".into(), |t| format!(
+                    "{{\"valid\":{},\"time\":{},\"authority\":{}}}",
+                    t.valid,
+                    opt(&t.time),
+                    opt(&t.authority)
+                )),
                 opt(&problem),
             ));
         } else {
@@ -716,6 +730,20 @@ fn verify(args: &[String], json: bool) -> Done {
             line("time", &time);
             line("reason", &s.info.reason);
             line("location", &s.info.location);
+            line(
+                "timestamp",
+                &stamp.as_ref().map(|t| {
+                    format!(
+                        "{}{}{}",
+                        t.time.as_deref().unwrap_or("?"),
+                        t.authority
+                            .as_deref()
+                            .map(|a| format!(" by {a}"))
+                            .unwrap_or_default(),
+                        if t.valid { "" } else { " (NOT VALID)" }
+                    )
+                }),
+            );
             line("page", &s.page.map(|p| (p + 1).to_string()));
             let _ = writeln!(
                 out,
