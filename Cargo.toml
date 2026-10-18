@@ -48,6 +48,8 @@ der = { version = "0.7", features = ["alloc", "derive", "oid", "std"] }
 spki = { version = "0.7", features = ["alloc"] }
 x509-cert = { version = "0.2", default-features = false, features = ["std"] }
 x509-tsp = "0.1"
+# Signing tokens through their PKCS#11 modules (OpenSC, vendors' own).
+cryptoki = "0.12"
 # Timestamp servers (RFC 3161) over HTTP; TLS through rustls, trusting
 # the system's roots as Katna does.
 ureq = { version = "3", default-features = false, features = ["rustls", "platform-verifier"] }

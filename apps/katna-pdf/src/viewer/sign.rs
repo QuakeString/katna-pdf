@@ -11,6 +11,7 @@ use std::sync::Arc;
 
 use gpui::{AnyElement, Context, Entity, Focusable as _, Subscription, Window, div, prelude::*};
 use katna_pdf_cos::{Coverage, Placement, SignRequest, SigningInfo};
+use katna_pdf_sign::pkcs11;
 use katna_ui::px;
 use katna_ui::scale::desktop_px;
 use katna_ui::text_input::{InputEvent, TextInput};
@@ -73,10 +74,41 @@ enum Placed {
     Hidden,
 }
 
+/// What the key is in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Source {
+    /// A certificate file (.pfx, .p12).
+    File,
+    /// A USB token, such as an ePass2003.
+    Token,
+}
+
+/// A token plugged in, and the module that reaches it.
+#[derive(Debug, Clone)]
+struct Found {
+    module: PathBuf,
+    token: pkcs11::Token,
+}
+
+/// The tokens plugged in, as last looked for.
+enum Tokens {
+    NotLooked,
+    Looking,
+    Found(Vec<Found>),
+    Failed(String),
+}
+
+/// Something that signs, made off the UI thread and used there.
+type Key = Box<dyn katna_pdf_sign::Signer + Send>;
+
 /// Signing, from placing the box to the signed file being written.
 pub(super) struct Signing {
     placed: Option<Placed>,
+    source: Source,
     certificate: Option<PathBuf>,
+    tokens: Tokens,
+    /// The token picked among those found.
+    token: usize,
     password: Entity<TextInput>,
     reason: Entity<TextInput>,
     location: Entity<TextInput>,
@@ -130,9 +162,16 @@ impl Viewer {
                 InputEvent::Changed => {}
             }));
         }
+        let source = match read_note("source").as_deref().map(str::trim) {
+            Some("token") => Source::Token,
+            _ => Source::File,
+        };
         self.signing = Some(Signing {
             placed: None,
+            source: Source::File,
             certificate: remembered_certificate(),
+            tokens: Tokens::NotLooked,
+            token: 0,
             password,
             reason,
             location,
@@ -143,7 +182,79 @@ impl Viewer {
             focus: false,
             _inputs: subs,
         });
+        self.set_source(source, cx);
         cx.notify();
+    }
+
+    /// Signs with a certificate file or a token from now on.
+    fn set_source(&mut self, source: Source, cx: &mut Context<Self>) {
+        let Some(signing) = self.signing.as_mut() else {
+            return;
+        };
+        signing.source = source;
+        signing.error = None;
+        signing.focus = signing.placed.is_some();
+        let placeholder = match source {
+            Source::File => t("sign-password", &[]),
+            Source::Token => t("sign-pin", &[]),
+        };
+        signing.password.update(cx, |input, cx| {
+            input.set_placeholder(placeholder);
+            input.set_text("", cx);
+        });
+        if source == Source::Token && matches!(signing.tokens, Tokens::NotLooked) {
+            self.look_for_tokens(cx);
+        }
+        cx.notify();
+    }
+
+    /// Looks for tokens plugged in, through every token driver
+    /// installed.
+    fn look_for_tokens(&mut self, cx: &mut Context<Self>) {
+        let Some(signing) = self.signing.as_mut() else {
+            return;
+        };
+        if matches!(signing.tokens, Tokens::Looking) {
+            return;
+        }
+        signing.tokens = Tokens::Looking;
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let found = cx
+                .background_executor()
+                .spawn(async move {
+                    let modules = pkcs11::known_modules();
+                    if modules.is_empty() {
+                        return Tokens::Failed(t("sign-no-driver", &[]));
+                    }
+                    let mut found = Vec::new();
+                    for path in modules {
+                        let Ok(module) = pkcs11::Module::load(&path) else {
+                            continue;
+                        };
+                        for token in module.tokens().unwrap_or_default() {
+                            // The same token through two drivers: once.
+                            if !found.iter().any(|f: &Found| f.token.serial == token.serial) {
+                                found.push(Found {
+                                    module: path.clone(),
+                                    token,
+                                });
+                            }
+                        }
+                    }
+                    Tokens::Found(found)
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                if let Some(signing) = this.signing.as_mut() {
+                    signing.token = 0;
+                    signing.tokens = found;
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// A press on the pages while placing the signature starts its box.
@@ -281,11 +392,22 @@ impl Viewer {
         let Some(placed) = signing.placed.filter(|_| !signing.busy) else {
             return;
         };
-        let Some(certificate) = signing.certificate.clone() else {
-            signing.error = Some(t("sign-no-certificate", &[]));
+        let source = signing.source;
+        let certificate = signing.certificate.clone();
+        let found = match (source, &signing.tokens) {
+            (Source::Token, Tokens::Found(f)) => f.get(signing.token).cloned(),
+            _ => None,
+        };
+        let missing = match source {
+            Source::File if certificate.is_none() => Some("sign-no-certificate"),
+            Source::Token if found.is_none() => Some("sign-no-token"),
+            _ => None,
+        };
+        if let Some(missing) = missing {
+            signing.error = Some(t(missing, &[]));
             cx.notify();
             return;
-        };
+        }
         let password = signing.password.read(cx).text().to_owned();
         let value = |input: &Entity<TextInput>| {
             Some(input.read(cx).text().trim().to_owned()).filter(|s| !s.is_empty())
@@ -302,18 +424,11 @@ impl Viewer {
         signing.error = None;
         cx.notify();
         cx.spawn(async move |this, cx| {
-            // The password is tried before asking where to save.
+            // The password or PIN is tried before asking where to save.
             let cert = certificate.clone();
             let opened = cx
                 .background_executor()
-                .spawn(async move {
-                    let p12 =
-                        std::fs::read(&cert).map_err(|e| format!("{}: {e}", file_name(&cert)))?;
-                    katna_pdf_sign::p12::open(&p12, &password).map_err(|e| match e {
-                        katna_pdf_sign::P12Error::Password => t("sign-wrong-password", &[]),
-                        e => e.to_string(),
-                    })
-                })
+                .spawn(async move { unlock(cert, found, &password) })
                 .await;
             let stop =
                 |this: gpui::WeakEntity<Viewer>, error: Option<String>, cx: &mut gpui::AsyncApp| {
@@ -363,13 +478,14 @@ impl Viewer {
                             page,
                             rect,
                             lines: katna_pdf_sign::appearance_lines(
-                                &id,
+                                id.as_ref(),
                                 &katna_pdf_sign::shown_date(time),
                                 reason.as_deref(),
                             ),
                         },
                     };
-                    let name = katna_pdf_sign::common_name(&id.certificate.tbs_certificate.subject);
+                    let name =
+                        katna_pdf_sign::common_name(&id.certificate().tbs_certificate.subject);
                     let mut request = SignRequest::new(
                         placement,
                         SigningInfo {
@@ -384,7 +500,7 @@ impl Viewer {
                     let signed = katna_pdf_sign::sign_with(
                         &doc,
                         &request,
-                        &id,
+                        id.as_ref(),
                         katna_pdf_sign::Digest::Sha256,
                         server
                             .as_ref()
@@ -392,7 +508,13 @@ impl Viewer {
                     )
                     .map_err(|e| e.to_string())?;
                     crate::viewer::save_over(&target, &signed).map_err(|e| e.to_string())?;
-                    write_note("certificate", &certificate.to_string_lossy());
+                    match &certificate {
+                        Some(c) if source == Source::File => {
+                            write_note("certificate", &c.to_string_lossy());
+                            write_note("source", "file");
+                        }
+                        _ => write_note("source", "token"),
+                    }
                     if let Some(url) = &tsa {
                         write_note("timestamp", &format!("on\n{url}\n"));
                     } else {
@@ -531,37 +653,44 @@ impl Viewer {
                         .text_color(th.text)
                         .child(t("sign-title", &[])),
                 )
-                .child(label("sign-certificate"))
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(px(space::S2))
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .overflow_hidden()
-                                .text_ellipsis()
-                                .whitespace_nowrap()
-                                .text_size(px(text::BODY))
-                                .text_color(if signing.certificate.is_some() {
-                                    th.text
-                                } else {
-                                    th.dim
-                                })
-                                .child(certificate),
-                        )
-                        .child(
-                            widgets::outlined_button(
-                                "sign-choose",
-                                t("sign-choose", &[]),
-                                &th.katna,
+                .child(self.source_switch(cx))
+                .when(signing.source == Source::File, |d| {
+                    d.child(label("sign-certificate")).child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(space::S2))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .overflow_hidden()
+                                    .text_ellipsis()
+                                    .whitespace_nowrap()
+                                    .text_size(px(text::BODY))
+                                    .text_color(if signing.certificate.is_some() {
+                                        th.text
+                                    } else {
+                                        th.dim
+                                    })
+                                    .child(certificate),
                             )
-                            .tip(t("sign-choose-tip", &[]), &th.katna)
-                            .on_click(cx.listener(|this, _, _, cx| this.choose_certificate(cx))),
-                        ),
-                )
+                            .child(
+                                widgets::outlined_button(
+                                    "sign-choose",
+                                    t("sign-choose", &[]),
+                                    &th.katna,
+                                )
+                                .tip(t("sign-choose-tip", &[]), &th.katna)
+                                .on_click(
+                                    cx.listener(|this, _, _, cx| this.choose_certificate(cx)),
+                                ),
+                            ),
+                    )
+                })
+                .when(signing.source == Source::Token, |d| {
+                    d.child(self.token_list(cx))
+                })
                 .child(field(&signing.password))
                 .child(field(&signing.reason))
                 .child(field(&signing.location))
@@ -637,6 +766,143 @@ impl Viewer {
                 )
                 .into_any_element(),
         )
+    }
+
+    /// Certificate file or token: two buttons side by side, the one in
+    /// use filled.
+    fn source_switch(&self, cx: &mut Context<Self>) -> AnyElement {
+        let th = self.theme;
+        let on = self.signing.as_ref().map(|s| s.source);
+        let button = |id: &'static str, source: Source, label: String| {
+            let chosen = on == Some(source);
+            div()
+                .id(id)
+                .flex_1()
+                .h(px(32.0))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(radius::FULL))
+                .text_size(px(text::SMALL))
+                .font_weight(if chosen {
+                    gpui::FontWeight::SEMIBOLD
+                } else {
+                    gpui::FontWeight::NORMAL
+                })
+                .text_color(if chosen { th.text } else { th.dim })
+                .when(chosen, |d| d.bg(th.field))
+                .hover(move |s| s.bg(th.hover))
+                .cursor_pointer()
+                .on_click(cx.listener(move |this, _, _, cx| this.set_source(source, cx)))
+                .child(label)
+        };
+        div()
+            .flex()
+            .gap(px(space::S1))
+            .child(button(
+                "sign-from-file",
+                Source::File,
+                t("sign-from-file", &[]),
+            ))
+            .child(button(
+                "sign-from-token",
+                Source::Token,
+                t("sign-from-token", &[]),
+            ))
+            .into_any_element()
+    }
+
+    /// The tokens plugged in, to pick one, and a button to look again.
+    fn token_list(&self, cx: &mut Context<Self>) -> AnyElement {
+        let th = self.theme;
+        let Some(signing) = self.signing.as_ref() else {
+            return div().into_any_element();
+        };
+        let note = |text: String, colour| {
+            div()
+                .flex_1()
+                .min_w_0()
+                .text_size(px(text::SMALL))
+                .text_color(colour)
+                .child(text)
+        };
+        let mut list = div().flex().flex_col().gap(px(space::S1));
+        match &signing.tokens {
+            Tokens::NotLooked | Tokens::Looking => {
+                list = list.child(note(t("sign-looking", &[]), th.dim));
+            }
+            Tokens::Failed(error) => list = list.child(note(error.clone(), th.error)),
+            Tokens::Found(found) if found.is_empty() => {
+                list = list.child(note(t("sign-no-tokens", &[]), th.dim));
+            }
+            Tokens::Found(found) => {
+                for (i, f) in found.iter().enumerate() {
+                    let chosen = i == signing.token;
+                    let what = [f.token.manufacturer.as_str(), f.token.model.as_str()]
+                        .iter()
+                        .filter(|s| !s.is_empty())
+                        .copied()
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    list = list.child(
+                        div()
+                            .id(("token", i))
+                            .px(px(space::S3))
+                            .py(px(space::S2))
+                            .rounded(px(radius::SM))
+                            .border_1()
+                            .border_color(if chosen {
+                                gpui::rgba(th.katna.accent).into()
+                            } else {
+                                th.line
+                            })
+                            .cursor_pointer()
+                            .hover(move |s| s.bg(th.hover))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                if let Some(signing) = this.signing.as_mut() {
+                                    signing.token = i;
+                                    signing.focus = true;
+                                    cx.notify();
+                                }
+                            }))
+                            .child(
+                                div()
+                                    .text_size(px(text::BODY))
+                                    .text_color(th.text)
+                                    .child(f.token.label.clone()),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(text::SMALL))
+                                    .text_color(if f.token.locked { th.error } else { th.dim })
+                                    .child(if f.token.locked {
+                                        t("sign-pin-locked", &[])
+                                    } else {
+                                        what
+                                    }),
+                            ),
+                    );
+                }
+            }
+        }
+        div()
+            .flex()
+            .items_start()
+            .gap(px(space::S2))
+            .child(div().flex_1().min_w_0().child(list))
+            .child(icon_button(
+                "sign-look-again",
+                "rotate-cw",
+                t("sign-look-again", &[]),
+                th,
+                cx.listener(|this, _, _, cx| {
+                    if let Some(signing) = this.signing.as_mut() {
+                        signing.tokens = Tokens::NotLooked;
+                    }
+                    this.look_for_tokens(cx);
+                }),
+            ))
+            .into_any_element()
     }
 
     /// The line over the pages of a signed file: whether its signatures
@@ -796,6 +1062,38 @@ impl Viewer {
         );
         list.into_any_element()
     }
+}
+
+/// The key to sign with, unlocked: from certificate file `file`, or on
+/// token `found`, with `secret`, its password or PIN.
+fn unlock(file: Option<PathBuf>, found: Option<Found>, secret: &str) -> Result<Key, String> {
+    if let Some(found) = found {
+        let module = pkcs11::Module::load(&found.module).map_err(|e| e.to_string())?;
+        let token = module
+            .tokens()
+            .map_err(|e| e.to_string())?
+            .into_iter()
+            .find(|t| t.serial == found.token.serial && t.label == found.token.label)
+            .ok_or_else(|| t("sign-token-gone", &[]))?;
+        let ids = module.open(&token, secret).map_err(|e| match e {
+            pkcs11::TokenError::Pin => t("sign-wrong-pin", &[]),
+            pkcs11::TokenError::Locked => t("sign-pin-locked", &[]),
+            pkcs11::TokenError::Gone => t("sign-token-gone", &[]),
+            e => e.to_string(),
+        })?;
+        let id = ids
+            .into_iter()
+            .next()
+            .ok_or_else(|| t("sign-no-key", &[]))?;
+        return Ok(Box::new(id));
+    }
+    let file = file.ok_or_else(|| t("sign-no-certificate", &[]))?;
+    let p12 = std::fs::read(&file).map_err(|e| format!("{}: {e}", file_name(&file)))?;
+    let id = katna_pdf_sign::p12::open(&p12, secret).map_err(|e| match e {
+        katna_pdf_sign::P12Error::Password => t("sign-wrong-password", &[]),
+        e => e.to_string(),
+    })?;
+    Ok(Box::new(id))
 }
 
 /// A free timestamp server, offered until another is given.

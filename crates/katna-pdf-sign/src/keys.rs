@@ -60,9 +60,8 @@ pub trait Signer {
     /// signer's, as far as it is known.
     fn chain(&self) -> &[Certificate];
     fn kind(&self) -> KeyKind;
-    /// The signature over `message`, hashed with `digest`
-    /// ([`KeyKind::digest`] of the digest asked for): PKCS#1 v1.5 for
-    /// RSA, DER for ECDSA.
+    /// The signature over `message`, hashed with `digest`: PKCS#1 v1.5
+    /// for RSA, DER for ECDSA.
     fn sign(&self, digest: Digest, message: &[u8]) -> Result<Vec<u8>, SignerError>;
 }
 

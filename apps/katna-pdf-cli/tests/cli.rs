@@ -194,3 +194,105 @@ fn files_are_signed_and_verified() {
     assert_eq!((code, out.as_str()), (0, "no signatures\n"));
     let _ = std::fs::remove_dir_all(d);
 }
+
+/// SoftHSM, a token in software, where it is installed (CI installs
+/// it on Linux): signing with a token goes through it as through an
+/// ePass2003's driver.
+const SOFTHSM: &str = "/usr/lib/softhsm/libsofthsm2.so";
+
+#[test]
+fn files_are_signed_with_a_token() {
+    let tools = ["softhsm2-util", "pkcs11-tool"];
+    if !Path::new(SOFTHSM).is_file()
+        || tools
+            .iter()
+            .any(|t| Command::new(t).arg("--help").output().is_err())
+    {
+        eprintln!("SoftHSM is not installed; token signing not tried");
+        return;
+    }
+    let d = dir("token");
+    std::fs::create_dir_all(d.join("tokens")).unwrap();
+    let conf = d.join("softhsm2.conf");
+    std::fs::write(
+        &conf,
+        format!(
+            "directories.tokendir = {}\nobjectstore.backend = file\n",
+            d.join("tokens").display()
+        ),
+    )
+    .unwrap();
+    let data = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../crates/katna-pdf-sign/tests/data"
+    );
+    let ok = |c: &mut Command| assert!(c.env("SOFTHSM2_CONF", &conf).status().unwrap().success());
+    ok(Command::new("softhsm2-util").args([
+        "--init-token",
+        "--free",
+        "--label",
+        "Katna Test Token",
+        "--so-pin",
+        "87654321",
+        "--pin",
+        "123456",
+    ]));
+    for (file, kind, id) in [
+        ("asha-key.p8", "privkey", "01"),
+        ("asha.der", "cert", "01"),
+        ("ca.der", "cert", "02"),
+    ] {
+        ok(Command::new("pkcs11-tool").args([
+            "--module",
+            SOFTHSM,
+            "--login",
+            "--pin",
+            "123456",
+            "--write-object",
+            &format!("{data}/{file}"),
+            "--type",
+            kind,
+            "--id",
+            id,
+        ]));
+    }
+    let run = |args: &[&str]| {
+        let out = Command::new(env!("CARGO_BIN_EXE_katna-pdf-cli"))
+            .args(args)
+            .env("SOFTHSM2_CONF", &conf)
+            .output()
+            .unwrap();
+        (
+            out.status.code().unwrap_or(-1),
+            String::from_utf8_lossy(&out.stdout).into_owned(),
+        )
+    };
+    let (code, out) = run(&["tokens", "--json", "--module", SOFTHSM]);
+    assert_eq!(code, 0);
+    assert!(out.contains("\"label\":\"Katna Test Token\""), "{out}");
+
+    let input = d.join("in.pdf");
+    std::fs::write(&input, pdf(1)).unwrap();
+    let signed = d.join("signed.pdf");
+    let sign = |pin: &str| {
+        run(&[
+            "sign",
+            s(&input),
+            "-o",
+            s(&signed),
+            "--token",
+            "Katna Test Token",
+            "--module",
+            SOFTHSM,
+            "--password",
+            pin,
+        ])
+    };
+    assert_eq!(sign("000000").0, 1);
+    assert_eq!(sign("123456").0, 0);
+    let (code, out) = run(&["verify", "--json", s(&signed)]);
+    assert_eq!(code, 0);
+    assert!(out.contains("\"intact\":true"), "{out}");
+    assert!(out.contains("\"signer\":\"Asha Verma\""), "{out}");
+    let _ = std::fs::remove_dir_all(d);
+}

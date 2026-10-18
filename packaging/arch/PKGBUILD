@@ -36,6 +36,8 @@ optdepends=(
   'vulkan-driver: GPU rendering with Vulkan instead of the OpenGL fallback'
   "xdg-desktop-portal-kde: KDE's file dialogs on Plasma"
   "xdg-desktop-portal-gnome: GNOME's file dialogs on GNOME"
+  'opensc: signing with USB tokens such as the ePass2003'
+  'pcsclite: the smart card service USB tokens need (enable pcscd.socket)'
 )
 provides=('katna-pdf')
 conflicts=('katna-pdf')
