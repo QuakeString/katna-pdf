@@ -31,6 +31,7 @@ colors-invert-lightness = Invert lightness
 colors-sepia = Sepia paper
 colors-black-white = Black and white
 search-open = Find (Ctrl+F)
+organize = Organize pages
 annotate = Annotate
 
 ## Find in the document

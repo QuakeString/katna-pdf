@@ -76,6 +76,34 @@ pub fn apply(
     }
 }
 
+/// The pages after the pages `picked` are dragged to sit before old page
+/// `to` (`pages` for the end), keeping their order, and their new places.
+/// `None` when nothing would move.
+pub fn move_to(
+    pages: usize,
+    picked: &BTreeSet<usize>,
+    to: usize,
+) -> Option<(Order, BTreeSet<usize>)> {
+    let picked: BTreeSet<usize> = picked.iter().copied().filter(|&p| p < pages).collect();
+    if picked.is_empty() {
+        return None;
+    }
+    let to = to.min(pages);
+    let before: Vec<usize> = (0..to).filter(|p| !picked.contains(p)).collect();
+    let after: Vec<usize> = (to..pages).filter(|p| !picked.contains(p)).collect();
+    let order: Vec<usize> = before
+        .iter()
+        .chain(&picked)
+        .chain(&after)
+        .copied()
+        .collect();
+    if order.iter().enumerate().all(|(i, &p)| i == p) {
+        return None;
+    }
+    let moved = (before.len()..before.len() + picked.len()).collect();
+    Some((order.into_iter().map(|p| (p, 0)).collect(), moved))
+}
+
 /// Where pages inserted go: after the last page picked, or at the end.
 pub fn insert_at(pages: usize, picked: &BTreeSet<usize>) -> usize {
     picked
@@ -158,5 +186,23 @@ mod tests {
         assert_eq!(click(&set(&[3]), Some(3), 1, true, false), set(&[1, 3]));
         assert_eq!(insert_at(4, &set(&[1, 2])), 3);
         assert_eq!(insert_at(4, &none), 4);
+    }
+
+    #[test]
+    fn dragged_pages_move_together() {
+        let moved = |picked: &[usize], to| {
+            move_to(5, &set(picked), to).map(|(order, picked)| {
+                (
+                    order.into_iter().map(|(p, _)| p).collect::<Vec<_>>(),
+                    picked.into_iter().collect::<Vec<_>>(),
+                )
+            })
+        };
+        assert_eq!(moved(&[3], 0), Some((vec![3, 0, 1, 2, 4], vec![0])));
+        assert_eq!(moved(&[0, 2], 5), Some((vec![1, 3, 4, 0, 2], vec![3, 4])));
+        assert_eq!(moved(&[1, 4], 3), Some((vec![0, 2, 1, 4, 3], vec![2, 3])));
+        assert_eq!(moved(&[2], 2), None);
+        assert_eq!(moved(&[2], 3), None);
+        assert_eq!(moved(&[], 3), None);
     }
 }

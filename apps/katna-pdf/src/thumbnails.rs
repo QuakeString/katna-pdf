@@ -13,6 +13,9 @@ use katna_ui::scale::desktop_px;
 
 /// A thumbnail's width, in logical pixels.
 pub const WIDTH: f32 = 120.0;
+/// The width thumbnails are drawn at: the organizer's, shown smaller
+/// in the pane.
+pub const DRAWN: f32 = 160.0;
 /// Thumbnails kept drawn; the ones farthest from the last asked for are
 /// freed beyond this.
 const KEEP: usize = 60;

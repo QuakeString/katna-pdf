@@ -115,6 +115,10 @@ const ICONS: &[(&str, &[u8])] = &[
     ("icons/print.svg", include_bytes!("../icons/print.svg")),
     ("icons/search.svg", include_bytes!("../icons/search.svg")),
     ("icons/spread.svg", include_bytes!("../icons/spread.svg")),
+    (
+        "icons/view-grid.svg",
+        include_bytes!("../icons/view-grid.svg"),
+    ),
     ("icons/zoom-in.svg", include_bytes!("../icons/zoom-in.svg")),
     (
         "icons/zoom-out.svg",
