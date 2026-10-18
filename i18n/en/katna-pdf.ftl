@@ -9,6 +9,7 @@ usage = Usage: katna-pdf [FILE.pdf…]
 empty-title = Open a PDF
 empty-detail = Choose a file, or drop one here.
 empty-open = Open…
+recent-title = Recent
 
 ## The toolbar over the pages
 page-of = { $page } / { $count }

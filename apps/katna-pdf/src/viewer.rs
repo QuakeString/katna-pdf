@@ -33,6 +33,7 @@ use katna_ui::widgets::{self, Tip};
 use katna_ui::{ScrollBar, px, unpx};
 
 use crate::contents::{self, Contents};
+use crate::history::History;
 use crate::search::{self, Found, Hit, Texts};
 use crate::select::{self, Selection, Spot};
 use crate::text::t;
@@ -147,6 +148,9 @@ pub enum ViewerEvent {
     /// Files were dropped on the viewer.
     Dropped(Vec<PathBuf>),
 }
+
+/// Recent files on the start screen.
+const RECENT: usize = 8;
 
 /// Points to logical pixels at 100%: 96 pixels to the inch, 72 points.
 const POINT: f32 = 96.0 / 72.0;
@@ -333,6 +337,17 @@ impl Viewer {
                 match opened {
                     Ok(opened) => {
                         this.list.reset(opened.doc.page_count());
+                        // Where it was left last time.
+                        let page = this
+                            .path
+                            .as_deref()
+                            .and_then(|p| cx.global::<History>().page(p));
+                        if let Some(page) = page.filter(|p| *p < opened.doc.page_count()) {
+                            this.list.scroll_to(ListOffset {
+                                item_ix: page,
+                                offset_in_item: px(0.0),
+                            });
+                        }
                         this.texts = Some(search::texts(opened.doc.page_count()));
                         let old = this.thumbs.reset(opened.doc.page_count());
                         this.released.extend(old);
@@ -1446,7 +1461,8 @@ impl Viewer {
                 .child(
                     widgets::filled_button("empty-open", t("empty-open", &[]), &th.katna)
                         .on_click(cx.listener(|_, _, _, cx| cx.emit(ViewerEvent::ChooseFiles))),
-                ),
+                )
+                .children(self.recent(cx)),
         };
         div()
             .flex_1()
@@ -1455,6 +1471,86 @@ impl Viewer {
             .justify_center()
             .bg(th.backdrop)
             .child(body)
+    }
+}
+
+impl Viewer {
+    /// The files opened lately, for the start screen.
+    fn recent(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
+        let th = self.theme;
+        let entries: Vec<_> = cx
+            .global::<History>()
+            .recent()
+            .iter()
+            .take(RECENT)
+            .cloned()
+            .collect();
+        if entries.is_empty() {
+            return None;
+        }
+        let rows = entries.into_iter().enumerate().map(|(i, entry)| {
+            let folder = entry
+                .path
+                .parent()
+                .map(|p| p.display().to_string())
+                .unwrap_or_default();
+            let name = file_name(&entry.path);
+            let path = entry.path;
+            div()
+                .id(("recent", i))
+                .flex()
+                .items_center()
+                .gap(px(space::S3))
+                .px(px(space::S3))
+                .py(px(space::S2))
+                .rounded(px(radius::SM))
+                .cursor_pointer()
+                .hover(|s| s.bg(th.hover))
+                .on_click(cx.listener(move |this, _, _, cx| this.open(path.clone(), cx)))
+                .child(
+                    svg()
+                        .path("icons/document.svg")
+                        .size(px(16.0))
+                        .flex_none()
+                        .text_color(th.dim),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .min_w_0()
+                        .child(
+                            div()
+                                .text_size(px(text::BODY))
+                                .text_color(th.text)
+                                .truncate()
+                                .child(name),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(text::SMALL))
+                                .text_color(th.dim)
+                                .truncate()
+                                .child(folder),
+                        ),
+                )
+        });
+        Some(
+            div()
+                .w(px(420.0))
+                .mt(px(space::S4))
+                .flex()
+                .flex_col()
+                .child(
+                    div()
+                        .px(px(space::S3))
+                        .pb(px(space::S2))
+                        .text_size(px(text::SMALL))
+                        .text_color(th.dim)
+                        .child(t("recent-title", &[])),
+                )
+                .children(rows),
+        )
     }
 }
 
@@ -1489,6 +1585,11 @@ impl Render for Viewer {
         let find_bar = self.find_bar(cx);
         let pages: AnyElement = match &self.content {
             Content::Ready(_) => {
+                // Reading progress: the page at the top, noted as it
+                // changes.
+                if let Some(path) = self.path.clone() {
+                    History::opened(&path, self.current_page(), cx);
+                }
                 let pages = list(
                     self.list.clone(),
                     cx.processor(|this, ix, window, cx| this.render_page(ix, window, cx)),
