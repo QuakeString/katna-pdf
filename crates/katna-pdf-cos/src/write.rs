@@ -32,6 +32,29 @@ impl std::fmt::Display for UpdateError {
 impl std::error::Error for UpdateError {}
 
 /// Serialises `obj` as PDF syntax.
+/// A whole new file of `objects`, object `n` at `n - 1`: header,
+/// objects, a classic cross-reference table, `trailer`.
+pub(crate) fn write_file(objects: &[Object], mut trailer: Dict) -> Vec<u8> {
+    let mut out = b"%PDF-1.7\n%\xe2\xe3\xcf\xd3\n".to_vec();
+    let mut offsets = Vec::with_capacity(objects.len());
+    for (i, obj) in objects.iter().enumerate() {
+        offsets.push(out.len());
+        let _ = writeln!(out, "{} 0 obj", i + 1);
+        write_object(&mut out, obj);
+        out.extend_from_slice(b"\nendobj\n");
+    }
+    let xref = out.len();
+    let _ = write!(out, "xref\n0 {}\n0000000000 65535 f\r\n", objects.len() + 1);
+    for offset in offsets {
+        let _ = write!(out, "{offset:010} 00000 n\r\n");
+    }
+    trailer.set("Size", objects.len() as i64 + 1);
+    out.extend_from_slice(b"trailer\n");
+    write_object(&mut out, &Object::Dict(trailer));
+    let _ = write!(out, "\nstartxref\n{xref}\n%%EOF\n");
+    out
+}
+
 pub fn write_object(out: &mut Vec<u8>, obj: &Object) {
     match obj {
         Object::Null => out.extend_from_slice(b"null"),

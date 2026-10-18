@@ -19,6 +19,7 @@ mod object;
 mod outline;
 mod pages;
 mod parse;
+mod report;
 mod sign;
 mod write;
 mod xfdf;
@@ -35,6 +36,7 @@ pub use mdp::{Allowed, Change};
 pub use object::{Dict, Name, Object, Ref, Stream};
 pub use outline::{Destination, OutlineItem, text_string};
 pub use pages::{ComposeError, PageInfo, PageSource, compose};
+pub use report::text_pdf;
 pub use sign::{
     CONTENTS_LEN, Coverage, Picture, Placement, Prepared, SignError, SignRequest, Signature,
     SigningInfo,

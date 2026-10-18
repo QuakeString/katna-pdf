@@ -13,11 +13,10 @@
 //! to pages left out go nowhere.
 
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::io::Write as _;
 
 use crate::document::Document;
 use crate::object::{Dict, Object, Ref};
-use crate::write::write_object;
+use crate::write::write_file;
 
 /// Attributes a page takes from the page tree above it when it lacks them
 /// (ISO 32000-2 §7.7.3.4).
@@ -361,28 +360,7 @@ impl Copier {
     }
 
     /// The file: header, objects, a classic cross-reference table.
-    fn write(self, mut trailer: Dict) -> Vec<u8> {
-        let mut out = b"%PDF-1.7\n%\xe2\xe3\xcf\xd3\n".to_vec();
-        let mut offsets = Vec::with_capacity(self.objects.len());
-        for (i, obj) in self.objects.iter().enumerate() {
-            offsets.push(out.len());
-            let _ = writeln!(out, "{} 0 obj", i + 1);
-            write_object(&mut out, obj);
-            out.extend_from_slice(b"\nendobj\n");
-        }
-        let xref = out.len();
-        let _ = write!(
-            out,
-            "xref\n0 {}\n0000000000 65535 f\r\n",
-            self.objects.len() + 1
-        );
-        for offset in offsets {
-            let _ = write!(out, "{offset:010} 00000 n\r\n");
-        }
-        trailer.set("Size", self.objects.len() as i64 + 1);
-        out.extend_from_slice(b"trailer\n");
-        write_object(&mut out, &Object::Dict(trailer));
-        let _ = write!(out, "\nstartxref\n{xref}\n%%EOF\n");
-        out
+    fn write(self, trailer: Dict) -> Vec<u8> {
+        write_file(&self.objects, trailer)
     }
 }

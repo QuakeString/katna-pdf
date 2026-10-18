@@ -1555,17 +1555,9 @@ impl Viewer {
         let rows = self.signatures.clone().unwrap_or_default();
         for (i, row) in rows.iter().enumerate() {
             let (icon, colour, state) = match &row.problem {
-                Some(problem) => (
-                    "shield-alert",
-                    th.katna.error,
-                    t("signature-bad", &[("problem", problem)]),
-                ),
+                Some(_) => ("shield-alert", th.katna.error, state(row)),
                 None => {
-                    let state = if row.whole {
-                        t("signature-intact", &[])
-                    } else {
-                        t("signature-intact-changed", &[])
-                    };
+                    let state = state(row);
                     let colour = if row.unverified() {
                         th.katna.warning
                     } else {
@@ -1584,48 +1576,7 @@ impl Viewer {
                 }
                 _ => (None, None),
             };
-            let mut details = Vec::new();
-            if let Some(allowed) = row.certifies {
-                details.push(t(
-                    "signer-certifies",
-                    &[(
-                        "allowed",
-                        &t(&allowed_id(allowed).replace("certify", "allowed"), &[]),
-                    )],
-                ));
-            }
-            match &row.revocation {
-                Some(Revocation::Good) => details.push(t("signer-not-revoked", &[])),
-                Some(Revocation::Unknown { name, why }) => details.push(t(
-                    "signer-revocation-unknown",
-                    &[("name", name), ("why", why)],
-                )),
-                _ => {}
-            }
-            if let Some(time) = &row.time {
-                details.push(t("signature-time", &[("time", time)]));
-            }
-            if let Some(stamp) = &row.stamp {
-                let time = stamp.time.clone().unwrap_or_default();
-                let by = stamp.authority.clone().unwrap_or_default();
-                details.push(if stamp.valid {
-                    t(
-                        "signature-timestamp",
-                        &[("time", &time), ("authority", &by)],
-                    )
-                } else {
-                    t("signature-timestamp-bad", &[])
-                });
-            }
-            if let Some(reason) = &row.reason {
-                details.push(t("signature-reason", &[("reason", reason)]));
-            }
-            if let Some(location) = &row.location {
-                details.push(t("signature-location", &[("location", location)]));
-            }
-            if let Some(page) = row.page {
-                details.push(t("comment-page", &[("page", &(page + 1).to_string())]));
-            }
+            let details = details(row);
             let page = row.page;
             let signer = row.signer.clone().unwrap_or_else(|| row.name.clone());
             list = list.child(
@@ -1710,6 +1661,19 @@ impl Viewer {
                     ),
             );
         }
+        if !rows.is_empty() {
+            list = list.child(
+                div().px(px(space::S4)).pt(px(space::S2)).flex().child(
+                    widgets::outlined_button(
+                        "signatures-report",
+                        t("signatures-report", &[]),
+                        &th.katna,
+                    )
+                    .tip(t("signatures-report-tip", &[]), &th.katna)
+                    .on_click(cx.listener(|this, _, _, cx| this.save_report(cx))),
+                ),
+            );
+        }
         let folder = trusted_folder()
             .map(|f| f.display().to_string())
             .unwrap_or_default();
@@ -1759,6 +1723,48 @@ impl Viewer {
         }
     }
 
+    /// Asks where, then writes what was found checking the signatures
+    /// as a PDF, to keep or send on.
+    fn save_report(&mut self, cx: &mut Context<Self>) {
+        let (Some(path), Some(rows)) = (self.path.clone(), self.signatures.clone()) else {
+            return;
+        };
+        let folder = path.parent().map(Path::to_path_buf).unwrap_or_default();
+        let stem = path
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let suggested = t("signatures-report-file", &[("name", &stem)]);
+        let chosen = cx.prompt_for_new_path(&folder, Some(&suggested));
+        let lines = report_lines(&super::file_name(&path), &rows);
+        let title = t("signatures-report-title", &[]);
+        cx.spawn(async move |this, cx| {
+            let Ok(Ok(Some(target))) = chosen.await else {
+                return;
+            };
+            let written = cx
+                .background_executor()
+                .spawn(async move {
+                    let pdf = katna_pdf_cos::text_pdf(&title, &lines);
+                    std::fs::write(&target, pdf).map_err(|e| e.to_string())?;
+                    Ok::<_, String>(target)
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                this.notice = Some(match written {
+                    Ok(target) => t(
+                        "signatures-report-saved",
+                        &[("name", &super::file_name(&target))],
+                    ),
+                    Err(error) => t("signatures-report-failed", &[("error", &error)]),
+                });
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     /// Trusts `root` from now on, and so every signer it vouches for.
     fn trust(&mut self, root: &Certificate, cx: &mut Context<Self>) {
         if let Err(e) = trust_root(root) {
@@ -1784,6 +1790,102 @@ impl Viewer {
         }
         cx.notify();
     }
+}
+
+/// What a signature's state is, in a line.
+fn state(row: &SigRow) -> String {
+    match &row.problem {
+        Some(problem) => t("signature-bad", &[("problem", problem)]),
+        None if row.whole => t("signature-intact", &[]),
+        None => t("signature-intact-changed", &[]),
+    }
+}
+
+/// Who vouches for a signer, if the signature holds.
+fn identity(row: &SigRow) -> Option<String> {
+    match (&row.vouched, row.problem.is_none()) {
+        (Some(Vouched::By(root)), true) => Some(t("signer-vouched", &[("root", root)])),
+        (Some(Vouched::Not { why, .. }), true) => Some(why.clone()),
+        _ => None,
+    }
+}
+
+/// The rest of what is known of a signature, a line each.
+fn details(row: &SigRow) -> Vec<String> {
+    let mut details = Vec::new();
+    if let Some(allowed) = row.certifies {
+        details.push(t(
+            "signer-certifies",
+            &[(
+                "allowed",
+                &t(&allowed_id(allowed).replace("certify", "allowed"), &[]),
+            )],
+        ));
+    }
+    match &row.revocation {
+        Some(Revocation::Good) => details.push(t("signer-not-revoked", &[])),
+        Some(Revocation::Unknown { name, why }) => details.push(t(
+            "signer-revocation-unknown",
+            &[("name", name), ("why", why)],
+        )),
+        _ => {}
+    }
+    if let Some(time) = &row.time {
+        details.push(t("signature-time", &[("time", time)]));
+    }
+    if let Some(stamp) = &row.stamp {
+        let time = stamp.time.clone().unwrap_or_default();
+        let by = stamp.authority.clone().unwrap_or_default();
+        details.push(if stamp.valid {
+            t(
+                "signature-timestamp",
+                &[("time", &time), ("authority", &by)],
+            )
+        } else {
+            t("signature-timestamp-bad", &[])
+        });
+    }
+    if let Some(reason) = &row.reason {
+        details.push(t("signature-reason", &[("reason", reason)]));
+    }
+    if let Some(location) = &row.location {
+        details.push(t("signature-location", &[("location", location)]));
+    }
+    if let Some(page) = row.page {
+        details.push(t("comment-page", &[("page", &(page + 1).to_string())]));
+    }
+    details
+}
+
+/// The signatures of file `name`, as lines for a report: each signer
+/// and state, then what is known of it, indented.
+fn report_lines(name: &str, rows: &[SigRow]) -> Vec<String> {
+    let mut lines = vec![
+        t("report-file", &[("name", name)]),
+        format!(
+            "  {}",
+            t(
+                "report-checked",
+                &[(
+                    "time",
+                    &katna_pdf_sign::shown_date(std::time::SystemTime::now())
+                )]
+            )
+        ),
+        String::new(),
+    ];
+    for row in rows {
+        let signer = row.signer.clone().unwrap_or_else(|| row.name.clone());
+        lines.push(format!("{signer}: {}", state(row)));
+        lines.extend(
+            identity(row)
+                .into_iter()
+                .chain(details(row))
+                .map(|l| format!("  {l}")),
+        );
+        lines.push(format!("  {}", t("report-field", &[("name", &row.name)])));
+    }
+    lines
 }
 
 /// The key to sign with, unlocked: from certificate file `file`, or on
@@ -2108,6 +2210,19 @@ mod tests {
         assert!(after.fields.is_empty() && after.signed);
         assert_eq!(after.certified, Some(Allowed::FormFilling));
         assert_eq!(check(&doc)[0].certifies, Some(Allowed::FormFilling));
+
+        // The report says the same as the pane.
+        let lines = report_lines("certified.pdf", &check(&doc));
+        assert_eq!(lines[0], "File: certified.pdf");
+        assert!(
+            lines.iter().any(|l| l.starts_with("Asha Verma: ")),
+            "{lines:?}"
+        );
+        assert!(
+            lines.contains(&"  Reason: Approved".to_owned()),
+            "{lines:?}"
+        );
+        assert!(lines.contains(&"  field: Author".to_owned()), "{lines:?}");
         let _ = std::fs::remove_dir_all(folder);
     }
 }
