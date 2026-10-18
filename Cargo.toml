@@ -32,8 +32,6 @@ gpui-platform = { package = "gpui-pre-platform", version = "=0.3.6", features = 
 # add PDFium or MuPDF behind the same trait).
 hayro = "0.8.0"
 image = { version = "0.25", default-features = false }
-# The R-tree behind vector-heavy pages' scenes (docs/PLAN.md §2.5).
-rstar = "0.13"
 # Requests from later launches to the running app (already in GPUI's tree).
 async-channel = "2.5"
 # Flate for xref and object streams; the pure-Rust backend (miniz_oxide).

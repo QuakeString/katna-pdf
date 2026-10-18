@@ -7,6 +7,7 @@
 //! beside [`hayro`](crate::Hayro) without the app noticing. No GPUI types
 //! here: the app turns a [`Bitmap`] into a GPUI image itself.
 
+mod grid;
 mod hayro_engine;
 pub mod scene;
 
