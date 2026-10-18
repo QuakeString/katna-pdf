@@ -27,12 +27,17 @@ const INHERITED: [&str; 4] = ["Resources", "MediaBox", "CropBox", "Rotate"];
 const MAX_DEPTH: usize = 64;
 
 /// One page of the new file: page `page` of `doc`, turned clockwise by
-/// `turns` quarter turns more than it already is.
+/// `turns` quarter turns more than it already is, and cropped to `crop`
+/// when given.
 #[derive(Clone, Copy)]
 pub struct PageSource<'a> {
     pub doc: &'a Document,
     pub page: usize,
     pub turns: i32,
+    /// The part of the page kept (left, bottom, right, top, in its user
+    /// space), within its media box; the media box itself uncrops it.
+    /// Left out, the page's crop is kept.
+    pub crop: Option<[f32; 4]>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -110,6 +115,22 @@ pub fn compose(base: Option<&Document>, pages: &[PageSource<'_>]) -> Result<Vec<
             page.remove("Rotate");
         } else {
             page.set("Rotate", rotate.rem_euclid(360));
+        }
+        if let Some(crop) = p.crop
+            && let Some(info) = p.doc.page_info(p.page)
+        {
+            let m = info.media;
+            let kept = [
+                crop[0].max(m[0]),
+                crop[1].max(m[1]),
+                crop[2].min(m[2]),
+                crop[3].min(m[3]),
+            ];
+            if kept == m || kept.iter().zip(&m).all(|(a, b)| (a - b).abs() < 0.01) {
+                page.remove("CropBox");
+            } else if kept[2] - kept[0] >= 1.0 && kept[3] - kept[1] >= 1.0 {
+                page.set("CropBox", crate::annots::reals(&kept));
+            }
         }
         // A page placed twice shares everything but its annotations: one
         // annotation belongs to one page.

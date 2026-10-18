@@ -139,7 +139,7 @@ impl Inverse {
 
     /// A box on the page shown (left, top, right, bottom) in page space
     /// (left, bottom, right, top).
-    fn rect(&self, b: [f32; 4]) -> [f32; 4] {
+    pub fn rect(&self, b: [f32; 4]) -> [f32; 4] {
         let corners = [[b[0], b[1]], [b[2], b[1]], [b[0], b[3]], [b[2], b[3]]].map(|p| self.map(p));
         corners.iter().fold(
             [

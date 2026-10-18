@@ -49,6 +49,7 @@ impl Viewer {
 
     fn pick_tool(&mut self, tool: Tool, cx: &mut Context<Self>) {
         self.tool = (self.tool != Some(tool)).then_some(tool);
+        self.cropping = false;
         self.draft = None;
         // Marking text that is already selected marks it now.
         if let Some(style) = tool.markup()
@@ -156,7 +157,10 @@ impl Viewer {
 
     /// The page under `position` in the window and the place on it, in
     /// points from its top left.
-    fn page_point(&self, position: gpui::Point<gpui::Pixels>) -> Option<(usize, [f32; 2])> {
+    pub(super) fn page_point(
+        &self,
+        position: gpui::Point<gpui::Pixels>,
+    ) -> Option<(usize, [f32; 2])> {
         let shown = desktop_px(self.shown);
         let bounds = self.page_bounds.borrow();
         let (&page, b) = bounds.iter().find(|(_, b)| b.contains(&position))?;
@@ -170,7 +174,7 @@ impl Viewer {
     }
 
     /// The map from page `page` shown back to its own space.
-    fn inverse(&self, page: usize) -> Option<Inverse> {
+    pub(super) fn inverse(&self, page: usize) -> Option<Inverse> {
         let Content::Ready(opened) = &self.content else {
             return None;
         };

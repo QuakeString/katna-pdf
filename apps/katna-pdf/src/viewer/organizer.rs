@@ -76,6 +76,10 @@ impl Viewer {
     /// while it shows.
     pub(super) fn toggle_organizer(&mut self, cx: &mut Context<Self>) {
         self.organizer = !self.organizer && matches!(self.content, Content::Ready(_));
+        if self.organizer {
+            self.cropping = false;
+            self.draft = None;
+        }
         if self.organizer && self.tools {
             self.toggle_tools(cx);
         }

@@ -126,6 +126,7 @@ fn reorder_check(doc: &Document, pages: usize) -> String {
             doc,
             page,
             turns: i32::from(page == 0),
+            crop: None,
         })
         .collect();
     let composed = match katna_pdf_cos::compose(Some(doc), &sources) {

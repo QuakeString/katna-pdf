@@ -34,6 +34,7 @@ use katna_ui::widgets::{self, Tip};
 use katna_ui::{ScrollBar, px, unpx};
 
 mod annots;
+mod crop;
 mod organizer;
 
 use crate::annotate::Tool;
@@ -178,6 +179,11 @@ enum Pages {
     Order(Vec<(usize, usize, i32)>),
     /// The pages of `file` inserted before page `at`.
     Insert { file: PathBuf, at: usize },
+    /// `pages` cropped to `crop` in their user space, or uncropped.
+    Crop {
+        pages: BTreeSet<usize>,
+        crop: Option<[f32; 4]>,
+    },
 }
 
 /// Recent files on the start screen.
@@ -310,6 +316,8 @@ pub struct Viewer {
     thumbs: Thumbs,
     /// The organizer shows in place of the pages (`organizer.rs`).
     organizer: bool,
+    /// A box dragged on a page crops it (`crop.rs`).
+    cropping: bool,
     grid: gpui::ScrollHandle,
     grid_bar: ScrollBar,
     theme: Theme,
@@ -399,6 +407,7 @@ impl Viewer {
             tab: PaneTab::Pages,
             thumbs: Thumbs::new(),
             organizer: false,
+            cropping: false,
             grid: gpui::ScrollHandle::new(),
             grid_bar: ScrollBar::default(),
             theme: Theme::for_appearance(window.appearance()),
@@ -476,6 +485,7 @@ impl Viewer {
         self.reading_text.clear();
         self.picked.clear();
         self.organizer = false;
+        self.cropping = false;
         self.anchor = None;
         self.edited = None;
         self.changing_pages = false;
@@ -919,7 +929,7 @@ impl Viewer {
         // A press outside the field being typed in ends the typing.
         self.finish_typing(true, cx);
         window.focus(&self.focus, cx);
-        if self.annot_press(event.position, cx) {
+        if self.crop_press(event.position, cx) || self.annot_press(event.position, cx) {
             return;
         }
         self.selection = self.spot_at(event.position, cx).map(|spot| Selection {
@@ -949,7 +959,7 @@ impl Viewer {
 
     fn release_pointer(&mut self, cx: &mut Context<Self>) {
         self.selecting = false;
-        if self.annot_release(cx) {
+        if self.crop_release(cx) || self.annot_release(cx) {
             return;
         }
         // A click without a drag selects nothing.
@@ -1689,7 +1699,9 @@ impl Viewer {
         let th = self.theme;
         let some = !self.picked.is_empty() && !self.changing_pages;
         let button = |id: &'static str, icon: &'static str, tip: &str, enabled: bool| {
+            // Smaller than the toolbar's, so eight fit across the pane.
             widgets::icon_button(id, icon, 18.0, &th.katna)
+                .size(px(32.0))
                 .tip(t(tip, &[]), &th.katna)
                 .when(!enabled, |b| b.opacity(0.4))
         };
@@ -1730,6 +1742,24 @@ impl Viewer {
                     !self.changing_pages,
                 )
                 .on_click(cx.listener(|this, _, _, cx| this.choose_insert(cx))),
+            )
+            .child(
+                widgets::icon_button_colored(
+                    "pages-crop",
+                    "crop",
+                    18.0,
+                    if self.cropping {
+                        th.katna.accent
+                    } else {
+                        th.katna.text_dim
+                    },
+                    &th.katna,
+                )
+                .size(px(32.0))
+                .when(self.cropping, |b| b.bg(th.field))
+                .tip(t("pages-crop", &[]), &th.katna)
+                .when(self.changing_pages, |b| b.opacity(0.4))
+                .on_click(cx.listener(|this, _, _, cx| this.toggle_crop(cx))),
             )
             .child(
                 button("pages-extract", "download", "pages-extract", some)
@@ -1810,6 +1840,7 @@ impl Viewer {
                             doc: &doc,
                             page,
                             turns: 0,
+                            crop: None,
                         })
                         .collect();
                     let out = katna_pdf_cos::compose(None, &sources).map_err(|e| e.to_string())?;
@@ -1858,8 +1889,12 @@ impl Viewer {
                         None => std::fs::read(&path).map_err(|e| e.to_string())?,
                     };
                     let base = katna_pdf_cos::Document::load(bytes).map_err(|e| e.to_string())?;
-                    let (order, other) = match change {
-                        Pages::Order(order) => (order, None),
+                    let (order, other, crop) = match change {
+                        Pages::Order(order) => (order, None, None),
+                        Pages::Crop { pages, crop } => {
+                            let order = (0..base.pages().len()).map(|p| (0, p, 0)).collect();
+                            (order, None, Some((pages, crop)))
+                        }
                         Pages::Insert { file, at } => {
                             let bytes = std::fs::read(&file).map_err(|e| e.to_string())?;
                             let other =
@@ -1867,7 +1902,7 @@ impl Viewer {
                             let mut order: Vec<_> = (0..at).map(|p| (0, p, 0)).collect();
                             order.extend((0..other.pages().len()).map(|p| (1, p, 0)));
                             order.extend((at..base.pages().len()).map(|p| (0, p, 0)));
-                            (order, Some(other))
+                            (order, Some(other), None)
                         }
                     };
                     let sources = order
@@ -1877,7 +1912,19 @@ impl Viewer {
                                 (1, Some(other)) => other,
                                 _ => &base,
                             };
-                            katna_pdf_cos::PageSource { doc, page, turns }
+                            // Uncropped: to the media box.
+                            let crop = crop
+                                .as_ref()
+                                .filter(|(pages, _)| from == 0 && pages.contains(&page))
+                                .and_then(|(_, crop)| {
+                                    crop.or_else(|| base.page_info(page).map(|i| i.media))
+                                });
+                            katna_pdf_cos::PageSource {
+                                doc,
+                                page,
+                                turns,
+                                crop,
+                            }
                         })
                         .collect::<Vec<_>>();
                     let out =
@@ -2276,7 +2323,7 @@ impl Viewer {
         let links: Vec<AnyElement> = match (
             self.links
                 .as_ref()
-                .filter(|_| self.tool.is_none())
+                .filter(|_| self.tool.is_none() && !self.cropping)
                 .and_then(|l| l.get(page)),
             transform,
         ) {
@@ -2305,7 +2352,8 @@ impl Viewer {
                 .collect(),
             _ => Vec::new(),
         };
-        let overlays = self.annot_overlays(page, transform);
+        let mut overlays = self.annot_overlays(page, transform);
+        overlays.extend(self.crop_overlay(page));
         // Matches on this page, the current one stronger, and the
         // selected text.
         let accent = self.theme.katna.accent & 0xffff_ff00;
@@ -2348,6 +2396,7 @@ impl Viewer {
             .shadow_sm()
             .relative()
             .cursor(match self.tool {
+                _ if self.cropping => gpui::CursorStyle::Crosshair,
                 Some(tool) if tool.markup().is_none() => gpui::CursorStyle::Crosshair,
                 _ => gpui::CursorStyle::IBeam,
             })
@@ -2940,7 +2989,9 @@ impl Render for Viewer {
             .on_action(cx.listener(|this, _: &CopyText, _, cx| this.copy_text(cx)))
             .on_action(cx.listener(|this, _: &DeleteAnnotation, _, cx| this.delete_chosen(cx)))
             .on_action(cx.listener(|this, _: &PutToolDown, _, cx| {
-                if this.organizer {
+                if this.cropping {
+                    this.toggle_crop(cx);
+                } else if this.organizer {
                     this.toggle_organizer(cx);
                 } else {
                     this.cancel_tool(cx);
