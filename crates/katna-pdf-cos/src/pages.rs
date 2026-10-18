@@ -160,6 +160,61 @@ pub fn compose(base: Option<&Document>, pages: &[PageSource<'_>]) -> Result<Vec<
     Ok(copier.write(trailer))
 }
 
+/// A page's boxes and turn, as its dictionary and the page tree above it
+/// give them.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PageInfo {
+    /// The media box: left, bottom, right, top, in points.
+    pub media: [f32; 4],
+    /// The crop box (the media box when it has none).
+    pub crop: [f32; 4],
+    /// Clockwise quarter turns, in degrees: 0, 90, 180 or 270.
+    pub rotate: i64,
+}
+
+impl PageInfo {
+    /// The size shown, in points: the crop box, turned.
+    pub fn size(&self) -> (f32, f32) {
+        let (w, h) = (
+            (self.crop[2] - self.crop[0]).abs(),
+            (self.crop[3] - self.crop[1]).abs(),
+        );
+        if self.rotate % 180 == 0 {
+            (w, h)
+        } else {
+            (h, w)
+        }
+    }
+}
+
+impl Document {
+    /// Page `page`'s boxes and turn; a page without a media box is US
+    /// Letter, as readers take it.
+    pub fn page_info(&self, page: usize) -> Option<PageInfo> {
+        let dict = page_dict(self, *self.pages().get(page)?);
+        let rect = |key: &str| -> Option<[f32; 4]> {
+            let Object::Array(a) = self.resolve_key(&dict, key) else {
+                return None;
+            };
+            let n: Vec<f32> = a
+                .iter()
+                .filter_map(|v| self.resolve(v).as_number())
+                .map(|v| v as f32)
+                .collect();
+            match n[..] {
+                [a, b, c, d] => Some([a.min(c), b.min(d), a.max(c), b.max(d)]),
+                _ => None,
+            }
+        };
+        let media = rect("MediaBox").unwrap_or([0.0, 0.0, 612.0, 792.0]);
+        Some(PageInfo {
+            media,
+            crop: rect("CropBox").unwrap_or(media),
+            rotate: dict.int("Rotate").unwrap_or(0).rem_euclid(360) / 90 * 90,
+        })
+    }
+}
+
 /// Page `page` of `doc` as a dictionary standing alone: the attributes it
 /// inherits copied in, its parent dropped.
 fn page_dict(doc: &Document, page: Ref) -> Dict {
