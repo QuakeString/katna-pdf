@@ -166,7 +166,7 @@ static ROOTS: OnceLock<RwLock<Arc<Roots>>> = OnceLock::new();
 
 fn roots_lock() -> &'static RwLock<Arc<Roots>> {
     ROOTS.get_or_init(|| {
-        let mut roots = Roots::system();
+        let mut roots = Roots::standard();
         if let Some(folder) = trusted_folder() {
             roots.add_folder(&folder);
         }

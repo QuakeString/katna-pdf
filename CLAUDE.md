@@ -30,7 +30,8 @@ cargo run --release -p katna-pdf-bench -- file.pdf
   tokens through PKCS#11 modules (`pkcs11.rs`; OpenSC, ePass2003 and
   other makers' drivers; `KATNA_PDF_PKCS11` adds one), and signers'
   certificates chained to trusted roots (`trust.rs`: the system's, plus
-  a folder of the person's own, such as India's CCA roots), and
+  India's CCA roots built in from `roots/india`, and a folder of the
+  person's own), and
   revocation checked online (`revocation.rs`: OCSP, then CRLs; missing
   issuers fetched from the certificate's AIA URL). The
   PDF side (fields, byte ranges) is `katna-pdf-cos`'s `sign.rs`, and

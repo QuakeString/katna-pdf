@@ -6,6 +6,10 @@
 //! and the ones the person adds (India's CCA roots, a company's own),
 //! as certificate files in a folder.
 //!
+//! India's CCA roots come built in (`roots/india`), with the issuing
+//! certificates of authorities under them that signers' tokens often
+//! leave out.
+//!
 //! Revocation is checked online, apart, in [`crate::revocation`].
 
 use std::path::{Path, PathBuf};
@@ -24,7 +28,32 @@ const DEPTH: usize = 10;
 #[derive(Debug, Clone, Default)]
 pub struct Roots {
     certs: Vec<Certificate>,
+    /// Certificates known to complete chains with, not trusted
+    /// themselves.
+    issuers: Vec<Certificate>,
 }
+
+/// India's CCA roots (Controller of Certifying Authorities, Root CA of
+/// India): every one, as old signatures were made under the old ones.
+const INDIA: [&[u8]; 5] = [
+    include_bytes!("../roots/india/cca-india-2007.der"),
+    include_bytes!("../roots/india/cca-india-2011.der"),
+    include_bytes!("../roots/india/cca-india-2014.der"),
+    include_bytes!("../roots/india/cca-india-2015-spl.der"),
+    include_bytes!("../roots/india/cca-india-2022.der"),
+];
+
+/// Licensed certifying authorities' issuing certificates under them.
+const INDIA_ISSUERS: [&[u8]; 8] = [
+    include_bytes!("../roots/india/issuers/emudhra-ca-2014.der"),
+    include_bytes!("../roots/india/issuers/emudhra-class3-organisation-2014.der"),
+    include_bytes!("../roots/india/issuers/emudhra-ca-2022.der"),
+    include_bytes!("../roots/india/issuers/emudhra-class2-document-signer-2022.der"),
+    include_bytes!("../roots/india/issuers/emudhra-class3-document-signer-2022.der"),
+    include_bytes!("../roots/india/issuers/emudhra-class3-individual-2022.der"),
+    include_bytes!("../roots/india/issuers/emudhra-class3-organisation-2022.der"),
+    include_bytes!("../roots/india/issuers/emudhra-dgft-2022.der"),
+];
 
 impl Roots {
     /// No roots.
@@ -44,6 +73,30 @@ impl Roots {
         roots
     }
 
+    /// The roots trusted unless the person says otherwise: the system's
+    /// and India's.
+    pub fn standard() -> Self {
+        let mut roots = Self::system();
+        roots.add_india();
+        roots
+    }
+
+    /// Trusts India's CCA roots, and knows the issuers under them.
+    pub fn add_india(&mut self) {
+        for der in INDIA {
+            if let Ok(cert) = Certificate::from_der(der) {
+                self.add(cert);
+            }
+        }
+        for der in INDIA_ISSUERS {
+            if let Ok(cert) = Certificate::from_der(der)
+                && !self.issuers.contains(&cert)
+            {
+                self.issuers.push(cert);
+            }
+        }
+    }
+
     /// Trusts `cert` as a root.
     pub fn add(&mut self, cert: Certificate) {
         if !self.contains(&cert) {
@@ -51,12 +104,17 @@ impl Roots {
         }
     }
 
-    /// Trusts the certificates in file `bytes` (DER, or PEM with one or
-    /// more); how many it held.
+    /// Trusts the certificates in file `bytes` (DER, PEM with one or
+    /// more, or bare Base64 as some authorities publish theirs); how
+    /// many it held.
     pub fn add_file(&mut self, bytes: &[u8]) -> usize {
         let certs = match Certificate::from_der(bytes) {
             Ok(cert) => vec![cert],
-            Err(_) => Certificate::load_pem_chain(bytes).unwrap_or_default(),
+            Err(_) => Certificate::load_pem_chain(bytes)
+                .ok()
+                .filter(|c| !c.is_empty())
+                .or_else(|| bare_base64(bytes).map(|c| vec![c]))
+                .unwrap_or_default(),
         };
         let n = certs.len();
         for cert in certs {
@@ -170,6 +228,7 @@ pub fn path(
                 .certs
                 .iter()
                 .chain(sent)
+                .chain(&roots.issuers)
                 .filter(|c| c.tbs_certificate.subject == tbs.issuer && *c != cert)
                 .collect();
             let Some(issuer) = issuers.iter().copied().find(|i| issued(cert, i)) else {
@@ -194,6 +253,25 @@ pub fn path(
         }
     };
     (trust, path)
+}
+
+/// A certificate written as Base64 with no PEM lines around it.
+fn bare_base64(bytes: &[u8]) -> Option<Certificate> {
+    let text: String = std::str::from_utf8(bytes)
+        .ok()?
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect();
+    if !text.starts_with("MII") {
+        return None;
+    }
+    let mut pem = String::from("-----BEGIN CERTIFICATE-----\n");
+    for line in text.as_bytes().chunks(64) {
+        pem.push_str(std::str::from_utf8(line).ok()?);
+        pem.push('\n');
+    }
+    pem.push_str("-----END CERTIFICATE-----\n");
+    der::DecodePem::from_pem(pem.as_bytes()).ok()
 }
 
 /// Whether `cert` was valid at `at`.
@@ -327,6 +405,22 @@ mod tests {
     }
 
     #[test]
+    fn india_s_roots_are_built_in() {
+        let mut roots = Roots::new();
+        roots.add_india();
+        assert_eq!(roots.len(), 5);
+        // A Class 3 issuer under e-Mudhra CA 2022 chains to CCA India
+        // 2022 with what is built in.
+        let class3 = cert(INDIA_ISSUERS[5]);
+        assert_eq!(
+            chain(&class3, &[], &roots, in_range(&class3)),
+            Trust::Trusted {
+                root: "CCA India 2022".into()
+            }
+        );
+    }
+
+    #[test]
     fn roots_are_read_from_der_and_pem() {
         let (ca, asha) = pair();
         let mut roots = Roots::new();
@@ -339,6 +433,14 @@ mod tests {
         // The CA only once.
         assert_eq!(roots.len(), 2);
         assert_eq!(roots.add_file(b"not a certificate"), 0);
+        // Bare Base64, as India's CCA publishes some of its roots.
+        let der = include_bytes!("../tests/data/ca.der");
+        let bare = der::pem::encode_string("CERTIFICATE", der::pem::LineEnding::LF, der)
+            .unwrap()
+            .lines()
+            .filter(|l| !l.starts_with("-----"))
+            .collect::<String>();
+        assert_eq!(Roots::new().add_file(bare.as_bytes()), 1);
         // Kept in a folder, and found there again.
         let dir = std::env::temp_dir().join(format!("katna-roots-{}", std::process::id()));
         Roots::keep(&dir, &ca).unwrap();
