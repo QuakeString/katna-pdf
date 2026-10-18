@@ -21,6 +21,7 @@ use std::sync::Arc;
 
 use hayro::hayro_interpret::font::{Glyph, GlyphRun};
 use hayro::hayro_interpret::hayro_syntax::Pdf;
+use hayro::hayro_interpret::hayro_syntax::object::dict::keys::ANNOTS;
 use hayro::hayro_interpret::hayro_syntax::page::Page;
 use hayro::hayro_interpret::util::{RectExt, TransformExt};
 use hayro::hayro_interpret::{
@@ -38,6 +39,8 @@ use hayro::vello_cpu::{
 
 use crate::Bitmap;
 use crate::grid::Grid;
+
+mod plain;
 
 /// A page with at least this many path segments is vector-heavy.
 pub const HEAVY_SEGMENTS: usize = 50_000;
@@ -78,6 +81,23 @@ pub fn page_scene(bytes: Arc<Vec<u8>>, page: usize) -> Option<Result<Scene, Unsu
     Some(Scene::build(pages.get(page)?))
 }
 
+/// Whether our quick reader reads page `page` of the PDF in `bytes` into
+/// exactly the scene hayro's interpreter does; `None` when it leaves the
+/// page to hayro, or there is no such page. For tools that check it.
+pub fn quick_reader_agrees(bytes: Arc<Vec<u8>>, page: usize) -> Option<bool> {
+    let pdf = Pdf::new_with_password(bytes, "").ok()?;
+    let pages = pdf.pages();
+    let page = pages.get(page)?;
+    let (quick, true) = Scene::read(page, true) else {
+        return None;
+    };
+    let (hayro, _) = Scene::read(page, false);
+    Some(match (quick, hayro) {
+        (Ok(a), Ok(b)) => a.same_as(&b),
+        _ => false,
+    })
+}
+
 /// Why a page cannot be drawn from a scene.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Unsupported {
@@ -107,7 +127,7 @@ pub struct Scene {
     grid: Grid,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 enum Verb {
     Move,
     Line,
@@ -118,6 +138,7 @@ enum Verb {
 
 /// One drawn path. Its points are in the coordinates of its transform;
 /// its box is in [`Scene::boxes`].
+#[derive(PartialEq)]
 struct Item {
     verbs: (u32, u32),
     points: u32,
@@ -138,6 +159,7 @@ enum Draw {
     Stroke { stroke: Stroke, text: bool },
 }
 
+#[derive(PartialEq)]
 struct Clip {
     parent: u32,
     verbs: (u32, u32),
@@ -148,6 +170,12 @@ struct Clip {
 impl Scene {
     /// Reads `page` into a scene, or says what on it a scene cannot draw.
     pub fn build(page: &Page<'_>) -> Result<Scene, Unsupported> {
+        Scene::read(page, true).0
+    }
+
+    /// Reads `page`, with our quick reader when `quick` and the page
+    /// suits it; true with the scene when it did.
+    fn read(page: &Page<'_>, quick: bool) -> (Result<Scene, Unsupported>, bool) {
         let (w, h) = page.render_dimensions();
         let transform = page.initial_transform(true).to_kurbo();
         let cache = InterpreterCache::new();
@@ -158,17 +186,30 @@ impl Scene {
             page.xref(),
             InterpreterSettings::default(),
         );
+        let bbox = Rect::new(0.0, 0.0, f64::from(w), f64::from(h));
         let mut builder = Builder::default();
         // The crop box clips everything, as in `hayro::render_into`.
         let mut crop = page.intersected_crop_box().to_kurbo().to_path(0.1);
         crop.apply_affine(transform);
-        builder.push_clip_path(&ClipPath {
+        let crop_clip = ClipPath {
             path: crop,
             fill: FillRule::NonZero,
-        });
-        interpret_page(page, &mut context, &mut builder);
+        };
+        builder.push_clip_path(&crop_clip);
+        // Pages of plain paths, as most CAD sheets are, are read by our own
+        // quick reader; anything else by hayro.
+        let quick = quick
+            && !page.raw().contains_key(ANNOTS)
+            && page
+                .page_stream()
+                .is_some_and(|content| plain::read(content, transform, bbox, &mut builder));
+        if !quick {
+            builder = Builder::default();
+            builder.push_clip_path(&crop_clip);
+            interpret_page(page, &mut context, &mut builder);
+        }
         if let Some(why) = builder.unsupported {
-            return Err(why);
+            return (Err(why), quick);
         }
         let Builder {
             verbs,
@@ -181,7 +222,7 @@ impl Scene {
             ..
         } = builder;
         let grid = Grid::new([w, h], &boxes);
-        Ok(Scene {
+        let scene = Scene {
             size: (w, h),
             verbs,
             points,
@@ -191,7 +232,20 @@ impl Scene {
             clips,
             boxes,
             grid,
-        })
+        };
+        (Ok(scene), quick)
+    }
+
+    /// Whether two scenes hold the same items, drawn the same way.
+    fn same_as(&self, other: &Scene) -> bool {
+        self.size == other.size
+            && self.verbs == other.verbs
+            && self.points == other.points
+            && self.items == other.items
+            && self.styles == other.styles
+            && self.transforms == other.transforms
+            && self.clips == other.clips
+            && self.boxes == other.boxes
     }
 
     /// How many items the scene holds.
@@ -567,10 +621,9 @@ impl Builder {
         bounds: Rect,
         transform: Affine,
         color: [u8; 4],
-        props: &StrokeProps,
+        stroke: Stroke,
         text: bool,
     ) {
-        let stroke = kurbo_stroke(props);
         let point = bounds.width() <= 0.0 && bounds.height() <= 0.0;
         if stored.0.1 == 0 || (point && stroke.start_cap == Cap::Butt) {
             return;
@@ -598,7 +651,14 @@ impl<'a> Device<'a> for Builder {
             self.fill(stored, bounds, props.transform, color, *rule);
         }
         if let DrawMode::Stroke(stroke) | DrawMode::FillAndStroke(_, stroke) = draw_mode {
-            self.stroke(stored, bounds, props.transform, color, stroke, false);
+            self.stroke(
+                stored,
+                bounds,
+                props.transform,
+                color,
+                kurbo_stroke(stroke),
+                false,
+            );
         }
     }
 
@@ -678,7 +738,14 @@ impl<'a> Device<'a> for Builder {
                 let path = glyph.transform() * outline.outline();
                 let stored = self.store_path(&path);
                 let bounds = path.bounding_box();
-                self.stroke(stored, bounds, props.transform, color, stroke, true);
+                self.stroke(
+                    stored,
+                    bounds,
+                    props.transform,
+                    color,
+                    kurbo_stroke(stroke),
+                    true,
+                );
             }
         }
     }
@@ -698,6 +765,18 @@ impl<'a> Device<'a> for Builder {
 }
 
 impl Builder {
+    /// Fills `path`, as `draw_path` would for a plain colour.
+    fn paint_fill(&mut self, path: &BezPath, transform: Affine, color: [u8; 4], rule: FillRule) {
+        let stored = self.store_path(path);
+        self.fill(stored, path.bounding_box(), transform, color, rule);
+    }
+
+    /// Strokes `path`, as `draw_path` would for a plain colour.
+    fn paint_stroke(&mut self, path: &BezPath, transform: Affine, color: [u8; 4], stroke: Stroke) {
+        let stored = self.store_path(path);
+        self.stroke(stored, path.bounding_box(), transform, color, stroke, false);
+    }
+
     /// The bounding box of a stored path's points.
     fn bounds_of(&self, stored: ((u32, u32), u32)) -> Rect {
         let count: usize = self.verbs[stored.0.0 as usize..(stored.0.0 + stored.0.1) as usize]
