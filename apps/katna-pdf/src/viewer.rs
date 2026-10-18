@@ -209,6 +209,8 @@ pub struct Viewer {
     generation: u64,
     /// The document's outline, once read, if it has one.
     contents: Option<Contents>,
+    /// Each page's links, once read.
+    links: Option<Arc<Vec<Vec<katna_pdf_cos::Link>>>>,
     /// Each page's text, read on first need, for search.
     texts: Option<Texts>,
     /// The find bar, while open.
@@ -269,6 +271,7 @@ impl Viewer {
             released: Vec::new(),
             generation: 0,
             contents: None,
+            links: None,
             texts: None,
             search: None,
             selection: None,
@@ -309,6 +312,7 @@ impl Viewer {
         let generation = self.generation;
         self.content = Content::Opening(name.clone());
         self.contents = None;
+        self.links = None;
         self.texts = None;
         self.selection = None;
         self.reading_text.clear();
@@ -386,23 +390,30 @@ impl Viewer {
     /// the file asks for it (`/PageMode /UseOutlines`).
     fn read_outline(&mut self, path: PathBuf, generation: u64, cx: &mut Context<Self>) {
         cx.spawn(async move |this, cx| {
-            let (outline, show) = cx
+            let (outline, show, links) = cx
                 .background_executor()
                 .spawn(async move {
                     let Some(doc) = std::fs::read(&path)
                         .ok()
                         .and_then(|bytes| katna_pdf_cos::Document::load(bytes).ok())
                     else {
-                        return (Vec::new(), false);
+                        return (Vec::new(), false, Vec::new());
                     };
                     let show = doc
                         .catalog()
                         .is_some_and(|c| c.name("PageMode") == Some(b"UseOutlines"));
-                    (doc.outline(), show)
+                    (doc.outline(), show, doc.links())
                 })
                 .await;
             this.update(cx, |this, cx| {
-                if this.generation == generation && !outline.is_empty() {
+                if this.generation != generation {
+                    return;
+                }
+                if links.iter().any(|l| !l.is_empty()) {
+                    this.links = Some(Arc::new(links));
+                    cx.notify();
+                }
+                if !outline.is_empty() {
                     this.contents = Some(Contents::new(outline));
                     if show {
                         this.pane = true;
@@ -896,11 +907,16 @@ impl Viewer {
         let page = dest.page.min(count - 1);
         let height = opened.doc.page_size(page).map_or(792.0, |(_, h)| h);
         // Each page sits below a gap (`render_page`); the height is
-        // counted from the page's bottom, as PDF counts it.
+        // counted from the page's bottom, as PDF counts it, before the
+        // page's crop and rotation.
         let gap = px(if page == 0 { space::S5 } else { GAP / 2.0 });
-        let below_top = dest
-            .top
-            .map_or(0.0, |top| (height - top).clamp(0.0, height) * self.shown);
+        let transform = opened.doc.page_transform(page);
+        let below_top = dest.top.map_or(0.0, |top| {
+            let y = transform.map_or(height - top, |t| {
+                katna_pdf_render::map_point(t, (0.0, top)).1
+            });
+            y.clamp(0.0, height) * self.shown
+        });
         self.list.scroll_to(ListOffset {
             item_ix: page,
             offset_in_item: if dest.top.is_some() {
@@ -910,6 +926,23 @@ impl Viewer {
             },
         });
         cx.notify();
+    }
+
+    /// A link was clicked: go to its place, or open its address in the
+    /// browser (web and mail addresses only).
+    fn follow(&mut self, target: &katna_pdf_cos::LinkTarget, cx: &mut Context<Self>) {
+        match target {
+            katna_pdf_cos::LinkTarget::Page(dest) => self.go_to(*dest, cx),
+            katna_pdf_cos::LinkTarget::Uri(uri) => {
+                let lower = uri.trim().to_ascii_lowercase();
+                if ["http://", "https://", "mailto:"]
+                    .iter()
+                    .any(|scheme| lower.starts_with(scheme))
+                {
+                    cx.open_url(uri.trim());
+                }
+            }
+        }
     }
 
     /// The side pane: its tabs in a header lined up with the toolbar,
@@ -1258,11 +1291,40 @@ impl Viewer {
             return div().into_any_element();
         };
         let (w, h) = opened.doc.page_size(page).unwrap_or((612.0, 792.0));
+        let transform = opened.doc.page_transform(page);
         let shown = self.shown;
         let device = shown * window.scale_factor();
         let image = self.pages.get(&page).map(|d| d.image.clone());
         self.laid_out(page);
         self.want(page, device, cx);
+        // The page's links, as areas to click.
+        let links: Vec<AnyElement> =
+            match (self.links.as_ref().and_then(|l| l.get(page)), transform) {
+                (Some(links), Some(transform)) => links
+                    .iter()
+                    .enumerate()
+                    .map(|(i, link)| {
+                        let b = katna_pdf_render::map_rect(transform, link.rect);
+                        let target = link.target.clone();
+                        let area = div()
+                            .id(("link", i))
+                            .absolute()
+                            .left(desktop_px(b[0] * shown))
+                            .top(desktop_px(b[1] * shown))
+                            .w(desktop_px((b[2] - b[0]) * shown))
+                            .h(desktop_px((b[3] - b[1]) * shown))
+                            .cursor_pointer()
+                            .on_click(cx.listener(move |this, _, _, cx| this.follow(&target, cx)));
+                        match &link.target {
+                            katna_pdf_cos::LinkTarget::Uri(uri) => {
+                                area.tip(uri.clone(), &self.theme.katna).into_any_element()
+                            }
+                            katna_pdf_cos::LinkTarget::Page(_) => area.into_any_element(),
+                        }
+                    })
+                    .collect(),
+                _ => Vec::new(),
+            };
         // Matches on this page, the current one stronger, and the
         // selected text.
         let accent = self.theme.katna.accent & 0xffff_ff00;
@@ -1318,6 +1380,7 @@ impl Viewer {
                     .cursor(gpui::CursorStyle::IBeam)
                     .children(image.map(|image| img(ImageSource::Render(image)).size_full()))
                     .children(marks)
+                    .children(links)
                     .child({
                         // Notes where the page is, for the pointer.
                         let record = self.page_bounds.clone();

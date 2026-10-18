@@ -221,6 +221,11 @@ impl Document for HayroDocument {
         device.text
     }
 
+    fn page_transform(&self, page: usize) -> Option<[f64; 6]> {
+        let pdf_page = self.pdf.pages().get(page)?;
+        Some(pdf_page.initial_transform(true).to_kurbo().as_coeffs())
+    }
+
     fn render_region(&self, page: usize, scale: f32, region: Region) -> Option<Bitmap> {
         if region.width > crate::MAX_SIDE || region.height > crate::MAX_SIDE {
             return None;

@@ -59,11 +59,13 @@ fn check(file: &Path) -> String {
     let pages = doc.pages().len();
     let outline = doc.outline();
     let mut out = format!(
-        "load=ok repaired={} encrypted={} pages={pages} hayro={} load_ms={load_ms:.2} outline={}",
+        "load=ok repaired={} encrypted={} pages={pages} hayro={} load_ms={load_ms:.2} outline={} \
+         links={}",
         doc.was_repaired(),
         doc.is_encrypted(),
         hayro_pages.map_or("failed".into(), |n| n.to_string()),
         outline_summary(&outline, pages),
+        doc.links().iter().map(Vec::len).sum::<usize>(),
     );
     let update = match doc.update() {
         Err(e) => format!(

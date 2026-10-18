@@ -389,3 +389,14 @@ fn reads_a_pages_text_with_where_it_is() {
     assert_eq!(found[0], 6..17);
     assert_eq!(text.line_boxes(found[0].clone()).len(), 2);
 }
+
+#[test]
+fn maps_the_files_coordinates_to_the_page_shown() {
+    let doc = Hayro.open(Arc::new(pdf(&[SQUARE])), "").unwrap();
+    let transform = doc.page_transform(0).unwrap();
+    // PDF counts up from the bottom; the page shown, down from the top.
+    assert_eq!(
+        katna_pdf_render::map_rect(transform, [10.0, 20.0, 50.0, 30.0]),
+        [10.0, 70.0, 50.0, 80.0]
+    );
+}
