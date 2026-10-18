@@ -24,9 +24,10 @@ pub struct Theme {
     pub hover: Hsla,
     /// The page-number field.
     pub field: Hsla,
-    pub accent: Hsla,
-    pub on_accent: Hsla,
     pub error: Hsla,
+    /// The palette itself, for Katna's shared controls
+    /// (`katna_ui::widgets`).
+    pub katna: Katna,
 }
 
 impl Theme {
@@ -56,9 +57,8 @@ impl Theme {
             line: rgba(k.outline).into(),
             hover: rgba(k.hover).into(),
             field: rgba(k.search).into(),
-            accent: rgba(k.accent).into(),
-            on_accent: rgba(k.on_accent).into(),
             error: rgba(k.error).into(),
+            katna: *k,
         }
     }
 }

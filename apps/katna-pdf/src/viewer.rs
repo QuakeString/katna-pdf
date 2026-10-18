@@ -19,12 +19,13 @@ use std::sync::Arc;
 use gpui::{
     AnyElement, App, ClickEvent, Context, EventEmitter, ExternalPaths, FocusHandle, Focusable,
     FontWeight, ImageSource, KeyBinding, ListAlignment, ListOffset, ListState, RenderImage,
-    SharedString, Subscription, Window, actions, div, img, list, prelude::*, svg,
+    Subscription, Window, actions, div, img, list, prelude::*, svg,
 };
 use image::{Frame, RgbaImage};
 use katna_pdf_render::{Bitmap, Document, Engine, Hayro, OpenError};
 use katna_ui::scale::desktop_px;
 use katna_ui::tokens::{radius, space, text};
+use katna_ui::widgets::{self, Tip};
 use katna_ui::{px, unpx};
 
 use crate::text::t;
@@ -580,19 +581,8 @@ impl Viewer {
                         .child(t("empty-detail", &[])),
                 )
                 .child(
-                    div()
-                        .id("empty-open")
-                        .px(px(space::S6))
-                        .h(px(40.0))
-                        .flex()
-                        .items_center()
-                        .rounded(px(radius::FULL))
-                        .bg(th.accent)
-                        .text_color(th.on_accent)
-                        .text_size(px(text::BODY))
-                        .cursor_pointer()
-                        .on_click(cx.listener(|_, _, _, cx| cx.emit(ViewerEvent::ChooseFiles)))
-                        .child(t("empty-open", &[])),
+                    widgets::filled_button("empty-open", t("empty-open", &[]), &th.katna)
+                        .on_click(cx.listener(|_, _, _, cx| cx.emit(ViewerEvent::ChooseFiles))),
                 ),
         };
         div()
@@ -686,6 +676,8 @@ impl Render for Viewer {
     }
 }
 
+/// Katna's round icon button (`katna_ui::widgets`), with `tip` shown
+/// under the pointer and read out by screen readers.
 fn icon_button(
     id: &'static str,
     icon: &'static str,
@@ -693,23 +685,9 @@ fn icon_button(
     th: Theme,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
-    let _ = tip;
-    div()
-        .id(id)
-        .size(px(32.0))
-        .flex()
-        .items_center()
-        .justify_center()
-        .rounded(px(radius::FULL))
-        .hover(move |s| s.bg(th.hover))
-        .cursor_pointer()
+    widgets::icon_button(id, icon, 18.0, &th.katna)
+        .tip(tip, &th.katna)
         .on_click(on_click)
-        .child(
-            svg()
-                .path(SharedString::from(format!("icons/{icon}.svg")))
-                .size(px(18.0))
-                .text_color(th.dim),
-        )
 }
 
 fn separator(th: Theme) -> impl IntoElement {
