@@ -37,6 +37,7 @@ pub const SIGNING_TIME: Oid = Oid::new_unwrap("1.2.840.113549.1.9.5");
 pub const SIGNING_CERTIFICATE: Oid = Oid::new_unwrap("1.2.840.113549.1.9.16.2.12");
 pub const SIGNING_CERTIFICATE_V2: Oid = Oid::new_unwrap("1.2.840.113549.1.9.16.2.47");
 pub const TIMESTAMP_TOKEN: Oid = Oid::new_unwrap("1.2.840.113549.1.9.16.2.14");
+pub const TST_INFO: Oid = Oid::new_unwrap("1.2.840.113549.1.9.16.1.4");
 
 // Names.
 pub const COMMON_NAME: Oid = Oid::new_unwrap("2.5.4.3");

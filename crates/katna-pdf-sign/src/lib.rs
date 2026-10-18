@@ -13,11 +13,12 @@ mod cms;
 mod keys;
 mod oid;
 pub mod p12;
+pub mod tsa;
 mod walk;
 
 use katna_pdf_cos::{Coverage, Document, SignError, SignRequest, Signature};
 
-pub use crate::cms::{CheckError, Checked, common_name};
+pub use crate::cms::{CheckError, Checked, Stamp, common_name};
 pub use crate::keys::{KeyKind, Signer, SignerError, SoftKey};
 pub use crate::p12::{Identity, P12Error};
 
@@ -114,6 +115,7 @@ impl Hash {
 pub enum SigningError {
     Pdf(SignError),
     Signer(SignerError),
+    Timestamp(tsa::TsaError),
     Encoding(String),
 }
 
@@ -122,6 +124,7 @@ impl std::fmt::Display for SigningError {
         match self {
             SigningError::Pdf(e) => e.fmt(f),
             SigningError::Signer(e) => e.fmt(f),
+            SigningError::Timestamp(e) => e.fmt(f),
             SigningError::Encoding(e) => write!(f, "the signature could not be written: {e}"),
         }
     }
@@ -130,19 +133,39 @@ impl std::fmt::Display for SigningError {
 impl std::error::Error for SigningError {}
 
 /// `doc` signed by `signer` as `request` says, with `digest`: the file
-/// with the signature appended as an incremental update.
+/// with the signature appended as an incremental update (PAdES B-B).
 pub fn sign(
     doc: &Document,
     request: &SignRequest,
     signer: &dyn Signer,
     digest: Digest,
 ) -> Result<Vec<u8>, SigningError> {
+    sign_with(doc, request, signer, digest, None)
+}
+
+/// [`sign`], and the signature timestamped by `stamper` when given
+/// (PAdES B-T).
+pub fn sign_with(
+    doc: &Document,
+    request: &SignRequest,
+    signer: &dyn Signer,
+    digest: Digest,
+    stamper: Option<&dyn tsa::Stamper>,
+) -> Result<Vec<u8>, SigningError> {
+    let encoding = |e: der::Error| SigningError::Encoding(e.to_string());
     let prepared = doc.prepare_signature(request).map_err(SigningError::Pdf)?;
     let document = digest.hash(&prepared.signed_parts());
-    let signature = cms::build(signer, digest, &document).map_err(|e| match e {
-        cms::BuildError::Encoding(e) => SigningError::Encoding(e.to_string()),
+    let mut signature = cms::build(signer, digest, &document).map_err(|e| match e {
+        cms::BuildError::Encoding(e) => encoding(e),
         cms::BuildError::Signer(e) => SigningError::Signer(e),
     })?;
+    if let Some(stamper) = stamper {
+        let value = cms::signature_value(&signature).map_err(encoding)?;
+        let token = stamper
+            .stamp(digest, &value)
+            .map_err(SigningError::Timestamp)?;
+        signature = cms::add_timestamp(&signature, &token).map_err(encoding)?;
+    }
     prepared.finish(&signature).map_err(SigningError::Pdf)
 }
 
