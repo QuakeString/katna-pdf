@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<!-- Katna PDF: a page with a folded corner on Katna's teal disc. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <circle cx="64" cy="64" r="62" fill="#008080"/>
+  <path fill="#f9f9f9" d="M40 24h34l22 22v54a4 4 0 0 1-4 4H40a4 4 0 0 1-4-4V28a4 4 0 0 1 4-4z"/>
+  <path fill="#b3d9d9" d="M74 24v18a4 4 0 0 0 4 4h18z"/>
+  <path fill="none" stroke="#008080" stroke-width="5" stroke-linecap="round" d="M48 62h32M48 74h32M48 86h20"/>
+</svg>

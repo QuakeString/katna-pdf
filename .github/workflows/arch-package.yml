@@ -1,0 +1,148 @@
+name: Arch package
+
+# Builds packaging/arch/PKGBUILD in an Arch container. On main it replaces
+# the `arch-latest` pre-release with the new package and a pacman
+# repository database, so Arch users install and update Katna PDF without
+# building it (README, "Install on Arch Linux").
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "**"
+      - "!docs/**"
+      - "!bakeoff/**"
+      - "!parity/**"
+  pull_request:
+    paths:
+      - "packaging/**"
+      - ".github/workflows/arch-package.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: arch-package-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    timeout-minutes: 90
+    env:
+      # Shared by the build user and root, so rust-cache (which runs as
+      # root) sees the toolchain and the downloaded crates.
+      RUSTUP_HOME: /opt/rustup
+      CARGO_HOME: /opt/cargo
+    steps:
+      # The package's depends and makedepends (rustup provides cargo), so
+      # makepkg finds them all installed and needs no sudo.
+      - name: Install build tools and dependencies
+        run: |
+          pacman -Syu --noconfirm --needed base-devel git rustup \
+            fontconfig freetype2 gcc-libs glibc libglvnd libxcb \
+            libxkbcommon libxkbcommon-x11 vulkan-icd-loader wayland
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          # pkgver counts the commits.
+          fetch-depth: 0
+      # makepkg refuses to run as root.
+      - name: Create the build user
+        run: |
+          useradd --create-home builder
+          target=$(realpath -m ../katna-pdf-target)
+          echo "CARGO_TARGET_DIR=$target" >> "$GITHUB_ENV"
+          mkdir -p "$RUSTUP_HOME" "$CARGO_HOME" "$target"
+          chown -R builder: "$GITHUB_WORKSPACE" "$RUSTUP_HOME" "$CARGO_HOME" "$target"
+          git config --system --add safe.directory '*'
+      - name: Install Rust
+        run: |
+          runuser -u builder -- env HOME=/home/builder \
+              RUSTUP_HOME="$RUSTUP_HOME" CARGO_HOME="$CARGO_HOME" bash -euc '
+            rustup toolchain install stable --profile minimal
+            rustup default stable
+            rustup toolchain install
+          '
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          key: arch-package
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          workspaces: ". -> ../katna-pdf-target"
+      - name: Hand the restored cache to the build user
+        run: chown -R builder: "$RUSTUP_HOME" "$CARGO_HOME" "$CARGO_TARGET_DIR"
+      - name: Build the package
+        run: |
+          runuser -u builder -- env HOME=/home/builder \
+              RUSTUP_HOME="$RUSTUP_HOME" CARGO_HOME="$CARGO_HOME" \
+              CARGO_TARGET_DIR="$CARGO_TARGET_DIR" bash -euc '
+            # makepkg clones the checked-out branch; pull request
+            # checkouts have none.
+            git checkout -B makepkg-ci
+            cd packaging/arch
+            makepkg --noconfirm
+          '
+      - name: Make the pacman repository
+        run: |
+          mkdir out
+          pkg=$(cd packaging/arch && ls katna-pdf-git-*.pkg.tar.zst)
+          cp "packaging/arch/$pkg" out/
+          # The same package under a name that does not change, for a
+          # one-off download.
+          cp "packaging/arch/$pkg" out/katna-pdf-git-x86_64.pkg.tar.zst
+          cd out
+          repo-add katna-pdf.db.tar.gz "$pkg"
+          # Release assets cannot be symlinks.
+          rm katna-pdf.db katna-pdf.files
+          cp katna-pdf.db.tar.gz katna-pdf.db
+          cp katna-pdf.files.tar.gz katna-pdf.files
+          ls -l
+      - name: Install it and check it
+        run: |
+          pacman -U --noconfirm out/katna-pdf-git-x86_64.pkg.tar.zst
+          if ldd /usr/bin/katna-pdf | grep 'not found'; then exit 1; fi
+          katna-pdf --help
+          pacman -Ql katna-pdf-git
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: arch-package
+          path: out/
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency:
+      group: arch-package-release
+      cancel-in-progress: false
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: arch-package
+          path: out
+      - name: Publish to the arch-latest pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          notes="The newest build of main for Arch Linux. Install it with
+          \`sudo pacman -U https://github.com/$GH_REPO/releases/download/arch-latest/katna-pdf-git-x86_64.pkg.tar.zst\`,
+          or add the repository in the README to get updates with \`pacman -Syu\`."
+          if gh release view arch-latest > /dev/null 2>&1; then
+            gh api -X PATCH "repos/$GH_REPO/git/refs/tags/arch-latest" \
+              -f sha="$GITHUB_SHA" -F force=true > /dev/null
+          else
+            gh release create arch-latest --prerelease --target "$GITHUB_SHA" \
+              --title "Katna PDF for Arch Linux (latest)" --notes "$notes"
+          fi
+          gh release upload arch-latest out/* --clobber
+          # Keep only this build's versioned package.
+          pkg=$(cd out && ls katna-pdf-git-*.pkg.tar.zst | grep -vxF katna-pdf-git-x86_64.pkg.tar.zst)
+          gh release view arch-latest --json assets --jq '.assets[].name' |
+            grep -E '^katna-pdf-git-.*\.pkg\.tar\.zst$' |
+            grep -vxF -e "$pkg" -e katna-pdf-git-x86_64.pkg.tar.zst |
+            while read -r old; do gh release delete-asset arch-latest "$old" --yes; done

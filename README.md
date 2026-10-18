@@ -9,6 +9,27 @@ A fast, beautiful PDF viewer, editor, signer and library manager in Rust and GPU
 
 Linux and Windows first; macOS later. **Status:** Phase 0, a first window that opens, scrolls and zooms a PDF. See [docs/PLAN.md](docs/PLAN.md).
 
+## Install on Arch Linux
+
+CI builds `packaging/arch/PKGBUILD` on every push to `main` and puts the
+package on the
+[`arch-latest`](https://github.com/QuakeString/katna-pdf/releases/tag/arch-latest)
+pre-release, which each build replaces. It is x86_64 only and not signed.
+
+```sh
+sudo pacman -U https://github.com/QuakeString/katna-pdf/releases/download/arch-latest/katna-pdf-git-x86_64.pkg.tar.zst
+```
+
+For updates with `pacman -Syu`, add this to `/etc/pacman.conf`:
+
+```ini
+[katna-pdf]
+SigLevel = Optional TrustAll
+Server = https://github.com/QuakeString/katna-pdf/releases/download/arch-latest
+```
+
+To build the package yourself: `cd packaging/arch && makepkg -si`.
+
 ## Build
 
 On Linux, install `libxkbcommon-dev libxkbcommon-x11-dev libfontconfig-dev libfreetype-dev libwayland-dev libx11-xcb-dev` (Debian/Ubuntu names), then:
