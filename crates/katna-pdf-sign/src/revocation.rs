@@ -17,6 +17,8 @@ use x509_ocsp::{
     BasicOcspResponse, CertId, CertStatus, OcspRequest, OcspResponse, Request, TbsRequest,
 };
 
+use katna_pdf_cos::Dss;
+
 use crate::cms::common_name;
 use crate::oid;
 use crate::trust::signed_by;
@@ -107,16 +109,42 @@ enum Status {
 /// issuer and so on up) were revoked before `at`. The last one, the
 /// root, is not asked about: nothing above it could say.
 pub fn check(path: &[Certificate], at: SystemTime, fetch: &dyn Fetch) -> Revocation {
+    check_with(path, at, &Dss::default(), Some(fetch), &mut Dss::default())
+}
+
+/// The same, told first by validation data `known` (the file's own),
+/// then asked of `fetch` when given; the OCSP answers and CRLs that
+/// told are added to `kept`.
+pub fn check_with(
+    path: &[Certificate],
+    at: SystemTime,
+    known: &Dss,
+    fetch: Option<&dyn Fetch>,
+    kept: &mut Dss,
+) -> Revocation {
     let mut unknown = None;
     for pair in path.windows(2) {
         let [cert, issuer] = pair else { continue };
         let name = common_name(&cert.tbs_certificate.subject);
-        let status = match ocsp(cert, issuer, fetch) {
-            Status::Unknown(why) => match crl(cert, issuer, fetch) {
-                Status::Unknown(_) => Status::Unknown(why),
-                status => status,
+        let status = match told(cert, issuer, known, kept) {
+            Some(status) => status,
+            None => match fetch {
+                None => Status::Unknown("the file keeps no answer for it".into()),
+                Some(fetch) => match ocsp(cert, issuer, fetch) {
+                    (status, Some(der)) => {
+                        kept.ocsps.push(der);
+                        status
+                    }
+                    (Status::Unknown(why), None) => match crl(cert, issuer, fetch) {
+                        (status, Some(der)) => {
+                            kept.crls.push(der);
+                            status
+                        }
+                        (_, None) => Status::Unknown(why),
+                    },
+                    (status, None) => status,
+                },
             },
-            status => status,
         };
         match status {
             Status::Good => {}
@@ -275,14 +303,37 @@ fn cert_id(cert: &Certificate, issuer: &Certificate) -> Option<CertId> {
     })
 }
 
-/// What `cert`'s issuer's OCSP responder says of it.
-fn ocsp(cert: &Certificate, issuer: &Certificate, fetch: &dyn Fetch) -> Status {
+/// What validation data `known` says of `cert`, if it says: an OCSP
+/// answer or CRL from `issuer`, which is added to `kept`.
+fn told(cert: &Certificate, issuer: &Certificate, known: &Dss, kept: &mut Dss) -> Option<Status> {
+    let decided = |s: &Status| matches!(s, Status::Good | Status::Revoked(_));
+    if let Some(id) = cert_id(cert, issuer) {
+        for der in &known.ocsps {
+            if let Some(status) = read_ocsp(der, &id, issuer).filter(decided) {
+                kept.ocsps.push(der.clone());
+                return Some(status);
+            }
+        }
+    }
+    for der in &known.crls {
+        if let Some(status) = read_crl(der, cert, issuer).filter(decided) {
+            kept.crls.push(der.clone());
+            return Some(status);
+        }
+    }
+    None
+}
+
+/// What `cert`'s issuer's OCSP responder says of it, and its answer
+/// when the answer told.
+fn ocsp(cert: &Certificate, issuer: &Certificate, fetch: &dyn Fetch) -> (Status, Option<Vec<u8>>) {
+    let unknown = |why: String| (Status::Unknown(why), None);
     let urls = urls(cert, oid::OCSP);
     let Some(url) = urls.first() else {
-        return Status::Unknown("it names no OCSP responder".into());
+        return unknown("it names no OCSP responder".into());
     };
     let Some(id) = cert_id(cert, issuer) else {
-        return Status::Unknown("its issuer could not be read".into());
+        return unknown("its issuer could not be read".into());
     };
     let request = OcspRequest {
         tbs_request: TbsRequest {
@@ -297,14 +348,17 @@ fn ocsp(cert: &Certificate, issuer: &Certificate, fetch: &dyn Fetch) -> Status {
         optional_signature: None,
     };
     let Ok(body) = request.to_der() else {
-        return Status::Unknown("the OCSP request could not be made".into());
+        return unknown("the OCSP request could not be made".into());
     };
     let answer = match fetch.post(url, "application/ocsp-request", &body) {
         Ok(a) => a,
-        Err(e) => return Status::Unknown(format!("{url}: {e}")),
+        Err(e) => return unknown(format!("{url}: {e}")),
     };
-    read_ocsp(&answer, &id, issuer)
-        .unwrap_or_else(|| Status::Unknown(format!("{url}: the answer does not hold")))
+    match read_ocsp(&answer, &id, issuer) {
+        Some(Status::Unknown(why)) => unknown(why),
+        Some(status) => (status, Some(answer)),
+        None => unknown(format!("{url}: the answer does not hold")),
+    }
 }
 
 /// What OCSP answer `der` says of the certificate `id` names, if it is
@@ -358,23 +412,23 @@ fn may_answer_ocsp(cert: &Certificate) -> bool {
         .is_some_and(|eku| eku.0.contains(&oid::OCSP_SIGNING))
 }
 
-/// What `cert`'s issuer's CRL says of it.
-fn crl(cert: &Certificate, issuer: &Certificate, fetch: &dyn Fetch) -> Status {
+/// What `cert`'s issuer's CRL says of it, and the CRL when it told.
+fn crl(cert: &Certificate, issuer: &Certificate, fetch: &dyn Fetch) -> (Status, Option<Vec<u8>>) {
     let urls = crl_urls(cert);
     if urls.is_empty() {
-        return Status::Unknown("it names no CRL".into());
+        return (Status::Unknown("it names no CRL".into()), None);
     }
     let mut why = String::new();
     for url in &urls {
         match fetch.get(url) {
             Ok(bytes) => match read_crl(&bytes, cert, issuer) {
-                Some(status) => return status,
+                Some(status) => return (status, Some(bytes)),
                 None => why = format!("{url}: the CRL does not hold"),
             },
             Err(e) => why = format!("{url}: {e}"),
         }
     }
-    Status::Unknown(why)
+    (Status::Unknown(why), None)
 }
 
 /// What CRL `bytes` (DER or PEM) says of `cert`, if `issuer` signed it.
@@ -560,6 +614,53 @@ pub(crate) mod tests {
             online.revocation,
             Some(Revocation::Revoked { ref name, .. }) if name == "Raj Kumar"
         ));
+    }
+
+    #[test]
+    fn validation_data_kept_in_the_file_is_checked_offline() {
+        use katna_pdf_cos::{Change, Coverage, Document, Placement, SignRequest, SigningInfo};
+        let mut roots = crate::Roots::new();
+        roots.add_file(&pki_file("root.cer"));
+        let long_term = |p12: &str| {
+            let id = crate::p12::open(&pki_file(p12), "katna").unwrap();
+            let doc = Document::load(crate::tsa::tests::pdf()).unwrap();
+            let request = SignRequest::new(Placement::Invisible, SigningInfo::default());
+            let file = crate::sign(&doc, &request, &id, crate::Digest::Sha256).unwrap();
+            let (file, untold) =
+                crate::add_validation_data(&Document::load(file).unwrap(), &roots, &Pki::new())
+                    .unwrap();
+            let doc = Document::load(file.clone()).unwrap();
+            (crate::check(&doc, &file, &roots).remove(0), untold, doc)
+        };
+        let (meera, untold, doc) = long_term("meera.p12");
+        assert!(untold.is_empty(), "{untold:?}");
+        let kept = doc.dss();
+        assert_eq!((kept.certs.len(), kept.ocsps.len()), (3, 1));
+        // Offline: the issuer and the OCSP answer come from the file.
+        assert!(meera.intact());
+        assert!(matches!(meera.coverage, Coverage::Revision(_)));
+        assert_eq!(meera.later.iter().collect::<Vec<_>>(), [&Change::Dss]);
+        assert!(meera.trust.as_ref().is_some_and(crate::Trust::trusted));
+        assert_eq!(meera.revocation, Some(Revocation::Good));
+        // Nothing to ask online any more.
+        let mut again = meera.clone();
+        crate::check_online(&mut again, &roots, &Unreachable);
+        assert_eq!(again.revocation, Some(Revocation::Good));
+        let (raj, untold, _) = long_term("raj.p12");
+        assert_eq!(untold.len(), 1);
+        assert!(matches!(raj.revocation, Some(Revocation::Revoked { .. })));
+    }
+
+    /// No network.
+    struct Unreachable;
+
+    impl Fetch for Unreachable {
+        fn get(&self, _: &str) -> Result<Vec<u8>, String> {
+            Err("offline".into())
+        }
+        fn post(&self, _: &str, _: &str, _: &[u8]) -> Result<Vec<u8>, String> {
+            Err("offline".into())
+        }
     }
 
     #[test]

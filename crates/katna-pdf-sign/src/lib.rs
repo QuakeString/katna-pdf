@@ -19,7 +19,11 @@ pub mod trust;
 pub mod tsa;
 mod walk;
 
-use katna_pdf_cos::{Allowed, Change, Coverage, Document, SignError, SignRequest, Signature};
+use std::collections::BTreeSet;
+use std::sync::Arc;
+
+use der::{Decode as _, Encode as _};
+use katna_pdf_cos::{Allowed, Change, Coverage, Document, Dss, SignError, SignRequest, Signature};
 
 pub use crate::cms::{CheckError, Checked, Stamp, common_name};
 pub use crate::keys::{KeyKind, Signer, SignerError, SoftKey};
@@ -254,6 +258,10 @@ pub struct SignatureCheck {
     /// When it certifies the file: the changes made after it that it
     /// does not allow.
     pub forbidden: Vec<Change>,
+    /// What was changed after it, when the file was changed after it.
+    pub later: BTreeSet<Change>,
+    /// The validation data the file keeps.
+    known: Arc<Dss>,
 }
 
 impl SignatureCheck {
@@ -333,6 +341,8 @@ pub fn allowed_text(allowed: Allowed) -> &'static str {
 /// Every signature of `doc`, whose bytes are `file`, checked, and its
 /// signer's certificate chained to `roots`.
 pub fn check(doc: &Document, file: &[u8], roots: &Roots) -> Vec<SignatureCheck> {
+    let known = Arc::new(doc.dss());
+    let kept = certificates(&known.certs);
     doc.signatures()
         .into_iter()
         .map(|signature| {
@@ -344,25 +354,49 @@ pub fn check(doc: &Document, file: &[u8], roots: &Roots) -> Vec<SignatureCheck> 
                 ),
                 Some(parts) => cms::check(&signature.contents, &parts),
             };
-            let trust = result
-                .as_ref()
-                .ok()
-                .map(|r| trust::chain(&r.signer, &r.certificates, roots, checked_at(r)));
-            let forbidden = match (signature.certify, coverage) {
-                (Some(allowed), Coverage::Revision(end)) => doc
-                    .changes_since(end)
-                    .into_iter()
+            // The chain, through the certificates sent and those the
+            // file keeps; and whether they were revoked, as far as the
+            // file's own validation data tells.
+            let mut revocation = None;
+            let trust = result.as_ref().ok().map(|r| {
+                let mut sent = r.certificates.clone();
+                sent.extend(kept.iter().cloned());
+                let (trust, path) = trust::path(&r.signer, &sent, roots, checked_at(r));
+                if path.len() > 1 && !known.is_empty() {
+                    let told = revocation::check_with(
+                        &path,
+                        revoked_by(r),
+                        &known,
+                        None,
+                        &mut Dss::default(),
+                    );
+                    if !matches!(told, Revocation::Unknown { .. }) {
+                        revocation = Some(told);
+                    }
+                }
+                trust
+            });
+            let later = match coverage {
+                Coverage::Revision(end) => doc.changes_since(end),
+                _ => BTreeSet::new(),
+            };
+            let forbidden = match signature.certify {
+                Some(allowed) => later
+                    .iter()
+                    .copied()
                     .filter(|c| !allowed.permits(*c))
                     .collect(),
-                _ => Vec::new(),
+                None => Vec::new(),
             };
             SignatureCheck {
                 signature,
                 coverage,
                 result,
                 trust,
-                revocation: None,
+                revocation,
                 forbidden,
+                later,
+                known: known.clone(),
             }
         })
         .collect()
@@ -373,25 +407,91 @@ pub fn check(doc: &Document, file: &[u8], roots: &Roots) -> Vec<SignatureCheck> 
 /// certificates say they are, and its signer's certificates are asked
 /// about at their issuers' OCSP responders, or looked up in their CRLs.
 pub fn check_online(check: &mut SignatureCheck, roots: &Roots, fetch: &dyn revocation::Fetch) {
+    // What the file keeps told already.
+    if check.revocation.is_some() {
+        return;
+    }
     let Ok(r) = &check.result else {
         return;
     };
     let mut sent = r.certificates.clone();
-    sent.extend(revocation::issuers(&r.signer, &r.certificates, fetch));
+    sent.extend(certificates(&check.known.certs));
+    sent.extend(revocation::issuers(&r.signer, &sent, fetch));
     let (trust, path) = trust::path(&r.signer, &sent, roots, checked_at(r));
     if path.len() > 1 {
-        // Revoked before a timestamp vouches for the time it was signed,
-        // or, without one, before now: the signer's own clock could say
-        // anything.
-        let at = r
-            .timestamp
-            .as_ref()
-            .filter(|s| s.valid)
-            .and_then(|s| s.at)
-            .unwrap_or_else(std::time::SystemTime::now);
-        check.revocation = Some(revocation::check(&path, at, fetch));
+        check.revocation = Some(revocation::check_with(
+            &path,
+            revoked_by(r),
+            &check.known,
+            Some(fetch),
+            &mut Dss::default(),
+        ));
     }
     check.trust = Some(trust);
+}
+
+/// The validation data for `doc`'s signatures: the certificates of each
+/// signer's chain (missing issuers fetched) and OCSP answers or CRLs
+/// saying they were not revoked, fetched through `fetch`; and what could
+/// not be told, by signer.
+pub fn validation_data(
+    doc: &Document,
+    roots: &Roots,
+    fetch: &dyn revocation::Fetch,
+) -> (Dss, Vec<String>) {
+    let known = doc.dss();
+    let mut data = Dss::default();
+    let mut untold = Vec::new();
+    for c in check(doc, doc.bytes(), roots) {
+        let Ok(r) = &c.result else {
+            continue;
+        };
+        let mut sent = r.certificates.clone();
+        sent.extend(certificates(&known.certs));
+        sent.extend(revocation::issuers(&r.signer, &sent, fetch));
+        let (_, path) = trust::path(&r.signer, &sent, roots, checked_at(r));
+        let mut kept = Dss::default();
+        match revocation::check_with(&path, revoked_by(r), &known, Some(fetch), &mut kept) {
+            Revocation::Unknown { name, why } => untold.push(format!("{name}: {why}")),
+            Revocation::Revoked { name, .. } => untold.push(format!("{name}: revoked")),
+            Revocation::Good => {}
+        }
+        kept.certs = path.iter().filter_map(|c| c.to_der().ok()).collect();
+        data.merge(&kept);
+    }
+    (data, untold)
+}
+
+/// `doc` with its signatures' validation data added (PAdES B-LT), as an
+/// incremental update; and what could not be told, by signer.
+pub fn add_validation_data(
+    doc: &Document,
+    roots: &Roots,
+    fetch: &dyn revocation::Fetch,
+) -> Result<(Vec<u8>, Vec<String>), SigningError> {
+    let (data, untold) = validation_data(doc, roots, fetch);
+    let bytes = doc
+        .add_dss(&data)
+        .map_err(|e| SigningError::Pdf(SignError::Update(e)))?;
+    Ok((bytes, untold))
+}
+
+/// The certificates of `ders` that can be read.
+fn certificates(ders: &[Vec<u8>]) -> Vec<Certificate> {
+    ders.iter()
+        .filter_map(|d| Certificate::from_der(d).ok())
+        .collect()
+}
+
+/// When a signer's certificates must not have been revoked by: when a
+/// timestamp vouches the signature was made, or, without one, now: the
+/// signer's own clock could say anything.
+fn revoked_by(r: &Checked) -> std::time::SystemTime {
+    r.timestamp
+        .as_ref()
+        .filter(|s| s.valid)
+        .and_then(|s| s.at)
+        .unwrap_or_else(std::time::SystemTime::now)
 }
 
 /// When a signature's certificates should have been valid: when its

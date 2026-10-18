@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use katna_pdf_cos::{
-    Allowed, AnnotKind, Coverage, Document, Object, PageSource, Placement, SignRequest,
+    Allowed, AnnotKind, Change, Coverage, Document, Object, PageSource, Placement, SignRequest,
     SigningInfo, compose, text_string,
 };
 use katna_pdf_sign::{Digest, Revocation, Signer, Trust, common_name, p12, pkcs11};
@@ -33,19 +33,22 @@ usage: katna-pdf-cli COMMAND [--json] ...
   sign FILE... -o OUT (--p12 CERT.pfx | --token LABEL [--cert NAME] [--module LIB])
           (--password-env VAR | --password-file F | --password PW)
           [--page N --rect L,B,R,T] [--reason R] [--location L] [--contact C] [--digest 256|384|512]
-          [--tsa URL] [--certify none|forms|comments] [--field NAME]
+          [--tsa URL] [--ltv] [--certify none|forms|comments] [--field NAME]
                                   sign with the key in a certificate file, or on a
                                   token (LABEL, or any), unlocked with the password
                                   or PIN (PAdES B-B);
                                   visible in a box on page N when --rect is given;
                                   timestamped by the server at URL with --tsa (PAdES B-T);
                                   in the empty signature field NAME with --field;
+                                  with long-term validation data (PAdES B-LT) with --ltv:
+                                  the chain and OCSP answers or CRLs, fetched now;
                                   certified with --certify, allowing no changes after,
                                   form filling and signing (of the file's own empty
                                   signature fields), or comments too;
                                   many files at once, unlocked once, into folder OUT
   add-field FILE -o OUT --rect L,B,R,T [--page N] [--name NAME]
                                   an empty signature field, for someone to sign later
+  ltv FILE -o OUT [--trust PATH]  long-term validation data added to a signed file
   tokens [--module LIB]           the signing tokens plugged in (ePass2003 and others)
   verify FILE [--trust PATH] [--online]
                                   the signatures, each checked: intact, what it covers,
@@ -78,6 +81,7 @@ fn main() -> ExitCode {
         "sign" => sign(rest, json),
         "verify" => verify(rest, json),
         "add-field" => add_field(rest, json),
+        "ltv" => ltv(rest, json),
         "tokens" => tokens(rest, json),
         "annots" => annots(rest, json),
         "xfdf-export" => xfdf_export(rest, json),
@@ -171,7 +175,7 @@ impl<'a> Args<'a> {
                     return Err(Failure::Usage(format!("{a} needs a value")));
                 };
                 options.push((a.as_str(), value.as_str()));
-            } else if a == "--uncrop" || a == "--online" {
+            } else if a == "--uncrop" || a == "--online" || a == "--ltv" {
                 flags.push(a.as_str());
             } else if a.starts_with("--") {
                 return Err(Failure::Usage(format!("unknown option {a}")));
@@ -680,6 +684,9 @@ fn sign(args: &[String], json: bool) -> Done {
     };
     let id = id.as_ref();
     let reason = args.option("--reason").map(str::to_owned);
+    let ltv = args.flag("--ltv");
+    let roots = trusted(&args)?;
+    let fetch = katna_pdf_sign::revocation::Http::default();
     let certify = match args.option("--certify") {
         None => None,
         Some("none") => Some(Allowed::Nothing),
@@ -749,8 +756,11 @@ fn sign(args: &[String], json: bool) -> Done {
             );
             request.time = time;
             request.certify = certify;
-            let signed = katna_pdf_sign::sign_with(&doc, &request, id, digest, stamper)
+            let mut signed = katna_pdf_sign::sign_with(&doc, &request, id, digest, stamper)
                 .map_err(|e| failed(format!("{file}: {e}")))?;
+            if ltv {
+                signed = long_term(file, signed, &roots, &fetch)?;
+            }
             let out = target(file)?;
             write(&out, &signed)?;
             Ok::<_, Failure>((out, doc.pages().len()))
@@ -775,6 +785,55 @@ fn sign(args: &[String], json: bool) -> Done {
 }
 
 /// The modules to look for tokens with: `module`, or those installed.
+/// The roots trusted: the standard ones, and those of `--trust`.
+fn trusted(args: &Args) -> Result<katna_pdf_sign::Roots, Failure> {
+    let mut roots = katna_pdf_sign::Roots::standard();
+    if let Some(path) = args.option("--trust") {
+        let path = std::path::Path::new(path);
+        let added = if path.is_dir() {
+            roots.add_folder(path)
+        } else {
+            let bytes =
+                std::fs::read(path).map_err(|e| failed(format!("{}: {e}", path.display())))?;
+            roots.add_file(&bytes)
+        };
+        if added == 0 {
+            return Err(failed(format!("{}: no certificates in it", path.display())));
+        }
+    }
+    Ok(roots)
+}
+
+/// Signed file `bytes` with its signatures' validation data added
+/// (PAdES B-LT); what could not be told is said on stderr.
+fn long_term(
+    file: &str,
+    bytes: Vec<u8>,
+    roots: &katna_pdf_sign::Roots,
+    fetch: &dyn katna_pdf_sign::revocation::Fetch,
+) -> Result<Vec<u8>, Failure> {
+    let doc = Document::load(bytes).map_err(|e| failed(format!("{file}: {e}")))?;
+    let (bytes, untold) = katna_pdf_sign::add_validation_data(&doc, roots, fetch)
+        .map_err(|e| failed(format!("{file}: {e}")))?;
+    for why in untold {
+        eprintln!("katna-pdf-cli: {file}: no validation data for {why}");
+    }
+    Ok(bytes)
+}
+
+/// Adds validation data to the signatures of a file signed already.
+fn ltv(args: &[String], json: bool) -> Done {
+    let args = Args::parse(args)?;
+    let [file] = args.words()?;
+    let out = args.output()?;
+    let doc = open(file)?;
+    let roots = trusted(&args)?;
+    let fetch = katna_pdf_sign::revocation::Http::default();
+    let bytes = long_term(file, doc.bytes().to_vec(), &roots, &fetch)?;
+    write(&out, &bytes)?;
+    Ok(wrote(&[(out, doc.pages().len())], json))
+}
+
 /// Page `page` (counted from 1; the first when `None`) of `doc`, counted
 /// from 0.
 fn page_number(doc: &Document, page: Option<&str>) -> Result<usize, Failure> {
@@ -917,20 +976,7 @@ fn verify(args: &[String], json: bool) -> Done {
     let [file] = args.words()?;
     let bytes = std::fs::read(file).map_err(|e| failed(format!("{file}: {e}")))?;
     let doc = Document::load(bytes.clone()).map_err(|e| failed(format!("{file}: {e}")))?;
-    let mut roots = katna_pdf_sign::Roots::standard();
-    if let Some(path) = args.option("--trust") {
-        let path = std::path::Path::new(path);
-        let added = if path.is_dir() {
-            roots.add_folder(path)
-        } else {
-            let bytes =
-                std::fs::read(path).map_err(|e| failed(format!("{}: {e}", path.display())))?;
-            roots.add_file(&bytes)
-        };
-        if added == 0 {
-            return Err(failed(format!("{}: no certificates in it", path.display())));
-        }
-    }
+    let roots = trusted(&args)?;
     let mut checks = katna_pdf_sign::check(&doc, &bytes, &roots);
     if args.flag("--online") {
         let fetch = katna_pdf_sign::revocation::Http::default();
@@ -1091,8 +1137,17 @@ fn verify(args: &[String], json: bool) -> Done {
                 "  covers: {}",
                 match c.coverage {
                     Coverage::Whole => "the whole file".to_owned(),
-                    Coverage::Revision(n) =>
-                        format!("the file as signed (first {n} bytes); changed since"),
+                    Coverage::Revision(n) if c.later.iter().all(|l| *l == Change::Dss) => format!(
+                        "the file as signed (first {n} bytes); only validation data added since"
+                    ),
+                    Coverage::Revision(n) => format!(
+                        "the file as signed (first {n} bytes); changed since ({})",
+                        c.later
+                            .iter()
+                            .map(|l| katna_pdf_sign::change_text(*l))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
                     Coverage::Broken => "a wrong byte range".to_owned(),
                 }
             );
