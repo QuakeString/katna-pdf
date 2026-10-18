@@ -6,7 +6,7 @@
 //! and the ones the person adds (India's CCA roots, a company's own),
 //! as certificate files in a folder.
 //!
-//! Revocation (CRLs, OCSP) is not checked yet.
+//! Revocation is checked online, apart, in [`crate::revocation`].
 
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
@@ -143,41 +143,57 @@ impl Trust {
 /// Chains `signer`, through the certificates `sent` with the signature,
 /// to one of `roots`, as things stood at time `at`.
 pub fn chain(signer: &Certificate, sent: &[Certificate], roots: &Roots, at: SystemTime) -> Trust {
-    let mut cert = signer;
-    for _ in 0..DEPTH {
-        let name = || common_name(&cert.tbs_certificate.subject);
-        if !valid_at(cert, at) {
-            return Trust::Expired { name: name() };
-        }
-        if roots.contains(cert) {
-            return Trust::Trusted { root: name() };
-        }
-        let tbs = &cert.tbs_certificate;
-        let issuers: Vec<&Certificate> = roots
-            .certs
-            .iter()
-            .chain(sent)
-            .filter(|c| c.tbs_certificate.subject == tbs.issuer && *c != cert)
-            .collect();
-        let Some(issuer) = issuers.iter().copied().find(|i| issued(cert, i)) else {
-            if issuers.is_empty() {
-                let complete = tbs.subject == tbs.issuer && issued(cert, cert);
-                return Trust::Untrusted {
-                    root: Box::new(cert.clone()),
-                    complete,
-                };
+    path(signer, sent, roots, at).0
+}
+
+/// The same, with the chain itself: `signer`, its issuer, and so on up
+/// to the root, or as far as it goes.
+pub fn path(
+    signer: &Certificate,
+    sent: &[Certificate],
+    roots: &Roots,
+    at: SystemTime,
+) -> (Trust, Vec<Certificate>) {
+    let mut path = vec![signer.clone()];
+    let trust = 'up: {
+        let mut cert = signer;
+        for _ in 0..DEPTH {
+            let name = || common_name(&cert.tbs_certificate.subject);
+            if !valid_at(cert, at) {
+                break 'up Trust::Expired { name: name() };
             }
-            return Trust::Forged { name: name() };
-        };
-        if !roots.contains(issuer) && !is_authority(issuer) {
-            return Trust::Forged { name: name() };
+            if roots.contains(cert) {
+                break 'up Trust::Trusted { root: name() };
+            }
+            let tbs = &cert.tbs_certificate;
+            let issuers: Vec<&Certificate> = roots
+                .certs
+                .iter()
+                .chain(sent)
+                .filter(|c| c.tbs_certificate.subject == tbs.issuer && *c != cert)
+                .collect();
+            let Some(issuer) = issuers.iter().copied().find(|i| issued(cert, i)) else {
+                if issuers.is_empty() {
+                    let complete = tbs.subject == tbs.issuer && issued(cert, cert);
+                    break 'up Trust::Untrusted {
+                        root: Box::new(cert.clone()),
+                        complete,
+                    };
+                }
+                break 'up Trust::Forged { name: name() };
+            };
+            if !roots.contains(issuer) && !is_authority(issuer) {
+                break 'up Trust::Forged { name: name() };
+            }
+            path.push(issuer.clone());
+            cert = issuer;
         }
-        cert = issuer;
-    }
-    Trust::Untrusted {
-        root: Box::new(cert.clone()),
-        complete: false,
-    }
+        Trust::Untrusted {
+            root: Box::new(cert.clone()),
+            complete: false,
+        }
+    };
+    (trust, path)
 }
 
 /// Whether `cert` was valid at `at`.
@@ -188,8 +204,24 @@ fn valid_at(cert: &Certificate, at: SystemTime) -> bool {
 
 /// Whether `issuer`'s key signed `cert`.
 fn issued(cert: &Certificate, issuer: &Certificate) -> bool {
-    let alg = cert.signature_algorithm.oid;
-    let hash = match alg {
+    let Ok(tbs) = cert.tbs_certificate.to_der() else {
+        return false;
+    };
+    let Some(signature) = cert.signature.as_bytes() else {
+        return false;
+    };
+    signed_by(issuer, &cert.signature_algorithm, &tbs, signature)
+}
+
+/// Whether `signature`, made with algorithm `alg`, is `key`'s key's
+/// over `message`: how certificates, CRLs and OCSP answers are signed.
+pub(crate) fn signed_by(
+    key: &Certificate,
+    alg: &spki::AlgorithmIdentifierOwned,
+    message: &[u8],
+    signature: &[u8],
+) -> bool {
+    let hash = match alg.oid {
         a if a == oid::SHA1_RSA => Hash::Sha1,
         a if a == oid::SHA256_RSA || a == oid::ECDSA_SHA256 => Hash::Sha256,
         a if a == oid::SHA384_RSA || a == oid::ECDSA_SHA384 => Hash::Sha384,
@@ -198,19 +230,13 @@ fn issued(cert: &Certificate, issuer: &Certificate) -> bool {
         a if a == oid::RSA_PSS => Hash::Sha256,
         _ => return false,
     };
-    let (Ok(alg), Ok(tbs)) = (
-        cert.signature_algorithm.to_der(),
-        cert.tbs_certificate.to_der(),
-    ) else {
+    let Ok(alg) = alg.to_der() else {
         return false;
     };
     let Some((alg, _)) = walk::read(&alg) else {
         return false;
     };
-    let Some(signature) = cert.signature.as_bytes() else {
-        return false;
-    };
-    verify(issuer, &alg, hash, &tbs, signature).unwrap_or(false)
+    verify(key, &alg, hash, message, signature).unwrap_or(false)
 }
 
 /// Whether `cert` may issue certificates: its basic constraints say it

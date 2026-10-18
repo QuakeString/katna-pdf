@@ -52,6 +52,7 @@ spki = { version = "0.7", features = ["alloc"] }
 x509-cert = { version = "0.2", default-features = false, features = ["std", "pem"] }
 # The system's root certificates, to check signers' certificates against.
 rustls-native-certs = "0.8"
+x509-ocsp = { version = "0.2", features = ["std"] }
 x509-tsp = "0.1"
 # Signing tokens through their PKCS#11 modules (OpenSC, vendors' own).
 cryptoki = "0.12"

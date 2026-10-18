@@ -173,9 +173,12 @@ signer-root-untrusted = Identity not verified: { $root } is not a root certifica
 signer-chain-incomplete = Identity not verified: the certificate that issued { $name } was not sent with the signature.
 signer-expired = Identity not verified: { $name } was not valid when it was signed.
 signer-forged = Identity not verified: { $name } was not issued by the certificate it names.
+signer-revoked = { $name }'s certificate was revoked ({ $when })
+signer-not-revoked = Not revoked, as its issuer says.
+signer-revocation-unknown = Whether { $name }'s certificate was revoked could not be checked: { $why }
 signer-trust-root = Trust { $root }
 signer-trust-failed = The certificate could not be kept: { $error }
-signatures-roots = Signers are checked against your system's root certificates and the ones in { $folder } (put India's CCA root certificates there). Revocation is not checked yet.
+signatures-roots = Signers are checked against your system's root certificates and the ones in { $folder } (put India's CCA root certificates there).
 
 ## The menu bar (KDE's global menu)
 menu-file = _File

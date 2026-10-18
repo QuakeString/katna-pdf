@@ -16,6 +16,7 @@ der.workspace = true
 spki.workspace = true
 x509-cert.workspace = true
 x509-tsp.workspace = true
+x509-ocsp.workspace = true
 ureq.workspace = true
 rustls-native-certs.workspace = true
 cryptoki.workspace = true

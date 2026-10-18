@@ -13,7 +13,7 @@ use katna_pdf_cos::{
     AnnotKind, Coverage, Document, Object, PageSource, Placement, SignRequest, SigningInfo,
     compose, text_string,
 };
-use katna_pdf_sign::{Digest, Signer, Trust, common_name, p12, pkcs11};
+use katna_pdf_sign::{Digest, Revocation, Signer, Trust, common_name, p12, pkcs11};
 
 mod ranges;
 
@@ -41,10 +41,13 @@ usage: katna-pdf-cli COMMAND [--json] ...
                                   timestamped by the server at URL with --tsa (PAdES B-T);
                                   many files at once, unlocked once, into folder OUT
   tokens [--module LIB]           the signing tokens plugged in (ePass2003 and others)
-  verify FILE [--trust PATH]      the signatures, each checked: intact, what it covers,
+  verify FILE [--trust PATH] [--online]
+                                  the signatures, each checked: intact, what it covers,
                                   who signed, and whether their certificate chains to a
                                   root the system trusts, or one in PATH (a certificate
-                                  file or a folder of them, such as India's CCA roots)
+                                  file or a folder of them, such as India's CCA roots);
+                                  with --online, missing issuers are fetched and
+                                  revocation is asked of OCSP responders and CRLs
   annots FILE                     the annotations, page by page
   xfdf-export FILE -o OUT.xfdf    the annotations as XFDF
   xfdf-import FILE XFDF -o OUT    the annotations of XFDF added to the PDF
@@ -158,7 +161,7 @@ impl<'a> Args<'a> {
                     return Err(Failure::Usage(format!("{a} needs a value")));
                 };
                 options.push((a.as_str(), value.as_str()));
-            } else if a == "--uncrop" {
+            } else if a == "--uncrop" || a == "--online" {
                 flags.push(a.as_str());
             } else if a.starts_with("--") {
                 return Err(Failure::Usage(format!("unknown option {a}")));
@@ -866,7 +869,13 @@ fn verify(args: &[String], json: bool) -> Done {
             return Err(failed(format!("{}: no certificates in it", path.display())));
         }
     }
-    let checks = katna_pdf_sign::check(&doc, &bytes, &roots);
+    let mut checks = katna_pdf_sign::check(&doc, &bytes, &roots);
+    if args.flag("--online") {
+        let fetch = katna_pdf_sign::revocation::Http::default();
+        for c in &mut checks {
+            katna_pdf_sign::check_online(c, &roots, &fetch);
+        }
+    }
     let mut out = String::new();
     let mut items = Vec::new();
     for c in &checks {
@@ -876,7 +885,26 @@ fn verify(args: &[String], json: bool) -> Done {
             Coverage::Revision(n) => format!("revision:{n}"),
             Coverage::Broken => "broken".to_owned(),
         };
-        let (signer, problem, time) = (c.signer(), c.problem(), c.time());
+        let (signer, time) = (c.signer(), c.time());
+        let revoked = match &c.revocation {
+            Some(Revocation::Revoked { name, when }) => Some(format!(
+                "{name}'s certificate was revoked ({})",
+                when.as_deref().unwrap_or("?")
+            )),
+            _ => None,
+        };
+        let problem = c.problem().or(revoked);
+        let revocation = match &c.revocation {
+            None => None,
+            Some(Revocation::Good) => Some(("good", None)),
+            Some(Revocation::Revoked { name, when }) => Some((
+                "revoked",
+                Some(format!("{name} ({})", when.as_deref().unwrap_or("?"))),
+            )),
+            Some(Revocation::Unknown { name, why }) => {
+                Some(("unknown", Some(format!("{name}: {why}"))))
+            }
+        };
         let stamp = c.result.as_ref().ok().and_then(|r| r.timestamp.clone());
         let (trust, root) = match &c.trust {
             None => ("unknown", None),
@@ -895,7 +923,7 @@ fn verify(args: &[String], json: bool) -> Done {
         if json {
             let opt = |v: &Option<String>| v.as_deref().map_or("null".into(), string);
             items.push(format!(
-                "{{\"field\":{},\"page\":{},\"intact\":{},\"covers\":{},\"signer\":{},\"time\":{},\"reason\":{},\"location\":{},\"sub_filter\":{},\"timestamp\":{},\"trust\":{{\"state\":{},\"certificate\":{}}},\"problem\":{}}}",
+                "{{\"field\":{},\"page\":{},\"intact\":{},\"covers\":{},\"signer\":{},\"time\":{},\"reason\":{},\"location\":{},\"sub_filter\":{},\"timestamp\":{},\"trust\":{{\"state\":{},\"certificate\":{}}},\"revocation\":{},\"problem\":{}}}",
                 string(&s.name),
                 s.page.map_or("null".into(), |p| (p + 1).to_string()),
                 c.intact(),
@@ -913,6 +941,11 @@ fn verify(args: &[String], json: bool) -> Done {
                 )),
                 string(trust),
                 opt(&root),
+                revocation.as_ref().map_or("null".into(), |(state, detail)| format!(
+                    "{{\"state\":{},\"detail\":{}}}",
+                    string(state),
+                    opt(detail)
+                )),
                 opt(&problem),
             ));
         } else {
@@ -946,6 +979,13 @@ fn verify(args: &[String], json: bool) -> Done {
                         format!("NOT VERIFIED: {r} was not issued by its issuer")
                     }
                     _ => "unknown".to_owned(),
+                }),
+            );
+            line(
+                "revocation",
+                &revocation.as_ref().map(|(state, detail)| match detail {
+                    Some(d) => format!("{state}: {d}"),
+                    None => (*state).to_owned(),
                 }),
             );
             line("time", &time);

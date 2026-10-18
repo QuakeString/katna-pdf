@@ -159,7 +159,7 @@ pub fn token(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::io::Write as _;
 
     use der::asn1::GeneralizedTime;
@@ -224,7 +224,7 @@ mod tests {
         }
     }
 
-    fn pdf() -> Vec<u8> {
+    pub(crate) fn pdf() -> Vec<u8> {
         let objs = [
             "<< /Type /Catalog /Pages 2 0 R >>",
             "<< /Type /Pages /Count 1 /Kids [3 0 R] >>",

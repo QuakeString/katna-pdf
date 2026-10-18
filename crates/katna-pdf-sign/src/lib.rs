@@ -14,6 +14,7 @@ mod keys;
 mod oid;
 pub mod p12;
 pub mod pkcs11;
+pub mod revocation;
 pub mod trust;
 pub mod tsa;
 mod walk;
@@ -23,6 +24,7 @@ use katna_pdf_cos::{Coverage, Document, SignError, SignRequest, Signature};
 pub use crate::cms::{CheckError, Checked, Stamp, common_name};
 pub use crate::keys::{KeyKind, Signer, SignerError, SoftKey};
 pub use crate::p12::{Identity, P12Error};
+pub use crate::revocation::Revocation;
 pub use crate::trust::{Roots, Trust};
 pub use x509_cert::Certificate;
 
@@ -246,6 +248,9 @@ pub struct SignatureCheck {
     /// Whether the signer's certificate chains to a trusted root, when
     /// the signature could be read.
     pub trust: Option<Trust>,
+    /// Whether the signer's certificates were revoked, once asked
+    /// ([`check_online`]).
+    pub revocation: Option<Revocation>,
 }
 
 impl SignatureCheck {
@@ -315,9 +320,36 @@ pub fn check(doc: &Document, file: &[u8], roots: &Roots) -> Vec<SignatureCheck> 
                 coverage,
                 result,
                 trust,
+                revocation: None,
             }
         })
         .collect()
+}
+
+/// Checks `check` further, over the network through `fetch`: the
+/// issuers its signature did not send are fetched from where the
+/// certificates say they are, and its signer's certificates are asked
+/// about at their issuers' OCSP responders, or looked up in their CRLs.
+pub fn check_online(check: &mut SignatureCheck, roots: &Roots, fetch: &dyn revocation::Fetch) {
+    let Ok(r) = &check.result else {
+        return;
+    };
+    let mut sent = r.certificates.clone();
+    sent.extend(revocation::issuers(&r.signer, &r.certificates, fetch));
+    let (trust, path) = trust::path(&r.signer, &sent, roots, checked_at(r));
+    if path.len() > 1 {
+        // Revoked before a timestamp vouches for the time it was signed,
+        // or, without one, before now: the signer's own clock could say
+        // anything.
+        let at = r
+            .timestamp
+            .as_ref()
+            .filter(|s| s.valid)
+            .and_then(|s| s.at)
+            .unwrap_or_else(std::time::SystemTime::now);
+        check.revocation = Some(revocation::check(&path, at, fetch));
+    }
+    check.trust = Some(trust);
 }
 
 /// When a signature's certificates should have been valid: when its

@@ -602,6 +602,7 @@ impl Viewer {
     /// held while the first page is drawn. The pane opens by itself when
     /// the file asks for it (`/PageMode /UseOutlines`).
     fn read_outline(&mut self, path: PathBuf, generation: u64, cx: &mut Context<Self>) {
+        let again = path.clone();
         cx.spawn(async move |this, cx| {
             let (outline, show, links, form, annots, signatures) = cx
                 .background_executor()
@@ -632,6 +633,9 @@ impl Viewer {
                     cx.notify();
                 }
                 this.annots = Some(Arc::new(annots));
+                if !signatures.is_empty() {
+                    this.check_signatures_online(again, generation, cx);
+                }
                 this.signatures = Some(Arc::new(signatures));
                 if links.iter().any(|l| !l.is_empty()) {
                     this.links = Some(Arc::new(links));
@@ -643,6 +647,30 @@ impl Viewer {
                         this.pane = true;
                         this.tab = PaneTab::Contents;
                     }
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Checks the signatures of `path` further, over the network: their
+    /// issuers fetched, and whether their certificates were revoked.
+    fn check_signatures_online(&mut self, path: PathBuf, generation: u64, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            let rows = cx
+                .background_executor()
+                .spawn(async move {
+                    let doc = katna_pdf_cos::Document::load(std::fs::read(&path).ok()?).ok()?;
+                    Some(sign::check_online(&doc))
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                if let Some(rows) = rows
+                    && this.generation == generation
+                {
+                    this.signatures = Some(Arc::new(rows));
                     cx.notify();
                 }
             })
