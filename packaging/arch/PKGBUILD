@@ -61,12 +61,13 @@ build() {
   export RUSTUP_TOOLCHAIN=stable
   # CI builds in a cached directory outside the clone.
   export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-target}"
-  cargo build --frozen --release --package katna-pdf
+  cargo build --frozen --release --package katna-pdf --package katna-pdf-cli
 }
 
 package() {
   cd katna-pdf
   install -Dm755 "${CARGO_TARGET_DIR:-target}/release/katna-pdf" "$pkgdir/usr/bin/katna-pdf"
+  install -Dm755 "${CARGO_TARGET_DIR:-target}/release/katna-pdf-cli" "$pkgdir/usr/bin/katna-pdf-cli"
   # The file names are the app ID (apps/katna-pdf/src/ids.rs checks them).
   install -Dm644 -t "$pkgdir/usr/share/applications" packaging/desktop/*.desktop
   install -Dm644 -t "$pkgdir/usr/share/icons/hicolor/scalable/apps" packaging/icons/*.svg

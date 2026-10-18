@@ -3431,6 +3431,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "katna-pdf-cli"
+version = "0.0.0"
+dependencies = [
+ "katna-pdf-cos",
+]
+
+[[package]]
 name = "katna-pdf-cos"
 version = "0.0.0"
 dependencies = [

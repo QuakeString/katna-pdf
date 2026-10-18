@@ -207,3 +207,19 @@ fn a_composed_file_composes_again() {
         [90, 90, 270]
     );
 }
+
+#[test]
+fn page_boxes_and_turns_are_read_through_the_tree() {
+    let doc = three();
+    let first = doc.page_info(0).unwrap();
+    assert_eq!(first.media, [0.0, 0.0, 100.0, 100.0]);
+    assert_eq!(first.rotate, 0);
+    // The second takes its box and turn from the tree above it.
+    let second = doc.page_info(1).unwrap();
+    assert_eq!(second.media, [0.0, 0.0, 300.0, 200.0]);
+    assert_eq!(second.crop, second.media);
+    assert_eq!(second.rotate, 90);
+    assert_eq!(second.size(), (200.0, 300.0));
+    assert_eq!(doc.page_info(2).unwrap().rotate, 270);
+    assert!(doc.page_info(3).is_none());
+}
