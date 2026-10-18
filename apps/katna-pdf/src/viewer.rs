@@ -33,6 +33,7 @@ use katna_ui::widgets::{self, Tip};
 use katna_ui::{ScrollBar, px, unpx};
 
 use crate::contents::{self, Contents};
+use crate::history::History;
 use crate::search::{self, Found, Hit, Texts};
 use crate::select::{self, Selection, Spot};
 use crate::text::t;
@@ -46,6 +47,7 @@ actions!(
         ZoomIn,
         ZoomOut,
         FitWidth,
+        FitPage,
         ActualSize,
         NextPage,
         PreviousPage,
@@ -89,6 +91,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl-+", ZoomIn, None),
         KeyBinding::new("ctrl--", ZoomOut, None),
         KeyBinding::new("ctrl-1", FitWidth, None),
+        KeyBinding::new("ctrl-2", FitPage, None),
         KeyBinding::new("ctrl-0", ActualSize, None),
         // Keys that mean something else while typing in a field.
         KeyBinding::new("pagedown", NextPage, Some(READING)),
@@ -119,6 +122,8 @@ pub fn bind_keys(cx: &mut App) {
 enum Zoom {
     /// The widest page fills the card's width, following the window.
     FitWidth,
+    /// The tallest page fits in the view, and the widest across it.
+    FitPage,
     /// Points to logical pixels (1.0 is the page's printed size on a
     /// 96 dpi screen, as other readers count 100%).
     Fixed(f32),
@@ -148,6 +153,9 @@ pub enum ViewerEvent {
     Dropped(Vec<PathBuf>),
 }
 
+/// Recent files on the start screen.
+const RECENT: usize = 8;
+
 /// Points to logical pixels at 100%: 96 pixels to the inch, 72 points.
 const POINT: f32 = 96.0 / 72.0;
 
@@ -163,8 +171,10 @@ enum Content {
 struct Opened {
     name: String,
     doc: Arc<dyn Document>,
-    /// The widest page, in points, for fit width.
+    /// The widest and the tallest page, in points, for fit width and fit
+    /// page.
     widest: f32,
+    tallest: f32,
 }
 
 /// A drawn page: the scale (device pixels per point) it was drawn at,
@@ -211,6 +221,8 @@ pub struct Viewer {
     reading_text: std::collections::HashSet<usize>,
     /// Where each page shown was laid out last frame, in the window.
     page_bounds: Rc<RefCell<HashMap<usize, gpui::Bounds<gpui::Pixels>>>>,
+    /// The size of the pages' view, as laid out last frame.
+    view_size: Rc<std::cell::Cell<Option<gpui::Size<gpui::Pixels>>>>,
     /// Whether the side pane is shown, and which of its tabs.
     pane: bool,
     tab: PaneTab,
@@ -263,6 +275,7 @@ impl Viewer {
             selecting: false,
             reading_text: Default::default(),
             page_bounds: Rc::default(),
+            view_size: Rc::default(),
             pane: false,
             tab: PaneTab::Pages,
             thumbs: Thumbs::new(),
@@ -320,10 +333,17 @@ impl Viewer {
                         OpenError::Locked => t("error-locked", &[("name", &name)]),
                         OpenError::Invalid => t("error-invalid", &[("name", &name)]),
                     })?;
-                    let widest = (0..doc.page_count())
+                    let (widest, tallest) = (0..doc.page_count())
                         .filter_map(|p| doc.page_size(p))
-                        .fold(1.0_f32, |w, (pw, _)| w.max(pw));
-                    Ok::<_, String>(Opened { name, doc, widest })
+                        .fold((1.0_f32, 1.0_f32), |(w, h), (pw, ph)| {
+                            (w.max(pw), h.max(ph))
+                        });
+                    Ok::<_, String>(Opened {
+                        name,
+                        doc,
+                        widest,
+                        tallest,
+                    })
                 })
                 .await;
             this.update(cx, |this, cx| {
@@ -333,6 +353,17 @@ impl Viewer {
                 match opened {
                     Ok(opened) => {
                         this.list.reset(opened.doc.page_count());
+                        // Where it was left last time.
+                        let page = this
+                            .path
+                            .as_deref()
+                            .and_then(|p| cx.global::<History>().page(p));
+                        if let Some(page) = page.filter(|p| *p < opened.doc.page_count()) {
+                            this.list.scroll_to(ListOffset {
+                                item_ix: page,
+                                offset_in_item: px(0.0),
+                            });
+                        }
                         this.texts = Some(search::texts(opened.doc.page_count()));
                         let old = this.thumbs.reset(opened.doc.page_count());
                         this.released.extend(old);
@@ -1029,15 +1060,32 @@ impl Viewer {
     }
 
     /// Points to logical pixels for the current zoom, in a card
-    /// `width` logical pixels wide.
-    fn points_to_pixels(&self, width: f32) -> f32 {
-        match (&self.zoom, &self.content) {
+    /// `width` logical pixels wide whose pages' view is `height` high.
+    fn points_to_pixels(&self, width: f32, height: f32) -> f32 {
+        let fit_width = |opened: &Opened| (width - 2.0 * MARGIN) / opened.widest;
+        let shown = match (&self.zoom, &self.content) {
             (Zoom::Fixed(zoom), _) => zoom * POINT,
-            (Zoom::FitWidth, Content::Ready(opened)) => {
-                ((width - 2.0 * MARGIN) / opened.widest).clamp(0.05, 16.0 * POINT)
+            (Zoom::FitWidth, Content::Ready(opened)) => fit_width(opened),
+            (Zoom::FitPage, Content::Ready(opened)) => {
+                fit_width(opened).min((height - 2.0 * GAP) / opened.tallest)
             }
-            (Zoom::FitWidth, _) => POINT,
+            (_, _) => POINT,
+        };
+        shown.clamp(0.05, 16.0 * POINT)
+    }
+
+    /// Ctrl and the wheel (or a touchpad's two fingers) zoom smoothly.
+    fn wheel_zoom(&mut self, delta: gpui::ScrollDelta, cx: &mut Context<Self>) {
+        let lines = match delta {
+            gpui::ScrollDelta::Lines(lines) => lines.y,
+            gpui::ScrollDelta::Pixels(pixels) => unpx(pixels.y) / 50.0,
+        };
+        if lines == 0.0 {
+            return;
         }
+        let now = self.shown / POINT;
+        let zoom = (now * 1.1_f32.powf(lines)).clamp(STEPS[0], STEPS[STEPS.len() - 1]);
+        self.set_zoom(Zoom::Fixed(zoom), cx);
     }
 
     fn set_zoom(&mut self, zoom: Zoom, cx: &mut Context<Self>) {
@@ -1390,6 +1438,13 @@ impl Viewer {
                     th,
                     cx.listener(|this, _, _, cx| this.set_zoom(Zoom::FitWidth, cx)),
                 ))
+                .child(icon_button(
+                    "fit-page",
+                    "fit-page",
+                    t("zoom-fit-page", &[]),
+                    th,
+                    cx.listener(|this, _, _, cx| this.set_zoom(Zoom::FitPage, cx)),
+                ))
                 .child(separator(th))
                 .child(icon_button(
                     "night",
@@ -1446,7 +1501,8 @@ impl Viewer {
                 .child(
                     widgets::filled_button("empty-open", t("empty-open", &[]), &th.katna)
                         .on_click(cx.listener(|_, _, _, cx| cx.emit(ViewerEvent::ChooseFiles))),
-                ),
+                )
+                .children(self.recent(cx)),
         };
         div()
             .flex_1()
@@ -1455,6 +1511,86 @@ impl Viewer {
             .justify_center()
             .bg(th.backdrop)
             .child(body)
+    }
+}
+
+impl Viewer {
+    /// The files opened lately, for the start screen.
+    fn recent(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
+        let th = self.theme;
+        let entries: Vec<_> = cx
+            .global::<History>()
+            .recent()
+            .iter()
+            .take(RECENT)
+            .cloned()
+            .collect();
+        if entries.is_empty() {
+            return None;
+        }
+        let rows = entries.into_iter().enumerate().map(|(i, entry)| {
+            let folder = entry
+                .path
+                .parent()
+                .map(|p| p.display().to_string())
+                .unwrap_or_default();
+            let name = file_name(&entry.path);
+            let path = entry.path;
+            div()
+                .id(("recent", i))
+                .flex()
+                .items_center()
+                .gap(px(space::S3))
+                .px(px(space::S3))
+                .py(px(space::S2))
+                .rounded(px(radius::SM))
+                .cursor_pointer()
+                .hover(|s| s.bg(th.hover))
+                .on_click(cx.listener(move |this, _, _, cx| this.open(path.clone(), cx)))
+                .child(
+                    svg()
+                        .path("icons/document.svg")
+                        .size(px(16.0))
+                        .flex_none()
+                        .text_color(th.dim),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .min_w_0()
+                        .child(
+                            div()
+                                .text_size(px(text::BODY))
+                                .text_color(th.text)
+                                .truncate()
+                                .child(name),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(text::SMALL))
+                                .text_color(th.dim)
+                                .truncate()
+                                .child(folder),
+                        ),
+                )
+        });
+        Some(
+            div()
+                .w(px(420.0))
+                .mt(px(space::S4))
+                .flex()
+                .flex_col()
+                .child(
+                    div()
+                        .px(px(space::S3))
+                        .pb(px(space::S2))
+                        .text_size(px(text::SMALL))
+                        .text_color(th.dim)
+                        .child(t("recent-title", &[])),
+                )
+                .children(rows),
+        )
     }
 }
 
@@ -1480,7 +1616,16 @@ impl Render for Viewer {
         };
         let card_width = unpx(window.viewport_size().width) * katna_ui::scale::scale()
             - (2.0 * space::S3 + pane_width) * katna_ui::scale::scale();
-        let shown = self.points_to_pixels(card_width);
+        // The pages' view: as laid out last frame, or the window less the
+        // toolbar at first.
+        let view_height = self.view_size.get().map_or_else(
+            || {
+                unpx(window.viewport_size().height) * katna_ui::scale::scale()
+                    - (2.0 * space::S3 + 48.0) * katna_ui::scale::scale()
+            },
+            |size| unpx(size.height) * katna_ui::scale::scale(),
+        );
+        let shown = self.points_to_pixels(card_width, view_height);
         if (shown / self.shown - 1.0).abs() > 0.001 {
             self.shown = shown;
             self.list.remeasure();
@@ -1489,6 +1634,11 @@ impl Render for Viewer {
         let find_bar = self.find_bar(cx);
         let pages: AnyElement = match &self.content {
             Content::Ready(_) => {
+                // Reading progress: the page at the top, noted as it
+                // changes.
+                if let Some(path) = self.path.clone() {
+                    History::opened(&path, self.current_page(), cx);
+                }
                 let pages = list(
                     self.list.clone(),
                     cx.processor(|this, ix, window, cx| this.render_page(ix, window, cx)),
@@ -1507,6 +1657,36 @@ impl Render for Viewer {
                         cx.listener(|this, event, window, cx| this.press(event, window, cx)),
                     )
                     .on_mouse_move(cx.listener(|this, event, _, cx| this.drag(event, cx)))
+                    .child({
+                        // Notes the view's size, and zooms with Ctrl and
+                        // the wheel before the list scrolls with it.
+                        let size = self.view_size.clone();
+                        let weak = cx.entity().downgrade();
+                        gpui::canvas(
+                            move |bounds, _, _| {
+                                size.set(Some(bounds.size));
+                                bounds
+                            },
+                            move |_, bounds, window, _| {
+                                window.on_mouse_event(
+                                    move |event: &gpui::ScrollWheelEvent, phase, _, cx| {
+                                        if phase == gpui::DispatchPhase::Capture
+                                            && event.modifiers.control
+                                            && bounds.contains(&event.position)
+                                        {
+                                            cx.stop_propagation();
+                                            weak.update(cx, |this, cx| {
+                                                this.wheel_zoom(event.delta, cx)
+                                            })
+                                            .ok();
+                                        }
+                                    },
+                                );
+                            },
+                        )
+                        .absolute()
+                        .size_full()
+                    })
                     .on_mouse_up(
                         gpui::MouseButton::Left,
                         cx.listener(|this, _, _, cx| this.release_pointer(cx)),
@@ -1530,6 +1710,7 @@ impl Render for Viewer {
             .on_action(cx.listener(|this, _: &ZoomIn, _, cx| this.step_zoom(true, cx)))
             .on_action(cx.listener(|this, _: &ZoomOut, _, cx| this.step_zoom(false, cx)))
             .on_action(cx.listener(|this, _: &FitWidth, _, cx| this.set_zoom(Zoom::FitWidth, cx)))
+            .on_action(cx.listener(|this, _: &FitPage, _, cx| this.set_zoom(Zoom::FitPage, cx)))
             .on_action(
                 cx.listener(|this, _: &ActualSize, _, cx| this.set_zoom(Zoom::Fixed(1.0), cx)),
             )

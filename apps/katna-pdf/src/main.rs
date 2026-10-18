@@ -7,6 +7,7 @@
 
 mod assets;
 mod contents;
+mod history;
 mod ids;
 mod instance;
 mod search;
@@ -54,6 +55,7 @@ fn main() -> ExitCode {
     gpui_platform::application()
         .with_assets(assets::Assets)
         .run(move |cx: &mut App| {
+            cx.set_global(history::History::load());
             katna_ui::text_input::bind_keys(cx);
             viewer::bind_keys(cx);
             let Some(window) = open_window(std::mem::take(&mut files), cx) else {
