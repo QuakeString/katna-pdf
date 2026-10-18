@@ -10,6 +10,7 @@ mod contents;
 mod history;
 mod ids;
 mod instance;
+mod print;
 mod search;
 mod select;
 mod spread;

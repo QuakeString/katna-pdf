@@ -18,5 +18,9 @@ gpui-platform.workspace = true
 image.workspace = true
 async-channel.workspace = true
 
+# The desktop's print dialog: Linux only.
+[target.'cfg(not(windows))'.dependencies]
+ashpd.workspace = true
+
 [lints]
 workspace = true
