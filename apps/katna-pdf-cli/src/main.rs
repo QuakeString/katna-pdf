@@ -992,14 +992,38 @@ fn tokens(args: &[String], json: bool) -> Done {
     for m in modules(args.option("--module"))? {
         for t in m.tokens().map_err(failed)? {
             let module = m.path().display().to_string();
+            // Readable without the PIN on most tokens.
+            let certs: Vec<(String, String, String)> = m
+                .certificates(&t)
+                .unwrap_or_default()
+                .iter()
+                .map(|c| {
+                    let tbs = &c.tbs_certificate;
+                    (
+                        common_name(&tbs.subject),
+                        common_name(&tbs.issuer),
+                        katna_pdf_sign::shown_date(tbs.validity.not_after.to_system_time()),
+                    )
+                })
+                .collect();
             if json {
                 items.push(format!(
-                    "{{\"label\":{},\"manufacturer\":{},\"model\":{},\"serial\":{},\"module\":{}}}",
+                    "{{\"label\":{},\"manufacturer\":{},\"model\":{},\"serial\":{},\"module\":{},\"certificates\":[{}]}}",
                     string(&t.label),
                     string(&t.manufacturer),
                     string(&t.model),
                     string(&t.serial),
-                    string(&module)
+                    string(&module),
+                    certs
+                        .iter()
+                        .map(|(name, issuer, until)| format!(
+                            "{{\"name\":{},\"issuer\":{},\"valid_until\":{}}}",
+                            string(name),
+                            string(issuer),
+                            string(until)
+                        ))
+                        .collect::<Vec<_>>()
+                        .join(",")
                 ));
             } else {
                 let _ = writeln!(
@@ -1007,6 +1031,12 @@ fn tokens(args: &[String], json: bool) -> Done {
                     "{} ({} {}, serial {})\n  driver: {module}",
                     t.label, t.manufacturer, t.model, t.serial
                 );
+                for (name, issuer, until) in &certs {
+                    let _ = writeln!(
+                        out,
+                        "  certificate: {name}, issued by {issuer}, valid until {until}"
+                    );
+                }
             }
         }
     }

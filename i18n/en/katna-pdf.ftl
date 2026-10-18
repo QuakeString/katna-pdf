@@ -136,6 +136,7 @@ sign-no-token = Plug in your token and pick it.
 sign-token-gone = The token was taken out. Plug it in and look again.
 sign-wrong-pin = The PIN is wrong. Tokens lock after a few wrong tries.
 sign-pin-locked = The PIN is locked after too many wrong tries; unlock it with your token's own tool.
+sign-token-certificate = { $name } ({ $issuer }), valid until { $until }
 sign-no-key = The token holds no signing certificate.
 sign-reason = Reason (optional)
 sign-location = Location (optional)
