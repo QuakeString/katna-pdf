@@ -46,6 +46,8 @@ pub(super) struct SigRow {
     pub revocation: Option<Revocation>,
     /// What it allows after it, when it certifies the file.
     pub certifies: Option<Allowed>,
+    /// The form fields it locks, in words.
+    pub locks: Option<String>,
     /// It is a document timestamp (PAdES B-LTA), not a signature.
     pub stamp_only: bool,
     /// The bytes of the file it signed, when the file was changed after
@@ -62,6 +64,8 @@ pub(super) struct Signable {
     pub certified: Option<Allowed>,
     /// Whether it holds a signature.
     pub signed: bool,
+    /// Whether it has form fields to fill, which signing may lock.
+    pub has_form: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -93,6 +97,7 @@ pub(super) fn signable(doc: &katna_pdf_cos::Document) -> Signable {
         fields,
         certified: doc.certification(),
         signed: !signed.is_empty(),
+        has_form: doc.form().iter().any(|f| f.kind != FieldKind::Signature),
     }
 }
 
@@ -222,6 +227,9 @@ fn rows(checks: Vec<katna_pdf_sign::SignatureCheck>) -> Vec<SigRow> {
                     "signer-revoked",
                     &[("name", name), ("when", when.as_deref().unwrap_or("?"))],
                 )),
+                _ if c.intact() && !c.unlocked.is_empty() => {
+                    Some(t("signer-unlocked", &[("fields", &c.unlocked.join(", "))]))
+                }
                 _ if c.intact() && !c.forbidden.is_empty() => {
                     let changes: Vec<String> =
                         c.forbidden.iter().map(|f| t(change_id(*f), &[])).collect();
@@ -255,6 +263,15 @@ fn rows(checks: Vec<katna_pdf_sign::SignatureCheck>) -> Vec<SigRow> {
                 vouched: c.trust.as_ref().map(vouched),
                 revocation: c.revocation.clone(),
                 certifies: c.signature.certify,
+                locks: c.signature.lock.as_ref().map(|lock| match lock {
+                    katna_pdf_cos::Lock::All => t("signer-locks-all", &[]),
+                    katna_pdf_cos::Lock::Include(names) => {
+                        t("signer-locks", &[("fields", &names.join(", "))])
+                    }
+                    katna_pdf_cos::Lock::Exclude(names) => {
+                        t("signer-locks-but", &[("fields", &names.join(", "))])
+                    }
+                }),
                 revision: match c.coverage {
                     Coverage::Revision(end) if c.later.iter().any(|l| *l != Change::Dss) => {
                         Some(end)
@@ -337,6 +354,8 @@ pub(super) struct Signing {
     others: Vec<PathBuf>,
     /// Certify the file, allowing these changes after.
     certify: Option<Allowed>,
+    /// Lock the form's fields: their values may not change after.
+    lock: bool,
     error: Option<String>,
     busy: bool,
     /// Put the keys in the password field on the next frame.
@@ -403,6 +422,7 @@ impl Viewer {
             server,
             others: Vec::new(),
             certify: None,
+            lock: false,
             error: None,
             busy: false,
             focus: false,
@@ -752,6 +772,7 @@ impl Viewer {
         let (reason, location) = (value(&signing.reason), value(&signing.location));
         let tsa = value(&signing.server).filter(|_| signing.timestamp);
         let long_term = signing.long_term;
+        let lock = signing.lock && self.signable.has_form;
         // A picture only shows in a box.
         let picture_file = signing
             .picture
@@ -846,6 +867,7 @@ impl Viewer {
                         certify,
                         long_term,
                         picture,
+                        lock,
                     };
                     // This file: into the file chosen, or into the folder.
                     let first = if others.is_empty() {
@@ -1139,6 +1161,31 @@ impl Viewer {
                         )
                         .tip(t("sign-long-term-tip", &[]), &th.katna),
                 )
+                .when(self.signable.has_form, |d| {
+                    d.child(
+                        div()
+                            .id("sign-lock")
+                            .flex()
+                            .items_center()
+                            .gap(px(space::S2))
+                            .py(px(space::S1))
+                            .cursor_pointer()
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                if let Some(signing) = this.signing.as_mut() {
+                                    signing.lock = !signing.lock;
+                                    cx.notify();
+                                }
+                            }))
+                            .child(check_box(signing.lock, th))
+                            .child(
+                                div()
+                                    .text_size(px(text::SMALL))
+                                    .text_color(th.text)
+                                    .child(t("sign-lock", &[])),
+                            )
+                            .tip(t("sign-lock-tip", &[]), &th.katna),
+                    )
+                })
                 .when(!self.signable.signed, |d| d.child(self.certify_choice(cx)))
                 .child(
                     div()
@@ -1822,6 +1869,9 @@ fn details(row: &SigRow) -> Vec<String> {
             )],
         ));
     }
+    if let Some(locks) = &row.locks {
+        details.push(locks.clone());
+    }
     match &row.revocation {
         Some(Revocation::Good) => details.push(t("signer-not-revoked", &[])),
         Some(Revocation::Unknown { name, why }) => details.push(t(
@@ -1954,6 +2004,8 @@ struct What {
     /// Keep the validation data in the file, fetched now.
     long_term: bool,
     picture: Option<katna_pdf_cos::Picture>,
+    /// Lock every form field.
+    lock: bool,
 }
 
 /// Signs PDF `bytes` with `id` as `what` says, and writes the signed
@@ -2004,6 +2056,9 @@ fn sign_one(
     request.time = time;
     request.certify = what.certify;
     request.picture = what.picture.clone();
+    if what.lock {
+        request.lock = Some(katna_pdf_cos::Lock::All);
+    }
     let server = what.tsa.as_deref().map(katna_pdf_sign::tsa::Server::new);
     let signed = katna_pdf_sign::sign_with(
         &doc,
@@ -2169,6 +2224,7 @@ mod tests {
             certify: None,
             long_term: false,
             picture: None,
+            lock: false,
         };
         let file = Path::new("/somewhere/report.pdf");
         let first = free_name(&folder, file);

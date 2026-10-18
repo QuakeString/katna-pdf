@@ -10,8 +10,8 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use katna_pdf_cos::{
-    Allowed, AnnotKind, Change, Coverage, Document, Object, PageSource, Placement, SignRequest,
-    SigningInfo, compose, text_string,
+    Allowed, AnnotKind, Change, Coverage, Document, Lock, Object, PageSource, Placement,
+    SignRequest, SigningInfo, compose, text_string,
 };
 use katna_pdf_sign::{Digest, Revocation, Signer, Trust, common_name, p12, pkcs11};
 
@@ -34,7 +34,7 @@ usage: katna-pdf-cli COMMAND [--json] ...
           (--password-env VAR | --password-file F | --password PW)
           [--page N --rect L,B,R,T] [--reason R] [--location L] [--contact C] [--digest 256|384|512]
           [--tsa URL] [--ltv | --lta] [--certify none|forms|comments] [--field NAME]
-          [--picture IMAGE]
+          [--picture IMAGE] [--lock all|FIELD,...]
                                   sign with the key in a certificate file, or on a
                                   token (LABEL, or any), unlocked with the password
                                   or PIN (PAdES B-B);
@@ -49,6 +49,8 @@ usage: katna-pdf-cli COMMAND [--json] ...
                                   certified with --certify, allowing no changes after,
                                   form filling and signing (of the file's own empty
                                   signature fields), or comments too;
+                                  locking form fields with --lock (all, or those
+                                  named), which then may not change;
                                   many files at once, unlocked once, into folder OUT
   add-field FILE -o OUT --rect L,B,R,T [--page N] [--name NAME]
                                   an empty signature field, for someone to sign later
@@ -175,6 +177,7 @@ impl<'a> Args<'a> {
                     | "--cert"
                     | "--trust"
                     | "--certify"
+                    | "--lock"
                     | "--field"
                     | "--picture"
                     | "--name"
@@ -720,6 +723,10 @@ fn sign(args: &[String], json: bool) -> Done {
             )));
         }
     };
+    let lock = args.option("--lock").map(|l| match l {
+        "all" => Lock::All,
+        names => Lock::Include(names.split(',').map(|n| n.trim().to_owned()).collect()),
+    });
     let server = args.option("--tsa").map(katna_pdf_sign::tsa::Server::new);
     let stamper = server
         .as_ref()
@@ -778,6 +785,7 @@ fn sign(args: &[String], json: bool) -> Done {
             );
             request.time = time;
             request.certify = certify;
+            request.lock = lock.clone();
             request.picture = picture.clone();
             let mut signed = katna_pdf_sign::sign_with(&doc, &request, id, digest, stamper)
                 .map_err(|e| failed(format!("{file}: {e}")))?;
@@ -1071,7 +1079,7 @@ fn verify(args: &[String], json: bool) -> Done {
         if json {
             let opt = |v: &Option<String>| v.as_deref().map_or("null".into(), string);
             items.push(format!(
-                "{{\"field\":{},\"kind\":{},\"page\":{},\"intact\":{},\"covers\":{},\"signer\":{},\"time\":{},\"reason\":{},\"location\":{},\"sub_filter\":{},\"timestamp\":{},\"trust\":{{\"state\":{},\"certificate\":{}}},\"revocation\":{},\"certifies\":{},\"problem\":{}}}",
+                "{{\"field\":{},\"kind\":{},\"page\":{},\"intact\":{},\"covers\":{},\"signer\":{},\"time\":{},\"reason\":{},\"location\":{},\"sub_filter\":{},\"timestamp\":{},\"trust\":{{\"state\":{},\"certificate\":{}}},\"revocation\":{},\"certifies\":{},\"locks\":{},\"problem\":{}}}",
                 string(&s.name),
                 string(if c.is_document_timestamp() {
                     "document-timestamp"
@@ -1112,6 +1120,19 @@ fn verify(args: &[String], json: bool) -> Done {
                         .collect::<Vec<_>>()
                         .join(",")
                 )),
+                s.lock.as_ref().map_or("null".into(), |l| {
+                    let names = |n: &[String]| n.iter().map(|n| string(n)).collect::<Vec<_>>().join(",");
+                    let (action, fields) = match l {
+                        Lock::All => ("all", String::new()),
+                        Lock::Include(n) => ("include", names(n)),
+                        Lock::Exclude(n) => ("exclude", names(n)),
+                    };
+                    format!(
+                        "{{\"action\":{},\"fields\":[{fields}],\"changed\":[{}]}}",
+                        string(action),
+                        c.unlocked.iter().map(|n| string(n)).collect::<Vec<_>>().join(",")
+                    )
+                }),
                 opt(&problem),
             ));
         }
@@ -1173,6 +1194,7 @@ fn verify(args: &[String], json: bool) -> Done {
                 &s.certify
                     .map(|a| format!("the file, allowing {}", katna_pdf_sign::allowed_text(a))),
             );
+            line("locks", &s.lock.as_ref().map(katna_pdf_sign::lock_text));
             line("time", &time);
             line("reason", &s.info.reason);
             line("location", &s.info.location);

@@ -7,8 +7,8 @@
 use std::io::Write as _;
 
 use katna_pdf_cos::{
-    Allowed, AnnotChanges, AnnotKind, Annotation, Change, Coverage, Document, Object, Placement,
-    SignError, SignRequest, SigningInfo,
+    Allowed, AnnotChanges, AnnotKind, Annotation, Change, Coverage, Document, FieldValue, Lock,
+    Object, Placement, SignError, SignRequest, SigningInfo,
 };
 use katna_pdf_sign::{
     Digest, P12Error, Roots, Signer, SigningError, Trust, check, common_name, p12, sign,
@@ -20,12 +20,16 @@ fn data(name: &str) -> Vec<u8> {
 
 /// A PDF of two pages with a classic xref table.
 fn pdf() -> Vec<u8> {
-    let objs = [
+    file(&[
         "<< /Type /Catalog /Pages 2 0 R >>",
         "<< /Type /Pages /Count 2 /Kids [3 0 R 4 0 R] >>",
         "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 400] >>",
         "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 400] >>",
-    ];
+    ])
+}
+
+/// A PDF of `objs`, numbered from 1, the first the catalog.
+fn file(objs: &[&str]) -> Vec<u8> {
     let mut out = b"%PDF-1.7\n".to_vec();
     let mut offsets = Vec::new();
     for (i, o) in objs.iter().enumerate() {
@@ -311,4 +315,112 @@ fn a_picture_shows_in_the_box() {
     // The picture and its mask.
     assert_eq!(images.len(), 2);
     assert!(images.iter().any(|s| s.dict.get("SMask").is_some()));
+}
+
+/// Locked fields (FieldMDP): changing them after signing breaks the
+/// signature's promise; other fields, and other signatures, do not.
+#[test]
+fn locked_fields_stay_as_signed() {
+    let id = p12::open(&data("rsa-aes.p12"), "katna").unwrap();
+    let form = file(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 5 0 R] >> >>",
+        "<< /Type /Pages /Count 1 /Kids [3 0 R] >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 400] /Annots [4 0 R 5 0 R] >>",
+        "<< /FT /Tx /T (Name) /V (Asha) /Type /Annot /Subtype /Widget /Rect [10 300 200 320] /P 3 0 R >>",
+        "<< /FT /Tx /T (City) /V (Pune) /Type /Annot /Subtype /Widget /Rect [10 260 200 280] /P 3 0 R >>",
+    ]);
+    let signed = |lock: Lock| {
+        let mut request = SignRequest::new(Placement::Invisible, info());
+        request.lock = Some(lock);
+        let doc = Document::load(form.clone()).unwrap();
+        Document::load(sign(&doc, &request, &id, Digest::Sha256).unwrap()).unwrap()
+    };
+    let refill = |doc: &Document, name: &str, text: &str| {
+        let field = doc.form().into_iter().find(|f| f.name == name).unwrap();
+        let bytes = doc
+            .fill(&[(field.id, FieldValue::Text(text.into()))])
+            .unwrap();
+        let doc = Document::load(bytes.clone()).unwrap();
+        check(&doc, &bytes, &Roots::new()).remove(0)
+    };
+
+    let doc = signed(Lock::Include(vec!["Name".into()]));
+    assert_eq!(
+        doc.signatures()[0].lock,
+        Some(Lock::Include(vec!["Name".into()]))
+    );
+    // Locked fields are read-only from then on.
+    let name = doc.form().into_iter().find(|f| f.name == "Name").unwrap();
+    assert!(name.read_only);
+    assert!(
+        !doc.form()
+            .into_iter()
+            .find(|f| f.name == "City")
+            .unwrap()
+            .read_only
+    );
+    let c = refill(&doc, "City", "Delhi");
+    assert!(c.intact() && c.unlocked.is_empty() && c.problem().is_none());
+    let c = refill(&doc, "Name", "Ravi");
+    assert!(c.intact());
+    assert_eq!(c.unlocked, ["Name"]);
+    assert!(c.problem().unwrap().contains("Name"));
+
+    let doc = signed(Lock::All);
+    assert_eq!(refill(&doc, "City", "Delhi").unlocked, ["City"]);
+    // Signature fields stay free to sign.
+    let more = doc
+        .add_signature_field(0, [10.0, 10.0, 110.0, 40.0], Some("Ravi".into()))
+        .unwrap();
+    let more = Document::load(more).unwrap();
+    let ravi = more.form().into_iter().find(|f| f.name == "Ravi").unwrap();
+    let ec = p12::open(&data("ec-p256.p12"), "katna").unwrap();
+    let bytes = sign(
+        &more,
+        &SignRequest::new(
+            Placement::Field {
+                id: ravi.id,
+                lines: Vec::new(),
+            },
+            SigningInfo::default(),
+        ),
+        &ec,
+        Digest::Sha256,
+    )
+    .unwrap();
+    let both = Document::load(bytes.clone()).unwrap();
+    let checks = check(&both, &bytes, &Roots::new());
+    assert!(checks.iter().all(|c| c.problem().is_none()), "{checks:?}");
+
+    let doc = signed(Lock::Exclude(vec!["City".into()]));
+    assert!(refill(&doc, "City", "Delhi").unlocked.is_empty());
+    assert_eq!(refill(&doc, "Name", "Ravi").unlocked, ["Name"]);
+}
+
+/// An empty field may say what signing it locks; that is followed.
+#[test]
+fn a_field_s_own_lock_is_followed() {
+    let id = p12::open(&data("rsa-aes.p12"), "katna").unwrap();
+    let form = file(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 5 0 R] >> >>",
+        "<< /Type /Pages /Count 1 /Kids [3 0 R] >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 400] /Annots [4 0 R 5 0 R] >>",
+        "<< /FT /Tx /T (Name) /V (Asha) /Type /Annot /Subtype /Widget /Rect [10 300 200 320] /P 3 0 R >>",
+        "<< /FT /Sig /T (Approver) /Lock << /Type /SigFieldLock /Action /All >> /Type /Annot /Subtype /Widget /Rect [10 10 110 40] /P 3 0 R >>",
+    ]);
+    let doc = Document::load(form).unwrap();
+    let field = doc
+        .form()
+        .into_iter()
+        .find(|f| f.name == "Approver")
+        .unwrap();
+    let request = SignRequest::new(
+        Placement::Field {
+            id: field.id,
+            lines: Vec::new(),
+        },
+        info(),
+    );
+    let signed = Document::load(sign(&doc, &request, &id, Digest::Sha256).unwrap()).unwrap();
+    assert_eq!(signed.signatures()[0].lock, Some(Lock::All));
 }
