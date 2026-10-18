@@ -26,7 +26,7 @@ use gpui::{
 };
 use image::{Frame, RgbaImage};
 use katna_pdf_render::recolor::PageColors;
-use katna_pdf_render::{Bitmap, Document, Engine, Hayro, OpenError};
+use katna_pdf_render::{Bitmap, Document, OpenError};
 use katna_ui::scale::desktop_px;
 use katna_ui::text_input::{InputEvent, TextInput};
 use katna_ui::tokens::{radius, space, text};
@@ -514,7 +514,7 @@ impl Viewer {
                     });
                     // `None` when it asks for a password.
                     let bytes = bytes.map_err(Some)?;
-                    let doc = Hayro
+                    let doc = crate::engine::engine()
                         .open(Arc::new(bytes), &password)
                         .map_err(|err| match err {
                             OpenError::Locked => None,
@@ -1634,7 +1634,9 @@ impl Viewer {
                 .background_executor()
                 .spawn(async move {
                     let bytes = Arc::new(source.fill(&changes).map_err(|e| e.to_string())?);
-                    let doc = Hayro.open(bytes.clone(), "").map_err(|e| e.to_string())?;
+                    let doc = crate::engine::engine()
+                        .open(bytes.clone(), "")
+                        .map_err(|e| e.to_string())?;
                     Ok::<_, String>((bytes, doc))
                 })
                 .await;
@@ -1930,7 +1932,9 @@ impl Viewer {
                     let out =
                         katna_pdf_cos::compose(Some(&base), &sources).map_err(|e| e.to_string())?;
                     let bytes = Arc::new(out);
-                    let doc = Hayro.open(bytes.clone(), "").map_err(|e| e.to_string())?;
+                    let doc = crate::engine::engine()
+                        .open(bytes.clone(), "")
+                        .map_err(|e| e.to_string())?;
                     let cos =
                         katna_pdf_cos::Document::load(bytes.to_vec()).map_err(|e| e.to_string())?;
                     Ok::<_, String>((bytes, doc, cos))
