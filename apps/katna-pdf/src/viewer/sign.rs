@@ -46,6 +46,9 @@ pub(super) struct SigRow {
     pub revocation: Option<Revocation>,
     /// What it allows after it, when it certifies the file.
     pub certifies: Option<Allowed>,
+    /// The bytes of the file it signed, when the file was changed after
+    /// it.
+    pub revision: Option<usize>,
 }
 
 /// What signing needs to know of the file.
@@ -244,6 +247,12 @@ fn rows(checks: Vec<katna_pdf_sign::SignatureCheck>) -> Vec<SigRow> {
                 vouched: c.trust.as_ref().map(vouched),
                 revocation: c.revocation.clone(),
                 certifies: c.signature.certify,
+                revision: match c.coverage {
+                    Coverage::Revision(end) if c.later.iter().any(|l| *l != Change::Dss) => {
+                        Some(end)
+                    }
+                    _ => None,
+                },
             }
         })
         .collect()
@@ -1368,7 +1377,9 @@ impl Viewer {
         let th = self.theme;
         let bad = rows.iter().filter(|r| r.problem.is_some()).count();
         let unverified = rows.iter().any(SigRow::unverified);
-        let changed = rows.last().is_some_and(|r| r.intact && !r.whole);
+        // Changed after the last signature: none covers the whole file
+        // (the form may list them in any order).
+        let changed = !rows.iter().any(|r| r.whole);
         let count = rows.len().to_string();
         let message = match (bad, rows.len(), &rows[0].signer) {
             (0, 1, Some(signer)) if unverified => t("signed-by-unverified", &[("name", signer)]),
@@ -1569,6 +1580,23 @@ impl Viewer {
                             }))
                             .children(details.into_iter().map(|d| {
                                 div().text_size(px(text::SMALL)).text_color(th.dim).child(d)
+                            }))
+                            .children(row.revision.map(|end| {
+                                let signer = row.signer.clone().unwrap_or_else(|| row.name.clone());
+                                div().flex().child(
+                                    widgets::outlined_button(
+                                        ("signed-version", i),
+                                        t("signature-signed-version", &[]),
+                                        &th.katna,
+                                    )
+                                    .tip(t("signature-signed-version-tip", &[]), &th.katna)
+                                    .on_click(cx.listener(
+                                        move |this, _, _, cx| {
+                                            cx.stop_propagation();
+                                            this.show_signed_version(end, &signer, cx);
+                                        },
+                                    )),
+                                )
                             })),
                     ),
             );
@@ -1589,6 +1617,39 @@ impl Viewer {
 }
 
 impl Viewer {
+    /// Opens the file as it was when it was signed by `signer`, its
+    /// first `end` bytes, in a tab of its own.
+    fn show_signed_version(&mut self, end: usize, signer: &str, cx: &mut Context<Self>) {
+        let Some(path) = self.path.clone() else {
+            return;
+        };
+        let stem = path
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let name = t(
+            "signature-signed-version-file",
+            &[("name", &stem), ("signer", signer)],
+        );
+        let shown = std::fs::read(&path).and_then(|bytes| {
+            let bytes = bytes
+                .get(..end)
+                .ok_or_else(|| std::io::Error::other("the file is shorter than it was"))?;
+            let folder = std::env::temp_dir().join("katna-pdf");
+            std::fs::create_dir_all(&folder)?;
+            let file = folder.join(name.replace(['/', '\\'], "-"));
+            std::fs::write(&file, bytes)?;
+            Ok(file)
+        });
+        match shown {
+            Ok(file) => cx.emit(super::ViewerEvent::Dropped(vec![file])),
+            Err(e) => {
+                self.notice = Some(e.to_string());
+                cx.notify();
+            }
+        }
+    }
+
     /// Trusts `root` from now on, and so every signer it vouches for.
     fn trust(&mut self, root: &Certificate, cx: &mut Context<Self>) {
         if let Err(e) = trust_root(root) {
