@@ -8,6 +8,7 @@
 mod annotate;
 mod assets;
 mod contents;
+mod engine;
 mod form;
 mod history;
 mod ids;
@@ -35,6 +36,15 @@ use katna_ui::scale::desktop_px;
 use crate::text::t;
 
 fn main() -> ExitCode {
+    if std::env::args_os()
+        .nth(1)
+        .is_some_and(|a| a == engine::WORKER_ARG)
+    {
+        return match katna_pdf_render::worker::serve() {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(_) => ExitCode::FAILURE,
+        };
+    }
     let mut files: Vec<PathBuf> = Vec::new();
     for arg in std::env::args_os().skip(1) {
         match arg.to_str() {

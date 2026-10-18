@@ -12,10 +12,12 @@ mod hayro_engine;
 pub mod recolor;
 pub mod scene;
 pub mod text;
+pub mod worker;
 
 use std::sync::Arc;
 
 pub use hayro_engine::{Hayro, HayroPlain};
+pub use worker::Workers;
 
 /// A page is never drawn larger than this many pixels on a side...
 pub const MAX_SIDE: u32 = 8192;

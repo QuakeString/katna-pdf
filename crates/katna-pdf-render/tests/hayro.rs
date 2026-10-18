@@ -476,3 +476,68 @@ fn annotations_are_drawn_from_the_appearances_written_for_them() {
     let [r, g, b, _] = pixel(&page, 145, 30);
     assert!(r > 240 && g > 240 && b > 240, "white inside: {r} {g} {b}");
 }
+
+fn workers(program: &str, args: &[&str]) -> katna_pdf_render::Workers {
+    let args = args.iter().map(|a| a.to_string()).collect();
+    let program = std::path::PathBuf::from(program);
+    katna_pdf_render::Workers::new(move || program.clone(), args, 2)
+}
+
+const WORKER: &str = env!("CARGO_BIN_EXE_katna-pdf-render-worker");
+
+#[test]
+fn workers_draw_and_read_as_the_app_would() {
+    let bytes = Arc::new(pdf(&[
+        "0 0 1 rg 10 10 50 50 re f",
+        "BT /F1 20 Tf 10 50 Td (Hello) Tj ET",
+    ]));
+    let local = Hayro.open(bytes.clone(), "").unwrap();
+    let engine = workers(WORKER, &[]);
+    let remote = engine.open(bytes.clone(), "").unwrap();
+    assert_eq!(remote.page_count(), 2);
+    assert_eq!(remote.render(0, 1.5), local.render(0, 1.5));
+    let region = Region {
+        x: 5,
+        y: 5,
+        width: 40,
+        height: 30,
+    };
+    assert_eq!(
+        remote.render_region(0, 2.0, region),
+        local.render_region(0, 2.0, region)
+    );
+    assert_eq!(remote.text(1).text, local.text(1).text);
+    assert_eq!(remote.text(1).boxes, local.text(1).boxes);
+    assert_eq!(remote.pictures(0, 1.0), local.pictures(0, 1.0));
+    // Several documents and threads at once, and documents dropped.
+    let other = engine
+        .open(Arc::new(pdf(&["0 1 0 rg 0 0 200 100 re f"])), "")
+        .unwrap();
+    std::thread::scope(|s| {
+        for _ in 0..4 {
+            s.spawn(|| {
+                assert_eq!(
+                    pixel(&other.render(0, 1.0).unwrap(), 100, 50),
+                    [0, 255, 0, 255]
+                );
+                assert!(remote.render(1, 1.0).is_some());
+            });
+        }
+    });
+    drop(other);
+    assert!(remote.render(0, 1.0).is_some());
+}
+
+#[test]
+fn a_worker_that_dies_costs_the_page_not_the_app() {
+    let bytes = Arc::new(pdf(&["0 0 1 rg 10 10 50 50 re f"]));
+    // Starts, then ends at once, as a crash would.
+    let engine = workers(WORKER, &["--exit"]);
+    let doc = engine.open(bytes.clone(), "").unwrap();
+    assert_eq!(doc.render(0, 1.0), None);
+    assert!(doc.text(0).text.is_empty());
+    // No worker can start at all: the app draws itself.
+    let engine = workers("/no/such/katna-pdf-worker", &[]);
+    let doc = engine.open(bytes, "").unwrap();
+    assert!(doc.render(0, 1.0).is_some());
+}

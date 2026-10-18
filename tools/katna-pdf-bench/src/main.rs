@@ -4,7 +4,8 @@
 //! against the budgets in docs/PLAN.md §2.4. It prints one line per file;
 //! `--json` prints JSON lines instead, for CI to keep. `--cad` measures
 //! zooming into drawings instead (`cad.rs`). `--plain` never draws pages
-//! from scenes, for comparison.
+//! from scenes, for comparison. `--workers` draws in worker processes,
+//! as the app does (`katna-pdf-render-worker`, built beside this).
 
 mod cad;
 
@@ -12,7 +13,7 @@ use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use katna_pdf_render::{Document, Engine, Hayro, HayroPlain, Region};
+use katna_pdf_render::{Document, Engine, Hayro, HayroPlain, Region, Workers};
 
 /// "Open a 1,000-page PDF to first page visible": open plus first page.
 const FIRST_PAGE_BUDGET: Duration = Duration::from_millis(300);
@@ -39,6 +40,7 @@ fn main() -> ExitCode {
     let mut drawings = false;
     let mut scene_check = false;
     let mut plain = false;
+    let mut workers = false;
     let mut files = Vec::new();
     for arg in std::env::args().skip(1) {
         match arg.as_str() {
@@ -46,15 +48,16 @@ fn main() -> ExitCode {
             "--cad" => drawings = true,
             "--scene-check" => scene_check = true,
             "--plain" => plain = true,
+            "--workers" => workers = true,
             "-h" | "--help" => {
-                println!("usage: katna-pdf-bench [--json | --cad] [--plain] FILE.pdf…");
+                println!("usage: katna-pdf-bench [--json | --cad] [--plain | --workers] FILE.pdf…");
                 return ExitCode::SUCCESS;
             }
             _ => files.push(arg),
         }
     }
     if files.is_empty() {
-        eprintln!("usage: katna-pdf-bench [--json | --cad] [--plain] FILE.pdf…");
+        eprintln!("usage: katna-pdf-bench [--json | --cad] [--plain | --workers] FILE.pdf…");
         return ExitCode::FAILURE;
     }
     if scene_check {
@@ -68,7 +71,21 @@ fn main() -> ExitCode {
             ExitCode::FAILURE
         };
     }
-    let engine: &dyn Engine = if plain { &HayroPlain } else { &Hayro };
+    let pool;
+    let engine: &dyn Engine = if plain {
+        &HayroPlain
+    } else if workers {
+        let program = std::env::current_exe()
+            .unwrap_or_default()
+            .with_file_name(format!(
+                "katna-pdf-render-worker{}",
+                std::env::consts::EXE_SUFFIX
+            ));
+        pool = Workers::new(move || program.clone(), Vec::new(), 4);
+        &pool
+    } else {
+        &Hayro
+    };
     let mut failed = false;
     if !json {
         println!(

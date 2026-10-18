@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use gpui::{AnyElement, Context, Focusable, Window, div, prelude::*};
 use katna_pdf_cos::{AnnotChanges, AnnotKind, Annotation, Ref};
-use katna_pdf_render::{Document, Engine, Hayro};
+use katna_pdf_render::Document;
 use katna_ui::px;
 use katna_ui::scale::desktop_px;
 use katna_ui::text_input::{InputEvent, TextInput};
@@ -484,7 +484,9 @@ impl Viewer {
                     };
                     let base = katna_pdf_cos::Document::load(bytes).map_err(|e| e.to_string())?;
                     let out = Arc::new(base.annotate(&changes).map_err(|e| e.to_string())?);
-                    let doc = Hayro.open(out.clone(), "").map_err(|e| e.to_string())?;
+                    let doc = crate::engine::engine()
+                        .open(out.clone(), "")
+                        .map_err(|e| e.to_string())?;
                     let cos =
                         katna_pdf_cos::Document::load(out.to_vec()).map_err(|e| e.to_string())?;
                     Ok::<_, String>((out, doc, cos))
