@@ -106,7 +106,55 @@ fn check(file: &Path) -> String {
     };
     out.push_str(&format!(" update={update}"));
     out.push_str(&format!(" form={}", form_check(&doc, pages)));
+    out.push_str(&format!(" reorder={}", reorder_check(&doc, pages)));
     out
+}
+
+/// Whether the pages written in reverse order, the first turned a quarter
+/// turn, give a file hayro reads with the same pages: the original first
+/// page, now last and turned, must draw as it did turned.
+fn reorder_check(doc: &Document, pages: usize) -> String {
+    if pages == 0 {
+        return "skipped".into();
+    }
+    let sources: Vec<_> = (0..pages)
+        .rev()
+        .map(|page| katna_pdf_cos::PageSource {
+            doc,
+            page,
+            turns: i32::from(page == 0),
+        })
+        .collect();
+    let composed = match katna_pdf_cos::compose(Some(doc), &sources) {
+        Ok(c) => c,
+        Err(katna_pdf_cos::ComposeError::Encrypted) => return "skipped_encrypted".into(),
+        Err(_) => return "failed".into(),
+    };
+    let (Ok(before), Ok(after)) = (
+        Hayro.open(Arc::new(doc.bytes().to_vec()), ""),
+        Hayro.open(Arc::new(composed.clone()), ""),
+    ) else {
+        return "hayro_failed".into();
+    };
+    if after.page_count() != before.page_count() || Document::load(composed).is_err() {
+        return "pages_changed".into();
+    }
+    let (Some((w, h)), Some((w2, h2))) = (before.page_size(0), after.page_size(pages - 1)) else {
+        return "no_size".into();
+    };
+    if (w - h2).abs() > 0.5 || (h - w2).abs() > 0.5 {
+        return "not_turned".into();
+    }
+    // The first page of the reversed file, drawn small, against the last
+    // of the original (unturned in both).
+    if pages > 1 {
+        let a = before.render(pages - 1, 0.25);
+        let b = after.render(0, 0.25);
+        if a != b {
+            return "draws_differently".into();
+        }
+    }
+    "ok".into()
 }
 
 /// How many form fields there are, and whether filling the text fields

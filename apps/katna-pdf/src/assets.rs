@@ -10,6 +10,31 @@ use gpui::{AssetSource, SharedString};
 
 const ICONS: &[(&str, &[u8])] = &[
     (
+        "icons/arrow-down.svg",
+        include_bytes!("../icons/arrow-down.svg"),
+    ),
+    (
+        "icons/arrow-up.svg",
+        include_bytes!("../icons/arrow-up.svg"),
+    ),
+    (
+        "icons/download.svg",
+        include_bytes!("../icons/download.svg"),
+    ),
+    (
+        "icons/insert-below.svg",
+        include_bytes!("../icons/insert-below.svg"),
+    ),
+    (
+        "icons/rotate-ccw.svg",
+        include_bytes!("../icons/rotate-ccw.svg"),
+    ),
+    (
+        "icons/rotate-cw.svg",
+        include_bytes!("../icons/rotate-cw.svg"),
+    ),
+    ("icons/trash.svg", include_bytes!("../icons/trash.svg")),
+    (
         "icons/chevron-down.svg",
         include_bytes!("../icons/chevron-down.svg"),
     ),
