@@ -318,6 +318,11 @@ enum Source {
 struct Found {
     module: PathBuf,
     token: pkcs11::Token,
+    /// Its signing certificates, likeliest first, as read without the
+    /// PIN; empty when the token keeps them private.
+    certificates: Vec<Arc<Certificate>>,
+    /// The one to sign with.
+    chosen: usize,
 }
 
 /// The tokens plugged in, as last looked for.
@@ -481,9 +486,17 @@ impl Viewer {
                         for token in module.tokens().unwrap_or_default() {
                             // The same token through two drivers: once.
                             if !found.iter().any(|f: &Found| f.token.serial == token.serial) {
+                                let certificates = module
+                                    .certificates(&token)
+                                    .unwrap_or_default()
+                                    .into_iter()
+                                    .map(Arc::new)
+                                    .collect();
                                 found.push(Found {
                                     module: path.clone(),
                                     token,
+                                    certificates,
+                                    chosen: 0,
                                 });
                             }
                         }
@@ -1495,7 +1508,62 @@ impl Viewer {
                                     } else {
                                         what
                                     }),
-                            ),
+                            )
+                            .children(f.certificates.iter().enumerate().map(|(c, cert)| {
+                                let tbs = &cert.tbs_certificate;
+                                let picked = chosen && c == f.chosen;
+                                let line = t(
+                                    "sign-token-certificate",
+                                    &[
+                                        ("name", &common_name(&tbs.subject)),
+                                        ("issuer", &common_name(&tbs.issuer)),
+                                        (
+                                            "until",
+                                            // The day is enough.
+                                            katna_pdf_sign::shown_date(
+                                                tbs.validity.not_after.to_system_time(),
+                                            )
+                                            .split(' ')
+                                            .next()
+                                            .unwrap_or_default(),
+                                        ),
+                                    ],
+                                );
+                                let many = f.certificates.len() > 1;
+                                div()
+                                    .id(("token-certificate", i * 64 + c))
+                                    .mt(px(space::S1))
+                                    .flex()
+                                    .items_start()
+                                    .gap(px(space::S2))
+                                    .when(many, |d| {
+                                        d.cursor_pointer().on_click(cx.listener(
+                                            move |this, _, _, cx| {
+                                                cx.stop_propagation();
+                                                if let Some(signing) = this.signing.as_mut() {
+                                                    signing.token = i;
+                                                    if let Tokens::Found(found) =
+                                                        &mut signing.tokens
+                                                        && let Some(f) = found.get_mut(i)
+                                                    {
+                                                        f.chosen = c;
+                                                    }
+                                                    signing.focus = true;
+                                                    cx.notify();
+                                                }
+                                            },
+                                        ))
+                                    })
+                                    .when(many, |d| d.child(radio(picked, th)))
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .min_w_0()
+                                            .text_size(px(text::SMALL))
+                                            .text_color(th.text)
+                                            .child(line),
+                                    )
+                            })),
                     );
                 }
             }
@@ -1941,6 +2009,7 @@ fn report_lines(name: &str, rows: &[SigRow]) -> Vec<String> {
 /// The key to sign with, unlocked: from certificate file `file`, or on
 /// token `found`, with `secret`, its password or PIN.
 fn unlock(file: Option<PathBuf>, found: Option<Found>, secret: &str) -> Result<Key, String> {
+    use katna_pdf_sign::Signer as _;
     if let Some(found) = found {
         let module = pkcs11::Module::load(&found.module).map_err(|e| e.to_string())?;
         let token = module
@@ -1955,10 +2024,17 @@ fn unlock(file: Option<PathBuf>, found: Option<Found>, secret: &str) -> Result<K
             pkcs11::TokenError::Gone => t("sign-token-gone", &[]),
             e => e.to_string(),
         })?;
-        let id = ids
-            .into_iter()
-            .next()
-            .ok_or_else(|| t("sign-no-key", &[]))?;
+        // The certificate chosen, else the likeliest.
+        let wanted = found.certificates.get(found.chosen);
+        let mut ids = ids;
+        let at = ids
+            .iter()
+            .position(|id| wanted.is_some_and(|w| **w == *id.certificate()))
+            .unwrap_or(0);
+        if ids.is_empty() {
+            return Err(t("sign-no-key", &[]));
+        }
+        let id = ids.swap_remove(at);
         return Ok(Box::new(id));
     }
     let file = file.ok_or_else(|| t("sign-no-certificate", &[]))?;
@@ -1991,6 +2067,31 @@ fn check_box(on: bool, th: super::Theme) -> gpui::Div {
                 th.katna.on_accent,
                 14.0,
             ))
+        })
+}
+
+/// One choice among several, picked or not.
+fn radio(on: bool, th: super::Theme) -> gpui::Div {
+    div()
+        .size(px(16.0))
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(radius::FULL))
+        .border_2()
+        .border_color(gpui::rgba(if on {
+            th.katna.accent
+        } else {
+            th.katna.text_dim
+        }))
+        .when(on, |d| {
+            d.child(
+                div()
+                    .size(px(8.0))
+                    .rounded(px(radius::FULL))
+                    .bg(gpui::rgba(th.katna.accent)),
+            )
         })
 }
 

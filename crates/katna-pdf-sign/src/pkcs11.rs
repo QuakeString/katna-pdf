@@ -178,8 +178,23 @@ impl Module {
         Ok(out)
     }
 
+    /// The certificates on `token` that sign, read without the PIN (they
+    /// are public): what to choose among before logging in. Indian
+    /// tokens often hold an encryption certificate beside the signing
+    /// one, which is left out.
+    pub fn certificates(&self, token: &Token) -> Result<Vec<Certificate>, TokenError> {
+        let session = self.context.open_ro_session(token.slot)?;
+        let mut out: Vec<Certificate> = read_certificates(&session)?
+            .into_iter()
+            .map(|(_, c)| c)
+            .filter(|c| crate::can_sign(c) && key_kind(c).is_some())
+            .collect();
+        sort_for_signing(&mut out, |c| c);
+        Ok(out)
+    }
+
     /// Logs in to `token` with `pin`: the signing identities on it, each
-    /// a key with its certificate.
+    /// a key with its certificate, the likeliest to sign with first.
     pub fn open(&self, token: &Token, pin: &str) -> Result<Vec<TokenIdentity>, TokenError> {
         let session = self.context.open_ro_session(token.slot)?;
         // A token with a keypad takes the PIN there.
@@ -188,25 +203,7 @@ impl Module {
             Ok(()) | Err(Error::Pkcs11(RvError::UserAlreadyLoggedIn, _)) => {}
             Err(e) => return Err(e.into()),
         }
-        let certificates: Vec<(Vec<u8>, Certificate)> = session
-            .find_objects(&[Attribute::Class(ObjectClass::CERTIFICATE)])?
-            .into_iter()
-            .filter_map(|object| {
-                let attrs = session
-                    .get_attributes(object, &[AttributeType::Id, AttributeType::Value])
-                    .ok()?;
-                let mut id = Vec::new();
-                let mut value = None;
-                for a in attrs {
-                    match a {
-                        Attribute::Id(v) => id = v,
-                        Attribute::Value(v) => value = Certificate::from_der(&v).ok(),
-                        _ => {}
-                    }
-                }
-                Some((id, value?))
-            })
-            .collect();
+        let certificates = read_certificates(&session)?;
         let keys = session.find_objects(&[Attribute::Class(ObjectClass::PRIVATE_KEY)])?;
         let session = Arc::new(Mutex::new(session));
         let mut out = Vec::new();
@@ -240,8 +237,50 @@ impl Module {
         if out.is_empty() {
             return Err(TokenError::NoKey);
         }
+        sort_for_signing(&mut out, |id| &id.certificate);
         Ok(out)
     }
+}
+
+/// The certificates on a token, each with its `CKA_ID`, which its key
+/// shares.
+fn read_certificates(session: &Session) -> Result<Vec<(Vec<u8>, Certificate)>, TokenError> {
+    Ok(session
+        .find_objects(&[Attribute::Class(ObjectClass::CERTIFICATE)])?
+        .into_iter()
+        .filter_map(|object| {
+            let attrs = session
+                .get_attributes(object, &[AttributeType::Id, AttributeType::Value])
+                .ok()?;
+            let mut id = Vec::new();
+            let mut value = None;
+            for a in attrs {
+                match a {
+                    Attribute::Id(v) => id = v,
+                    Attribute::Value(v) => value = Certificate::from_der(&v).ok(),
+                    _ => {}
+                }
+            }
+            Some((id, value?))
+        })
+        .collect())
+}
+
+/// Orders `items` by their certificates: those made for signing first,
+/// then those valid now, then the newest.
+fn sort_for_signing<T>(items: &mut [T], cert: impl Fn(&T) -> &Certificate) {
+    let now = std::time::SystemTime::now();
+    items.sort_by_key(|item| {
+        let c = cert(item);
+        let validity = &c.tbs_certificate.validity;
+        let current = validity.not_before.to_system_time() <= now
+            && now <= validity.not_after.to_system_time();
+        (
+            !crate::can_sign(c),
+            !current,
+            std::cmp::Reverse(validity.not_after.to_system_time()),
+        )
+    });
 }
 
 /// The certificates above `leaf` among `all`, nearest first.

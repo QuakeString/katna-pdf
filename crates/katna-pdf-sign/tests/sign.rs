@@ -424,3 +424,15 @@ fn a_field_s_own_lock_is_followed() {
     let signed = Document::load(sign(&doc, &request, &id, Digest::Sha256).unwrap()).unwrap();
     assert_eq!(signed.signatures()[0].lock, Some(Lock::All));
 }
+
+/// Only certificates made for signing are offered to sign with: not a
+/// certificate authority's.
+#[test]
+fn signing_certificates_are_told_apart() {
+    use katna_pdf_sign::{Certificate, can_sign};
+    use x509_cert::der::Decode;
+    let asha = Certificate::from_der(&data("asha.der")).unwrap();
+    let ca = Certificate::from_der(&data("ca.der")).unwrap();
+    assert!(can_sign(&asha));
+    assert!(!can_sign(&ca));
+}

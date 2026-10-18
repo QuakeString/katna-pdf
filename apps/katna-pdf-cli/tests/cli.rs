@@ -402,6 +402,12 @@ fn files_are_signed_with_a_token() {
     let (code, out) = run(&["tokens", "--json", "--module", SOFTHSM]);
     assert_eq!(code, 0);
     assert!(out.contains("\"label\":\"Katna Test Token\""), "{out}");
+    // The signing certificate, not the authority's beside it.
+    assert!(
+        out.contains("\"certificates\":[{\"name\":\"Asha Verma\",\"issuer\":\"Katna Test Root\""),
+        "{out}"
+    );
+    assert_eq!(out.matches("\"name\":").count(), 1, "{out}");
 
     let input = d.join("in.pdf");
     std::fs::write(&input, pdf(1)).unwrap();

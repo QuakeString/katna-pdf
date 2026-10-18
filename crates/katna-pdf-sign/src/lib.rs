@@ -399,6 +399,23 @@ pub fn change_text(change: Change) -> &'static str {
     }
 }
 
+/// Whether `cert` is made for signing: its key usage, when it says,
+/// includes signing (digital signature or non-repudiation), and it is
+/// not a certificate authority's.
+pub fn can_sign(cert: &Certificate) -> bool {
+    use x509_cert::ext::pkix::{BasicConstraints, KeyUsage};
+    let tbs = &cert.tbs_certificate;
+    if let Ok(Some((_, bc))) = tbs.get::<BasicConstraints>()
+        && bc.ca
+    {
+        return false;
+    }
+    match tbs.get::<KeyUsage>() {
+        Ok(Some((_, usage))) => usage.digital_signature() || usage.non_repudiation(),
+        _ => true,
+    }
+}
+
 /// Which fields a signature locks, in a few words.
 pub fn lock_text(lock: &Lock) -> String {
     match lock {
