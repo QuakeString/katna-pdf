@@ -34,6 +34,7 @@ use katna_ui::widgets::{self, Tip};
 use katna_ui::{ScrollBar, px, unpx};
 
 mod annots;
+mod organizer;
 
 use crate::annotate::Tool;
 use crate::contents::{self, Contents};
@@ -307,6 +308,10 @@ pub struct Viewer {
     pane: bool,
     tab: PaneTab,
     thumbs: Thumbs,
+    /// The organizer shows in place of the pages (`organizer.rs`).
+    organizer: bool,
+    grid: gpui::ScrollHandle,
+    grid_bar: ScrollBar,
     theme: Theme,
     /// Whether the window is dark: pages are then shown as night pages
     /// unless [`Viewer::colors`] says otherwise.
@@ -393,6 +398,9 @@ impl Viewer {
             pane: false,
             tab: PaneTab::Pages,
             thumbs: Thumbs::new(),
+            organizer: false,
+            grid: gpui::ScrollHandle::new(),
+            grid_bar: ScrollBar::default(),
             theme: Theme::for_appearance(window.appearance()),
             dark: is_dark(window.appearance()),
             colors: None,
@@ -467,6 +475,7 @@ impl Viewer {
         self.selection = None;
         self.reading_text.clear();
         self.picked.clear();
+        self.organizer = false;
         self.anchor = None;
         self.edited = None;
         self.changing_pages = false;
@@ -1131,6 +1140,7 @@ impl Viewer {
         }
         let current = page == self.current_page();
         let picked = self.picked.contains(&page);
+        let accent = th.katna.accent;
         let label = (page + 1).to_string();
         div()
             .id(("thumb", page))
@@ -1146,6 +1156,17 @@ impl Viewer {
                 let keys = event.modifiers();
                 this.thumb_click(page, keys.control || keys.platform, keys.shift, cx);
             }))
+            .on_drag(self.dragged(page), |dragged, _, _, cx| {
+                cx.new(|_| dragged.clone())
+            })
+            .drag_over::<organizer::PagesDragged>(move |style, _, _, _| {
+                style.bg(gpui::rgba(accent & 0xffff_ff00 | 0x33))
+            })
+            .on_drop(
+                cx.listener(move |this, dragged: &organizer::PagesDragged, _, cx| {
+                    this.drop_pages(dragged, page, cx)
+                }),
+            )
             .child(
                 div()
                     .w(px(thumbnails::WIDTH))
@@ -1178,7 +1199,7 @@ impl Viewer {
             return;
         };
         let width = opened.doc.page_size(page).map_or(612.0, |(w, _)| w);
-        let scale = thumbnails::WIDTH * katna_ui::scale::scale() * scale_factor / width.max(1.0);
+        let scale = thumbnails::DRAWN * katna_ui::scale::scale() * scale_factor / width.max(1.0);
         let doc = opened.doc.clone();
         let (generation, revision) = (self.generation, self.revision);
         let colors = self.page_colors();
@@ -2412,6 +2433,22 @@ impl Viewer {
             ));
             bar = bar.child(
                 widgets::icon_button_colored(
+                    "organize",
+                    "view-grid",
+                    18.0,
+                    if self.organizer {
+                        th.katna.accent
+                    } else {
+                        th.katna.text_dim
+                    },
+                    &th.katna,
+                )
+                .when(self.organizer, |b| b.bg(th.field))
+                .tip(t("organize", &[]), &th.katna)
+                .on_click(cx.listener(|this, _, _, cx| this.toggle_organizer(cx))),
+            );
+            bar = bar.child(
+                widgets::icon_button_colored(
                     "annotate",
                     "pen",
                     18.0,
@@ -2810,6 +2847,7 @@ impl Render for Viewer {
                 ))
         });
         let pages: AnyElement = match &self.content {
+            Content::Ready(_) if self.organizer => self.organizer_view(window, cx),
             Content::Ready(_) => {
                 // Reading progress: the page at the top, noted as it
                 // changes.
@@ -2901,7 +2939,13 @@ impl Render for Viewer {
             .on_action(cx.listener(|this, _: &Find, window, cx| this.open_search(window, cx)))
             .on_action(cx.listener(|this, _: &CopyText, _, cx| this.copy_text(cx)))
             .on_action(cx.listener(|this, _: &DeleteAnnotation, _, cx| this.delete_chosen(cx)))
-            .on_action(cx.listener(|this, _: &PutToolDown, _, cx| this.cancel_tool(cx)))
+            .on_action(cx.listener(|this, _: &PutToolDown, _, cx| {
+                if this.organizer {
+                    this.toggle_organizer(cx);
+                } else {
+                    this.cancel_tool(cx);
+                }
+            }))
             .on_action(cx.listener(|this, _: &FindNext, _, cx| this.step_search(true, cx)))
             .on_action(cx.listener(|this, _: &FindPrevious, _, cx| this.step_search(false, cx)))
             .on_action(cx.listener(|this, _: &ScrollDown, _, cx| {
