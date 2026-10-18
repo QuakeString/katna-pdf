@@ -196,6 +196,8 @@ pub(super) struct Signing {
     /// Whether to timestamp the signature, and the server to ask.
     timestamp: bool,
     server: Entity<TextInput>,
+    /// Other files to sign at the same time, with the key unlocked once.
+    others: Vec<PathBuf>,
     error: Option<String>,
     busy: bool,
     /// Put the keys in the password field on the next frame.
@@ -258,6 +260,7 @@ impl Viewer {
             location,
             timestamp,
             server,
+            others: Vec::new(),
             error: None,
             busy: false,
             focus: false,
@@ -460,8 +463,38 @@ impl Viewer {
         .detach();
     }
 
+    /// Asks for other files to sign at the same time.
+    fn choose_others(&mut self, cx: &mut Context<Self>) {
+        let chosen = cx.prompt_for_paths(gpui::PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: true,
+            prompt: None,
+        });
+        cx.spawn(async move |this, cx| {
+            if let Ok(Ok(Some(paths))) = chosen.await {
+                this.update(cx, |this, cx| {
+                    let current = this.path.clone();
+                    if let Some(signing) = this.signing.as_mut() {
+                        for path in paths {
+                            if Some(&path) != current.as_ref() && !signing.others.contains(&path) {
+                                signing.others.push(path);
+                            }
+                        }
+                        signing.error = None;
+                        signing.focus = true;
+                        cx.notify();
+                    }
+                })
+                .ok();
+            }
+        })
+        .detach();
+    }
+
     /// Signs with what was given: asks where to save the signed copy,
-    /// writes it, and opens it.
+    /// writes it, and opens it. With other files to sign too, asks for a
+    /// folder instead, and signs them all into it.
     fn sign_now(&mut self, cx: &mut Context<Self>) {
         let Some(path) = self.path.clone() else {
             return;
@@ -495,6 +528,7 @@ impl Viewer {
         };
         let (reason, location) = (value(&signing.reason), value(&signing.location));
         let tsa = value(&signing.server).filter(|_| signing.timestamp);
+        let others = signing.others.clone();
         let folder = path.parent().map(Path::to_path_buf).unwrap_or_default();
         let stem = path
             .file_stem()
@@ -528,7 +562,22 @@ impl Viewer {
                 Err(error) => return stop(this, Some(error), cx),
             };
             let Ok(chosen) = this.update(cx, |_, cx| {
-                cx.prompt_for_new_path(&folder, Some(&suggested))
+                if others.is_empty() {
+                    let file = cx.prompt_for_new_path(&folder, Some(&suggested));
+                    cx.background_executor().spawn(file)
+                } else {
+                    let folder = cx.prompt_for_paths(gpui::PathPromptOptions {
+                        files: false,
+                        directories: true,
+                        multiple: false,
+                        prompt: Some(t("sign-batch-folder", &[]).into()),
+                    });
+                    cx.background_executor().spawn(async move {
+                        folder
+                            .await
+                            .map(|f| f.map(|f| f.and_then(|f| f.into_iter().next())))
+                    })
+                }
             }) else {
                 return;
             };
@@ -551,44 +600,33 @@ impl Viewer {
                         Some(bytes) => bytes.to_vec(),
                         None => std::fs::read(&path).map_err(|e| e.to_string())?,
                     };
-                    let doc = katna_pdf_cos::Document::load(bytes).map_err(|e| e.to_string())?;
-                    let time = std::time::SystemTime::now();
-                    let placement = match placed {
-                        Placed::Hidden => Placement::Invisible,
-                        Placed::Box { page, rect, .. } => Placement::Visible {
-                            page,
-                            rect,
-                            lines: katna_pdf_sign::appearance_lines(
-                                id.as_ref(),
-                                &katna_pdf_sign::shown_date(time),
-                                reason.as_deref(),
-                            ),
-                        },
+                    let what = What {
+                        placed,
+                        reason,
+                        location,
+                        tsa: tsa.clone(),
                     };
-                    let name =
-                        katna_pdf_sign::common_name(&id.certificate().tbs_certificate.subject);
-                    let mut request = SignRequest::new(
-                        placement,
-                        SigningInfo {
-                            name: Some(name),
-                            reason,
-                            location,
-                            contact: None,
-                        },
-                    );
-                    request.time = time;
-                    let server = tsa.as_deref().map(katna_pdf_sign::tsa::Server::new);
-                    let signed = katna_pdf_sign::sign_with(
-                        &doc,
-                        &request,
-                        id.as_ref(),
-                        katna_pdf_sign::Digest::Sha256,
-                        server
-                            .as_ref()
-                            .map(|s| s as &dyn katna_pdf_sign::tsa::Stamper),
-                    )
-                    .map_err(|e| e.to_string())?;
-                    crate::viewer::save_over(&target, &signed).map_err(|e| e.to_string())?;
+                    // This file: into the file chosen, or into the folder.
+                    let first = if others.is_empty() {
+                        target.clone()
+                    } else {
+                        free_name(&target, &path)
+                    };
+                    sign_one(bytes, &what, id.as_ref(), &first)?;
+                    let mut done = 1;
+                    let mut failed = Vec::new();
+                    for other in &others {
+                        let signed =
+                            std::fs::read(other)
+                                .map_err(|e| e.to_string())
+                                .and_then(|bytes| {
+                                    sign_one(bytes, &what, id.as_ref(), &free_name(&target, other))
+                                });
+                        match signed {
+                            Ok(()) => done += 1,
+                            Err(e) => failed.push(format!("{}: {e}", file_name(other))),
+                        }
+                    }
                     match &certificate {
                         Some(c) if source == Source::File => {
                             write_note("certificate", &c.to_string_lossy());
@@ -602,14 +640,36 @@ impl Viewer {
                         let (_, url) = remembered_timestamp();
                         write_note("timestamp", &format!("off\n{url}\n"));
                     }
-                    Ok::<_, String>(target)
+                    let notice = if others.is_empty() {
+                        None
+                    } else if failed.is_empty() {
+                        Some(t(
+                            "sign-batch-done",
+                            &[
+                                ("count", &done.to_string()),
+                                ("folder", &target.display().to_string()),
+                            ],
+                        ))
+                    } else {
+                        Some(t(
+                            "sign-batch-partial",
+                            &[
+                                ("count", &done.to_string()),
+                                ("total", &(others.len() + 1).to_string()),
+                                ("folder", &target.display().to_string()),
+                                ("failed", &failed.join("; ")),
+                            ],
+                        ))
+                    };
+                    Ok::<_, String>((first, notice))
                 })
                 .await;
             this.update(cx, |this, cx| {
                 match written {
-                    Ok(target) => {
+                    Ok((target, notice)) => {
                         this.signing = None;
                         this.open_with(target, String::new(), cx);
+                        this.notice = notice;
                     }
                     Err(error) => {
                         if let Some(signing) = this.signing.as_mut() {
@@ -819,6 +879,57 @@ impl Viewer {
                         ),
                 )
                 .when(signing.timestamp, |d| d.child(field(&signing.server)))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(space::S2))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .text_size(px(text::SMALL))
+                                .text_color(if signing.others.is_empty() {
+                                    th.dim
+                                } else {
+                                    th.text
+                                })
+                                .child(if signing.others.is_empty() {
+                                    t("sign-others-none", &[])
+                                } else {
+                                    t(
+                                        "sign-others",
+                                        &[("count", &signing.others.len().to_string())],
+                                    )
+                                }),
+                        )
+                        .when(!signing.others.is_empty(), |d| {
+                            d.child(
+                                widgets::outlined_button(
+                                    "sign-others-clear",
+                                    t("sign-others-clear", &[]),
+                                    &th.katna,
+                                )
+                                .on_click(cx.listener(
+                                    |this, _, _, cx| {
+                                        if let Some(signing) = this.signing.as_mut() {
+                                            signing.others.clear();
+                                            cx.notify();
+                                        }
+                                    },
+                                )),
+                            )
+                        })
+                        .child(
+                            widgets::outlined_button(
+                                "sign-others-choose",
+                                t("sign-others-choose", &[]),
+                                &th.katna,
+                            )
+                            .tip(t("sign-others-tip", &[]), &th.katna)
+                            .on_click(cx.listener(|this, _, _, cx| this.choose_others(cx))),
+                        ),
+                )
                 .children(signing.error.clone().map(|error| {
                     div()
                         .text_size(px(text::SMALL))
@@ -838,7 +949,14 @@ impl Viewer {
                         .child(
                             widgets::filled_button(
                                 "sign-go",
-                                t(if busy { "sign-busy" } else { "sign-go" }, &[]),
+                                t(
+                                    match (busy, signing.others.len()) {
+                                        (true, _) => "sign-busy",
+                                        (false, 0) => "sign-go",
+                                        (false, _) => "sign-go-all",
+                                    },
+                                    &[("count", &(signing.others.len() + 1).to_string())],
+                                ),
                                 &th.katna,
                             )
                             .when(busy, |b| b.opacity(0.6))
@@ -1256,6 +1374,79 @@ fn unlock(file: Option<PathBuf>, found: Option<Found>, secret: &str) -> Result<K
     Ok(Box::new(id))
 }
 
+/// What goes into each signature of one signing.
+struct What {
+    placed: Placed,
+    reason: Option<String>,
+    location: Option<String>,
+    tsa: Option<String>,
+}
+
+/// Signs PDF `bytes` with `id` as `what` says, and writes the signed
+/// copy to `target`. A box goes on the same page, or the last one when
+/// the file is shorter.
+fn sign_one(
+    bytes: Vec<u8>,
+    what: &What,
+    id: &dyn katna_pdf_sign::Signer,
+    target: &Path,
+) -> Result<(), String> {
+    let doc = katna_pdf_cos::Document::load(bytes).map_err(|e| e.to_string())?;
+    let time = std::time::SystemTime::now();
+    let placement = match what.placed {
+        Placed::Hidden => Placement::Invisible,
+        Placed::Box { page, rect, .. } => Placement::Visible {
+            page: page.min(doc.pages().len().saturating_sub(1)),
+            rect,
+            lines: katna_pdf_sign::appearance_lines(
+                id,
+                &katna_pdf_sign::shown_date(time),
+                what.reason.as_deref(),
+            ),
+        },
+    };
+    let mut request = SignRequest::new(
+        placement,
+        SigningInfo {
+            name: Some(common_name(&id.certificate().tbs_certificate.subject)),
+            reason: what.reason.clone(),
+            location: what.location.clone(),
+            contact: None,
+        },
+    );
+    request.time = time;
+    let server = what.tsa.as_deref().map(katna_pdf_sign::tsa::Server::new);
+    let signed = katna_pdf_sign::sign_with(
+        &doc,
+        &request,
+        id,
+        katna_pdf_sign::Digest::Sha256,
+        server
+            .as_ref()
+            .map(|s| s as &dyn katna_pdf_sign::tsa::Stamper),
+    )
+    .map_err(|e| e.to_string())?;
+    crate::viewer::save_over(target, &signed).map_err(|e| e.to_string())
+}
+
+/// Where `file`'s signed copy goes in `folder`: "name (signed).pdf", or
+/// "name (signed) 2.pdf" and on when that is taken.
+fn free_name(folder: &Path, file: &Path) -> PathBuf {
+    let stem = file
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let name = t("sign-file-name", &[("name", &stem)]);
+    let mut target = folder.join(&name);
+    let mut n = 2;
+    while target.exists() {
+        let base = name.strip_suffix(".pdf").unwrap_or(&name);
+        target = folder.join(format!("{base} {n}.pdf"));
+        n += 1;
+    }
+    target
+}
+
 /// A free timestamp server, offered until another is given.
 const TSA: &str = "http://timestamp.digicert.com";
 
@@ -1301,3 +1492,76 @@ fn remembered_timestamp() -> (bool, String) {
 
 /// The signatures of the file shown, checked.
 pub(super) type Rows = Arc<Vec<SigRow>>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write as _;
+
+    /// A PDF of two pages.
+    fn two_pages() -> Vec<u8> {
+        let objs = [
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Count 2 /Kids [3 0 R 4 0 R] >>",
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 400] >>",
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 400] >>",
+        ];
+        let mut out = b"%PDF-1.7\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, o) in objs.iter().enumerate() {
+            offsets.push(out.len());
+            write!(out, "{} 0 obj\n{o}\nendobj\n", i + 1).unwrap();
+        }
+        let xref = out.len();
+        write!(out, "xref\n0 5\n0000000000 65535 f \n").unwrap();
+        for o in offsets {
+            writeln!(out, "{o:010} 00000 n ").unwrap();
+        }
+        write!(
+            out,
+            "trailer\n<< /Size 5 /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n"
+        )
+        .unwrap();
+        out
+    }
+
+    /// Several files signed with one key: each into the folder under a
+    /// name of its own, none written over, a box on a page they have.
+    #[test]
+    fn files_are_signed_into_a_folder() {
+        let data = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../crates/katna-pdf-sign/tests/data"
+        );
+        let p12 = std::fs::read(format!("{data}/rsa-aes.p12")).unwrap();
+        let id = katna_pdf_sign::p12::open(&p12, "katna").unwrap();
+        let folder = std::env::temp_dir().join(format!("katna-batch-{}", std::process::id()));
+        std::fs::create_dir_all(&folder).unwrap();
+        let pdf = two_pages();
+        let what = What {
+            placed: Placed::Box {
+                page: 5,
+                shown: [0.0; 4],
+                rect: [20.0, 20.0, 120.0, 60.0],
+            },
+            reason: Some("Approved".into()),
+            location: None,
+            tsa: None,
+        };
+        let file = Path::new("/somewhere/report.pdf");
+        let first = free_name(&folder, file);
+        sign_one(pdf.clone(), &what, &id, &first).unwrap();
+        let second = free_name(&folder, file);
+        assert_ne!(first, second);
+        sign_one(pdf, &what, &id, &second).unwrap();
+        for target in [first, second] {
+            let doc = katna_pdf_cos::Document::load(std::fs::read(&target).unwrap()).unwrap();
+            let checks = katna_pdf_sign::check(&doc, doc.bytes(), &Roots::new());
+            assert!(checks[0].intact());
+            // Page 6 asked for; the file has 2.
+            assert_eq!(checks[0].signature.page, Some(1));
+        }
+        assert!(sign_one(b"nope".to_vec(), &what, &id, &folder.join("x.pdf")).is_err());
+        let _ = std::fs::remove_dir_all(folder);
+    }
+}
