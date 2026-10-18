@@ -45,6 +45,7 @@ actions!(
         PreviousPage,
         ScrollDown,
         ToggleContents,
+        ToggleNight,
         ScrollUp,
         CloseTab,
         NextTab,
@@ -82,6 +83,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("shift-space", PreviousPage, None),
         KeyBinding::new("down", ScrollDown, None),
         KeyBinding::new("f7", ToggleContents, None),
+        KeyBinding::new("ctrl-shift-n", ToggleNight, None),
         KeyBinding::new("up", ScrollUp, None),
         KeyBinding::new("ctrl-w", CloseTab, None),
         KeyBinding::new("ctrl-f4", CloseTab, None),
@@ -138,9 +140,11 @@ struct Opened {
     widest: f32,
 }
 
-/// A drawn page: the scale (device pixels per point) it was drawn at.
+/// A drawn page: the scale (device pixels per point) it was drawn at,
+/// and whether as a night page.
 struct Drawn {
     scale: f32,
+    night: bool,
     image: Arc<RenderImage>,
 }
 
@@ -173,6 +177,11 @@ pub struct Viewer {
     tab: PaneTab,
     thumbs: Thumbs,
     theme: Theme,
+    /// Whether the window is dark: pages are then shown as night pages
+    /// unless [`Viewer::night`] says otherwise.
+    dark: bool,
+    /// Night pages turned on or off by hand, overriding the theme.
+    night: Option<bool>,
     _appearance: Subscription,
 }
 
@@ -181,6 +190,11 @@ impl Viewer {
         let focus = cx.focus_handle();
         let appearance = cx.observe_window_appearance(window, |this, window, cx| {
             this.theme = Theme::for_appearance(window.appearance());
+            let was = this.night_pages();
+            this.dark = is_dark(window.appearance());
+            if this.night_pages() != was {
+                this.redraw_thumbs();
+            }
             cx.notify();
         });
         let list = ListState::new(0, ListAlignment::Top, desktop_px(600.0));
@@ -208,6 +222,8 @@ impl Viewer {
             tab: PaneTab::Pages,
             thumbs: Thumbs::new(),
             theme: Theme::for_appearance(window.appearance()),
+            dark: is_dark(window.appearance()),
+            night: None,
             _appearance: appearance,
         };
         if let Some(file) = file {
@@ -324,6 +340,35 @@ impl Viewer {
         }
     }
 
+    /// Whether pages are shown as night pages: as set by hand, otherwise
+    /// when the window is dark (docs/PLAN.md §4.5, auto mode).
+    fn night_pages(&self) -> bool {
+        self.night.unwrap_or(self.dark)
+    }
+
+    fn toggle_night(&mut self, cx: &mut Context<Self>) {
+        self.night = Some(!self.night_pages());
+        self.redraw_thumbs();
+        cx.notify();
+    }
+
+    /// Thumbnails are drawn again in the new colours. Pages redraw by
+    /// themselves, keeping the old picture until the new one comes.
+    fn redraw_thumbs(&mut self) {
+        let old = self.thumbs.reset(self.page_count());
+        self.released.extend(old);
+    }
+
+    /// The colour of a page not drawn yet: its paper, as it will be drawn.
+    fn paper(&self) -> gpui::Hsla {
+        let [r, g, b] = if self.night_pages() {
+            katna_pdf_render::recolor::flip([255, 255, 255])
+        } else {
+            [255, 255, 255]
+        };
+        gpui::rgb(u32::from_be_bytes([0, r, g, b])).into()
+    }
+
     /// Whether the side pane is shown now.
     fn pane_shown(&self) -> bool {
         self.pane && matches!(self.content, Content::Ready(_))
@@ -362,7 +407,7 @@ impl Viewer {
                 div()
                     .w(px(thumbnails::WIDTH))
                     .h(px(thumbnails::WIDTH * h / w.max(1.0)))
-                    .bg(gpui::white())
+                    .bg(self.paper())
                     .shadow_sm()
                     .border_2()
                     .border_color(if current {
@@ -393,10 +438,11 @@ impl Viewer {
         let scale = thumbnails::WIDTH * katna_ui::scale::scale() * scale_factor / width.max(1.0);
         let doc = opened.doc.clone();
         let generation = self.generation;
+        let night = self.night_pages();
         cx.spawn(async move |this, cx| {
             let image = cx
                 .background_executor()
-                .spawn(async move { doc.render(page, scale).and_then(render_image) })
+                .spawn(async move { draw(doc.as_ref(), page, scale, night) })
                 .await;
             this.update(cx, |this, cx| {
                 if this.generation != generation {
@@ -697,7 +743,11 @@ impl Viewer {
     /// is drawn or being drawn at about that scale already.
     fn want(&mut self, page: usize, scale: f32, cx: &mut Context<Self>) {
         let close = |s: f32| (s / scale - 1.0).abs() < 0.01;
-        if self.pages.get(&page).is_some_and(|d| close(d.scale))
+        let night = self.night_pages();
+        if self
+            .pages
+            .get(&page)
+            .is_some_and(|d| close(d.scale) && d.night == night)
             || self.drawing.get(&page).is_some_and(|s| close(*s))
         {
             return;
@@ -715,6 +765,7 @@ impl Viewer {
         let Content::Ready(opened) = &self.content else {
             return;
         };
+        let night = self.night_pages();
         while self.drawing.len() < WORKERS {
             let Some(page) = self.queue.pop() else {
                 break;
@@ -728,7 +779,7 @@ impl Viewer {
             cx.spawn(async move |this, cx| {
                 let image = cx
                     .background_executor()
-                    .spawn(async move { doc.render(page, scale).and_then(render_image) })
+                    .spawn(async move { draw(doc.as_ref(), page, scale, night) })
                     .await;
                 this.update(cx, |this, cx| {
                     if this.generation != generation {
@@ -740,7 +791,12 @@ impl Viewer {
                     this.drawing.remove(&page);
                     if let Some(image) = image {
                         if this.wanted().contains(&page) {
-                            if let Some(old) = this.pages.insert(page, Drawn { scale, image }) {
+                            let drawn = Drawn {
+                                scale,
+                                night,
+                                image,
+                            };
+                            if let Some(old) = this.pages.insert(page, drawn) {
                                 this.released.push(old.image);
                             }
                         } else {
@@ -786,7 +842,7 @@ impl Viewer {
                     .w(desktop_px(w * shown))
                     .h(desktop_px(h * shown))
                     .flex_shrink_0()
-                    .bg(gpui::white())
+                    .bg(self.paper())
                     .shadow_sm()
                     .children(image.map(|image| img(ImageSource::Render(image)).size_full())),
             )
@@ -889,6 +945,14 @@ impl Viewer {
                     t("zoom-fit-width", &[]),
                     th,
                     cx.listener(|this, _, _, cx| this.set_zoom(Zoom::FitWidth, cx)),
+                ))
+                .child(separator(th))
+                .child(icon_button(
+                    "night",
+                    "contrast",
+                    t("night-pages", &[]),
+                    th,
+                    cx.listener(|this, _, _, cx| this.toggle_night(cx)),
                 ));
         }
         bar
@@ -1021,6 +1085,7 @@ impl Render for Viewer {
                 this.go_to_page(page, cx);
             }))
             .on_action(cx.listener(|this, _: &ToggleContents, _, cx| this.toggle_pane(cx)))
+            .on_action(cx.listener(|this, _: &ToggleNight, _, cx| this.toggle_night(cx)))
             .on_action(cx.listener(|this, _: &ScrollDown, _, cx| {
                 this.list.scroll_by(px(48.0));
                 cx.notify();
@@ -1088,6 +1153,25 @@ fn file_name(path: &Path) -> String {
     path.file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| path.to_string_lossy().into_owned())
+}
+
+/// Page `page` drawn at `scale`, as a night page when `night`, ready to
+/// show.
+fn draw(doc: &dyn Document, page: usize, scale: f32, night: bool) -> Option<Arc<RenderImage>> {
+    let mut bitmap = doc.render(page, scale)?;
+    if night {
+        let pictures = doc.pictures(page, scale);
+        katna_pdf_render::recolor::darken(&mut bitmap, &pictures);
+    }
+    render_image(bitmap)
+}
+
+/// Whether `appearance` is a dark one.
+fn is_dark(appearance: gpui::WindowAppearance) -> bool {
+    matches!(
+        appearance,
+        gpui::WindowAppearance::Dark | gpui::WindowAppearance::VibrantDark
+    )
 }
 
 /// A drawn page as GPUI draws images: BGRA.

@@ -352,3 +352,15 @@ fn the_quick_reader_reads_a_compressed_drawing_in_pieces() {
     let scene = page_scene(bytes, 0).unwrap().unwrap();
     assert!(scene.len() > HEAVY_SEGMENTS, "{} items", scene.len());
 }
+
+#[test]
+fn finds_where_pictures_are_drawn() {
+    // A 2×2 picture filling 100×50 points at (20, 30), and an image mask
+    // (ink, not a picture) beside it.
+    let page = "q 100 0 0 50 20 30 cm BI /W 2 /H 2 /CS /RGB /BPC 8 /F /AHx ID \
+                ff000000ff000000ffffffff> EI Q \
+                q 10 0 0 10 150 10 cm BI /W 2 /H 2 /IM true /F /AHx ID 40c0> EI Q";
+    let doc = Hayro.open(Arc::new(pdf(&[page])), "").unwrap();
+    // y is flipped: the page's top is row 0.
+    assert_eq!(doc.pictures(0, 2.0), [(40, 40, 240, 140)]);
+}
