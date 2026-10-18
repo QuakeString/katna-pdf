@@ -25,6 +25,7 @@ use gpui::{
     RenderImage, Subscription, Window, actions, div, img, list, prelude::*, svg,
 };
 use image::{Frame, RgbaImage};
+use katna_pdf_render::recolor::PageColors;
 use katna_pdf_render::{Bitmap, Document, Engine, Hayro, OpenError};
 use katna_ui::scale::desktop_px;
 use katna_ui::text_input::{InputEvent, TextInput};
@@ -191,10 +192,10 @@ struct Opened {
 }
 
 /// A drawn page: the scale (device pixels per point) it was drawn at,
-/// and whether as a night page.
+/// and in which colours.
 struct Drawn {
     scale: f32,
-    night: bool,
+    colors: PageColors,
     image: Arc<RenderImage>,
 }
 
@@ -260,10 +261,16 @@ pub struct Viewer {
     thumbs: Thumbs,
     theme: Theme,
     /// Whether the window is dark: pages are then shown as night pages
-    /// unless [`Viewer::night`] says otherwise.
+    /// unless [`Viewer::colors`] says otherwise.
     dark: bool,
     /// Night pages turned on or off by hand, overriding the theme.
-    night: Option<bool>,
+    colors: Option<PageColors>,
+    /// The colours picked last other than normal, for Ctrl+Shift+N.
+    last_colors: PageColors,
+    /// Whether the page colours menu is open, and when a press outside
+    /// last closed it (a press on its button closes it, not again open).
+    colors_menu: bool,
+    colors_menu_closed: Option<std::time::Instant>,
     _appearance: Subscription,
 }
 
@@ -272,9 +279,9 @@ impl Viewer {
         let focus = cx.focus_handle();
         let appearance = cx.observe_window_appearance(window, |this, window, cx| {
             this.theme = Theme::for_appearance(window.appearance());
-            let was = this.night_pages();
+            let was = this.page_colors();
             this.dark = is_dark(window.appearance());
-            if this.night_pages() != was {
+            if this.page_colors() != was {
                 this.redraw_thumbs();
             }
             cx.notify();
@@ -324,7 +331,10 @@ impl Viewer {
             thumbs: Thumbs::new(),
             theme: Theme::for_appearance(window.appearance()),
             dark: is_dark(window.appearance()),
-            night: None,
+            colors: None,
+            last_colors: PageColors::Night,
+            colors_menu: false,
+            colors_menu_closed: None,
             _appearance: appearance,
         };
         if let Some(file) = file {
@@ -876,16 +886,127 @@ impl Viewer {
         }
     }
 
-    /// Whether pages are shown as night pages: as set by hand, otherwise
-    /// when the window is dark (docs/PLAN.md §4.5, auto mode).
-    fn night_pages(&self) -> bool {
-        self.night.unwrap_or(self.dark)
+    /// The pages' colours: as picked, otherwise night pages when the
+    /// window is dark (docs/PLAN.md §4.5, auto mode).
+    fn page_colors(&self) -> PageColors {
+        self.colors.unwrap_or(if self.dark {
+            PageColors::Night
+        } else {
+            PageColors::Normal
+        })
     }
 
-    fn toggle_night(&mut self, cx: &mut Context<Self>) {
-        self.night = Some(!self.night_pages());
-        self.redraw_thumbs();
+    /// Shows the pages in `colors`.
+    fn set_colors(&mut self, colors: PageColors, cx: &mut Context<Self>) {
+        self.colors_menu = false;
+        if colors != PageColors::Normal {
+            self.last_colors = colors;
+        }
+        if colors != self.page_colors() {
+            self.colors = Some(colors);
+            self.redraw_thumbs();
+        }
         cx.notify();
+    }
+
+    /// Normal colours, or back to the ones picked last.
+    fn toggle_night(&mut self, cx: &mut Context<Self>) {
+        let colors = if self.page_colors() == PageColors::Normal {
+            self.last_colors
+        } else {
+            PageColors::Normal
+        };
+        self.set_colors(colors, cx);
+    }
+
+    /// The page colours menu, under its button.
+    fn colors_menu(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if !self.colors_menu {
+            return None;
+        }
+        let th = self.theme;
+        let now = self.page_colors();
+        let rows = PageColors::ALL.into_iter().map(|colors| {
+            let [r, g, b] = colors.paper();
+            let [ir, ig, ib] = colors.ink();
+            div()
+                .id(("colors", colors as usize))
+                .flex()
+                .items_center()
+                .gap(px(space::S3))
+                .px(px(space::S3))
+                .py(px(space::S2))
+                .rounded(px(radius::SM))
+                .cursor_pointer()
+                .hover(move |s| s.bg(th.hover))
+                .on_click(cx.listener(move |this, _, _, cx| this.set_colors(colors, cx)))
+                // A swatch: the paper with a line of ink.
+                .child(
+                    div()
+                        .size(px(20.0))
+                        .flex_none()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded(px(radius::XS))
+                        .border_1()
+                        .border_color(th.line)
+                        .bg(gpui::rgb(u32::from_be_bytes([0, r, g, b])))
+                        .child(
+                            div()
+                                .w(px(10.0))
+                                .h(px(2.0))
+                                .bg(gpui::rgb(u32::from_be_bytes([0, ir, ig, ib]))),
+                        ),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .text_size(px(text::BODY))
+                        .text_color(th.text)
+                        .child(t(colors_text(colors), &[])),
+                )
+                .when(colors == now, |row| {
+                    row.child(
+                        svg()
+                            .path("icons/check.svg")
+                            .size(px(16.0))
+                            .flex_none()
+                            .text_color(gpui::rgb(th.katna.accent >> 8)),
+                    )
+                })
+        });
+        let menu = div()
+            .id("colors-menu")
+            .occlude()
+            .w(px(240.0))
+            .mt(px(space::S1))
+            .p(px(space::S1))
+            .flex()
+            .flex_col()
+            .rounded(px(radius::MD))
+            .bg(th.card)
+            .border_1()
+            .border_color(th.line)
+            .shadow_lg()
+            .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+                this.colors_menu = false;
+                this.colors_menu_closed = Some(std::time::Instant::now());
+                cx.notify();
+            }))
+            .children(rows);
+        Some(
+            div()
+                .absolute()
+                .top_full()
+                .right_0()
+                .child(gpui::deferred(
+                    katna_ui::anchored()
+                        .anchor(gpui::Anchor::TopRight)
+                        .child(menu),
+                ))
+                .into_any_element(),
+        )
     }
 
     /// Thumbnails are drawn again in the new colours. Pages redraw by
@@ -897,11 +1018,7 @@ impl Viewer {
 
     /// The colour of a page not drawn yet: its paper, as it will be drawn.
     fn paper(&self) -> gpui::Hsla {
-        let [r, g, b] = if self.night_pages() {
-            katna_pdf_render::recolor::flip([255, 255, 255])
-        } else {
-            [255, 255, 255]
-        };
+        let [r, g, b] = self.page_colors().paper();
         gpui::rgb(u32::from_be_bytes([0, r, g, b])).into()
     }
 
@@ -974,11 +1091,11 @@ impl Viewer {
         let scale = thumbnails::WIDTH * katna_ui::scale::scale() * scale_factor / width.max(1.0);
         let doc = opened.doc.clone();
         let (generation, revision) = (self.generation, self.revision);
-        let night = self.night_pages();
+        let colors = self.page_colors();
         cx.spawn(async move |this, cx| {
             let image = cx
                 .background_executor()
-                .spawn(async move { draw(doc.as_ref(), page, scale, night) })
+                .spawn(async move { draw(doc.as_ref(), page, scale, colors) })
                 .await;
             this.update(cx, |this, cx| {
                 if this.generation != generation {
@@ -1583,11 +1700,11 @@ impl Viewer {
     /// is drawn or being drawn at about that scale already.
     fn want(&mut self, page: usize, scale: f32, cx: &mut Context<Self>) {
         let close = |s: f32| (s / scale - 1.0).abs() < 0.01;
-        let night = self.night_pages();
+        let colors = self.page_colors();
         if self
             .pages
             .get(&page)
-            .is_some_and(|d| close(d.scale) && d.night == night)
+            .is_some_and(|d| close(d.scale) && d.colors == colors)
             || self.drawing.get(&page).is_some_and(|s| close(*s))
         {
             return;
@@ -1605,7 +1722,7 @@ impl Viewer {
         let Content::Ready(opened) = &self.content else {
             return;
         };
-        let night = self.night_pages();
+        let colors = self.page_colors();
         while self.drawing.len() < WORKERS {
             let Some(page) = self.queue.pop() else {
                 break;
@@ -1619,7 +1736,7 @@ impl Viewer {
             cx.spawn(async move |this, cx| {
                 let image = cx
                     .background_executor()
-                    .spawn(async move { draw(doc.as_ref(), page, scale, night) })
+                    .spawn(async move { draw(doc.as_ref(), page, scale, colors) })
                     .await;
                 this.update(cx, |this, cx| {
                     if this.generation != generation || this.revision != revision {
@@ -1640,7 +1757,7 @@ impl Viewer {
                         if this.wanted().contains(&page) {
                             let drawn = Drawn {
                                 scale,
-                                night,
+                                colors,
                                 image,
                             };
                             if let Some(old) = this.pages.insert(page, drawn) {
@@ -1703,10 +1820,9 @@ impl Viewer {
                                 .border_1()
                                 .border_color(gpui::rgb(self.theme.katna.accent >> 8))
                                 .text_size(desktop_px(size))
-                                .text_color(if self.night_pages() {
-                                    gpui::rgb(0xe6e6e6)
-                                } else {
-                                    gpui::rgb(0x000000)
+                                .text_color({
+                                    let [r, g, b] = self.page_colors().ink();
+                                    gpui::rgb(u32::from_be_bytes([0, r, g, b]))
                                 })
                                 .cursor(gpui::CursorStyle::IBeam)
                                 // Presses inside stay in the field.
@@ -1983,13 +2099,27 @@ impl Viewer {
                     th,
                     cx.listener(|this, _, _, cx| this.print(cx)),
                 ))
-                .child(icon_button(
-                    "night",
-                    "contrast",
-                    t("night-pages", &[]),
-                    th,
-                    cx.listener(|this, _, _, cx| this.toggle_night(cx)),
-                ));
+                .child(
+                    div()
+                        .relative()
+                        .child({
+                            let button = widgets::icon_button("night", "contrast", 18.0, &th.katna);
+                            // No tip over the open menu.
+                            let button = if self.colors_menu {
+                                button
+                            } else {
+                                button.tip(t("page-colors", &[]), &th.katna)
+                            };
+                            button.on_click(cx.listener(|this, _, _, cx| {
+                                let just_closed = this
+                                    .colors_menu_closed
+                                    .is_some_and(|t| t.elapsed().as_millis() < 300);
+                                this.colors_menu = !this.colors_menu && !just_closed;
+                                cx.notify();
+                            }))
+                        })
+                        .children(self.colors_menu(cx)),
+                );
         }
         bar
     }
@@ -2112,11 +2242,7 @@ impl Viewer {
             return None;
         }
         let rows = entries.into_iter().enumerate().map(|(i, entry)| {
-            let folder = entry
-                .path
-                .parent()
-                .map(|p| p.display().to_string())
-                .unwrap_or_default();
+            let folder = entry.path.parent().map(short_folder).unwrap_or_default();
             let name = file_name(&entry.path);
             let path = entry.path;
             div()
@@ -2418,21 +2544,52 @@ fn save_over(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     })
 }
 
+/// A folder as people read it: the home folder as `~`.
+fn short_folder(folder: &Path) -> String {
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    match home
+        .as_deref()
+        .and_then(|home| folder.strip_prefix(home).ok())
+    {
+        Some(rest) if rest.as_os_str().is_empty() => "~".into(),
+        Some(rest) => format!("~{}{}", std::path::MAIN_SEPARATOR, rest.display()),
+        None => folder.display().to_string(),
+    }
+}
+
 fn file_name(path: &Path) -> String {
     path.file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| path.to_string_lossy().into_owned())
 }
 
-/// Page `page` drawn at `scale`, as a night page when `night`, ready to
-/// show.
-fn draw(doc: &dyn Document, page: usize, scale: f32, night: bool) -> Option<Arc<RenderImage>> {
+/// Page `page` drawn at `scale` in `colors`, ready to show.
+fn draw(
+    doc: &dyn Document,
+    page: usize,
+    scale: f32,
+    colors: PageColors,
+) -> Option<Arc<RenderImage>> {
     let mut bitmap = doc.render(page, scale)?;
-    if night {
-        let pictures = doc.pictures(page, scale);
-        katna_pdf_render::recolor::darken(&mut bitmap, &pictures);
-    }
+    let pictures = if colors == PageColors::Night {
+        doc.pictures(page, scale)
+    } else {
+        Vec::new()
+    };
+    colors.apply(&mut bitmap, &pictures);
     render_image(bitmap)
+}
+
+/// The id of a page colours mode's name.
+fn colors_text(colors: PageColors) -> &'static str {
+    match colors {
+        PageColors::Normal => "colors-normal",
+        PageColors::Night => "colors-night",
+        PageColors::Invert => "colors-invert",
+        PageColors::InvertLightness => "colors-invert-lightness",
+        PageColors::Sepia => "colors-sepia",
+        PageColors::BlackWhite => "colors-black-white",
+    }
 }
 
 /// Whether `appearance` is a dark one.

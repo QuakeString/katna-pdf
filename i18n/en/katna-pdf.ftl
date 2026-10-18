@@ -23,7 +23,13 @@ spread-book = Layout: two pages, first page alone (Ctrl+3 to change)
 zoom-actual = Actual size (Ctrl+0)
 open-file = Open a file (Ctrl+O)
 side-pane-toggle = Side pane (F7)
-night-pages = Night pages (Ctrl+Shift+N)
+page-colors = Page colours (Ctrl+Shift+N for normal or the last picked)
+colors-normal = Normal
+colors-night = Night (keeps photos)
+colors-invert = Invert colours
+colors-invert-lightness = Invert lightness
+colors-sepia = Sepia paper
+colors-black-white = Black and white
 search-open = Find (Ctrl+F)
 
 ## Find in the document
