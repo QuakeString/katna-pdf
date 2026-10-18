@@ -68,6 +68,9 @@ pub struct SignRequest {
     /// A picture shown in the signature's box, such as a scanned
     /// handwritten signature.
     pub picture: Option<Picture>,
+    /// A document timestamp (PAdES B-LTA) rather than a signature: an
+    /// RFC 3161 token over the file, kept in a field not seen.
+    pub document_timestamp: bool,
 }
 
 /// A picture: 8-bit RGB, row by row, with an alpha channel when it has
@@ -90,7 +93,15 @@ impl SignRequest {
             contents_len: CONTENTS_LEN,
             certify: None,
             picture: None,
+            document_timestamp: false,
         }
+    }
+
+    /// A document timestamp, in a field not seen.
+    pub fn document_timestamp() -> Self {
+        let mut request = Self::new(Placement::Invisible, SigningInfo::default());
+        request.document_timestamp = true;
+        request
     }
 }
 
@@ -317,7 +328,10 @@ impl Document {
         if request.certify.is_some() && !self.signatures().is_empty() {
             return Err(SignError::AlreadySigned);
         }
+        // A document timestamp is validation data, which any
+        // certification allows.
         match self.certification() {
+            _ if request.document_timestamp => {}
             Some(Allowed::Nothing) => return Err(SignError::Certified),
             Some(_) if !matches!(request.placement, Placement::Field { .. }) => {
                 return Err(SignError::CertifiedFieldsOnly);
@@ -326,9 +340,15 @@ impl Document {
         }
         let mut update = self.update()?;
         let mut sig = Dict::new();
-        sig.set("Type", Object::name("Sig"));
-        sig.set("Filter", Object::name("Adobe.PPKLite"));
-        sig.set("SubFilter", Object::name("ETSI.CAdES.detached"));
+        if request.document_timestamp {
+            sig.set("Type", Object::name("DocTimeStamp"));
+            sig.set("Filter", Object::name("Adobe.PPKLite"));
+            sig.set("SubFilter", Object::name("ETSI.RFC3161"));
+        } else {
+            sig.set("Type", Object::name("Sig"));
+            sig.set("Filter", Object::name("Adobe.PPKLite"));
+            sig.set("SubFilter", Object::name("ETSI.CAdES.detached"));
+        }
         sig.set(
             "ByteRange",
             vec![
@@ -345,7 +365,9 @@ impl Document {
                 hex: true,
             },
         );
-        sig.set("M", text_object(&pdf_date(request.time)));
+        if !request.document_timestamp {
+            sig.set("M", text_object(&pdf_date(request.time)));
+        }
         let info = &request.info;
         for (key, value) in [
             ("Name", &info.name),

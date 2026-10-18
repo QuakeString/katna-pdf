@@ -46,6 +46,8 @@ pub(super) struct SigRow {
     pub revocation: Option<Revocation>,
     /// What it allows after it, when it certifies the file.
     pub certifies: Option<Allowed>,
+    /// It is a document timestamp (PAdES B-LTA), not a signature.
+    pub stamp_only: bool,
     /// The bytes of the file it signed, when the file was changed after
     /// it.
     pub revision: Option<usize>,
@@ -232,7 +234,13 @@ fn rows(checks: Vec<katna_pdf_sign::SignatureCheck>) -> Vec<SigRow> {
             };
             SigRow {
                 name: c.signature.name.clone(),
-                signer: c.signer(),
+                signer: match c.signer() {
+                    Some(tsa) if c.is_document_timestamp() => {
+                        Some(t("document-timestamp-by", &[("authority", &tsa)]))
+                    }
+                    signer => signer,
+                },
+                stamp_only: c.is_document_timestamp(),
                 time: c.time(),
                 reason: c.signature.info.reason.clone(),
                 location: c.signature.info.location.clone(),
@@ -1468,10 +1476,16 @@ impl Viewer {
     /// The line over the pages of a signed file: whether its signatures
     /// hold, with a button to list them.
     pub(super) fn signatures_line(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let rows = self.signatures.as_ref().filter(|r| !r.is_empty())?;
+        let all = self.signatures.as_ref().filter(|r| !r.is_empty())?;
+        // Document timestamps vouch for the others; they are not counted
+        // as signatures, unless they do not hold.
+        let rows: Vec<&SigRow> = all.iter().filter(|r| !r.stamp_only).collect();
+        if rows.is_empty() {
+            return None;
+        }
         let th = self.theme;
-        let bad = rows.iter().filter(|r| r.problem.is_some()).count();
-        let unverified = rows.iter().any(SigRow::unverified);
+        let bad = all.iter().filter(|r| r.problem.is_some()).count();
+        let unverified = rows.iter().any(|r| r.unverified());
         // Changed after the last signature: none covers the whole file
         // (the form may list them in any order).
         let changed = !rows.iter().any(|r| r.whole);
@@ -1912,6 +1926,16 @@ fn sign_one(
         .0
     } else {
         signed
+    };
+    // With a timestamp server too, the file and its validation data are
+    // timestamped after it (PAdES B-LTA).
+    let signed = match server.as_ref().filter(|_| what.long_term) {
+        Some(server) => {
+            let doc = katna_pdf_cos::Document::load(signed).map_err(|e| e.to_string())?;
+            katna_pdf_sign::timestamp_document(&doc, server, katna_pdf_sign::Digest::Sha256)
+                .map_err(|e| e.to_string())?
+        }
+        None => signed,
     };
     crate::viewer::save_over(target, &signed).map_err(|e| e.to_string())
 }

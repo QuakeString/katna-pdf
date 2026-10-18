@@ -264,6 +264,32 @@ fn check_stamp(token: &[u8], signature: &[u8]) -> Stamp {
     }
 }
 
+/// Checks document timestamp `token` (DER, an RFC 3161 token kept as a
+/// signature: PAdES B-LTA) over the bytes `parts` of the file it covers.
+/// The authority is its signer; its time, the signing time.
+pub(crate) fn check_document_stamp(token: &[u8], parts: &[&[u8]]) -> Result<Checked, CheckError> {
+    let content = token_content(token).ok_or(CheckError::Malformed)?;
+    let tst = x509_tsp::TstInfo::from_der(&content).map_err(|_| CheckError::Malformed)?;
+    let mut checked = check(token, &[&content])?;
+    let imprint = &tst.message_imprint;
+    let imprint_matches = Hash::from_oid(imprint.hash_algorithm.oid)
+        .is_some_and(|h| h.hash(parts) == imprint.hashed_message.as_bytes());
+    checked.digest_matches &= imprint_matches;
+    let at = tst.gen_time.to_system_time();
+    let time = crate::readable_pdf_date(&katna_pdf_cos::pdf_date(at));
+    checked.timestamp = Some(Stamp {
+        time: time.clone(),
+        authority: Some(common_name(&checked.signer.tbs_certificate.subject)),
+        valid: checked.digest_matches
+            && checked.signature_valid
+            && checked.certificate_named != Some(false),
+        at: Some(at),
+    });
+    checked.signing_time = time;
+    checked.signed_at = Some(at);
+    Ok(checked)
+}
+
 /// What a CMS signature says, and whether it holds.
 #[derive(Debug, Clone)]
 pub struct Checked {
