@@ -22,18 +22,41 @@ use super::Builder;
 /// stream holds something this reader leaves to hayro; `builder` is then
 /// half-filled and must be thrown away.
 pub(super) fn read(content: &[u8], initial: Affine, bbox: Rect, builder: &mut Builder) -> bool {
-    let mut reader = Reader {
-        builder,
-        // hayro's context starts with one state and saves another before
-        // the page's own operators.
-        states: vec![State::new(initial), State::new(initial)],
-        bboxes: vec![bbox],
-        path: BezPath::new(),
-        last_point: Point::ZERO,
-        sub_path_start: Point::ZERO,
-        clip: None,
-    };
-    reader.run(content).is_some()
+    Quick::new(initial, bbox, builder).feed(content, true) == Some(content.len())
+}
+
+/// Reads a content stream that arrives in pieces, as it is inflated.
+pub(super) struct Quick<'b>(Reader<'b>);
+
+/// A piece is read up to the first token that starts this close to its
+/// end, so no token is cut in two; the rest comes again with the next
+/// piece.
+const MARGIN: usize = 4096;
+
+impl<'b> Quick<'b> {
+    /// As [`read`] takes them.
+    pub(super) fn new(initial: Affine, bbox: Rect, builder: &'b mut Builder) -> Quick<'b> {
+        Quick(Reader {
+            builder,
+            // hayro's context starts with one state and saves another
+            // before the page's own operators.
+            states: vec![State::new(initial), State::new(initial)],
+            bboxes: vec![bbox],
+            path: BezPath::new(),
+            last_point: Point::ZERO,
+            sub_path_start: Point::ZERO,
+            clip: None,
+            operands: [0.0; MAX_OPERANDS],
+            count: 0,
+        })
+    }
+
+    /// Reads what it can of `content`, the rest of the stream so far, and
+    /// returns how many bytes it read; `last` when the stream ends with
+    /// it. `None` as [`read`] returns false.
+    pub(super) fn feed(&mut self, content: &[u8], last: bool) -> Option<usize> {
+        self.0.run(content, last)
+    }
 }
 
 #[derive(Clone)]
@@ -93,46 +116,57 @@ struct Reader<'b> {
     sub_path_start: Point,
     /// A clip (`W`, `W*`) waiting for the `n` that applies it.
     clip: Option<FillRule>,
+    /// The numbers read since the last operator.
+    operands: [f64; MAX_OPERANDS],
+    count: usize,
 }
 
 /// The most operands an operator here takes.
 const MAX_OPERANDS: usize = 6;
 
 impl Reader<'_> {
-    fn run(&mut self, content: &[u8]) -> Option<()> {
-        let mut nums = [0f64; MAX_OPERANDS];
-        let mut count = 0;
+    /// Reads `content` as [`Quick::feed`] does.
+    fn run(&mut self, content: &[u8], last: bool) -> Option<usize> {
         let mut i = 0;
         while i < content.len() {
+            if !last && content.len() - i < MARGIN {
+                return Some(i);
+            }
             match content[i] {
                 b if is_white(b) => i += 1,
                 b'%' => {
+                    let start = i;
                     while i < content.len() && !matches!(content[i], b'\n' | b'\r') {
                         i += 1;
                     }
+                    // The comment may go on in the next piece.
+                    if i == content.len() && !last {
+                        return Some(start);
+                    }
                 }
                 // Only `d` takes an array: `[dashes] phase d`.
-                b'[' if count == 0 => i = self.dash(content, i + 1)?,
+                b'[' if self.count == 0 => i = self.dash(content, i + 1)?,
                 b'0'..=b'9' | b'+' | b'-' | b'.' => {
-                    if count == MAX_OPERANDS {
+                    if self.count == MAX_OPERANDS {
                         return None;
                     }
-                    (nums[count], i) = number(content, i)?;
-                    count += 1;
+                    (self.operands[self.count], i) = number(content, i)?;
+                    self.count += 1;
                 }
                 b'a'..=b'z' | b'A'..=b'Z' | b'*' | b'\'' | b'"' => {
                     let start = i;
                     while i < content.len() && is_regular(content[i]) {
                         i += 1;
                     }
-                    self.operator(&content[start..i], &nums[..count])?;
-                    count = 0;
+                    let operands = self.operands;
+                    self.operator(&content[start..i], &operands[..self.count])?;
+                    self.count = 0;
                 }
                 // Names, strings, dictionaries: not plain paths.
                 _ => return None,
             }
         }
-        (count == 0).then_some(())
+        (!last || self.count == 0).then_some(content.len())
     }
 
     /// Reads a dash pattern from just inside its `[` at `i` to its `d`,

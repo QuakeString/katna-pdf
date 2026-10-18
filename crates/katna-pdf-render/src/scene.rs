@@ -16,12 +16,16 @@
 //! patterns, soft masks, blend modes and Type 3 text. Those pages draw the
 //! usual way.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
+use std::io::Read as _;
 use std::sync::Arc;
 
 use hayro::hayro_interpret::font::{Glyph, GlyphRun};
+use hayro::hayro_interpret::hayro_syntax::Filter;
 use hayro::hayro_interpret::hayro_syntax::Pdf;
-use hayro::hayro_interpret::hayro_syntax::object::dict::keys::ANNOTS;
+use hayro::hayro_interpret::hayro_syntax::object::Stream;
+use hayro::hayro_interpret::hayro_syntax::object::dict::keys::{ANNOTS, CONTENTS, DECODE_PARMS};
 use hayro::hayro_interpret::hayro_syntax::page::Page;
 use hayro::hayro_interpret::util::{RectExt, TransformExt};
 use hayro::hayro_interpret::{
@@ -54,6 +58,13 @@ const DOT: f64 = 0.75;
 /// [`HEAVY_SEGMENTS`] path segments in its own content stream. A quick
 /// count of operators; it does not look inside form XObjects.
 pub fn is_vector_heavy(page: &Page<'_>) -> bool {
+    // Inflating all of a big drawing's content to count it would cost as
+    // much as reading it; the start of it is enough.
+    if let Some(raw) = flate_content(page)
+        && let Some(heavy) = starts_heavy(&raw)
+    {
+        return heavy;
+    }
     let mut ops = page.operations();
     let (mut seen, mut segments) = (0, 0);
     while let Some(op) = ops.next() {
@@ -71,6 +82,87 @@ pub fn is_vector_heavy(page: &Page<'_>) -> bool {
         }
     }
     false
+}
+
+/// The page's content when it is one Flate stream with no parameters,
+/// still compressed: what [`inflate_in_pieces`] inflates.
+fn flate_content<'a>(page: &Page<'a>) -> Option<Cow<'a, [u8]>> {
+    let stream = page.raw().get::<Stream<'_>>(CONTENTS)?;
+    (stream.filters().as_slice() == [Filter::FlateDecode]
+        && !stream.dict().contains_key(DECODE_PARMS))
+    .then(|| stream.raw_data())
+}
+
+/// [`is_vector_heavy`] on the zlib stream `raw`, inflating only as much of
+/// it as it needs; `None` when it does not inflate cleanly. Operators are
+/// told apart roughly, by their first letter: a string holding `re` would
+/// count, which only matters on a page of nothing much else.
+fn starts_heavy(raw: &[u8]) -> Option<bool> {
+    let mut decoder = flate2::read::ZlibDecoder::new(raw);
+    let mut piece = vec![0; PIECE];
+    let (mut seen, mut segments) = (0, 0);
+    loop {
+        let len = decoder.read(&mut piece).ok()?;
+        if len == 0 {
+            return Some(false);
+        }
+        for token in piece[..len].split(|b| b.is_ascii_whitespace() || *b == 0) {
+            if !token.first().is_some_and(u8::is_ascii_alphabetic) {
+                continue;
+            }
+            if matches!(token, b"l" | b"c" | b"v" | b"y" | b"re") {
+                segments += 1;
+                if segments >= HEAVY_SEGMENTS {
+                    return Some(true);
+                }
+            }
+            seen += 1;
+            if seen >= 40 * HEAVY_SEGMENTS {
+                return Some(false);
+            }
+        }
+    }
+}
+
+/// How much is inflated at a time.
+const PIECE: usize = 1 << 20;
+
+/// Inflates the zlib stream `raw` on another thread, handing `each` the
+/// pieces in order on this one, so reading overlaps inflating. False when
+/// `raw` does not inflate cleanly or `each` returns false.
+fn inflate_in_pieces(raw: &[u8], mut each: impl FnMut(&[u8]) -> bool) -> bool {
+    std::thread::scope(|s| {
+        let (send, receive) = std::sync::mpsc::sync_channel::<Option<Vec<u8>>>(2);
+        s.spawn(move || {
+            let mut decoder = flate2::read::ZlibDecoder::new(raw);
+            loop {
+                let mut piece = vec![0; PIECE];
+                let mut len = 0;
+                while len < PIECE {
+                    match decoder.read(&mut piece[len..]) {
+                        Ok(0) => break,
+                        Ok(n) => len += n,
+                        Err(_) => {
+                            let _ = send.send(None);
+                            return;
+                        }
+                    }
+                }
+                piece.truncate(len);
+                // The reader gave up when the channel is closed.
+                if len == 0 || send.send(Some(piece)).is_err() {
+                    return;
+                }
+            }
+        });
+        for piece in receive {
+            match piece {
+                Some(piece) if each(&piece) => {}
+                _ => return false,
+            }
+        }
+        true
+    })
 }
 
 /// Reads page `page` of the PDF in `bytes` into a scene, whether or not
@@ -201,9 +293,24 @@ impl Scene {
         // quick reader; anything else by hayro.
         let quick = quick
             && !page.raw().contains_key(ANNOTS)
-            && page
-                .page_stream()
-                .is_some_and(|content| plain::read(content, transform, bbox, &mut builder));
+            && match flate_content(page) {
+                // Read while another thread inflates.
+                Some(raw) => {
+                    let mut reader = plain::Quick::new(transform, bbox, &mut builder);
+                    let mut pending = Vec::new();
+                    inflate_in_pieces(&raw, |piece| {
+                        pending.extend_from_slice(piece);
+                        let Some(read) = reader.feed(&pending, false) else {
+                            return false;
+                        };
+                        pending.drain(..read);
+                        true
+                    }) && reader.feed(&pending, true).is_some()
+                }
+                None => page
+                    .page_stream()
+                    .is_some_and(|content| plain::read(content, transform, bbox, &mut builder)),
+            };
         if !quick {
             builder = Builder::default();
             builder.push_clip_path(&crop_clip);

@@ -11,27 +11,46 @@ use katna_pdf_render::{Bitmap, Engine, Hayro, HayroPlain, OpenError, Region};
 /// stream; the xref offsets are worked out, so hayro reads it without
 /// repairing it.
 fn pdf(pages: &[&str]) -> Vec<u8> {
+    pdf_with(pages, false)
+}
+
+/// [`pdf`], with each content stream Flate-compressed when `flate`.
+fn pdf_with(pages: &[&str], flate: bool) -> Vec<u8> {
     let n = pages.len();
     let kids: Vec<String> = (0..n).map(|i| format!("{} 0 R", 3 + 2 * i)).collect();
-    let mut objects = vec![
-        "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
-        format!("<< /Type /Pages /Kids [{}] /Count {n} >>", kids.join(" ")),
+    let mut objects: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        format!("<< /Type /Pages /Kids [{}] /Count {n} >>", kids.join(" ")).into_bytes(),
     ];
     for (i, content) in pages.iter().enumerate() {
-        objects.push(format!(
-            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Contents {} 0 R >>",
-            4 + 2 * i
-        ));
-        objects.push(format!(
-            "<< /Length {} >>\nstream\n{content}\nendstream",
-            content.len()
-        ));
+        objects.push(
+            format!(
+                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Contents {} 0 R >>",
+                4 + 2 * i
+            )
+            .into_bytes(),
+        );
+        let (filter, data) = if flate {
+            use std::io::Write as _;
+            let mut encoder =
+                flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::fast());
+            encoder.write_all(content.as_bytes()).unwrap();
+            (" /Filter /FlateDecode", encoder.finish().unwrap())
+        } else {
+            ("", content.as_bytes().to_vec())
+        };
+        let mut stream = format!("<< /Length {}{filter} >>\nstream\n", data.len()).into_bytes();
+        stream.extend_from_slice(&data);
+        stream.extend_from_slice(b"\nendstream");
+        objects.push(stream);
     }
     let mut out = b"%PDF-1.7\n".to_vec();
     let mut offsets = Vec::new();
     for (i, body) in objects.iter().enumerate() {
         offsets.push(out.len());
-        out.extend_from_slice(format!("{} 0 obj\n{body}\nendobj\n", i + 1).as_bytes());
+        out.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+        out.extend_from_slice(body);
+        out.extend_from_slice(b"\nendobj\n");
     }
     let xref = out.len();
     out.extend_from_slice(
@@ -317,4 +336,19 @@ fn a_drawing_of_hairlines_is_drawn_as_hayro_draws_it() {
         let b = usual.render(0, scale).unwrap();
         assert!(differs(&a, &b) < 0.005, "at {scale}: {}", differs(&a, &b));
     }
+}
+
+#[test]
+fn the_quick_reader_reads_a_compressed_drawing_in_pieces() {
+    // More than a megabyte inflated, so it arrives in several pieces, with
+    // comments and dash patterns along the way.
+    let page = drawing("").replace(
+        " l S\n",
+        " l S % a comment that may be cut\n[0.5 0.25] 0.1 d\n",
+    );
+    assert!(page.len() > 3 << 20, "{} bytes", page.len());
+    let bytes = Arc::new(pdf_with(&[&page], true));
+    assert_eq!(quick_reader_agrees(bytes.clone(), 0), Some(true));
+    let scene = page_scene(bytes, 0).unwrap().unwrap();
+    assert!(scene.len() > HEAVY_SEGMENTS, "{} items", scene.len());
 }
