@@ -26,7 +26,7 @@ use katna_pdf_render::{Bitmap, Document, Engine, Hayro, OpenError};
 use katna_ui::scale::desktop_px;
 use katna_ui::tokens::{radius, space, text};
 use katna_ui::widgets::{self, Tip};
-use katna_ui::{px, unpx};
+use katna_ui::{ScrollBar, px, unpx};
 
 use crate::contents::{self, Contents};
 use crate::text::t;
@@ -145,6 +145,8 @@ pub struct Viewer {
     /// Points to logical pixels, as last laid out.
     shown: f32,
     list: ListState,
+    /// The list's overlay scrollbar, as Katna Mail's lists have.
+    bar: ScrollBar,
     pages: HashMap<usize, Drawn>,
     /// Pages being drawn, with the scale asked for.
     drawing: HashMap<usize, f32>,
@@ -184,6 +186,7 @@ impl Viewer {
             zoom: Zoom::FitWidth,
             shown: 1.0,
             list,
+            bar: ScrollBar::default(),
             pages: HashMap::new(),
             drawing: HashMap::new(),
             queue: Vec::new(),
@@ -480,8 +483,24 @@ impl Viewer {
         if range == self.visible {
             return;
         }
+        self.forget_far(range);
+        cx.notify();
+    }
+
+    /// Page `page` is being laid out. The list tells [`Viewer::scrolled`]
+    /// only of wheel and touch scrolling, not of keys, jumps or the
+    /// scrollbar, so a page shown after those is noted here; otherwise
+    /// its bitmap would be thrown away as off screen when it arrived.
+    fn laid_out(&mut self, page: usize) {
+        if !self.visible.contains(&page) {
+            self.forget_far(shown_with(&self.visible, self.current_page(), page));
+        }
+    }
+
+    /// `range` is on screen: frees the bitmaps of pages far from it.
+    fn forget_far(&mut self, range: Range<usize>) {
         self.visible = range;
-        let keep = self.visible.start.saturating_sub(KEEP)..self.visible.end + KEEP;
+        let keep = self.wanted();
         let far: Vec<usize> = self
             .pages
             .keys()
@@ -494,7 +513,12 @@ impl Viewer {
             }
         }
         self.queue.retain(|p| keep.contains(p));
-        cx.notify();
+    }
+
+    /// The pages whose bitmaps are kept: those on screen and a few
+    /// either side.
+    fn wanted(&self) -> Range<usize> {
+        self.visible.start.saturating_sub(KEEP)..self.visible.end + KEEP
     }
 
     /// Asks for page `page` at `scale` device pixels per point, unless it
@@ -543,9 +567,7 @@ impl Viewer {
                     }
                     this.drawing.remove(&page);
                     if let Some(image) = image {
-                        let wanted =
-                            this.visible.start.saturating_sub(KEEP)..this.visible.end + KEEP;
-                        if wanted.contains(&page) {
+                        if this.wanted().contains(&page) {
                             if let Some(old) = this.pages.insert(page, Drawn { scale, image }) {
                                 this.released.push(old.image);
                             }
@@ -575,6 +597,7 @@ impl Viewer {
         let shown = self.shown;
         let device = shown * window.scale_factor();
         let image = self.pages.get(&page).map(|d| d.image.clone());
+        self.laid_out(page);
         self.want(page, device, cx);
         div()
             .w_full()
@@ -784,18 +807,27 @@ impl Render for Viewer {
         }
         let pane = self.pane(window, cx);
         let pages: AnyElement = match &self.content {
-            Content::Ready(_) => div()
-                .flex_1()
-                .min_h_0()
-                .bg(th.backdrop)
-                .child(
-                    list(
-                        self.list.clone(),
-                        cx.processor(|this, ix, window, cx| this.render_page(ix, window, cx)),
-                    )
-                    .size_full(),
+            Content::Ready(_) => {
+                let pages = list(
+                    self.list.clone(),
+                    cx.processor(|this, ix, window, cx| this.render_page(ix, window, cx)),
                 )
-                .into_any_element(),
+                .size_full();
+                let thumb = th.katna.text_dim & 0xffff_ff00 | 0x99;
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .bg(th.backdrop)
+                    .child(self.bar.clone().wrap(
+                        "pages-scroll",
+                        &self.list,
+                        pages,
+                        thumb,
+                        window,
+                        cx,
+                    ))
+                    .into_any_element()
+            }
             _ => self.message(cx).into_any_element(),
         };
         div()
@@ -869,6 +901,17 @@ fn separator(th: Theme) -> impl IntoElement {
     div().w(px(1.0)).h(px(20.0)).mx(px(space::S2)).bg(th.line)
 }
 
+/// The pages on screen once page `page` is laid out, with the list's
+/// top at `top`: `visible` if it holds `page`, otherwise the pages from
+/// the top to it.
+fn shown_with(visible: &Range<usize>, top: usize, page: usize) -> Range<usize> {
+    if visible.contains(&page) {
+        visible.clone()
+    } else {
+        top.min(page)..top.max(page) + 1
+    }
+}
+
 fn file_name(path: &Path) -> String {
     path.file_name()
         .map(|n| n.to_string_lossy().into_owned())
@@ -887,4 +930,21 @@ fn render_image(bitmap: Bitmap) -> Option<Arc<RenderImage>> {
     }
     let image = RgbaImage::from_raw(width, height, rgba)?;
     Some(Arc::new(RenderImage::new([Frame::new(image)])))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pages_shown_after_a_jump_count_as_on_screen() {
+        // Laid out where the list already was: nothing changes.
+        assert_eq!(shown_with(&(4..6), 4, 5), 4..6);
+        // After Space from page 0 to page 9, page 9 is on screen.
+        assert_eq!(shown_with(&(0..2), 9, 9), 9..10);
+        // Pages below the top as the list lays them out.
+        assert_eq!(shown_with(&(9..10), 9, 10), 9..11);
+        // A page above the top, drawn ahead of scrolling back.
+        assert_eq!(shown_with(&(9..11), 9, 8), 8..10);
+    }
 }
