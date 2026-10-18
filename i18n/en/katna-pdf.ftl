@@ -17,10 +17,11 @@ zoom-out = Zoom out (Ctrl+-)
 zoom-fit-width = Fit width (Ctrl+1)
 zoom-actual = Actual size (Ctrl+0)
 open-file = Open a file (Ctrl+O)
-contents-toggle = Contents (F7)
+side-pane-toggle = Side pane (F7)
 
-## The contents pane beside the pages
-contents-title = Contents
+## The side pane beside the pages
+pane-pages = Pages
+pane-contents = Contents
 
 ## Tabs
 tab-empty = New tab

@@ -31,6 +31,7 @@ use katna_ui::{ScrollBar, px, unpx};
 use crate::contents::{self, Contents};
 use crate::text::t;
 use crate::theme::Theme;
+use crate::thumbnails::{self, Thumbs};
 
 actions!(
     katna_pdf,
@@ -103,6 +104,13 @@ enum Zoom {
     Fixed(f32),
 }
 
+/// The side pane's tabs.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum PaneTab {
+    Pages,
+    Contents,
+}
+
 /// What a viewer asks of the tabs around it.
 pub enum ViewerEvent {
     /// The open button was pressed: choose files to open.
@@ -160,8 +168,10 @@ pub struct Viewer {
     generation: u64,
     /// The document's outline, once read, if it has one.
     contents: Option<Contents>,
-    /// Whether the contents pane is shown.
+    /// Whether the side pane is shown, and which of its tabs.
     pane: bool,
+    tab: PaneTab,
+    thumbs: Thumbs,
     theme: Theme,
     _appearance: Subscription,
 }
@@ -195,6 +205,8 @@ impl Viewer {
             generation: 0,
             contents: None,
             pane: false,
+            tab: PaneTab::Pages,
+            thumbs: Thumbs::new(),
             theme: Theme::for_appearance(window.appearance()),
             _appearance: appearance,
         };
@@ -253,6 +265,8 @@ impl Viewer {
                 match opened {
                     Ok(opened) => {
                         this.list.reset(opened.doc.page_count());
+                        let old = this.thumbs.reset(opened.doc.page_count());
+                        this.released.extend(old);
                         this.visible = 0..1;
                         this.content = Content::Ready(opened);
                     }
@@ -290,7 +304,10 @@ impl Viewer {
             this.update(cx, |this, cx| {
                 if this.generation == generation && !outline.is_empty() {
                     this.contents = Some(Contents::new(outline));
-                    this.pane |= show;
+                    if show {
+                        this.pane = true;
+                        this.tab = PaneTab::Contents;
+                    }
                     cx.notify();
                 }
             })
@@ -299,12 +316,106 @@ impl Viewer {
         .detach();
     }
 
-    /// Shows or hides the contents pane, when there is an outline.
+    /// Shows or hides the side pane, once a document is open.
     fn toggle_pane(&mut self, cx: &mut Context<Self>) {
-        if self.contents.is_some() {
+        if matches!(self.content, Content::Ready(_)) {
             self.pane = !self.pane;
             cx.notify();
         }
+    }
+
+    /// Whether the side pane is shown now.
+    fn pane_shown(&self) -> bool {
+        self.pane && matches!(self.content, Content::Ready(_))
+    }
+
+    /// Page `page`'s thumbnail, asked for if it is not drawn yet.
+    fn render_thumb(
+        &mut self,
+        page: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let th = self.theme;
+        let Content::Ready(opened) = &self.content else {
+            return div().into_any_element();
+        };
+        let (w, h) = opened.doc.page_size(page).unwrap_or((612.0, 792.0));
+        let image = self.thumbs.image(page);
+        if image.is_none() {
+            self.thumbs.want(page);
+            self.pump_thumbs(window.scale_factor(), cx);
+        }
+        let current = page == self.current_page();
+        let label = (page + 1).to_string();
+        div()
+            .id(("thumb", page))
+            .w_full()
+            .flex()
+            .flex_col()
+            .items_center()
+            .gap(px(space::S2))
+            .py(px(space::S3))
+            .cursor_pointer()
+            .on_click(cx.listener(move |this, _, _, cx| this.go_to_page(page, cx)))
+            .child(
+                div()
+                    .w(px(thumbnails::WIDTH))
+                    .h(px(thumbnails::WIDTH * h / w.max(1.0)))
+                    .bg(gpui::white())
+                    .shadow_sm()
+                    .border_2()
+                    .border_color(if current {
+                        gpui::rgba(th.katna.accent).into()
+                    } else {
+                        gpui::transparent_black()
+                    })
+                    .children(image.map(|image| img(ImageSource::Render(image)).size_full())),
+            )
+            .child(
+                div()
+                    .text_size(px(text::CAPTION))
+                    .text_color(if current { th.text } else { th.dim })
+                    .child(label),
+            )
+            .into_any_element()
+    }
+
+    /// Draws the next waiting thumbnail, one at a time.
+    fn pump_thumbs(&mut self, scale_factor: f32, cx: &mut Context<Self>) {
+        let Content::Ready(opened) = &self.content else {
+            return;
+        };
+        let Some(page) = self.thumbs.next() else {
+            return;
+        };
+        let width = opened.doc.page_size(page).map_or(612.0, |(w, _)| w);
+        let scale = thumbnails::WIDTH * katna_ui::scale::scale() * scale_factor / width.max(1.0);
+        let doc = opened.doc.clone();
+        let generation = self.generation;
+        cx.spawn(async move |this, cx| {
+            let image = cx
+                .background_executor()
+                .spawn(async move { doc.render(page, scale).and_then(render_image) })
+                .await;
+            this.update(cx, |this, cx| {
+                if this.generation != generation {
+                    this.released.extend(image);
+                    return;
+                }
+                match image {
+                    Some(image) => {
+                        let freed = this.thumbs.drawn(page, image);
+                        this.released.extend(freed);
+                    }
+                    None => this.thumbs.failed(page),
+                }
+                this.pump_thumbs(scale_factor, cx);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// Scrolls so `dest` is at the top of the view: its height on the
@@ -336,41 +447,122 @@ impl Viewer {
         cx.notify();
     }
 
-    /// The contents pane: a header lined up with the toolbar, then the
-    /// outline.
-    fn pane(&self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
+    /// The side pane: its tabs in a header lined up with the toolbar,
+    /// then the page thumbnails or the outline.
+    fn pane(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if !self.pane_shown() {
+            return None;
+        }
         let th = self.theme;
-        let contents = self.contents.as_ref().filter(|_| self.pane)?;
-        let rows = contents.rows().into_iter().map(|row| {
-            let (path, dest) = (row.path.clone(), row.dest);
-            let fold = cx.listener(move |this, _: &(), _, cx| {
-                if let Some(contents) = this.contents.as_mut() {
-                    contents.toggle(&path);
-                    cx.notify();
-                }
-            });
-            let go = cx.listener(move |this, _: &(), _, cx| {
-                if let Some(dest) = dest {
-                    this.go_to(dest, cx);
-                }
-            });
-            contents::row(
-                row,
-                th,
-                move |window, cx| fold(&(), window, cx),
-                move |window, cx| go(&(), window, cx),
-            )
-        });
-        let list = div()
-            .id("contents-list")
-            .size_full()
-            .overflow_y_scroll()
-            .track_scroll(&contents.scroll)
-            .py(px(space::S2))
-            .flex()
-            .flex_col()
-            .children(rows);
         let thumb = th.katna.text_dim & 0xffff_ff00 | 0x99;
+        // Contents only when the file has an outline.
+        let tab = if self.contents.is_some() {
+            self.tab
+        } else {
+            PaneTab::Pages
+        };
+        let body = match (tab, self.contents.as_ref()) {
+            (PaneTab::Contents, Some(contents)) => {
+                let rows = contents.rows().into_iter().map(|row| {
+                    let (path, dest) = (row.path.clone(), row.dest);
+                    let fold = cx.listener(move |this, _: &(), _, cx| {
+                        if let Some(contents) = this.contents.as_mut() {
+                            contents.toggle(&path);
+                            cx.notify();
+                        }
+                    });
+                    let go = cx.listener(move |this, _: &(), _, cx| {
+                        if let Some(dest) = dest {
+                            this.go_to(dest, cx);
+                        }
+                    });
+                    contents::row(
+                        row,
+                        th,
+                        move |window, cx| fold(&(), window, cx),
+                        move |window, cx| go(&(), window, cx),
+                    )
+                });
+                let list = div()
+                    .id("contents-list")
+                    .size_full()
+                    .overflow_y_scroll()
+                    .track_scroll(&contents.scroll)
+                    .py(px(space::S2))
+                    .flex()
+                    .flex_col()
+                    .children(rows);
+                contents.bar.clone().wrap(
+                    "contents-scroll",
+                    &contents.scroll,
+                    list,
+                    thumb,
+                    window,
+                    cx,
+                )
+            }
+            _ => {
+                let list = list(
+                    self.thumbs.list.clone(),
+                    cx.processor(|this, ix, window, cx| this.render_thumb(ix, window, cx)),
+                )
+                .size_full();
+                self.thumbs.bar.clone().wrap(
+                    "thumbs-scroll",
+                    &self.thumbs.list,
+                    list,
+                    thumb,
+                    window,
+                    cx,
+                )
+            }
+        };
+        let tab_button = |id: &'static str, which: PaneTab, label: String| {
+            let selected = tab == which;
+            div()
+                .id(id)
+                .h(px(32.0))
+                .px(px(space::S4))
+                .flex()
+                .items_center()
+                .rounded(px(radius::FULL))
+                .text_size(px(text::SMALL))
+                .font_weight(if selected {
+                    FontWeight::SEMIBOLD
+                } else {
+                    FontWeight::NORMAL
+                })
+                .text_color(if selected { th.text } else { th.dim })
+                .when(selected, |d| d.bg(th.field))
+                .hover(move |s| s.bg(th.hover))
+                .cursor_pointer()
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.tab = which;
+                    cx.notify();
+                }))
+                .child(label)
+        };
+        let mut header = div()
+            .h(px(48.0))
+            .flex_shrink_0()
+            .flex()
+            .items_center()
+            .gap(px(space::S1))
+            .px(px(space::S3))
+            .border_b_1()
+            .border_color(th.line)
+            .child(tab_button(
+                "tab-pages",
+                PaneTab::Pages,
+                t("pane-pages", &[]),
+            ));
+        if self.contents.is_some() {
+            header = header.child(tab_button(
+                "tab-contents",
+                PaneTab::Contents,
+                t("pane-contents", &[]),
+            ));
+        }
         Some(
             div()
                 .w(px(contents::WIDTH))
@@ -379,28 +571,8 @@ impl Viewer {
                 .flex_col()
                 .border_r_1()
                 .border_color(th.line)
-                .child(
-                    div()
-                        .h(px(48.0))
-                        .flex_shrink_0()
-                        .flex()
-                        .items_center()
-                        .px(px(space::S5))
-                        .border_b_1()
-                        .border_color(th.line)
-                        .text_size(px(text::BODY))
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(th.text)
-                        .child(t("contents-title", &[])),
-                )
-                .child(div().flex_1().min_h_0().child(contents.bar.clone().wrap(
-                    "contents-scroll",
-                    &contents.scroll,
-                    list,
-                    thumb,
-                    window,
-                    cx,
-                )))
+                .child(header)
+                .child(div().flex_1().min_h_0().child(body))
                 .into_any_element(),
         )
     }
@@ -637,11 +809,11 @@ impl Viewer {
             Content::Opening(name) => name.clone(),
             _ => t("app-name", &[]),
         };
-        if self.contents.is_some() {
+        if matches!(self.content, Content::Ready(_)) {
             bar = bar.child(icon_button(
-                "contents",
+                "side-pane",
                 "folders-pane",
-                t("contents-toggle", &[]),
+                t("side-pane-toggle", &[]),
                 th,
                 cx.listener(|this, _, _, cx| this.toggle_pane(cx)),
             ));
@@ -793,7 +965,7 @@ impl Render for Viewer {
         }
         let th = self.theme;
         // The pages' width: the window less its padding and the pane.
-        let pane_width = if self.pane && self.contents.is_some() {
+        let pane_width = if self.pane_shown() {
             contents::WIDTH
         } else {
             0.0
