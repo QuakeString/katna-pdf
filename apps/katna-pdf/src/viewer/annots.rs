@@ -5,6 +5,7 @@
 //! each change into the file (`katna_pdf_cos::annots`) to be drawn from
 //! there.
 
+use std::path::Path;
 use std::sync::Arc;
 
 use gpui::{AnyElement, Context, Focusable, Window, div, prelude::*};
@@ -635,6 +636,121 @@ impl Viewer {
             _ => {}
         }
         out
+    }
+
+    /// The buttons above the comments: save them as XFDF, add them from
+    /// XFDF.
+    pub(super) fn comment_actions(&self, cx: &mut Context<Self>) -> AnyElement {
+        let th = self.theme;
+        div()
+            .h(px(40.0))
+            .flex_shrink_0()
+            .flex()
+            .items_center()
+            .justify_end()
+            .gap(px(space::S1))
+            .px(px(space::S2))
+            .border_b_1()
+            .border_color(th.line)
+            .child(
+                widgets::icon_button("comments-import", "upload", 18.0, &th.katna)
+                    .tip(t("comments-import", &[]), &th.katna)
+                    .on_click(cx.listener(|this, _, _, cx| this.import_xfdf(cx))),
+            )
+            .child(
+                widgets::icon_button("comments-export", "download", 18.0, &th.katna)
+                    .tip(t("comments-export", &[]), &th.katna)
+                    .on_click(cx.listener(|this, _, _, cx| this.export_xfdf(cx))),
+            )
+            .into_any_element()
+    }
+
+    /// Asks where to save the annotations as XFDF, and saves them there.
+    fn export_xfdf(&mut self, cx: &mut Context<Self>) {
+        let (Some(path), Some(annots)) = (self.path.clone(), self.annots.clone()) else {
+            return;
+        };
+        let folder = path.parent().map(Path::to_path_buf).unwrap_or_default();
+        let stem = path
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let chosen = cx.prompt_for_new_path(&folder, Some(&format!("{stem}.xfdf")));
+        let file = super::file_name(&path);
+        cx.spawn(async move |this, cx| {
+            let Ok(Ok(Some(target))) = chosen.await else {
+                return;
+            };
+            let written = cx
+                .background_executor()
+                .spawn(async move {
+                    let xml = katna_pdf_cos::to_xfdf(&annots, &file);
+                    std::fs::write(&target, xml).map_err(|e| e.to_string())?;
+                    Ok::<_, String>(target)
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                this.notice = Some(match written {
+                    Ok(target) => t("comments-exported", &[("name", &super::file_name(&target))]),
+                    Err(error) => t("comments-failed", &[("error", &error)]),
+                });
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Asks for an XFDF file and adds its annotations to the file shown;
+    /// ones already here (by name) are replaced.
+    fn import_xfdf(&mut self, cx: &mut Context<Self>) {
+        let Some(path) = self.path.clone() else {
+            return;
+        };
+        let chosen = cx.prompt_for_paths(gpui::PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: None,
+        });
+        let current = self.unsaved();
+        let generation = self.generation;
+        cx.spawn(async move |this, cx| {
+            let Ok(Ok(Some(paths))) = chosen.await else {
+                return;
+            };
+            let Some(file) = paths.into_iter().next() else {
+                return;
+            };
+            let read = cx
+                .background_executor()
+                .spawn(async move {
+                    let xml = std::fs::read(&file).map_err(|e| e.to_string())?;
+                    let xml = String::from_utf8_lossy(&xml);
+                    let bytes = match current {
+                        Some(bytes) => bytes.to_vec(),
+                        None => std::fs::read(&path).map_err(|e| e.to_string())?,
+                    };
+                    let doc = katna_pdf_cos::Document::load(bytes).map_err(|e| e.to_string())?;
+                    doc.xfdf_changes(&xml).map_err(|e| e.to_string())
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                if this.generation != generation {
+                    return;
+                }
+                match read {
+                    Ok(changes) if changes.put.is_empty() => {
+                        this.notice = Some(t("comments-import-none", &[]));
+                    }
+                    Ok(changes) => this.change_annotations(changes, cx),
+                    Err(error) => this.notice = Some(t("comments-failed", &[("error", &error)])),
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// The comments tab: every annotation, page by page, the one chosen

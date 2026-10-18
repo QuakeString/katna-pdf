@@ -1381,7 +1381,11 @@ impl Viewer {
             PaneTab::Comments,
             t("pane-comments", &[]),
         ));
-        let actions = (tab == PaneTab::Pages).then(|| self.page_actions(cx));
+        let actions = match tab {
+            PaneTab::Pages => Some(self.page_actions(cx)),
+            PaneTab::Comments if self.annots.is_some() => Some(self.comment_actions(cx)),
+            _ => None,
+        };
         Some(
             div()
                 .w(px(contents::WIDTH))

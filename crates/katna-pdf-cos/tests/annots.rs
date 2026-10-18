@@ -225,3 +225,73 @@ fn annotations_are_changed_and_removed() {
 fn stamps_read_as_words() {
     assert_eq!(stamp_label("ForPublicRelease"), "FOR PUBLIC RELEASE");
 }
+
+#[test]
+fn annotations_go_to_xfdf_and_back() {
+    let doc = two();
+    let mut ink = Annotation::new(
+        1,
+        AnnotKind::Ink(vec![vec![[10.0, 10.0], [20.5, 30.25]], vec![[5.0, 5.0]]]),
+    );
+    ink.colour = [1.0, 0.0, 0.0];
+    ink.width = 3.0;
+    ink.contents = "Says \"hi\" & <bye>\nline two".into();
+    ink.author = "Asha".into();
+    let mut line = Annotation::new(
+        1,
+        AnnotKind::Line {
+            from: [1.0, 2.0],
+            to: [3.0, 4.0],
+            arrow: true,
+        },
+    );
+    line.opacity = 0.5;
+    let mut text = Annotation::new(1, AnnotKind::FreeText { size: 14.0 });
+    text.rect = [10.0, 10.0, 200.0, 50.0];
+    text.contents = "नमस्ते".into();
+    let out = doc
+        .annotate(&AnnotChanges {
+            put: vec![ink, line, text],
+            remove: vec![],
+        })
+        .unwrap();
+    let doc = Document::load(out).unwrap();
+    let all = doc.annotations();
+    let xml = katna_pdf_cos::to_xfdf(&all, "two.pdf");
+    assert!(xml.contains("<ink page=\"1\""));
+    let back = katna_pdf_cos::from_xfdf(&xml).unwrap();
+    // The note, its caret reply (not ours: left out), the three added.
+    assert_eq!(back.len(), 4);
+    let want: Vec<_> = all
+        .iter()
+        .flatten()
+        .filter(|a| !matches!(a.kind, AnnotKind::Other(_)))
+        .collect();
+    for (got, want) in back.iter().zip(want) {
+        let got = &got.annotation;
+        assert_eq!(got.kind, want.kind);
+        assert_eq!(got.page, want.page);
+        assert_eq!(got.rect, want.rect);
+        // Colours go through XFDF as bytes.
+        for (g, w) in got.colour.iter().zip(want.colour) {
+            assert!(
+                (g - w).abs() <= 0.5 / 255.0,
+                "{:?} {:?}",
+                got.colour,
+                want.colour
+            );
+        }
+        assert_eq!(got.opacity, want.opacity);
+        assert_eq!(got.contents, want.contents);
+        assert_eq!(got.author, want.author);
+        assert_eq!(got.name, want.name);
+        assert_eq!(got.modified, want.modified);
+    }
+    // Read into the same file, each one with a name replaces itself (the
+    // note had none); into another, each is added.
+    let changes = doc.xfdf_changes(&xml).unwrap();
+    let replaced = |c: &AnnotChanges| c.put.iter().filter(|a| a.id.is_some()).count();
+    assert_eq!(replaced(&changes), 3);
+    assert_eq!(replaced(&two().xfdf_changes(&xml).unwrap()), 0);
+    assert!(katna_pdf_cos::from_xfdf("<html/>").is_err());
+}
