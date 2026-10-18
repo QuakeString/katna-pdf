@@ -18,6 +18,7 @@ zoom-fit-width = Fit width (Ctrl+1)
 zoom-actual = Actual size (Ctrl+0)
 open-file = Open a file (Ctrl+O)
 side-pane-toggle = Side pane (F7)
+night-pages = Night pages (Ctrl+Shift+N)
 
 ## The side pane beside the pages
 pane-pages = Pages

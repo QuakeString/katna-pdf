@@ -5,14 +5,19 @@
 
 use std::sync::{Arc, OnceLock};
 
-use hayro::hayro_interpret::InterpreterSettings;
+use hayro::hayro_interpret::font::GlyphRun;
 use hayro::hayro_interpret::util::TransformExt;
+use hayro::hayro_interpret::{
+    BlendMode, ClipPath, Context, Device, DrawMode, DrawProps, Image, ImageDrawProps,
+    InterpreterCache, InterpreterSettings, SoftMask, interpret_page,
+};
 use hayro::hayro_syntax::{LoadPdfError, Pdf};
-use hayro::kurbo::Affine;
+use hayro::kurbo::{Affine, BezPath, Rect};
 use hayro::vello_cpu::color::palette::css::WHITE;
 use hayro::vello_cpu::{Pixmap, RasterizerSettings, RenderContext, Resources, TargetInit};
 use hayro::{RenderCache, RenderSettings, render_into};
 
+use crate::recolor::Area;
 use crate::scene::{Scene, is_vector_heavy};
 use crate::{Bitmap, Document, Engine, OpenError, Region, fit_scale};
 
@@ -157,6 +162,46 @@ impl Document for HayroDocument {
         self.draw(page, scale, (0.0, 0.0), (size.0.max(1), size.1.max(1)))
     }
 
+    fn pictures(&self, page: usize, scale: f32) -> Vec<Area> {
+        // A scene's page holds no pictures: it would not have one.
+        if self.scene(page).is_some() {
+            return Vec::new();
+        }
+        let (Some((w, h)), Some(pdf_page)) = (self.page_size(page), self.pdf.pages().get(page))
+        else {
+            return Vec::new();
+        };
+        let scale = fit_scale(w, h, scale);
+        let size = ((w * scale).round(), (h * scale).round());
+        let transform =
+            Affine::scale(f64::from(scale)) * pdf_page.initial_transform(true).to_kurbo();
+        let cache = InterpreterCache::new();
+        let mut context = Context::new(
+            transform,
+            Rect::new(0.0, 0.0, f64::from(size.0), f64::from(size.1)),
+            &cache,
+            pdf_page.xref(),
+            InterpreterSettings::default(),
+        );
+        let mut found = Pictures::default();
+        interpret_page(pdf_page, &mut context, &mut found);
+        found
+            .areas
+            .into_iter()
+            .filter_map(|r| {
+                let r = r.intersect(Rect::new(0.0, 0.0, f64::from(size.0), f64::from(size.1)));
+                (r.width() >= 1.0 && r.height() >= 1.0).then(|| {
+                    (
+                        r.x0.floor() as u32,
+                        r.y0.floor() as u32,
+                        r.x1.ceil() as u32,
+                        r.y1.ceil() as u32,
+                    )
+                })
+            })
+            .collect()
+    }
+
     fn render_region(&self, page: usize, scale: f32, region: Region) -> Option<Bitmap> {
         if region.width > crate::MAX_SIDE || region.height > crate::MAX_SIDE {
             return None;
@@ -168,4 +213,32 @@ impl Document for HayroDocument {
             (region.width, region.height),
         )
     }
+}
+
+/// A device that only notes where raster images are drawn.
+#[derive(Default)]
+struct Pictures {
+    areas: Vec<Rect>,
+}
+
+impl<'a> Device<'a> for Pictures {
+    fn draw_path(&mut self, _: &BezPath, _: DrawProps<'a>, _: &DrawMode) {}
+    fn push_clip_path(&mut self, _: &ClipPath) {}
+    fn push_transparency_group(&mut self, _: f32, _: Option<SoftMask<'a>>, _: BlendMode) {}
+    fn draw_glyph_run(&mut self, _: &GlyphRun<'_, 'a>, _: DrawProps<'a>, _: &DrawMode) {}
+    fn draw_image(&mut self, image: Image<'a, '_>, props: ImageDrawProps<'a>) {
+        // Image masks (stencils) are ink, not pictures.
+        if let Image::Raster(_) = &image {
+            // The transform places the image's own pixels.
+            let own = Rect::new(
+                0.0,
+                0.0,
+                f64::from(image.width()),
+                f64::from(image.height()),
+            );
+            self.areas.push(props.transform.transform_rect_bbox(own));
+        }
+    }
+    fn pop_clip(&mut self) {}
+    fn pop_transparency_group(&mut self) {}
 }

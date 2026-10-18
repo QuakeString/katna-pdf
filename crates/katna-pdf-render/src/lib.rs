@@ -9,6 +9,7 @@
 
 mod grid;
 mod hayro_engine;
+pub mod recolor;
 pub mod scene;
 
 use std::sync::Arc;
@@ -91,6 +92,13 @@ pub trait Document: Send + Sync {
     /// Draws `region` of page `page` as it would be at `scale` pixels per
     /// point: a tile, for zoom levels too deep to draw whole pages.
     fn render_region(&self, page: usize, scale: f32, region: Region) -> Option<Bitmap>;
+
+    /// Where page `page`'s pictures (raster images) fall when it is drawn
+    /// whole by [`Document::render`] at `scale`, in pixels: night pages
+    /// dim them instead of flipping them ([`recolor::darken`]).
+    fn pictures(&self, _page: usize, _scale: f32) -> Vec<recolor::Area> {
+        Vec::new()
+    }
 }
 
 /// `scale`, made smaller if a `w`×`h` point page drawn at it would pass
