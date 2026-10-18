@@ -21,6 +21,7 @@ impl Viewer {
         if self.cropping {
             self.tool = None;
             self.organizer = false;
+            self.signing = None;
         }
         self.draft = None;
         cx.notify();

@@ -40,6 +40,9 @@ impl Viewer {
     /// tool down.
     pub(super) fn toggle_tools(&mut self, cx: &mut Context<Self>) {
         self.tools = !self.tools;
+        if self.tools {
+            self.signing = None;
+        }
         if !self.tools {
             self.tool = None;
             self.draft = None;

@@ -3557,6 +3557,7 @@ dependencies = [
  "katna-core",
  "katna-pdf-cos",
  "katna-pdf-render",
+ "katna-pdf-sign",
  "katna-ui",
 ]
 

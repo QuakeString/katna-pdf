@@ -11,7 +11,7 @@ use std::process::ExitCode;
 
 use katna_pdf_cos::{
     AnnotKind, Coverage, Document, Object, PageSource, Placement, SignRequest, SigningInfo,
-    compose, pdf_date, text_string,
+    compose, text_string,
 };
 use katna_pdf_sign::{Digest, common_name, p12};
 
@@ -640,7 +640,11 @@ fn sign(args: &[String], json: bool) -> Done {
             Placement::Visible {
                 page,
                 rect,
-                lines: katna_pdf_sign::appearance_lines(&id, &shown_date(time), reason.as_deref()),
+                lines: katna_pdf_sign::appearance_lines(
+                    &id,
+                    &katna_pdf_sign::shown_date(time),
+                    reason.as_deref(),
+                ),
             }
         }
         (Some(_), None) => {
@@ -662,19 +666,6 @@ fn sign(args: &[String], json: bool) -> Done {
     Ok(wrote(&[(out, doc.pages().len())], json))
 }
 
-/// `time` as people read it: `2026-10-18 12:50 UTC`.
-fn shown_date(time: std::time::SystemTime) -> String {
-    let d = pdf_date(time);
-    format!(
-        "{}-{}-{} {}:{} UTC",
-        &d[2..6],
-        &d[6..8],
-        &d[8..10],
-        &d[10..12],
-        &d[12..14]
-    )
-}
-
 fn verify(args: &[String], json: bool) -> Done {
     let args = Args::parse(args)?;
     let [file] = args.words()?;
@@ -690,30 +681,7 @@ fn verify(args: &[String], json: bool) -> Done {
             Coverage::Revision(n) => format!("revision:{n}"),
             Coverage::Broken => "broken".to_owned(),
         };
-        let (signer, problem) = match &c.result {
-            Ok(r) => (
-                Some(common_name(&r.signer.tbs_certificate.subject)),
-                (!c.intact()).then(|| {
-                    if !r.digest_matches {
-                        "the signed bytes were changed"
-                    } else if !r.signature_valid {
-                        "the signature does not match the signer's key"
-                    } else if c.coverage == Coverage::Broken {
-                        "the byte range is wrong"
-                    } else {
-                        "the signature names another certificate"
-                    }
-                    .to_owned()
-                }),
-            ),
-            Err(e) => (None, Some(e.to_string())),
-        };
-        let time = c
-            .result
-            .as_ref()
-            .ok()
-            .and_then(|r| r.signing_time.clone())
-            .or_else(|| s.time.clone());
+        let (signer, problem, time) = (c.signer(), c.problem(), c.time());
         if json {
             let opt = |v: &Option<String>| v.as_deref().map_or("null".into(), string);
             items.push(format!(

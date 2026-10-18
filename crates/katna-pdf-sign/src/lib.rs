@@ -159,6 +159,57 @@ pub fn appearance_lines(signer: &dyn Signer, date: &str, reason: Option<&str>) -
     lines
 }
 
+/// `time` as people read it, in UTC: `2026-10-18 12:50 UTC`.
+pub fn shown_date(time: std::time::SystemTime) -> String {
+    let d = katna_pdf_cos::pdf_date(time);
+    format!(
+        "{}-{}-{} {}:{} UTC",
+        &d[2..6],
+        &d[6..8],
+        &d[8..10],
+        &d[10..12],
+        &d[12..14]
+    )
+}
+
+/// PDF date `date` (`D:YYYYMMDDHHmmSS` and a zone) as people read it:
+/// `2026-10-18 12:50:45 UTC`, or `+05:30` for a zone ahead of UTC.
+pub fn readable_pdf_date(date: &str) -> Option<String> {
+    let d = date.strip_prefix("D:").unwrap_or(date);
+    let digits = d.chars().take_while(char::is_ascii_digit).count();
+    if digits < 8 {
+        return None;
+    }
+    let part = |from: usize, to: usize, or: &'static str| {
+        d.get(from..to).filter(|_| digits >= to).unwrap_or(or)
+    };
+    let zone = match d[digits..].chars().next() {
+        Some('Z') => "UTC".to_owned(),
+        Some(sign @ ('+' | '-')) => {
+            let z: String = d[digits + 1..]
+                .chars()
+                .filter(char::is_ascii_digit)
+                .collect();
+            match z.len() {
+                4 => format!("{sign}{}:{}", &z[..2], &z[2..]),
+                2 => format!("{sign}{z}:00"),
+                _ => String::new(),
+            }
+        }
+        _ => String::new(),
+    };
+    let shown = format!(
+        "{}-{}-{} {}:{}:{} {zone}",
+        &d[..4],
+        &d[4..6],
+        &d[6..8],
+        part(8, 10, "00"),
+        part(10, 12, "00"),
+        part(12, 14, "00"),
+    );
+    Some(shown.trim_end().to_owned())
+}
+
 /// One signature of a file, checked.
 #[derive(Debug, Clone)]
 pub struct SignatureCheck {
@@ -175,6 +226,39 @@ impl SignatureCheck {
             && self.result.as_ref().is_ok_and(|c| {
                 c.digest_matches && c.signature_valid && c.certificate_named != Some(false)
             })
+    }
+
+    /// When it was signed: as the signature states it, or as the file
+    /// says (which the signer's computer set).
+    pub fn time(&self) -> Option<String> {
+        self.result
+            .as_ref()
+            .ok()
+            .and_then(|r| r.signing_time.clone())
+            .or_else(|| self.signature.time.as_deref().and_then(readable_pdf_date))
+    }
+
+    /// Who signed: the common name of the certificate, or the name the
+    /// file gives.
+    pub fn signer(&self) -> Option<String> {
+        match &self.result {
+            Ok(r) => Some(common_name(&r.signer.tbs_certificate.subject)),
+            Err(_) => self.signature.info.name.clone(),
+        }
+    }
+
+    /// Why it does not hold, in a few words; `None` when it does.
+    pub fn problem(&self) -> Option<String> {
+        if self.intact() {
+            return None;
+        }
+        Some(match &self.result {
+            Err(e) => e.to_string(),
+            Ok(r) if !r.digest_matches => "the signed part of the file was changed".into(),
+            Ok(r) if !r.signature_valid => "the signature does not match the signer's key".into(),
+            Ok(_) if self.coverage == Coverage::Broken => "its byte range is wrong".into(),
+            Ok(_) => "it names another certificate than the one that signed".into(),
+        })
     }
 }
 
@@ -198,4 +282,28 @@ pub fn check(doc: &Document, file: &[u8]) -> Vec<SignatureCheck> {
             }
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dates_read_as_people_write_them() {
+        assert_eq!(
+            readable_pdf_date("D:20261018125045Z").as_deref(),
+            Some("2026-10-18 12:50:45 UTC")
+        );
+        assert_eq!(
+            readable_pdf_date("D:20261018125045+05'30'").as_deref(),
+            Some("2026-10-18 12:50:45 +05:30")
+        );
+        assert_eq!(
+            readable_pdf_date("D:20261018").as_deref(),
+            Some("2026-10-18 00:00:00")
+        );
+        assert_eq!(readable_pdf_date("D:2026"), None);
+        let t = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_792_327_845);
+        assert_eq!(shown_date(t), "2026-10-18 12:50 UTC");
+    }
 }

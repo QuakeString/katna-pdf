@@ -11,6 +11,7 @@ publish.workspace = true
 [dependencies]
 katna-pdf-render.workspace = true
 katna-pdf-cos.workspace = true
+katna-pdf-sign.workspace = true
 katna-core.workspace = true
 katna-ui.workspace = true
 gpui.workspace = true
