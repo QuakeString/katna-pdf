@@ -11,6 +11,7 @@ mod grid;
 mod hayro_engine;
 pub mod recolor;
 pub mod scene;
+pub mod text;
 
 use std::sync::Arc;
 
@@ -98,6 +99,12 @@ pub trait Document: Send + Sync {
     /// dim them instead of flipping them ([`recolor::darken`]).
     fn pictures(&self, _page: usize, _scale: f32) -> Vec<recolor::Area> {
         Vec::new()
+    }
+
+    /// Page `page`'s text and where each character is, in points from
+    /// the page's top left.
+    fn text(&self, _page: usize) -> text::PageText {
+        text::PageText::default()
     }
 }
 
