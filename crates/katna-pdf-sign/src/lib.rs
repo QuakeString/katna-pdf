@@ -179,6 +179,31 @@ pub fn sign_with(
     prepared.finish(&signature).map_err(SigningError::Pdf)
 }
 
+/// `doc` with a document timestamp from `stamper` over all of it (PAdES
+/// B-LTA, after its validation data is kept): it vouches the file, and
+/// the validation data in it, existed then, so they can be trusted after
+/// the certificates in them expire.
+pub fn timestamp_document(
+    doc: &Document,
+    stamper: &dyn tsa::Stamper,
+    digest: Digest,
+) -> Result<Vec<u8>, SigningError> {
+    let prepared = doc
+        .prepare_signature(&SignRequest::document_timestamp())
+        .map_err(SigningError::Pdf)?;
+    let token = stamper
+        .stamp(digest, &prepared.signed_parts().concat())
+        .map_err(SigningError::Timestamp)?;
+    prepared.finish(&token).map_err(SigningError::Pdf)
+}
+
+impl SignatureCheck {
+    /// Whether it is a document timestamp rather than a signature.
+    pub fn is_document_timestamp(&self) -> bool {
+        self.signature.sub_filter == "ETSI.RFC3161"
+    }
+}
+
 /// Widest a picture in a signature box is kept, in pixels: enough for
 /// print, small in the file.
 const PICTURE_WIDTH: u32 = 900;
@@ -387,6 +412,9 @@ pub fn check(doc: &Document, file: &[u8], roots: &Roots) -> Vec<SignatureCheck> 
                 Some(_) if signature.sub_filter == "adbe.pkcs7.sha1" => Err(
                     CheckError::Unsupported("the old adbe.pkcs7.sha1 format".into()),
                 ),
+                Some(parts) if signature.sub_filter == "ETSI.RFC3161" => {
+                    cms::check_document_stamp(&signature.contents, &parts)
+                }
                 Some(parts) => cms::check(&signature.contents, &parts),
             };
             // The chain, through the certificates sent and those the

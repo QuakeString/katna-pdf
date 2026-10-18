@@ -33,7 +33,7 @@ usage: katna-pdf-cli COMMAND [--json] ...
   sign FILE... -o OUT (--p12 CERT.pfx | --token LABEL [--cert NAME] [--module LIB])
           (--password-env VAR | --password-file F | --password PW)
           [--page N --rect L,B,R,T] [--reason R] [--location L] [--contact C] [--digest 256|384|512]
-          [--tsa URL] [--ltv] [--certify none|forms|comments] [--field NAME]
+          [--tsa URL] [--ltv | --lta] [--certify none|forms|comments] [--field NAME]
           [--picture IMAGE]
                                   sign with the key in a certificate file, or on a
                                   token (LABEL, or any), unlocked with the password
@@ -45,13 +45,16 @@ usage: katna-pdf-cli COMMAND [--json] ...
                                   signature) beside the text with --picture;
                                   with long-term validation data (PAdES B-LT) with --ltv:
                                   the chain and OCSP answers or CRLs, fetched now;
+                                  and a document timestamp after them with --lta (B-LTA);
                                   certified with --certify, allowing no changes after,
                                   form filling and signing (of the file's own empty
                                   signature fields), or comments too;
                                   many files at once, unlocked once, into folder OUT
   add-field FILE -o OUT --rect L,B,R,T [--page N] [--name NAME]
                                   an empty signature field, for someone to sign later
-  ltv FILE -o OUT [--trust PATH]  long-term validation data added to a signed file
+  ltv FILE -o OUT [--trust PATH] [--tsa URL]
+                                  long-term validation data added to a signed file,
+                                  and a document timestamp with --tsa (renews B-LTA)
   tokens [--module LIB]           the signing tokens plugged in (ePass2003 and others)
   verify FILE [--trust PATH] [--online]
                                   the signatures, each checked: intact, what it covers,
@@ -179,7 +182,7 @@ impl<'a> Args<'a> {
                     return Err(Failure::Usage(format!("{a} needs a value")));
                 };
                 options.push((a.as_str(), value.as_str()));
-            } else if a == "--uncrop" || a == "--online" || a == "--ltv" {
+            } else if ["--uncrop", "--online", "--ltv", "--lta"].contains(&a.as_str()) {
                 flags.push(a.as_str());
             } else if a.starts_with("--") {
                 return Err(Failure::Usage(format!("unknown option {a}")));
@@ -688,7 +691,13 @@ fn sign(args: &[String], json: bool) -> Done {
     };
     let id = id.as_ref();
     let reason = args.option("--reason").map(str::to_owned);
-    let ltv = args.flag("--ltv");
+    let lta = args.flag("--lta");
+    let ltv = lta || args.flag("--ltv");
+    if lta && args.option("--tsa").is_none() {
+        return Err(Failure::Usage(
+            "--lta needs a timestamp server: --tsa URL".into(),
+        ));
+    }
     let picture = match args.option("--picture") {
         None => None,
         Some(path) => {
@@ -771,7 +780,13 @@ fn sign(args: &[String], json: bool) -> Done {
             let mut signed = katna_pdf_sign::sign_with(&doc, &request, id, digest, stamper)
                 .map_err(|e| failed(format!("{file}: {e}")))?;
             if ltv {
-                signed = long_term(file, signed, &roots, &fetch)?;
+                signed = long_term(
+                    file,
+                    signed,
+                    &roots,
+                    &fetch,
+                    lta.then_some(stamper).flatten(),
+                )?;
             }
             let out = target(file)?;
             write(&out, &signed)?;
@@ -817,20 +832,27 @@ fn trusted(args: &Args) -> Result<katna_pdf_sign::Roots, Failure> {
 }
 
 /// Signed file `bytes` with its signatures' validation data added
-/// (PAdES B-LT); what could not be told is said on stderr.
+/// (PAdES B-LT), then a document timestamp from `stamper` when given
+/// (B-LTA); what could not be told is said on stderr.
 fn long_term(
     file: &str,
     bytes: Vec<u8>,
     roots: &katna_pdf_sign::Roots,
     fetch: &dyn katna_pdf_sign::revocation::Fetch,
+    stamper: Option<&dyn katna_pdf_sign::tsa::Stamper>,
 ) -> Result<Vec<u8>, Failure> {
-    let doc = Document::load(bytes).map_err(|e| failed(format!("{file}: {e}")))?;
-    let (bytes, untold) = katna_pdf_sign::add_validation_data(&doc, roots, fetch)
-        .map_err(|e| failed(format!("{file}: {e}")))?;
+    let fail = |e: &dyn std::fmt::Display| failed(format!("{file}: {e}"));
+    let doc = Document::load(bytes).map_err(|e| fail(&e))?;
+    let (bytes, untold) =
+        katna_pdf_sign::add_validation_data(&doc, roots, fetch).map_err(|e| fail(&e))?;
     for why in untold {
         eprintln!("katna-pdf-cli: {file}: no validation data for {why}");
     }
-    Ok(bytes)
+    let Some(stamper) = stamper else {
+        return Ok(bytes);
+    };
+    let doc = Document::load(bytes).map_err(|e| fail(&e))?;
+    katna_pdf_sign::timestamp_document(&doc, stamper, Digest::Sha256).map_err(|e| fail(&e))
 }
 
 /// Adds validation data to the signatures of a file signed already.
@@ -841,7 +863,11 @@ fn ltv(args: &[String], json: bool) -> Done {
     let doc = open(file)?;
     let roots = trusted(&args)?;
     let fetch = katna_pdf_sign::revocation::Http::default();
-    let bytes = long_term(file, doc.bytes().to_vec(), &roots, &fetch)?;
+    let server = args.option("--tsa").map(katna_pdf_sign::tsa::Server::new);
+    let stamper = server
+        .as_ref()
+        .map(|s| s as &dyn katna_pdf_sign::tsa::Stamper);
+    let bytes = long_term(file, doc.bytes().to_vec(), &roots, &fetch, stamper)?;
     write(&out, &bytes)?;
     Ok(wrote(&[(out, doc.pages().len())], json))
 }
@@ -1043,8 +1069,13 @@ fn verify(args: &[String], json: bool) -> Done {
         if json {
             let opt = |v: &Option<String>| v.as_deref().map_or("null".into(), string);
             items.push(format!(
-                "{{\"field\":{},\"page\":{},\"intact\":{},\"covers\":{},\"signer\":{},\"time\":{},\"reason\":{},\"location\":{},\"sub_filter\":{},\"timestamp\":{},\"trust\":{{\"state\":{},\"certificate\":{}}},\"revocation\":{},\"certifies\":{},\"problem\":{}}}",
+                "{{\"field\":{},\"kind\":{},\"page\":{},\"intact\":{},\"covers\":{},\"signer\":{},\"time\":{},\"reason\":{},\"location\":{},\"sub_filter\":{},\"timestamp\":{},\"trust\":{{\"state\":{},\"certificate\":{}}},\"revocation\":{},\"certifies\":{},\"problem\":{}}}",
                 string(&s.name),
+                string(if c.is_document_timestamp() {
+                    "document-timestamp"
+                } else {
+                    "signature"
+                }),
                 s.page.map_or("null".into(), |p| (p + 1).to_string()),
                 c.intact(),
                 string(&covers),
@@ -1084,8 +1115,13 @@ fn verify(args: &[String], json: bool) -> Done {
         } else {
             let _ = writeln!(
                 out,
-                "{}: {}",
+                "{}{}: {}",
                 s.name,
+                if c.is_document_timestamp() {
+                    " (document timestamp)"
+                } else {
+                    ""
+                },
                 match &problem {
                     None => "intact".to_owned(),
                     Some(p) => format!("NOT VALID: {p}"),
@@ -1096,7 +1132,14 @@ fn verify(args: &[String], json: bool) -> Done {
                     let _ = writeln!(out, "  {k}: {v}");
                 }
             };
-            line("signed by", &signer);
+            line(
+                if c.is_document_timestamp() {
+                    "timestamped by"
+                } else {
+                    "signed by"
+                },
+                &signer,
+            );
             line(
                 "identity",
                 &Some(match (trust, &root) {

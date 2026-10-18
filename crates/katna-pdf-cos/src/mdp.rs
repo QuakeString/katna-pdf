@@ -145,11 +145,27 @@ impl Document {
                 (Object::Dict(new), Object::Dict(before)) => {
                     if kind == Some(b"Catalog") || num == self.root_num() {
                         for key in changed_keys(new, before) {
-                            out.insert(match key.as_bytes() {
-                                b"DSS" | b"Extensions" => Change::Dss,
-                                b"AcroForm" => Change::FormFilled,
-                                _ => Change::Other,
-                            });
+                            match key.as_bytes() {
+                                b"DSS" | b"Extensions" => {
+                                    out.insert(Change::Dss);
+                                }
+                                b"AcroForm" => {
+                                    let form = |doc: &Document, d: &Dict| match doc
+                                        .resolve_key(d, "AcroForm")
+                                    {
+                                        Object::Dict(f) => f,
+                                        _ => Dict::new(),
+                                    };
+                                    out.extend(self.form_changes(
+                                        &old,
+                                        &form(self, new),
+                                        &form(&old, before),
+                                    ));
+                                }
+                                _ => {
+                                    out.insert(Change::Other);
+                                }
+                            }
                         }
                     } else if kind == Some(b"Page") || pages.contains(&num) {
                         for key in changed_keys(new, before) {
@@ -177,6 +193,8 @@ impl Document {
                         }
                     } else if kind == Some(b"Pages") {
                         out.insert(Change::Pages);
+                    } else if new.get("Fields").is_some() {
+                        out.extend(self.form_changes(&old, new, before));
                     } else {
                         out.insert(self.kind_of(new));
                     }
@@ -190,6 +208,27 @@ impl Document {
                 _ => {
                     out.insert(Change::Other);
                 }
+            }
+        }
+        out
+    }
+
+    /// The changes the form dictionary went through, from `before` (in
+    /// `old`) to `new`: by the fields added and removed. Its flags only
+    /// say that signatures are present.
+    fn form_changes(&self, old: &Document, new: &Dict, before: &Dict) -> Vec<Change> {
+        let mut out = Vec::new();
+        for key in changed_keys(new, before) {
+            match key.as_bytes() {
+                b"Fields" => {
+                    let list = |doc: &Document, d: &Dict| match doc.resolve_key(d, "Fields") {
+                        Object::Array(a) => a,
+                        _ => Vec::new(),
+                    };
+                    out.extend(self.list_changes(old, &list(self, new), &list(old, before)));
+                }
+                b"SigFlags" => {}
+                _ => out.push(Change::FormFilled),
             }
         }
         out
@@ -233,7 +272,7 @@ impl Document {
     /// The change that an annotation, field, signature or form
     /// dictionary `dict` being added or changed is.
     fn kind_of(&self, dict: &Dict) -> Change {
-        if matches!(dict.name("Type"), Some(b"Sig" | b"DocTimeStamp")) {
+        if dict.name("Type") == Some(b"Sig") {
             return Change::Signed;
         }
         if dict.get("Fields").is_some() {
@@ -242,6 +281,15 @@ impl Document {
         if ["Certs", "OCSPs", "CRLs", "VRI"]
             .iter()
             .any(|k| dict.get(k).is_some())
+        {
+            return Change::Dss;
+        }
+        // A document timestamp, or a field holding one: validation data.
+        if dict.name("Type") == Some(b"DocTimeStamp") {
+            return Change::Dss;
+        }
+        if let Object::Dict(v) = self.resolve_key(dict, "V")
+            && v.name("Type") == Some(b"DocTimeStamp")
         {
             return Change::Dss;
         }

@@ -26,7 +26,8 @@ cargo run --release -p katna-pdf-bench -- file.pdf
   object streams, repair, incremental updates. No GPUI, no C.
 - `crates/katna-pdf-sign` — signing and checking signatures, pure
   Rust: certificate files (`p12.rs`), CMS / PAdES B-B (`cms.rs`),
-  timestamps for B-T (`tsa.rs`, RFC 3161 over ureq + rustls), USB
+  timestamps for B-T and document timestamps for B-LTA (`tsa.rs`, RFC
+  3161 over ureq + rustls), USB
   tokens through PKCS#11 modules (`pkcs11.rs`; OpenSC, ePass2003 and
   other makers' drivers; `KATNA_PDF_PKCS11` adds one), and signers'
   certificates chained to trusted roots (`trust.rs`: the system's, plus

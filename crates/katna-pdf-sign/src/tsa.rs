@@ -277,6 +277,49 @@ pub(crate) mod tests {
         assert!(!c.result.unwrap().timestamp.unwrap().valid);
     }
 
+    #[test]
+    fn files_carry_document_timestamps_that_are_checked() {
+        use katna_pdf_cos::{Allowed, Change, Coverage, Document, Placement, SignRequest};
+        let id = p12::open(&data("rsa-aes.p12"), "katna").unwrap();
+        // Certified allowing no changes: a document timestamp still may
+        // be added, as validation data.
+        let mut request = SignRequest::new(Placement::Invisible, Default::default());
+        request.certify = Some(Allowed::Nothing);
+        let signed = crate::sign(
+            &Document::load(pdf()).unwrap(),
+            &request,
+            &id,
+            Digest::Sha256,
+        )
+        .unwrap();
+        let doc = Document::load(signed.clone()).unwrap();
+        let stamped = crate::timestamp_document(&doc, &Local::new(), Digest::Sha256).unwrap();
+        let doc = Document::load(stamped.clone()).unwrap();
+        let checks = crate::check(&doc, &stamped, &crate::Roots::new());
+        assert_eq!(checks.len(), 2);
+        let (signature, stamp) = (&checks[0], &checks[1]);
+        assert_eq!(signature.coverage, Coverage::Revision(signed.len()));
+        assert_eq!(signature.later.iter().collect::<Vec<_>>(), [&Change::Dss]);
+        assert!(signature.forbidden.is_empty() && signature.problem().is_none());
+        assert!(stamp.is_document_timestamp());
+        assert!(stamp.intact(), "{stamp:?}");
+        assert_eq!(stamp.signer().as_deref(), Some("Katna Test TSA"));
+        let token = stamp.result.as_ref().unwrap().timestamp.clone().unwrap();
+        assert!(token.valid);
+        // A token over something else does not hold.
+        let wrong = crate::timestamp_document(
+            &Document::load(signed).unwrap(),
+            &Local {
+                wrong: true,
+                ..Local::new()
+            },
+            Digest::Sha256,
+        )
+        .unwrap();
+        let doc = Document::load(wrong.clone()).unwrap();
+        assert!(!crate::check(&doc, &wrong, &crate::Roots::new())[1].intact());
+    }
+
     /// A timestamp answer: `status`, and `token` if any.
     fn answer(status: u8, token: Option<&[u8]>) -> Vec<u8> {
         let mut body = vec![0x30, 0x03, 0x02, 0x01, status];
