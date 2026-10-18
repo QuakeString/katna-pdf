@@ -208,6 +208,44 @@ fn files_are_signed_and_verified() {
     assert_eq!(code, 2);
     let (code, out) = run(&["verify", s(&input)]);
     assert_eq!((code, out.as_str()), (0, "no signatures\n"));
+
+    // Many files at once, into a folder; one that is not a PDF does not
+    // stop the others.
+    let bad = d.join("bad.pdf");
+    std::fs::write(&bad, "nope").unwrap();
+    let folder = d.join("signed");
+    let (code, _) = run(&[
+        "sign",
+        s(&input),
+        s(&signed),
+        s(&bad),
+        "-o",
+        s(&folder),
+        "--p12",
+        p12,
+        "--password",
+        "katna",
+    ]);
+    assert_eq!(code, 1);
+    for name in ["in.pdf", "signed.pdf"] {
+        let (code, out) = run(&["verify", "--json", s(&folder.join(name))]);
+        assert_eq!(code, 0);
+        assert!(out.contains("\"intact\":true"), "{name}: {out}");
+    }
+    assert!(!folder.join("bad.pdf").exists());
+    // Not over the files themselves.
+    let (code, _) = run(&[
+        "sign",
+        s(&input),
+        s(&signed),
+        "-o",
+        s(&d),
+        "--p12",
+        p12,
+        "--password",
+        "katna",
+    ]);
+    assert_eq!(code, 2);
     let _ = std::fs::remove_dir_all(d);
 }
 

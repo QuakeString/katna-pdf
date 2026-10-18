@@ -30,7 +30,7 @@ usage: katna-pdf-cli COMMAND [--json] ...
                                   keep a box of each page, in points from its media
                                   box's corner; or cut margins off what is shown now
                                   (M: all sides, or top,right,bottom,left); or uncrop
-  sign FILE -o OUT (--p12 CERT.pfx | --token LABEL [--cert NAME] [--module LIB])
+  sign FILE... -o OUT (--p12 CERT.pfx | --token LABEL [--cert NAME] [--module LIB])
           (--password-env VAR | --password-file F | --password PW)
           [--page N --rect L,B,R,T] [--reason R] [--location L] [--contact C] [--digest 256|384|512]
           [--tsa URL]
@@ -38,7 +38,8 @@ usage: katna-pdf-cli COMMAND [--json] ...
                                   token (LABEL, or any), unlocked with the password
                                   or PIN (PAdES B-B);
                                   visible in a box on page N when --rect is given;
-                                  timestamped by the server at URL with --tsa (PAdES B-T)
+                                  timestamped by the server at URL with --tsa (PAdES B-T);
+                                  many files at once, unlocked once, into folder OUT
   tokens [--module LIB]           the signing tokens plugged in (ePass2003 and others)
   verify FILE [--trust PATH]      the signatures, each checked: intact, what it covers,
                                   who signed, and whether their certificate chains to a
@@ -584,8 +585,35 @@ fn margins(crop: [f32; 4], rotate: i64, cut: [f32; 4]) -> [f32; 4] {
 
 fn sign(args: &[String], json: bool) -> Done {
     let args = Args::parse(args)?;
-    let [file] = args.words()?;
+    if args.words.is_empty() {
+        return Err(Failure::Usage("name the file to sign".into()));
+    }
     let out = args.output()?;
+    // Many files: each is written under its own name into folder `out`.
+    let many = args.words.len() > 1;
+    let target = |file: &str| -> Result<PathBuf, Failure> {
+        if !many {
+            return Ok(out.clone());
+        }
+        let name = Path::new(file)
+            .file_name()
+            .ok_or_else(|| Failure::Usage(format!("{file}: not a file")))?;
+        let target = out.join(name);
+        let same = std::fs::canonicalize(file).ok() == std::fs::canonicalize(&target).ok();
+        if same {
+            return Err(Failure::Usage(format!(
+                "-o {}: signing would write over {file}; name another folder",
+                out.display()
+            )));
+        }
+        Ok(target)
+    };
+    if many {
+        std::fs::create_dir_all(&out).map_err(|e| failed(format!("{}: {e}", out.display())))?;
+        for file in &args.words {
+            target(file)?;
+        }
+    }
     let cert = args.option("--p12");
     let token = args.option("--token");
     if cert.is_some() == token.is_some() {
@@ -638,66 +666,94 @@ fn sign(args: &[String], json: bool) -> Done {
         (None, None) => unreachable!("checked above"),
     };
     let id = id.as_ref();
-    let doc = open(file)?;
     let reason = args.option("--reason").map(str::to_owned);
-    let time = std::time::SystemTime::now();
-    let placement = match (args.option("--page"), args.option("--rect")) {
-        (None, None) => Placement::Invisible,
-        (page, Some(rect)) => {
-            let page = match page {
-                None => 0,
-                Some(p) => {
-                    p.parse::<usize>()
-                        .ok()
-                        .filter(|p| (1..=doc.pages().len()).contains(p))
-                        .ok_or_else(|| Failure::Usage(format!("--page {p}: no such page")))?
-                        - 1
-                }
-            };
-            let rect = match rect
-                .split(',')
-                .map(|n| n.trim().parse::<f32>().ok().filter(|n| n.is_finite()))
-                .collect::<Option<Vec<_>>>()
-                .as_deref()
-            {
-                Some(&[l, b, r, t]) if r > l && t > b => [l, b, r, t],
-                _ => {
-                    return Err(Failure::Usage(format!(
-                        "--rect {rect}: left,bottom,right,top"
-                    )));
-                }
-            };
-            Placement::Visible {
-                page,
-                rect,
-                lines: katna_pdf_sign::appearance_lines(
-                    id,
-                    &katna_pdf_sign::shown_date(time),
-                    reason.as_deref(),
-                ),
-            }
-        }
-        (Some(_), None) => {
-            return Err(Failure::Usage("--page goes with --rect".into()));
-        }
-    };
-    let mut request = SignRequest::new(
-        placement,
-        SigningInfo {
-            name: Some(common_name(&id.certificate().tbs_certificate.subject)),
-            reason,
-            location: args.option("--location").map(str::to_owned),
-            contact: args.option("--contact").map(str::to_owned),
-        },
-    );
-    request.time = time;
     let server = args.option("--tsa").map(katna_pdf_sign::tsa::Server::new);
     let stamper = server
         .as_ref()
         .map(|s| s as &dyn katna_pdf_sign::tsa::Stamper);
-    let signed = katna_pdf_sign::sign_with(&doc, &request, id, digest, stamper).map_err(failed)?;
-    write(&out, &signed)?;
-    Ok(wrote(&[(out, doc.pages().len())], json))
+    let placement = |doc: &Document, time| -> Result<Placement, Failure> {
+        Ok(match (args.option("--page"), args.option("--rect")) {
+            (None, None) => Placement::Invisible,
+            (page, Some(rect)) => {
+                let page = match page {
+                    None => 0,
+                    Some(p) => {
+                        p.parse::<usize>()
+                            .ok()
+                            .filter(|p| (1..=doc.pages().len()).contains(p))
+                            .ok_or_else(|| Failure::Usage(format!("--page {p}: no such page")))?
+                            - 1
+                    }
+                };
+                let rect = match rect
+                    .split(',')
+                    .map(|n| n.trim().parse::<f32>().ok().filter(|n| n.is_finite()))
+                    .collect::<Option<Vec<_>>>()
+                    .as_deref()
+                {
+                    Some(&[l, b, r, t]) if r > l && t > b => [l, b, r, t],
+                    _ => {
+                        return Err(Failure::Usage(format!(
+                            "--rect {rect}: left,bottom,right,top"
+                        )));
+                    }
+                };
+                Placement::Visible {
+                    page,
+                    rect,
+                    lines: katna_pdf_sign::appearance_lines(
+                        id,
+                        &katna_pdf_sign::shown_date(time),
+                        reason.as_deref(),
+                    ),
+                }
+            }
+            (Some(_), None) => {
+                return Err(Failure::Usage("--page goes with --rect".into()));
+            }
+        })
+    };
+    // Each file in turn, with the key unlocked once; one that fails
+    // does not stop the rest.
+    let mut written = Vec::new();
+    let mut failures = Vec::new();
+    for file in &args.words {
+        let signed = (|| {
+            let doc = open(file)?;
+            let time = std::time::SystemTime::now();
+            let mut request = SignRequest::new(
+                placement(&doc, time)?,
+                SigningInfo {
+                    name: Some(common_name(&id.certificate().tbs_certificate.subject)),
+                    reason: reason.clone(),
+                    location: args.option("--location").map(str::to_owned),
+                    contact: args.option("--contact").map(str::to_owned),
+                },
+            );
+            request.time = time;
+            let signed = katna_pdf_sign::sign_with(&doc, &request, id, digest, stamper)
+                .map_err(|e| failed(format!("{file}: {e}")))?;
+            let out = target(file)?;
+            write(&out, &signed)?;
+            Ok::<_, Failure>((out, doc.pages().len()))
+        })();
+        match signed {
+            Ok(done) => written.push(done),
+            Err(e) if !many => return Err(e),
+            Err(Failure::Usage(e) | Failure::Failed(e)) => failures.push(e),
+        }
+    }
+    if failures.is_empty() {
+        Ok(wrote(&written, json))
+    } else {
+        let done = wrote(&written, false);
+        Err(failed(format!(
+            "{done}{} of {} files not signed:\n  {}",
+            failures.len(),
+            args.words.len(),
+            failures.join("\n  ")
+        )))
+    }
 }
 
 /// The modules to look for tokens with: `module`, or those installed.
