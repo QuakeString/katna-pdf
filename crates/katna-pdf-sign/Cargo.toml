@@ -1,0 +1,33 @@
+[package]
+name = "katna-pdf-sign"
+description = "Signs PDFs and checks their signatures for Katna PDF: CMS and PAdES in pure Rust."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+katna-pdf-cos.workspace = true
+cms.workspace = true
+const-oid.workspace = true
+der.workspace = true
+spki.workspace = true
+x509-cert.workspace = true
+pkcs8.workspace = true
+pkcs12.workspace = true
+pkcs5.workspace = true
+rsa.workspace = true
+p256.workspace = true
+p384.workspace = true
+sha1.workspace = true
+sha2.workspace = true
+hmac.workspace = true
+des.workspace = true
+rc2.workspace = true
+cbc.workspace = true
+rand_core.workspace = true
+
+[lints]
+workspace = true

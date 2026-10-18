@@ -9,7 +9,11 @@ use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use katna_pdf_cos::{AnnotKind, Document, Object, PageSource, compose, text_string};
+use katna_pdf_cos::{
+    AnnotKind, Coverage, Document, Object, PageSource, Placement, SignRequest, SigningInfo,
+    compose, pdf_date, text_string,
+};
+use katna_pdf_sign::{Digest, common_name, p12};
 
 mod ranges;
 
@@ -26,6 +30,12 @@ usage: katna-pdf-cli COMMAND [--json] ...
                                   keep a box of each page, in points from its media
                                   box's corner; or cut margins off what is shown now
                                   (M: all sides, or top,right,bottom,left); or uncrop
+  sign FILE -o OUT --p12 CERT.pfx (--password-env VAR | --password-file F | --password PW)
+          [--page N --rect L,B,R,T] [--reason R] [--location L] [--contact C] [--digest 256|384|512]
+                                  sign with the key in a certificate file (PAdES B-B);
+                                  visible in a box on page N when --rect is given
+  verify FILE                     the signatures, each checked: intact, what it covers,
+                                  who signed (trust in the signer is not checked yet)
   annots FILE                     the annotations, page by page
   xfdf-export FILE -o OUT.xfdf    the annotations as XFDF
   xfdf-import FILE XFDF -o OUT    the annotations of XFDF added to the PDF
@@ -47,6 +57,8 @@ fn main() -> ExitCode {
         "pages" => pages(rest, json),
         "rotate" => rotate(rest, json),
         "crop" => crop(rest, json),
+        "sign" => sign(rest, json),
+        "verify" => verify(rest, json),
         "annots" => annots(rest, json),
         "xfdf-export" => xfdf_export(rest, json),
         "xfdf-import" => xfdf_import(rest, json),
@@ -100,8 +112,9 @@ struct Args<'a> {
 }
 
 impl<'a> Args<'a> {
-    /// `args`, with `-o`, `--every`, `--by`, `--pages`, `--box` and
-    /// `--margins` taking values, and `--uncrop` a flag.
+    /// `args`, with `-o`, `--every`, `--by`, `--pages`, `--box`,
+    /// `--margins` and `sign`'s options taking values, and `--uncrop` a
+    /// flag.
     fn parse(args: &'a [String]) -> Result<Self, Failure> {
         let mut words = Vec::new();
         let mut options = Vec::new();
@@ -110,7 +123,21 @@ impl<'a> Args<'a> {
         while let Some(a) = it.next() {
             if matches!(
                 a.as_str(),
-                "-o" | "--every" | "--by" | "--pages" | "--box" | "--margins"
+                "-o" | "--every"
+                    | "--by"
+                    | "--pages"
+                    | "--box"
+                    | "--margins"
+                    | "--p12"
+                    | "--password"
+                    | "--password-env"
+                    | "--password-file"
+                    | "--page"
+                    | "--rect"
+                    | "--reason"
+                    | "--location"
+                    | "--contact"
+                    | "--digest"
             ) {
                 let Some(value) = it.next() else {
                     return Err(Failure::Usage(format!("{a} needs a value")));
@@ -539,6 +566,208 @@ fn margins(crop: [f32; 4], rotate: i64, cut: [f32; 4]) -> [f32; 4] {
         _ => [top, right, bottom, left],
     };
     [crop[0] + l, crop[1] + b, crop[2] - r, crop[3] - t]
+}
+
+fn sign(args: &[String], json: bool) -> Done {
+    let args = Args::parse(args)?;
+    let [file] = args.words()?;
+    let out = args.output()?;
+    let cert = args
+        .option("--p12")
+        .ok_or_else(|| Failure::Usage("name the certificate file with --p12".into()))?;
+    let password = match (
+        args.option("--password"),
+        args.option("--password-env"),
+        args.option("--password-file"),
+    ) {
+        (Some(p), None, None) => p.to_owned(),
+        (None, Some(var), None) => {
+            std::env::var(var).map_err(|_| failed(format!("the environment has no {var}")))?
+        }
+        (None, None, Some(path)) => {
+            let text = if path == "-" {
+                std::io::read_to_string(std::io::stdin())
+            } else {
+                std::fs::read_to_string(path)
+            }
+            .map_err(|e| failed(format!("{path}: {e}")))?;
+            text.trim_end_matches(['\r', '\n']).to_owned()
+        }
+        _ => {
+            return Err(Failure::Usage(
+                "give the password with one of --password-env, --password-file and --password"
+                    .into(),
+            ));
+        }
+    };
+    let digest = match args.option("--digest") {
+        None | Some("256") => Digest::Sha256,
+        Some("384") => Digest::Sha384,
+        Some("512") => Digest::Sha512,
+        Some(d) => return Err(Failure::Usage(format!("--digest {d}: 256, 384 or 512"))),
+    };
+    let bytes = std::fs::read(cert).map_err(|e| failed(format!("{cert}: {e}")))?;
+    let id = p12::open(&bytes, &password).map_err(|e| failed(format!("{cert}: {e}")))?;
+    let doc = open(file)?;
+    let reason = args.option("--reason").map(str::to_owned);
+    let time = std::time::SystemTime::now();
+    let placement = match (args.option("--page"), args.option("--rect")) {
+        (None, None) => Placement::Invisible,
+        (page, Some(rect)) => {
+            let page = match page {
+                None => 0,
+                Some(p) => {
+                    p.parse::<usize>()
+                        .ok()
+                        .filter(|p| (1..=doc.pages().len()).contains(p))
+                        .ok_or_else(|| Failure::Usage(format!("--page {p}: no such page")))?
+                        - 1
+                }
+            };
+            let rect = match rect
+                .split(',')
+                .map(|n| n.trim().parse::<f32>().ok().filter(|n| n.is_finite()))
+                .collect::<Option<Vec<_>>>()
+                .as_deref()
+            {
+                Some(&[l, b, r, t]) if r > l && t > b => [l, b, r, t],
+                _ => {
+                    return Err(Failure::Usage(format!(
+                        "--rect {rect}: left,bottom,right,top"
+                    )));
+                }
+            };
+            Placement::Visible {
+                page,
+                rect,
+                lines: katna_pdf_sign::appearance_lines(&id, &shown_date(time), reason.as_deref()),
+            }
+        }
+        (Some(_), None) => {
+            return Err(Failure::Usage("--page goes with --rect".into()));
+        }
+    };
+    let mut request = SignRequest::new(
+        placement,
+        SigningInfo {
+            name: Some(common_name(&id.certificate.tbs_certificate.subject)),
+            reason,
+            location: args.option("--location").map(str::to_owned),
+            contact: args.option("--contact").map(str::to_owned),
+        },
+    );
+    request.time = time;
+    let signed = katna_pdf_sign::sign(&doc, &request, &id, digest).map_err(failed)?;
+    write(&out, &signed)?;
+    Ok(wrote(&[(out, doc.pages().len())], json))
+}
+
+/// `time` as people read it: `2026-10-18 12:50 UTC`.
+fn shown_date(time: std::time::SystemTime) -> String {
+    let d = pdf_date(time);
+    format!(
+        "{}-{}-{} {}:{} UTC",
+        &d[2..6],
+        &d[6..8],
+        &d[8..10],
+        &d[10..12],
+        &d[12..14]
+    )
+}
+
+fn verify(args: &[String], json: bool) -> Done {
+    let args = Args::parse(args)?;
+    let [file] = args.words()?;
+    let bytes = std::fs::read(file).map_err(|e| failed(format!("{file}: {e}")))?;
+    let doc = Document::load(bytes.clone()).map_err(|e| failed(format!("{file}: {e}")))?;
+    let checks = katna_pdf_sign::check(&doc, &bytes);
+    let mut out = String::new();
+    let mut items = Vec::new();
+    for c in &checks {
+        let s = &c.signature;
+        let covers = match c.coverage {
+            Coverage::Whole => "whole".to_owned(),
+            Coverage::Revision(n) => format!("revision:{n}"),
+            Coverage::Broken => "broken".to_owned(),
+        };
+        let (signer, problem) = match &c.result {
+            Ok(r) => (
+                Some(common_name(&r.signer.tbs_certificate.subject)),
+                (!c.intact()).then(|| {
+                    if !r.digest_matches {
+                        "the signed bytes were changed"
+                    } else if !r.signature_valid {
+                        "the signature does not match the signer's key"
+                    } else if c.coverage == Coverage::Broken {
+                        "the byte range is wrong"
+                    } else {
+                        "the signature names another certificate"
+                    }
+                    .to_owned()
+                }),
+            ),
+            Err(e) => (None, Some(e.to_string())),
+        };
+        let time = c
+            .result
+            .as_ref()
+            .ok()
+            .and_then(|r| r.signing_time.clone())
+            .or_else(|| s.time.clone());
+        if json {
+            let opt = |v: &Option<String>| v.as_deref().map_or("null".into(), string);
+            items.push(format!(
+                "{{\"field\":{},\"page\":{},\"intact\":{},\"covers\":{},\"signer\":{},\"time\":{},\"reason\":{},\"location\":{},\"sub_filter\":{},\"problem\":{}}}",
+                string(&s.name),
+                s.page.map_or("null".into(), |p| (p + 1).to_string()),
+                c.intact(),
+                string(&covers),
+                opt(&signer),
+                opt(&time),
+                opt(&s.info.reason),
+                opt(&s.info.location),
+                string(&s.sub_filter),
+                opt(&problem),
+            ));
+        } else {
+            let _ = writeln!(
+                out,
+                "{}: {}",
+                s.name,
+                match &problem {
+                    None => "intact".to_owned(),
+                    Some(p) => format!("NOT VALID: {p}"),
+                }
+            );
+            let mut line = |k: &str, v: &Option<String>| {
+                if let Some(v) = v {
+                    let _ = writeln!(out, "  {k}: {v}");
+                }
+            };
+            line("signed by", &signer);
+            line("time", &time);
+            line("reason", &s.info.reason);
+            line("location", &s.info.location);
+            line("page", &s.page.map(|p| (p + 1).to_string()));
+            let _ = writeln!(
+                out,
+                "  covers: {}",
+                match c.coverage {
+                    Coverage::Whole => "the whole file".to_owned(),
+                    Coverage::Revision(n) =>
+                        format!("the file as signed (first {n} bytes); changed since"),
+                    Coverage::Broken => "a wrong byte range".to_owned(),
+                }
+            );
+        }
+    }
+    if json {
+        Ok(format!("{{\"signatures\":[{}]}}\n", items.join(",")))
+    } else if checks.is_empty() {
+        Ok("no signatures\n".into())
+    } else {
+        Ok(out)
+    }
 }
 
 fn annots(args: &[String], json: bool) -> Done {
