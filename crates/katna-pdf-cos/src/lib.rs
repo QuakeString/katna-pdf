@@ -10,6 +10,7 @@
 
 mod annots;
 mod document;
+mod dss;
 mod filter;
 mod forms;
 mod links;
@@ -26,6 +27,7 @@ pub use annots::{
     AnnotChanges, AnnotKind, Annotation, MarkupStyle, NOTE_SIZE, pdf_date, stamp_label,
 };
 pub use document::{Document, Entry, LoadError, XrefKind};
+pub use dss::Dss;
 pub use filter::{FilterError, decode};
 pub use forms::{Field, FieldKind, FieldValue, Widget};
 pub use links::{Link, LinkTarget};

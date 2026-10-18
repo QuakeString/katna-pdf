@@ -235,7 +235,10 @@ fn rows(checks: Vec<katna_pdf_sign::SignatureCheck>) -> Vec<SigRow> {
                 location: c.signature.info.location.clone(),
                 page: c.signature.page,
                 intact: c.intact(),
-                whole: c.coverage == Coverage::Whole,
+                // Validation data added after it changes nothing signed.
+                whole: c.coverage == Coverage::Whole
+                    || matches!(c.coverage, Coverage::Revision(_))
+                        && c.later.iter().all(|l| *l == Change::Dss),
                 problem,
                 stamp: c.result.as_ref().ok().and_then(|r| r.timestamp.clone()),
                 vouched: c.trust.as_ref().map(vouched),
@@ -307,6 +310,8 @@ pub(super) struct Signing {
     location: Entity<TextInput>,
     /// Whether to timestamp the signature, and the server to ask.
     timestamp: bool,
+    /// Whether to keep the validation data in the file (PAdES B-LT).
+    long_term: bool,
     server: Entity<TextInput>,
     /// Other files to sign at the same time, with the key unlocked once.
     others: Vec<PathBuf>,
@@ -373,6 +378,7 @@ impl Viewer {
             reason,
             location,
             timestamp,
+            long_term: read_note("long-term").as_deref().map(str::trim) != Some("off"),
             server,
             others: Vec::new(),
             certify: None,
@@ -700,6 +706,7 @@ impl Viewer {
         };
         let (reason, location) = (value(&signing.reason), value(&signing.location));
         let tsa = value(&signing.server).filter(|_| signing.timestamp);
+        let long_term = signing.long_term;
         let others = signing.others.clone();
         let folder = path.parent().map(Path::to_path_buf).unwrap_or_default();
         let stem = path
@@ -778,6 +785,7 @@ impl Viewer {
                         location,
                         tsa: tsa.clone(),
                         certify,
+                        long_term,
                     };
                     // This file: into the file chosen, or into the folder.
                     let first = if others.is_empty() {
@@ -807,6 +815,7 @@ impl Viewer {
                         }
                         _ => write_note("source", "token"),
                     }
+                    write_note("long-term", if long_term { "on" } else { "off" });
                     if let Some(url) = &tsa {
                         write_note("timestamp", &format!("on\n{url}\n"));
                     } else {
@@ -1041,6 +1050,29 @@ impl Viewer {
                         ),
                 )
                 .when(signing.timestamp, |d| d.child(field(&signing.server)))
+                .child(
+                    div()
+                        .id("sign-long-term")
+                        .flex()
+                        .items_center()
+                        .gap(px(space::S2))
+                        .py(px(space::S1))
+                        .cursor_pointer()
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            if let Some(signing) = this.signing.as_mut() {
+                                signing.long_term = !signing.long_term;
+                                cx.notify();
+                            }
+                        }))
+                        .child(check_box(signing.long_term, th))
+                        .child(
+                            div()
+                                .text_size(px(text::SMALL))
+                                .text_color(th.text)
+                                .child(t("sign-long-term", &[])),
+                        )
+                        .tip(t("sign-long-term-tip", &[]), &th.katna),
+                )
                 .when(!self.signable.signed, |d| d.child(self.certify_choice(cx)))
                 .child(
                     div()
@@ -1647,6 +1679,8 @@ struct What {
     location: Option<String>,
     tsa: Option<String>,
     certify: Option<Allowed>,
+    /// Keep the validation data in the file, fetched now.
+    long_term: bool,
 }
 
 /// Signs PDF `bytes` with `id` as `what` says, and writes the signed
@@ -1707,6 +1741,20 @@ fn sign_one(
             .map(|s| s as &dyn katna_pdf_sign::tsa::Stamper),
     )
     .map_err(|e| e.to_string())?;
+    // The chain and OCSP answers or CRLs, fetched now; a signature whose
+    // data could not all be had is kept as it is with what was.
+    let signed = if what.long_term {
+        let doc = katna_pdf_cos::Document::load(signed).map_err(|e| e.to_string())?;
+        katna_pdf_sign::add_validation_data(
+            &doc,
+            &roots(),
+            &katna_pdf_sign::revocation::Http::default(),
+        )
+        .map_err(|e| e.to_string())?
+        .0
+    } else {
+        signed
+    };
     crate::viewer::save_over(target, &signed).map_err(|e| e.to_string())
 }
 
@@ -1829,6 +1877,7 @@ mod tests {
             location: None,
             tsa: None,
             certify: None,
+            long_term: false,
         };
         let file = Path::new("/somewhere/report.pdf");
         let first = free_name(&folder, file);

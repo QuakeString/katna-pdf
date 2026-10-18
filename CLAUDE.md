@@ -32,13 +32,15 @@ cargo run --release -p katna-pdf-bench -- file.pdf
   certificates chained to trusted roots (`trust.rs`: the system's, plus
   India's CCA roots built in from `roots/india`, and a folder of the
   person's own), and
-  revocation checked online (`revocation.rs`: OCSP, then CRLs; missing
-  issuers fetched from the certificate's AIA URL). The
-  PDF side (fields, byte ranges) is `katna-pdf-cos`'s `sign.rs`, and
-  certified files' allowed changes (DocMDP) its `mdp.rs`.
+  revocation checked (`revocation.rs`: from the file's own validation
+  data, then online by OCSP, then CRLs; missing issuers fetched from the
+  certificate's AIA URL). The
+  PDF side (fields, byte ranges) is `katna-pdf-cos`'s `sign.rs`, , certified
+  files' allowed changes (DocMDP) its `mdp.rs`, and long-term validation
+  data (PAdES B-LT DSS) its `dss.rs`.
 - `apps/katna-pdf` — the app window.
 - `apps/katna-pdf-cli` — the command line: info, merge, split, pages,
-  rotate, crop, sign (and certify), add-field, verify, annotations and XFDF; `--json` for scripts and agents.
+  rotate, crop, sign (and certify), add-field, ltv, verify, annotations and XFDF; `--json` for scripts and agents.
 - `tools/katna-pdf-cos-check` — runs katna-pdf-cos over a folder of PDFs
   (loads, page counts against hayro, update round trips).
 - `vendor/hayro`, `vendor/hayro-interpret` — hayro with our patches

@@ -146,7 +146,7 @@ impl Document {
                     if kind == Some(b"Catalog") || num == self.root_num() {
                         for key in changed_keys(new, before) {
                             out.insert(match key.as_bytes() {
-                                b"DSS" => Change::Dss,
+                                b"DSS" | b"Extensions" => Change::Dss,
                                 b"AcroForm" => Change::FormFilled,
                                 _ => Change::Other,
                             });
