@@ -43,7 +43,8 @@ jobs:
         run: |
           pacman -Syu --noconfirm --needed base-devel git rustup \
             fontconfig freetype2 gcc-libs glibc libglvnd libxcb \
-            libxkbcommon libxkbcommon-x11 vulkan-icd-loader wayland
+            libxkbcommon libxkbcommon-x11 vulkan-icd-loader wayland \
+            xdg-desktop-portal
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           # pkgver counts the commits.
