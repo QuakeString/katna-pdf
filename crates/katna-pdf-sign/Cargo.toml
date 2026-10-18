@@ -17,6 +17,7 @@ spki.workspace = true
 x509-cert.workspace = true
 x509-tsp.workspace = true
 ureq.workspace = true
+cryptoki.workspace = true
 pkcs8.workspace = true
 pkcs12.workspace = true
 pkcs5.workspace = true

@@ -13,6 +13,7 @@ mod cms;
 mod keys;
 mod oid;
 pub mod p12;
+pub mod pkcs11;
 pub mod tsa;
 mod walk;
 

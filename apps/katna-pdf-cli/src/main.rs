@@ -13,7 +13,7 @@ use katna_pdf_cos::{
     AnnotKind, Coverage, Document, Object, PageSource, Placement, SignRequest, SigningInfo,
     compose, text_string,
 };
-use katna_pdf_sign::{Digest, common_name, p12};
+use katna_pdf_sign::{Digest, Signer, common_name, p12, pkcs11};
 
 mod ranges;
 
@@ -30,12 +30,16 @@ usage: katna-pdf-cli COMMAND [--json] ...
                                   keep a box of each page, in points from its media
                                   box's corner; or cut margins off what is shown now
                                   (M: all sides, or top,right,bottom,left); or uncrop
-  sign FILE -o OUT --p12 CERT.pfx (--password-env VAR | --password-file F | --password PW)
+  sign FILE -o OUT (--p12 CERT.pfx | --token LABEL [--cert NAME] [--module LIB])
+          (--password-env VAR | --password-file F | --password PW)
           [--page N --rect L,B,R,T] [--reason R] [--location L] [--contact C] [--digest 256|384|512]
           [--tsa URL]
-                                  sign with the key in a certificate file (PAdES B-B);
+                                  sign with the key in a certificate file, or on a
+                                  token (LABEL, or any), unlocked with the password
+                                  or PIN (PAdES B-B);
                                   visible in a box on page N when --rect is given;
                                   timestamped by the server at URL with --tsa (PAdES B-T)
+  tokens [--module LIB]           the signing tokens plugged in (ePass2003 and others)
   verify FILE                     the signatures, each checked: intact, what it covers,
                                   who signed (trust in the signer is not checked yet)
   annots FILE                     the annotations, page by page
@@ -61,6 +65,7 @@ fn main() -> ExitCode {
         "crop" => crop(rest, json),
         "sign" => sign(rest, json),
         "verify" => verify(rest, json),
+        "tokens" => tokens(rest, json),
         "annots" => annots(rest, json),
         "xfdf-export" => xfdf_export(rest, json),
         "xfdf-import" => xfdf_import(rest, json),
@@ -141,6 +146,9 @@ impl<'a> Args<'a> {
                     | "--contact"
                     | "--digest"
                     | "--tsa"
+                    | "--token"
+                    | "--module"
+                    | "--cert"
             ) {
                 let Some(value) = it.next() else {
                     return Err(Failure::Usage(format!("{a} needs a value")));
@@ -575,9 +583,13 @@ fn sign(args: &[String], json: bool) -> Done {
     let args = Args::parse(args)?;
     let [file] = args.words()?;
     let out = args.output()?;
-    let cert = args
-        .option("--p12")
-        .ok_or_else(|| Failure::Usage("name the certificate file with --p12".into()))?;
+    let cert = args.option("--p12");
+    let token = args.option("--token");
+    if cert.is_some() == token.is_some() {
+        return Err(Failure::Usage(
+            "sign with a certificate file (--p12) or a token (--token)".into(),
+        ));
+    }
     let password = match (
         args.option("--password"),
         args.option("--password-env"),
@@ -609,8 +621,20 @@ fn sign(args: &[String], json: bool) -> Done {
         Some("512") => Digest::Sha512,
         Some(d) => return Err(Failure::Usage(format!("--digest {d}: 256, 384 or 512"))),
     };
-    let bytes = std::fs::read(cert).map_err(|e| failed(format!("{cert}: {e}")))?;
-    let id = p12::open(&bytes, &password).map_err(|e| failed(format!("{cert}: {e}")))?;
+    let id: Box<dyn Signer> = match (cert, token) {
+        (Some(cert), _) => {
+            let bytes = std::fs::read(cert).map_err(|e| failed(format!("{cert}: {e}")))?;
+            Box::new(p12::open(&bytes, &password).map_err(|e| failed(format!("{cert}: {e}")))?)
+        }
+        (None, Some(label)) => Box::new(token_identity(
+            args.option("--module"),
+            label,
+            args.option("--cert"),
+            &password,
+        )?),
+        (None, None) => unreachable!("checked above"),
+    };
+    let id = id.as_ref();
     let doc = open(file)?;
     let reason = args.option("--reason").map(str::to_owned);
     let time = std::time::SystemTime::now();
@@ -644,7 +668,7 @@ fn sign(args: &[String], json: bool) -> Done {
                 page,
                 rect,
                 lines: katna_pdf_sign::appearance_lines(
-                    &id,
+                    id,
                     &katna_pdf_sign::shown_date(time),
                     reason.as_deref(),
                 ),
@@ -657,7 +681,7 @@ fn sign(args: &[String], json: bool) -> Done {
     let mut request = SignRequest::new(
         placement,
         SigningInfo {
-            name: Some(common_name(&id.certificate.tbs_certificate.subject)),
+            name: Some(common_name(&id.certificate().tbs_certificate.subject)),
             reason,
             location: args.option("--location").map(str::to_owned),
             contact: args.option("--contact").map(str::to_owned),
@@ -668,9 +692,100 @@ fn sign(args: &[String], json: bool) -> Done {
     let stamper = server
         .as_ref()
         .map(|s| s as &dyn katna_pdf_sign::tsa::Stamper);
-    let signed = katna_pdf_sign::sign_with(&doc, &request, &id, digest, stamper).map_err(failed)?;
+    let signed = katna_pdf_sign::sign_with(&doc, &request, id, digest, stamper).map_err(failed)?;
     write(&out, &signed)?;
     Ok(wrote(&[(out, doc.pages().len())], json))
+}
+
+/// The modules to look for tokens with: `module`, or those installed.
+fn modules(module: Option<&str>) -> Result<Vec<pkcs11::Module>, Failure> {
+    let paths = match module {
+        Some(m) => vec![PathBuf::from(m)],
+        None => pkcs11::known_modules(),
+    };
+    if paths.is_empty() {
+        return Err(failed(
+            "no token driver is installed: install OpenSC, or name the token's PKCS#11 module with --module",
+        ));
+    }
+    let mut out = Vec::new();
+    for path in paths {
+        match pkcs11::Module::load(&path) {
+            Ok(m) => out.push(m),
+            Err(e) if module.is_some() => return Err(failed(format!("{}: {e}", path.display()))),
+            Err(_) => {}
+        }
+    }
+    Ok(out)
+}
+
+/// The signing key on the token labelled `label` (`any` for the first
+/// one plugged in), for the certificate named `name` when given.
+fn token_identity(
+    module: Option<&str>,
+    label: &str,
+    name: Option<&str>,
+    pin: &str,
+) -> Result<pkcs11::TokenIdentity, Failure> {
+    for m in modules(module)? {
+        let tokens = m.tokens().map_err(failed)?;
+        let Some(token) = tokens.iter().find(|t| label == "any" || t.label == label) else {
+            continue;
+        };
+        let ids = m
+            .open(token, pin)
+            .map_err(|e| failed(format!("{}: {e}", token.label)))?;
+        return ids
+            .into_iter()
+            .find(|id| name.is_none_or(|n| id.name() == n))
+            .ok_or_else(|| {
+                failed(format!(
+                    "{}: no certificate named {}",
+                    token.label,
+                    name.unwrap_or("")
+                ))
+            });
+    }
+    Err(failed(if label == "any" {
+        "no token is plugged in".to_owned()
+    } else {
+        format!("no token labelled {label} is plugged in")
+    }))
+}
+
+fn tokens(args: &[String], json: bool) -> Done {
+    let args = Args::parse(args)?;
+    let [] = args.words()?;
+    let mut out = String::new();
+    let mut items = Vec::new();
+    for m in modules(args.option("--module"))? {
+        for t in m.tokens().map_err(failed)? {
+            let module = m.path().display().to_string();
+            if json {
+                items.push(format!(
+                    "{{\"label\":{},\"manufacturer\":{},\"model\":{},\"serial\":{},\"module\":{}}}",
+                    string(&t.label),
+                    string(&t.manufacturer),
+                    string(&t.model),
+                    string(&t.serial),
+                    string(&module)
+                ));
+            } else {
+                let _ = writeln!(
+                    out,
+                    "{} ({} {}, serial {})\n  driver: {module}",
+                    t.label, t.manufacturer, t.model, t.serial
+                );
+            }
+        }
+    }
+    if json {
+        Ok(format!("{{\"tokens\":[{}]}}\n", items.join(",")))
+    } else if out.is_empty() {
+        Ok("no tokens plugged in\n".into())
+    } else {
+        Ok(out)
+    }
 }
 
 fn verify(args: &[String], json: bool) -> Done {
