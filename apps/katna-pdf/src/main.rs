@@ -7,6 +7,7 @@
 
 mod assets;
 mod contents;
+mod form;
 mod history;
 mod ids;
 mod instance;
