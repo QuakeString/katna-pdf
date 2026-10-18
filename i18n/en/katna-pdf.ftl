@@ -214,6 +214,15 @@ change-other = other changes
 signer-revocation-unknown = Whether { $name }'s certificate was revoked could not be checked: { $why }
 signer-trust-root = Trust { $root }
 signer-trust-failed = The certificate could not be kept: { $error }
+signatures-report = Save report…
+signatures-report-tip = Save what was found checking these signatures as a PDF, to keep or send on
+signatures-report-file = { $name } (signature report).pdf
+signatures-report-title = Signature report
+signatures-report-saved = Saved the report as { $name }
+signatures-report-failed = Couldn't save the report: { $error }
+report-file = File: { $name }
+report-checked = checked { $time }
+report-field = field: { $name }
 signatures-roots = Signers are checked against your system's root certificates, India's CCA roots (built in), and the ones in { $folder }.
 
 ## The menu bar (KDE's global menu)

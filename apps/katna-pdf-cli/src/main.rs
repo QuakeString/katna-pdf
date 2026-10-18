@@ -56,13 +56,14 @@ usage: katna-pdf-cli COMMAND [--json] ...
                                   long-term validation data added to a signed file,
                                   and a document timestamp with --tsa (renews B-LTA)
   tokens [--module LIB]           the signing tokens plugged in (ePass2003 and others)
-  verify FILE [--trust PATH] [--online]
+  verify FILE [--trust PATH] [--online] [--report OUT.pdf]
                                   the signatures, each checked: intact, what it covers,
                                   who signed, and whether their certificate chains to a
                                   root the system trusts, India's CCA roots (built in),
                                   or one in PATH (a certificate file or a folder of them);
                                   with --online, missing issuers are fetched and
-                                  revocation is asked of OCSP responders and CRLs
+                                  revocation is asked of OCSP responders and CRLs;
+                                  with --report, the same written as a PDF to keep or send
   annots FILE                     the annotations, page by page
   xfdf-export FILE -o OUT.xfdf    the annotations as XFDF
   xfdf-import FILE XFDF -o OUT    the annotations of XFDF added to the PDF
@@ -177,6 +178,7 @@ impl<'a> Args<'a> {
                     | "--field"
                     | "--picture"
                     | "--name"
+                    | "--report"
             ) {
                 let Some(value) = it.next() else {
                     return Err(Failure::Usage(format!("{a} needs a value")));
@@ -1112,7 +1114,9 @@ fn verify(args: &[String], json: bool) -> Done {
                 )),
                 opt(&problem),
             ));
-        } else {
+        }
+        // The text, for the terminal or the report.
+        {
             let _ = writeln!(
                 out,
                 "{}{}: {}",
@@ -1208,10 +1212,40 @@ fn verify(args: &[String], json: bool) -> Done {
             );
         }
     }
+    if checks.is_empty() {
+        out = "no signatures\n".into();
+    }
+    if let Some(report) = args.option("--report") {
+        let name = Path::new(file)
+            .file_name()
+            .map_or(file.into(), |n| n.to_string_lossy());
+        let mut lines = vec![
+            format!("File: {name}"),
+            format!(
+                "  checked {}",
+                katna_pdf_sign::shown_date(std::time::SystemTime::now())
+            ),
+            format!(
+                "  revocation {}",
+                if args.flag("--online") {
+                    "checked online, and from the file's own validation data"
+                } else {
+                    "checked from the file's own validation data only"
+                }
+            ),
+            String::new(),
+        ];
+        lines.extend(out.lines().map(str::to_owned));
+        write(
+            Path::new(report),
+            &katna_pdf_cos::text_pdf("Signature report", &lines),
+        )?;
+        if !json {
+            let _ = writeln!(out, "report: {report}");
+        }
+    }
     if json {
         Ok(format!("{{\"signatures\":[{}]}}\n", items.join(",")))
-    } else if checks.is_empty() {
-        Ok("no signatures\n".into())
     } else {
         Ok(out)
     }

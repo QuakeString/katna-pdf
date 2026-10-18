@@ -23,7 +23,8 @@ cargo run --release -p katna-pdf-bench -- file.pdf
   `worker.rs` draws in worker processes (the app runs itself with
   `--render-worker`; `KATNA_PDF_IN_PROCESS=1` draws in the app). No GPUI.
 - `crates/katna-pdf-cos` — our own PDF object layer: parsing, xref and
-  object streams, repair, incremental updates. No GPUI, no C.
+  object streams, repair, incremental updates, and plain-text reports
+  as new PDFs (`report.rs`). No GPUI, no C.
 - `crates/katna-pdf-sign` — signing and checking signatures, pure
   Rust: certificate files (`p12.rs`), CMS / PAdES B-B (`cms.rs`),
   timestamps for B-T and document timestamps for B-LTA (`tsa.rs`, RFC
@@ -41,7 +42,7 @@ cargo run --release -p katna-pdf-bench -- file.pdf
   data (PAdES B-LT DSS) its `dss.rs`.
 - `apps/katna-pdf` — the app window.
 - `apps/katna-pdf-cli` — the command line: info, merge, split, pages,
-  rotate, crop, sign (and certify), add-field, ltv, verify, annotations and XFDF; `--json` for scripts and agents.
+  rotate, crop, sign (and certify), add-field, ltv, verify (with `--report` as a PDF), annotations and XFDF; `--json` for scripts and agents.
 - `tools/katna-pdf-cos-check` — runs katna-pdf-cos over a folder of PDFs
   (loads, page counts against hayro, update round trips).
 - `vendor/hayro`, `vendor/hayro-interpret` — hayro with our patches

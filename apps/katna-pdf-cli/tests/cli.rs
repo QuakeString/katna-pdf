@@ -192,6 +192,31 @@ fn files_are_signed_and_verified() {
         out.contains("identity: vouched for by Katna Test Root"),
         "{out}"
     );
+    // The same, as a PDF to keep or send on.
+    let report = d.join("report.pdf");
+    let (code, out) = run(&[
+        "verify",
+        "--json",
+        s(&signed),
+        "--trust",
+        ca,
+        "--report",
+        s(&report),
+    ]);
+    assert_eq!(code, 0);
+    assert!(out.starts_with("{\"signatures\":"), "{out}");
+    let bytes = std::fs::read(&report).unwrap();
+    let text = String::from_utf8_lossy(&bytes);
+    assert!(text.contains("(Signature report) Tj"));
+    assert!(text.contains("(signed by: Asha Verma) Tj"), "{text}");
+    assert!(text.contains("(identity: vouched for by Katna Test Root) Tj"));
+    assert_eq!(
+        katna_pdf_cos::Document::load(bytes.clone())
+            .unwrap()
+            .pages()
+            .len(),
+        1
+    );
 
     let (code, _) = run(&[
         "sign",
