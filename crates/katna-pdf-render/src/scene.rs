@@ -40,6 +40,7 @@ use hayro::vello_cpu::{
 use crate::Bitmap;
 use crate::grid::Grid;
 
+mod hairline;
 mod plain;
 
 /// A page with at least this many path segments is vector-heavy.
@@ -298,6 +299,13 @@ impl Scene {
         // In the page's order, so later items cover earlier ones.
         let mut found = Vec::new();
         self.grid.find(region, &self.boxes, &mut found);
+        if let Some(rgba) = self.render_hairlines(&found, view, scale, size) {
+            return Some(Bitmap {
+                width,
+                height,
+                rgba,
+            });
+        }
 
         let mut ctx = RenderContext::new_with(
             w16,
@@ -370,6 +378,110 @@ impl Scene {
             height,
             rgba: pixmap.data_as_u8_slice().to_vec(),
         })
+    }
+
+    /// Draws the items `found` with our quick rasterizer (`hairline.rs`)
+    /// when every one of them is a dot or a one-pixel line, clipped only
+    /// by rectangles; `None`, having drawn nothing, when any is not.
+    fn render_hairlines(
+        &self,
+        found: &[u32],
+        view: Affine,
+        scale: f64,
+        size: (u32, u32),
+    ) -> Option<Vec<u8>> {
+        let tile = Rect::new(0.0, 0.0, f64::from(size.0), f64::from(size.1));
+        // Each clip's rectangle in pixels, the clips around it applied.
+        let mut clips: HashMap<u32, Rect> = HashMap::new();
+        let mut clip_path = BezPath::new();
+        let mut chain = Vec::new();
+        // Most items share their clip with the one before.
+        let mut last: Option<(u32, Rect)> = None;
+        let mut clip_of = |c: u32| -> Option<Rect> {
+            if c == 0 {
+                return Some(tile);
+            }
+            if let Some((id, rect)) = last
+                && id == c
+            {
+                return Some(rect);
+            }
+            if let Some(&rect) = clips.get(&c) {
+                last = Some((c, rect));
+                return Some(rect);
+            }
+            self.clip_chain(c, &mut chain);
+            let mut rect = tile;
+            for &c in &chain {
+                let clip = &self.clips[c as usize];
+                self.path(clip.verbs, clip.points, &mut clip_path);
+                clip_path.apply_affine(view);
+                rect = rect.intersect(hairline::as_rect(&clip_path)?);
+            }
+            clips.insert(c, rect);
+            last = Some((c, rect));
+            Some(rect)
+        };
+        let is_dot = |b: &[f32; 4]| {
+            f64::from(b[2] - b[0]) * scale < DOT && f64::from(b[3] - b[1]) * scale < DOT
+        };
+        for &i in found {
+            let item = &self.items[i as usize];
+            clip_of(item.clip)?;
+            if is_dot(&self.boxes[i as usize]) {
+                continue;
+            }
+            let Draw::Stroke {
+                stroke,
+                text: false,
+            } = &self.styles[item.style as usize].draw
+            else {
+                return None;
+            };
+            let [a, b, c, d, _, _] = (view * self.transforms[item.transform as usize]).as_coeffs();
+            let (sx, sy) = ((a * a + b * b).sqrt(), (c * c + d * d).sqrt());
+            if !stroke.dash_pattern.is_empty()
+                || (sx - sy).abs() > 1e-3 * sx.max(sy)
+                || stroke.width * sx > 1.0
+            {
+                return None;
+            }
+        }
+        let mut path = BezPath::new();
+        let mut canvas = hairline::Canvas::new(size.0, size.1);
+        for &i in found {
+            let item = &self.items[i as usize];
+            let clip = clip_of(item.clip)?;
+            let style = &self.styles[item.style as usize];
+            let bbox = self.boxes[i as usize].map(f64::from);
+            if is_dot(&self.boxes[i as usize]) {
+                let centre =
+                    view * Point::new((bbox[0] + bbox[2]) / 2.0, (bbox[1] + bbox[3]) / 2.0);
+                let half = DOT / 2.0;
+                let dot = Rect::new(
+                    centre.x - half,
+                    centre.y - half,
+                    centre.x + half,
+                    centre.y + half,
+                );
+                canvas.fill_rect(dot, style.color, clip);
+                continue;
+            }
+            let Draw::Stroke { stroke, .. } = &style.draw else {
+                return None;
+            };
+            // The caps lengthen each piece by about as much area as
+            // they add.
+            let cap = match stroke.start_cap {
+                Cap::Butt => 0.0,
+                Cap::Square => 0.5,
+                Cap::Round => std::f64::consts::PI / 8.0,
+            };
+            self.path(item.verbs, item.points, &mut path);
+            let transform = view * self.transforms[item.transform as usize];
+            canvas.stroke(&path, transform, style.color, cap, clip);
+        }
+        Some(canvas.into_rgba())
     }
 
     /// The clips around clip `c`, outermost first.

@@ -294,3 +294,27 @@ fn the_quick_reader_leaves_other_pages_to_hayro() {
         assert_eq!(quick_reader_agrees(bytes.clone(), i), None, "page {i}");
     }
 }
+
+#[test]
+fn a_drawing_of_hairlines_is_drawn_as_hayro_draws_it() {
+    // Only one-pixel lines, clipped by a rectangle: drawn by the scene's
+    // quick line drawer when zoomed out. Polylines, curves and round
+    // caps too.
+    let mut page = drawing("").replace(
+        "1 0 0 rg 60 30 40 20 re f 2 w [4 2] 0 d 0 g 20 50 m 180 50 l S\n",
+        "",
+    );
+    page.insert_str(
+        page.len() - 1,
+        "1 J 1 j 0.3 0.3 0.3 RG 30 30 m 40 35 l 45 25 l 60 40 l S \
+         70 70 m 80 90 100 50 110 70 c S 120 20 m 140 30 l 130 45 l h S\n",
+    );
+    let bytes = Arc::new(pdf(&[&page]));
+    let fast = Hayro.open(bytes.clone(), "").unwrap();
+    let usual = HayroPlain.open(bytes, "").unwrap();
+    for scale in [1.0, 3.0] {
+        let a = fast.render(0, scale).unwrap();
+        let b = usual.render(0, scale).unwrap();
+        assert!(differs(&a, &b) < 0.005, "at {scale}: {}", differs(&a, &b));
+    }
+}
