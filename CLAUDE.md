@@ -32,6 +32,8 @@ cargo run --release -p katna-pdf-bench -- file.pdf
 - `tools/katna-pdf-bench` — open and draw timings against the budgets in
   `docs/PLAN.md` §2.4; `--cad` for zoom timings on drawings (§2.5).
 - `i18n/en/katna-pdf.ftl` — English text people see.
+- `packaging/` — the Arch package, desktop entry and icon; CI publishes
+  the package on the `arch-latest` pre-release.
 
 ## Rules
 

@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+[Desktop Entry]
+Type=Application
+Name=Katna PDF
+GenericName=PDF Reader
+Comment=Read PDF documents and large technical drawings
+Exec=katna-pdf %F
+Icon=in.invenia.katna.Pdf
+Terminal=false
+Categories=Office;Viewer;Graphics;
+MimeType=application/pdf;
+Keywords=pdf;document;reader;viewer;drawing;
+StartupNotify=true
+StartupWMClass=in.invenia.katna.Pdf

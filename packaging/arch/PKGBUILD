@@ -1,0 +1,68 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Arch Linux package for Katna PDF, built from this git checkout.
+#
+#   cd packaging/arch && makepkg -si
+#
+# makepkg clones the checkout it sits in (committed HEAD only; uncommitted
+# changes are not packaged). CI builds it on every push to main and puts
+# it on the `arch-latest` pre-release (.github/workflows/arch-package.yml).
+
+pkgname=katna-pdf-git
+pkgver=0.0.0.r0.g0000000
+pkgrel=1
+pkgdesc='Katna PDF: a fast PDF reader, editor and signer in the Katna family'
+arch=('x86_64')
+url='https://github.com/QuakeString/katna-pdf'
+license=('GPL-3.0-or-later')
+# Linked: libxcb, libxkbcommon(-x11), glibc, gcc-libs, fontconfig and
+# freetype2. Loaded at runtime: libwayland-client, libvulkan
+# (vulkan-icd-loader) and libEGL (libglvnd, the OpenGL fallback).
+depends=(
+  'fontconfig'
+  'freetype2'
+  'gcc-libs'
+  'glibc'
+  'libglvnd'
+  'libxcb'
+  'libxkbcommon'
+  'libxkbcommon-x11'
+  'vulkan-icd-loader'
+  'wayland'
+)
+makedepends=('cargo' 'git')
+optdepends=('vulkan-driver: GPU rendering with Vulkan instead of the OpenGL fallback')
+provides=('katna-pdf')
+conflicts=('katna-pdf')
+# Rust does its own LTO and the release profile strips the binary.
+options=('!lto' '!debug')
+# The repository root, two levels above this file.
+source=("katna-pdf::git+file://$(git -C "${startdir:-.}" rev-parse --show-toplevel 2>/dev/null || realpath ../..)")
+sha256sums=('SKIP')
+
+pkgver() {
+  cd katna-pdf
+  printf '0.0.0.r%s.g%s\n' "$(git rev-list --count HEAD)" "$(git rev-parse --short=7 HEAD)"
+}
+
+prepare() {
+  cd katna-pdf
+  export RUSTUP_TOOLCHAIN=stable
+  cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+build() {
+  cd katna-pdf
+  export RUSTUP_TOOLCHAIN=stable
+  # CI builds in a cached directory outside the clone.
+  export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-target}"
+  cargo build --frozen --release --package katna-pdf
+}
+
+package() {
+  cd katna-pdf
+  install -Dm755 "${CARGO_TARGET_DIR:-target}/release/katna-pdf" "$pkgdir/usr/bin/katna-pdf"
+  # The file names are the app ID (apps/katna-pdf/src/ids.rs checks them).
+  install -Dm644 -t "$pkgdir/usr/share/applications" packaging/desktop/*.desktop
+  install -Dm644 -t "$pkgdir/usr/share/icons/hicolor/scalable/apps" packaging/icons/*.svg
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}
