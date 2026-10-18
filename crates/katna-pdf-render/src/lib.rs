@@ -30,6 +30,8 @@ pub enum OpenError {
     Locked,
     /// It is damaged, or not a PDF.
     Invalid,
+    /// It is encrypted in a way we cannot read.
+    Unsupported,
 }
 
 impl std::fmt::Display for OpenError {
@@ -37,6 +39,7 @@ impl std::fmt::Display for OpenError {
         f.write_str(match self {
             OpenError::Locked => "the PDF is protected by a password",
             OpenError::Invalid => "the file is damaged or not a PDF",
+            OpenError::Unsupported => "the PDF is encrypted in a way that cannot be read",
         })
     }
 }
