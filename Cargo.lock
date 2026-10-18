@@ -3412,6 +3412,7 @@ dependencies = [
 name = "katna-pdf"
 version = "0.0.0"
 dependencies = [
+ "ashpd",
  "async-channel",
  "gpui-pre",
  "gpui-pre-platform",

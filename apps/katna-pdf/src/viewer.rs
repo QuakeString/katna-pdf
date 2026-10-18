@@ -51,6 +51,7 @@ actions!(
         FitPage,
         ActualSize,
         NextSpread,
+        Print,
         NextPage,
         PreviousPage,
         ScrollDown,
@@ -89,6 +90,7 @@ const READING: &str = "Viewer && !TextInput";
 pub fn bind_keys(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("ctrl-o", Open, None),
+        KeyBinding::new("ctrl-p", Print, None),
         KeyBinding::new("ctrl-=", ZoomIn, None),
         KeyBinding::new("ctrl-+", ZoomIn, None),
         KeyBinding::new("ctrl--", ZoomOut, None),
@@ -229,6 +231,9 @@ pub struct Viewer {
     /// the keys in it on the next frame.
     password: Option<(Entity<TextInput>, Subscription)>,
     focus_password: bool,
+    /// A line shown under the toolbar until dismissed, such as why
+    /// printing failed.
+    notice: Option<String>,
     /// The text selected with the pointer, and whether it is being
     /// dragged out now.
     selection: Option<Selection>,
@@ -295,6 +300,7 @@ impl Viewer {
             search: None,
             password: None,
             focus_password: false,
+            notice: None,
             selection: None,
             selecting: false,
             reading_text: Default::default(),
@@ -1256,6 +1262,30 @@ impl Viewer {
         }
     }
 
+    /// Hands the open file to the desktop's print dialog.
+    fn print(&mut self, cx: &mut Context<Self>) {
+        let (Some(path), Content::Ready(opened)) = (self.path.clone(), &self.content) else {
+            return;
+        };
+        let title = opened.name.clone();
+        cx.spawn(async move |this, cx| {
+            let printed = crate::print::print(&title, &path).await;
+            let notice = match printed {
+                crate::print::Printed::Done => None,
+                crate::print::Printed::NoDialog => Some(t("print-no-dialog", &[])),
+                crate::print::Printed::Failed(error) => {
+                    Some(t("print-failed", &[("error", &error)]))
+                }
+            };
+            this.update(cx, |this, cx| {
+                this.notice = notice;
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     /// Goes round the layouts: one page, two, two with a cover.
     fn next_spread(&mut self, cx: &mut Context<Self>) {
         let page = self.current_page();
@@ -1647,6 +1677,13 @@ impl Viewer {
                 ))
                 .child(separator(th))
                 .child(icon_button(
+                    "print",
+                    "print",
+                    t("print", &[]),
+                    th,
+                    cx.listener(|this, _, _, cx| this.print(cx)),
+                ))
+                .child(icon_button(
                     "night",
                     "contrast",
                     t("night-pages", &[]),
@@ -1883,6 +1920,30 @@ impl Render for Viewer {
         }
         let pane = self.pane(window, cx);
         let find_bar = self.find_bar(cx);
+        let notice = self.notice.clone().map(|notice| {
+            div()
+                .flex_shrink_0()
+                .flex()
+                .items_center()
+                .gap(px(space::S2))
+                .px(px(space::S3))
+                .py(px(space::S2))
+                .border_b_1()
+                .border_color(th.line)
+                .text_size(px(text::SMALL))
+                .text_color(th.error)
+                .child(div().flex_1().min_w_0().child(notice))
+                .child(icon_button(
+                    "notice-close",
+                    "close",
+                    t("notice-close", &[]),
+                    th,
+                    cx.listener(|this, _, _, cx| {
+                        this.notice = None;
+                        cx.notify();
+                    }),
+                ))
+        });
         let pages: AnyElement = match &self.content {
             Content::Ready(_) => {
                 // Reading progress: the page at the top, noted as it
@@ -1968,6 +2029,7 @@ impl Render for Viewer {
             .on_action(cx.listener(|this, _: &NextPage, _, cx| this.step_page(true, cx)))
             .on_action(cx.listener(|this, _: &PreviousPage, _, cx| this.step_page(false, cx)))
             .on_action(cx.listener(|this, _: &NextSpread, _, cx| this.next_spread(cx)))
+            .on_action(cx.listener(|this, _: &Print, _, cx| this.print(cx)))
             .on_action(cx.listener(|this, _: &ToggleContents, _, cx| this.toggle_pane(cx)))
             .on_action(cx.listener(|this, _: &ToggleNight, _, cx| this.toggle_night(cx)))
             .on_action(cx.listener(|this, _: &Find, window, cx| this.open_search(window, cx)))
@@ -2004,6 +2066,7 @@ impl Render for Viewer {
                     .flex_col()
                     .child(self.toolbar(cx))
                     .children(find_bar)
+                    .children(notice)
                     .child(pages),
             )
     }
