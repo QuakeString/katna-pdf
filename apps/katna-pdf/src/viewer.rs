@@ -12,7 +12,7 @@
 //! so the viewer only says when it is asked to ([`ViewerEvent`]).
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -36,6 +36,7 @@ use katna_ui::{ScrollBar, px, unpx};
 use crate::contents::{self, Contents};
 use crate::form::{Editing, Form};
 use crate::history::History;
+use crate::organize::{self, PageOp};
 use crate::search::{self, Found, Hit, Texts};
 use crate::select::{self, Selection, Spot};
 use crate::spread::Spread;
@@ -162,6 +163,14 @@ pub enum ViewerEvent {
     Dropped(Vec<PathBuf>),
 }
 
+/// A change to the pages, as [`Viewer::change_pages`] writes it.
+enum Pages {
+    /// The new pages: (0 for this file, page, quarter turns added).
+    Order(Vec<(usize, usize, i32)>),
+    /// The pages of `file` inserted before page `at`.
+    Insert { file: PathBuf, at: usize },
+}
+
 /// Recent files on the start screen.
 const RECENT: usize = 8;
 
@@ -219,6 +228,9 @@ pub struct Viewer {
     queue: Vec<usize>,
     /// The pages on screen, as the list last reported.
     visible: Range<usize>,
+    /// The first page of the row at the top, as of the last render: the
+    /// list cannot be asked while it lays pages out.
+    top: usize,
     /// Bitmaps to free on the next frame (they need the window).
     released: Vec<Arc<RenderImage>>,
     /// Bumped on each open, so a late page of the last file is dropped.
@@ -255,6 +267,14 @@ pub struct Viewer {
     page_bounds: Rc<RefCell<HashMap<usize, gpui::Bounds<gpui::Pixels>>>>,
     /// The size of the pages' view, as laid out last frame.
     view_size: Rc<std::cell::Cell<Option<gpui::Size<gpui::Pixels>>>>,
+    /// The pages picked in the pages pane, for page changes, and the one
+    /// a Shift+click runs from.
+    picked: BTreeSet<usize>,
+    anchor: Option<usize>,
+    /// The file with its pages changed, until saved.
+    edited: Option<Arc<Vec<u8>>>,
+    /// Whether a page change is being written.
+    changing_pages: bool,
     /// Whether the side pane is shown, and which of its tabs.
     pane: bool,
     tab: PaneTab,
@@ -309,6 +329,7 @@ impl Viewer {
             drawing: HashMap::new(),
             queue: Vec::new(),
             visible: 0..0,
+            top: 0,
             released: Vec::new(),
             generation: 0,
             revision: 0,
@@ -326,6 +347,10 @@ impl Viewer {
             reading_text: Default::default(),
             page_bounds: Rc::default(),
             view_size: Rc::default(),
+            picked: BTreeSet::new(),
+            anchor: None,
+            edited: None,
+            changing_pages: false,
             pane: false,
             tab: PaneTab::Pages,
             thumbs: Thumbs::new(),
@@ -402,6 +427,10 @@ impl Viewer {
         self.texts = None;
         self.selection = None;
         self.reading_text.clear();
+        self.picked.clear();
+        self.anchor = None;
+        self.edited = None;
+        self.changing_pages = false;
         if let Some(bar) = self.search.as_mut() {
             bar.generation.fetch_add(1, Ordering::Relaxed);
             bar.found = Found::default();
@@ -1045,6 +1074,7 @@ impl Viewer {
             self.pump_thumbs(window.scale_factor(), cx);
         }
         let current = page == self.current_page();
+        let picked = self.picked.contains(&page);
         let label = (page + 1).to_string();
         div()
             .id(("thumb", page))
@@ -1055,7 +1085,11 @@ impl Viewer {
             .gap(px(space::S2))
             .py(px(space::S3))
             .cursor_pointer()
-            .on_click(cx.listener(move |this, _, _, cx| this.go_to_page(page, cx)))
+            .when(picked, |d| d.bg(th.field))
+            .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
+                let keys = event.modifiers();
+                this.thumb_click(page, keys.control || keys.platform, keys.shift, cx);
+            }))
             .child(
                 div()
                     .w(px(thumbnails::WIDTH))
@@ -1292,6 +1326,7 @@ impl Viewer {
                 t("pane-contents", &[]),
             ));
         }
+        let actions = (tab == PaneTab::Pages).then(|| self.page_actions(cx));
         Some(
             div()
                 .w(px(contents::WIDTH))
@@ -1301,6 +1336,7 @@ impl Viewer {
                 .border_r_1()
                 .border_color(th.line)
                 .child(header)
+                .children(actions)
                 .child(div().flex_1().min_h_0().child(body))
                 .into_any_element(),
         )
@@ -1555,35 +1591,340 @@ impl Viewer {
         self.texts = Some(search::texts(self.page_count()));
     }
 
-    /// Whether the tab may close: not at first when a filled-in form is
+    /// A click on page `page`'s thumbnail: picks it (Ctrl adds or takes
+    /// it away, Shift picks the run to it) and, alone, goes to it.
+    fn thumb_click(&mut self, page: usize, ctrl: bool, shift: bool, cx: &mut Context<Self>) {
+        self.picked = organize::click(&self.picked, self.anchor, page, ctrl, shift);
+        if !shift {
+            self.anchor = Some(page);
+        }
+        if !ctrl && !shift {
+            self.go_to_page(page, cx);
+        }
+        cx.notify();
+    }
+
+    /// The buttons above the thumbnails that change the pages picked.
+    fn page_actions(&self, cx: &mut Context<Self>) -> AnyElement {
+        let th = self.theme;
+        let some = !self.picked.is_empty() && !self.changing_pages;
+        let button = |id: &'static str, icon: &'static str, tip: &str, enabled: bool| {
+            widgets::icon_button(id, icon, 18.0, &th.katna)
+                .tip(t(tip, &[]), &th.katna)
+                .when(!enabled, |b| b.opacity(0.4))
+        };
+        let op = |op: PageOp| cx.listener(move |this, _: &ClickEvent, _, cx| this.page_op(op, cx));
+        div()
+            .h(px(40.0))
+            .flex_shrink_0()
+            .flex()
+            .items_center()
+            .justify_between()
+            .px(px(space::S2))
+            .border_b_1()
+            .border_color(th.line)
+            .child(
+                button("pages-left", "rotate-ccw", "pages-turn-left", some)
+                    .on_click(op(PageOp::Turn(-1))),
+            )
+            .child(
+                button("pages-right", "rotate-cw", "pages-turn-right", some)
+                    .on_click(op(PageOp::Turn(1))),
+            )
+            .child(
+                button("pages-earlier", "arrow-up", "pages-earlier", some)
+                    .on_click(op(PageOp::Earlier)),
+            )
+            .child(
+                button("pages-later", "arrow-down", "pages-later", some)
+                    .on_click(op(PageOp::Later)),
+            )
+            .child(
+                button("pages-delete", "trash", "pages-delete", some).on_click(op(PageOp::Delete)),
+            )
+            .child(
+                button(
+                    "pages-insert",
+                    "insert-below",
+                    "pages-insert",
+                    !self.changing_pages,
+                )
+                .on_click(cx.listener(|this, _, _, cx| this.choose_insert(cx))),
+            )
+            .child(
+                button("pages-extract", "download", "pages-extract", some)
+                    .on_click(cx.listener(|this, _, _, cx| this.choose_extract(cx))),
+            )
+            .into_any_element()
+    }
+
+    /// Turns, deletes or moves the pages picked.
+    fn page_op(&mut self, op: PageOp, cx: &mut Context<Self>) {
+        if self.changing_pages {
+            return;
+        }
+        let Some((order, picked)) = organize::apply(op, self.page_count(), &self.picked) else {
+            return;
+        };
+        let order = order.into_iter().map(|(p, turns)| (0, p, turns)).collect();
+        self.change_pages(Pages::Order(order), picked, cx);
+    }
+
+    /// Asks for a PDF whose pages go after the pages picked.
+    fn choose_insert(&mut self, cx: &mut Context<Self>) {
+        if self.changing_pages || self.page_count() == 0 {
+            return;
+        }
+        let chosen = cx.prompt_for_paths(gpui::PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: None,
+        });
+        cx.spawn(async move |this, cx| {
+            if let Ok(Ok(Some(paths))) = chosen.await
+                && let Some(file) = paths.into_iter().next()
+            {
+                this.update(cx, |this, cx| {
+                    let at = organize::insert_at(this.page_count(), &this.picked);
+                    this.change_pages(Pages::Insert { file, at }, BTreeSet::new(), cx);
+                })
+                .ok();
+            }
+        })
+        .detach();
+    }
+
+    /// Asks where to save the pages picked as a file of their own.
+    fn choose_extract(&mut self, cx: &mut Context<Self>) {
+        let Some(path) = self.path.clone() else {
+            return;
+        };
+        if self.picked.is_empty() {
+            return;
+        }
+        let pages: Vec<usize> = self.picked.iter().copied().collect();
+        let folder = path.parent().map(Path::to_path_buf).unwrap_or_default();
+        let stem = path
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let suggested = t("pages-extract-name", &[("name", &stem)]);
+        let chosen = cx.prompt_for_new_path(&folder, Some(&suggested));
+        let current = self.unsaved();
+        cx.spawn(async move |this, cx| {
+            let Ok(Ok(Some(target))) = chosen.await else {
+                return;
+            };
+            let written = cx
+                .background_executor()
+                .spawn(async move {
+                    let bytes = match current {
+                        Some(bytes) => bytes.to_vec(),
+                        None => std::fs::read(&path).map_err(|e| e.to_string())?,
+                    };
+                    let doc = katna_pdf_cos::Document::load(bytes).map_err(|e| e.to_string())?;
+                    let sources: Vec<_> = pages
+                        .iter()
+                        .map(|&page| katna_pdf_cos::PageSource {
+                            doc: &doc,
+                            page,
+                            turns: 0,
+                        })
+                        .collect();
+                    let out = katna_pdf_cos::compose(None, &sources).map_err(|e| e.to_string())?;
+                    std::fs::write(&target, out).map_err(|e| e.to_string())?;
+                    Ok::<_, String>(target)
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                this.notice = Some(match written {
+                    Ok(target) => t("pages-extracted", &[("name", &file_name(&target))]),
+                    Err(error) => t("pages-failed", &[("error", &error)]),
+                });
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Writes the file with its pages changed, off the UI thread, and
+    /// shows it; `picked` are the pages picked afterwards.
+    fn change_pages(&mut self, change: Pages, picked: BTreeSet<usize>, cx: &mut Context<Self>) {
+        self.finish_typing(true, cx);
+        let (Some(path), Content::Ready(opened)) = (self.path.clone(), &self.content) else {
+            return;
+        };
+        if self
+            .form
+            .as_ref()
+            .is_some_and(|f| f.dirty() && f.filled.is_none())
+        {
+            // A form change is still being written; try again then.
+            return;
+        }
+        let name = opened.name.clone();
+        let current = self.unsaved();
+        let generation = self.generation;
+        self.changing_pages = true;
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let changed = cx
+                .background_executor()
+                .spawn(async move {
+                    let bytes = match current {
+                        Some(bytes) => bytes.to_vec(),
+                        None => std::fs::read(&path).map_err(|e| e.to_string())?,
+                    };
+                    let base = katna_pdf_cos::Document::load(bytes).map_err(|e| e.to_string())?;
+                    let (order, other) = match change {
+                        Pages::Order(order) => (order, None),
+                        Pages::Insert { file, at } => {
+                            let bytes = std::fs::read(&file).map_err(|e| e.to_string())?;
+                            let other =
+                                katna_pdf_cos::Document::load(bytes).map_err(|e| e.to_string())?;
+                            let mut order: Vec<_> = (0..at).map(|p| (0, p, 0)).collect();
+                            order.extend((0..other.pages().len()).map(|p| (1, p, 0)));
+                            order.extend((at..base.pages().len()).map(|p| (0, p, 0)));
+                            (order, Some(other))
+                        }
+                    };
+                    let sources = order
+                        .iter()
+                        .map(|&(from, page, turns)| {
+                            let doc = match (from, other.as_ref()) {
+                                (1, Some(other)) => other,
+                                _ => &base,
+                            };
+                            katna_pdf_cos::PageSource { doc, page, turns }
+                        })
+                        .collect::<Vec<_>>();
+                    let out =
+                        katna_pdf_cos::compose(Some(&base), &sources).map_err(|e| e.to_string())?;
+                    let bytes = Arc::new(out);
+                    let doc = Hayro.open(bytes.clone(), "").map_err(|e| e.to_string())?;
+                    let cos =
+                        katna_pdf_cos::Document::load(bytes.to_vec()).map_err(|e| e.to_string())?;
+                    Ok::<_, String>((bytes, doc, cos))
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                if this.generation != generation {
+                    return;
+                }
+                this.changing_pages = false;
+                match changed {
+                    Ok((bytes, doc, cos)) => this.show_changed(name, bytes, doc, cos, picked),
+                    Err(error) => this.notice = Some(t("pages-failed", &[("error", &error)])),
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Shows the file with its pages changed in place of the one shown.
+    fn show_changed(
+        &mut self,
+        name: String,
+        bytes: Arc<Vec<u8>>,
+        doc: Arc<dyn Document>,
+        cos: katna_pdf_cos::Document,
+        picked: BTreeSet<usize>,
+    ) {
+        let count = doc.page_count();
+        let (widest, tallest) = (0..count)
+            .filter_map(|p| doc.page_size(p))
+            .fold((1.0_f32, 1.0_f32), |(w, h), (pw, ph)| {
+                (w.max(pw), h.max(ph))
+            });
+        let page = picked
+            .first()
+            .copied()
+            .unwrap_or_else(|| self.current_page())
+            .min(count.saturating_sub(1));
+        self.forget_pages();
+        self.revision += 1;
+        self.list.reset(self.spread.rows(count));
+        self.list.scroll_to(ListOffset {
+            item_ix: self.spread.row_of(page),
+            offset_in_item: px(0.0),
+        });
+        self.visible = page..page + 1;
+        let old = self.thumbs.reset(count);
+        self.released.extend(old);
+        self.texts = Some(search::texts(count));
+        if let Some(bar) = self.search.as_mut() {
+            bar.generation.fetch_add(1, Ordering::Relaxed);
+            bar.found = Found::default();
+        }
+        self.selection = None;
+        self.reading_text.clear();
+        let (outline, links, fields) = (cos.outline(), cos.links(), cos.form());
+        self.contents = (!outline.is_empty()).then(|| Contents::new(outline));
+        self.links = links.iter().any(|l| !l.is_empty()).then(|| Arc::new(links));
+        // A form's changes are in the file now.
+        self.form = Form::new(Arc::new(cos), fields);
+        self.content = Content::Ready(Opened {
+            name,
+            doc,
+            widest,
+            tallest,
+        });
+        self.edited = Some(bytes);
+        self.anchor = picked.first().copied();
+        self.picked = picked;
+    }
+
+    /// Whether the file shown has changes not saved: a form filled in or
+    /// pages changed.
+    fn dirty(&self) -> bool {
+        self.edited.is_some() || self.form.as_ref().is_some_and(Form::dirty)
+    }
+
+    /// The file shown, as changed and not yet saved; `None` when it is
+    /// the file on disk, or when a form change is still being written.
+    fn unsaved(&self) -> Option<Arc<Vec<u8>>> {
+        match self.form.as_ref().filter(|f| f.dirty()) {
+            Some(form) => form.filled.clone(),
+            None => self.edited.clone(),
+        }
+    }
+
+    /// Whether the tab may close: not at first when there are changes
     /// not saved; the notice says so, and closing again closes.
     pub fn may_close(&mut self, cx: &mut Context<Self>) -> bool {
-        let Some(form) = self.form.as_ref().filter(|f| f.dirty()) else {
-            return true;
-        };
-        if self.close_warned == Some(form.generation) {
+        if !self.dirty() {
             return true;
         }
-        self.close_warned = Some(form.generation);
+        let mark = self.revision + self.form.as_ref().map_or(0, |f| f.generation << 32);
+        if self.close_warned == Some(mark) {
+            return true;
+        }
+        self.close_warned = Some(mark);
         self.notice = Some(t("unsaved-close", &[]));
         cx.notify();
         false
     }
 
-    /// Writes the filled-in form over the file opened.
+    /// Writes the changed file (a form filled in, pages changed) over
+    /// the file opened.
     fn save(&mut self, cx: &mut Context<Self>) {
         self.finish_typing(true, cx);
-        let (Some(path), Some(form)) = (self.path.clone(), self.form.as_ref()) else {
+        let Some(path) = self.path.clone() else {
             return;
         };
-        if !form.dirty() {
+        if !self.dirty() {
             return;
         }
-        let Some(bytes) = form.filled.clone() else {
+        let Some(bytes) = self.unsaved() else {
             // Still being written; Save again once it is.
             return;
         };
-        let mine = form.generation;
+        let mine = self.form.as_ref().map_or(0, |f| f.generation);
+        let revision = self.revision;
         cx.spawn(async move |this, cx| {
             let saved = cx
                 .background_executor()
@@ -1599,6 +1940,9 @@ impl Viewer {
                             && form.generation == mine
                         {
                             form.saved(Arc::new(source));
+                        }
+                        if this.revision == revision {
+                            this.edited = None;
                         }
                         this.notice = None;
                     }
@@ -1668,7 +2012,7 @@ impl Viewer {
     /// its bitmap would be thrown away as off screen when it arrived.
     fn laid_out(&mut self, page: usize) {
         if !self.visible.contains(&page) {
-            self.forget_far(shown_with(&self.visible, self.current_page(), page));
+            self.forget_far(shown_with(&self.visible, self.top, page));
         }
     }
 
@@ -2011,7 +2355,7 @@ impl Viewer {
                     .text_color(th.text)
                     .child(title),
             )
-            .when(self.form.as_ref().is_some_and(Form::dirty), |bar| {
+            .when(self.dirty(), |bar| {
                 bar.child(
                     widgets::filled_button("save", t("save", &[]), &th.katna)
                         .tip(t("save-tip", &[]), &th.katna)
@@ -2313,6 +2657,7 @@ impl Focusable for Viewer {
 
 impl Render for Viewer {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.top = self.current_page();
         for image in self.released.drain(..) {
             window.drop_image(image).ok();
         }

@@ -11,6 +11,7 @@ mod form;
 mod history;
 mod ids;
 mod instance;
+mod organize;
 mod print;
 mod search;
 mod select;

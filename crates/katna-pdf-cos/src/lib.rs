@@ -14,6 +14,7 @@ mod forms;
 mod links;
 mod object;
 mod outline;
+mod pages;
 mod parse;
 mod write;
 
@@ -23,4 +24,5 @@ pub use forms::{Field, FieldKind, FieldValue, Widget};
 pub use links::{Link, LinkTarget};
 pub use object::{Dict, Name, Object, Ref, Stream};
 pub use outline::{Destination, OutlineItem, text_string};
+pub use pages::{ComposeError, PageSource, compose};
 pub use write::{Update, UpdateError, write_object};
