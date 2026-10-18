@@ -28,6 +28,7 @@ use katna_ui::tokens::{radius, space, text};
 use katna_ui::widgets::{self, Tip};
 use katna_ui::{ScrollBar, px, unpx};
 
+use crate::contents::{self, Contents};
 use crate::text::t;
 use crate::theme::Theme;
 
@@ -42,6 +43,7 @@ actions!(
         NextPage,
         PreviousPage,
         ScrollDown,
+        ToggleContents,
         ScrollUp,
         CloseTab,
         NextTab,
@@ -78,6 +80,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("space", NextPage, None),
         KeyBinding::new("shift-space", PreviousPage, None),
         KeyBinding::new("down", ScrollDown, None),
+        KeyBinding::new("f7", ToggleContents, None),
         KeyBinding::new("up", ScrollUp, None),
         KeyBinding::new("ctrl-w", CloseTab, None),
         KeyBinding::new("ctrl-f4", CloseTab, None),
@@ -155,6 +158,10 @@ pub struct Viewer {
     released: Vec<Arc<RenderImage>>,
     /// Bumped on each open, so a late page of the last file is dropped.
     generation: u64,
+    /// The document's outline, once read, if it has one.
+    contents: Option<Contents>,
+    /// Whether the contents pane is shown.
+    pane: bool,
     theme: Theme,
     _appearance: Subscription,
 }
@@ -186,6 +193,8 @@ impl Viewer {
             visible: 0..0,
             released: Vec::new(),
             generation: 0,
+            contents: None,
+            pane: false,
             theme: Theme::for_appearance(window.appearance()),
             _appearance: appearance,
         };
@@ -213,8 +222,10 @@ impl Viewer {
         self.generation += 1;
         let generation = self.generation;
         self.content = Content::Opening(name.clone());
+        self.contents = None;
         self.forget_pages();
         cx.notify();
+        self.read_outline(path.clone(), generation, cx);
         cx.spawn(async move |this, cx| {
             let opened = cx
                 .background_executor()
@@ -252,6 +263,146 @@ impl Viewer {
             .ok();
         })
         .detach();
+    }
+
+    /// Reads the outline of `path` off the UI thread, after the pages
+    /// have started, with our own object layer (hayro does not read
+    /// outlines). The file is read again so that two copies are not
+    /// held while the first page is drawn. The pane opens by itself when
+    /// the file asks for it (`/PageMode /UseOutlines`).
+    fn read_outline(&mut self, path: PathBuf, generation: u64, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            let (outline, show) = cx
+                .background_executor()
+                .spawn(async move {
+                    let Some(doc) = std::fs::read(&path)
+                        .ok()
+                        .and_then(|bytes| katna_pdf_cos::Document::load(bytes).ok())
+                    else {
+                        return (Vec::new(), false);
+                    };
+                    let show = doc
+                        .catalog()
+                        .is_some_and(|c| c.name("PageMode") == Some(b"UseOutlines"));
+                    (doc.outline(), show)
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                if this.generation == generation && !outline.is_empty() {
+                    this.contents = Some(Contents::new(outline));
+                    this.pane |= show;
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Shows or hides the contents pane, when there is an outline.
+    fn toggle_pane(&mut self, cx: &mut Context<Self>) {
+        if self.contents.is_some() {
+            self.pane = !self.pane;
+            cx.notify();
+        }
+    }
+
+    /// Scrolls so `dest` is at the top of the view: its height on the
+    /// page when it gives one, otherwise the page's top.
+    fn go_to(&mut self, dest: katna_pdf_cos::Destination, cx: &mut Context<Self>) {
+        let count = self.page_count();
+        let Content::Ready(opened) = &self.content else {
+            return;
+        };
+        if count == 0 {
+            return;
+        }
+        let page = dest.page.min(count - 1);
+        let height = opened.doc.page_size(page).map_or(792.0, |(_, h)| h);
+        // Each page sits below a gap (`render_page`); the height is
+        // counted from the page's bottom, as PDF counts it.
+        let gap = px(if page == 0 { space::S5 } else { GAP / 2.0 });
+        let below_top = dest
+            .top
+            .map_or(0.0, |top| (height - top).clamp(0.0, height) * self.shown);
+        self.list.scroll_to(ListOffset {
+            item_ix: page,
+            offset_in_item: if dest.top.is_some() {
+                gap + desktop_px(below_top)
+            } else {
+                px(0.0)
+            },
+        });
+        cx.notify();
+    }
+
+    /// The contents pane: a header lined up with the toolbar, then the
+    /// outline.
+    fn pane(&self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let th = self.theme;
+        let contents = self.contents.as_ref().filter(|_| self.pane)?;
+        let rows = contents.rows().into_iter().map(|row| {
+            let (path, dest) = (row.path.clone(), row.dest);
+            let fold = cx.listener(move |this, _: &(), _, cx| {
+                if let Some(contents) = this.contents.as_mut() {
+                    contents.toggle(&path);
+                    cx.notify();
+                }
+            });
+            let go = cx.listener(move |this, _: &(), _, cx| {
+                if let Some(dest) = dest {
+                    this.go_to(dest, cx);
+                }
+            });
+            contents::row(
+                row,
+                th,
+                move |window, cx| fold(&(), window, cx),
+                move |window, cx| go(&(), window, cx),
+            )
+        });
+        let list = div()
+            .id("contents-list")
+            .size_full()
+            .overflow_y_scroll()
+            .track_scroll(&contents.scroll)
+            .py(px(space::S2))
+            .flex()
+            .flex_col()
+            .children(rows);
+        let thumb = th.katna.text_dim & 0xffff_ff00 | 0x99;
+        Some(
+            div()
+                .w(px(contents::WIDTH))
+                .flex_shrink_0()
+                .flex()
+                .flex_col()
+                .border_r_1()
+                .border_color(th.line)
+                .child(
+                    div()
+                        .h(px(48.0))
+                        .flex_shrink_0()
+                        .flex()
+                        .items_center()
+                        .px(px(space::S5))
+                        .border_b_1()
+                        .border_color(th.line)
+                        .text_size(px(text::BODY))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(th.text)
+                        .child(t("contents-title", &[])),
+                )
+                .child(div().flex_1().min_h_0().child(contents.bar.clone().wrap(
+                    "contents-scroll",
+                    &contents.scroll,
+                    list,
+                    thumb,
+                    window,
+                    cx,
+                )))
+                .into_any_element(),
+        )
     }
 
     /// Frees every drawn page now: the tab is closing.
@@ -486,6 +637,15 @@ impl Viewer {
             Content::Opening(name) => name.clone(),
             _ => t("app-name", &[]),
         };
+        if self.contents.is_some() {
+            bar = bar.child(icon_button(
+                "contents",
+                "folders-pane",
+                t("contents-toggle", &[]),
+                th,
+                cx.listener(|this, _, _, cx| this.toggle_pane(cx)),
+            ));
+        }
         bar = bar
             .child(icon_button(
                 "open",
@@ -632,14 +792,20 @@ impl Render for Viewer {
             window.drop_image(image).ok();
         }
         let th = self.theme;
-        // The card's width: the window less its padding.
+        // The pages' width: the window less its padding and the pane.
+        let pane_width = if self.pane && self.contents.is_some() {
+            contents::WIDTH
+        } else {
+            0.0
+        };
         let card_width = unpx(window.viewport_size().width) * katna_ui::scale::scale()
-            - 2.0 * space::S3 * katna_ui::scale::scale();
+            - (2.0 * space::S3 + pane_width) * katna_ui::scale::scale();
         let shown = self.points_to_pixels(card_width);
         if (shown / self.shown - 1.0).abs() > 0.001 {
             self.shown = shown;
             self.list.remeasure();
         }
+        let pane = self.pane(window, cx);
         let pages: AnyElement = match &self.content {
             Content::Ready(_) => {
                 let pages = list(
@@ -682,6 +848,7 @@ impl Render for Viewer {
                 let page = this.current_page().saturating_sub(1);
                 this.go_to_page(page, cx);
             }))
+            .on_action(cx.listener(|this, _: &ToggleContents, _, cx| this.toggle_pane(cx)))
             .on_action(cx.listener(|this, _: &ScrollDown, _, cx| {
                 this.list.scroll_by(px(48.0));
                 cx.notify();
@@ -697,14 +864,22 @@ impl Render for Viewer {
             .min_h_0()
             .min_w_0()
             .flex()
-            .flex_col()
             .overflow_hidden()
             .rounded(px(radius::SM))
             .bg(th.card)
             .border_1()
             .border_color(th.line)
-            .child(self.toolbar(cx))
-            .child(pages)
+            .children(pane)
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .min_h_0()
+                    .flex()
+                    .flex_col()
+                    .child(self.toolbar(cx))
+                    .child(pages),
+            )
     }
 }
 

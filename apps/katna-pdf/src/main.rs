@@ -6,6 +6,7 @@
 //! a file again hands it to the running window (`instance.rs`).
 
 mod assets;
+mod contents;
 mod ids;
 mod instance;
 mod tabs;

@@ -11,10 +11,12 @@
 mod document;
 mod filter;
 mod object;
+mod outline;
 mod parse;
 mod write;
 
 pub use document::{Document, Entry, LoadError, XrefKind};
 pub use filter::{FilterError, decode};
 pub use object::{Dict, Name, Object, Ref, Stream};
+pub use outline::{Destination, OutlineItem, text_string};
 pub use write::{Update, UpdateError, write_object};

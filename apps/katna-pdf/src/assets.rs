@@ -9,6 +9,14 @@ use std::borrow::Cow;
 use gpui::{AssetSource, SharedString};
 
 const ICONS: &[(&str, &[u8])] = &[
+    (
+        "icons/chevron-down.svg",
+        include_bytes!("../icons/chevron-down.svg"),
+    ),
+    (
+        "icons/chevron-right.svg",
+        include_bytes!("../icons/chevron-right.svg"),
+    ),
     ("icons/close.svg", include_bytes!("../icons/close.svg")),
     (
         "icons/document.svg",
@@ -19,6 +27,10 @@ const ICONS: &[(&str, &[u8])] = &[
         include_bytes!("../icons/fit-width.svg"),
     ),
     ("icons/folder.svg", include_bytes!("../icons/folder.svg")),
+    (
+        "icons/folders-pane.svg",
+        include_bytes!("../icons/folders-pane.svg"),
+    ),
     ("icons/zoom-in.svg", include_bytes!("../icons/zoom-in.svg")),
     (
         "icons/zoom-out.svg",
