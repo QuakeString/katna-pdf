@@ -5,6 +5,7 @@
 //! in the desktop's light or dark mode. One app runs per person; opening
 //! a file again hands it to the running window (`instance.rs`).
 
+mod annotate;
 mod assets;
 mod contents;
 mod form;

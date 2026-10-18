@@ -33,6 +33,9 @@ use katna_ui::tokens::{radius, space, text};
 use katna_ui::widgets::{self, Tip};
 use katna_ui::{ScrollBar, px, unpx};
 
+mod annots;
+
+use crate::annotate::Tool;
 use crate::contents::{self, Contents};
 use crate::form::{Editing, Form};
 use crate::history::History;
@@ -69,6 +72,8 @@ actions!(
         CloseTab,
         NextTab,
         PreviousTab,
+        DeleteAnnotation,
+        PutToolDown,
         Quit
     ]
 );
@@ -111,6 +116,8 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("down", ScrollDown, Some(READING)),
         KeyBinding::new("up", ScrollUp, Some(READING)),
         KeyBinding::new("ctrl-c", CopyText, Some(READING)),
+        KeyBinding::new("delete", DeleteAnnotation, Some(READING)),
+        KeyBinding::new("escape", PutToolDown, Some(READING)),
         KeyBinding::new("ctrl-f", Find, None),
         KeyBinding::new("f3", FindNext, None),
         KeyBinding::new("shift-f3", FindPrevious, None),
@@ -153,6 +160,7 @@ struct SearchBar {
 enum PaneTab {
     Pages,
     Contents,
+    Comments,
 }
 
 /// What a viewer asks of the tabs around it.
@@ -275,6 +283,26 @@ pub struct Viewer {
     edited: Option<Arc<Vec<u8>>>,
     /// Whether a page change is being written.
     changing_pages: bool,
+    /// Whether the row of annotation tools is shown, the tool in hand,
+    /// and the colour picked (`annotate::COLOURS`).
+    tools: bool,
+    tool: Option<Tool>,
+    colour: usize,
+    /// Each page's annotations, once read.
+    annots: Option<Arc<Vec<Vec<katna_pdf_cos::Annotation>>>>,
+    /// An annotation being drawn with the pointer.
+    draft: Option<annots::Draft>,
+    /// The annotation chosen, and its comment while typed.
+    chosen: Option<katna_pdf_cos::Ref>,
+    comment: Option<annots::Comment>,
+    /// Whether annotation changes are being written, and those asked for
+    /// meanwhile.
+    annotating: bool,
+    annots_waiting: katna_pdf_cos::AnnotChanges,
+    /// Whether the annotation being written opens its comment once
+    /// written, and once shown.
+    comment_next: bool,
+    open_comment: bool,
     /// Whether the side pane is shown, and which of its tabs.
     pane: bool,
     tab: PaneTab,
@@ -351,6 +379,17 @@ impl Viewer {
             anchor: None,
             edited: None,
             changing_pages: false,
+            tools: false,
+            tool: None,
+            colour: 0,
+            annots: None,
+            draft: None,
+            chosen: None,
+            comment: None,
+            annotating: false,
+            annots_waiting: Default::default(),
+            comment_next: false,
+            open_comment: false,
             pane: false,
             tab: PaneTab::Pages,
             thumbs: Thumbs::new(),
@@ -431,6 +470,12 @@ impl Viewer {
         self.anchor = None;
         self.edited = None;
         self.changing_pages = false;
+        self.annots = None;
+        self.draft = None;
+        self.chosen = None;
+        self.comment = None;
+        self.annotating = false;
+        self.annots_waiting = Default::default();
         if let Some(bar) = self.search.as_mut() {
             bar.generation.fetch_add(1, Ordering::Relaxed);
             bar.found = Found::default();
@@ -526,22 +571,23 @@ impl Viewer {
     /// the file asks for it (`/PageMode /UseOutlines`).
     fn read_outline(&mut self, path: PathBuf, generation: u64, cx: &mut Context<Self>) {
         cx.spawn(async move |this, cx| {
-            let (outline, show, links, form) = cx
+            let (outline, show, links, form, annots) = cx
                 .background_executor()
                 .spawn(async move {
                     let Some(doc) = std::fs::read(&path)
                         .ok()
                         .and_then(|bytes| katna_pdf_cos::Document::load(bytes).ok())
                     else {
-                        return (Vec::new(), false, Vec::new(), None);
+                        return (Vec::new(), false, Vec::new(), None, Vec::new());
                     };
                     let show = doc
                         .catalog()
                         .is_some_and(|c| c.name("PageMode") == Some(b"UseOutlines"));
                     let (outline, links, fields) = (doc.outline(), doc.links(), doc.form());
+                    let annots = doc.annotations();
                     // The object layer's copy is kept only for a form.
                     let form = (!fields.is_empty()).then(|| (Arc::new(doc), fields));
-                    (outline, show, links, form)
+                    (outline, show, links, form, annots)
                 })
                 .await;
             this.update(cx, |this, cx| {
@@ -552,6 +598,7 @@ impl Viewer {
                     this.form = Form::new(source, fields);
                     cx.notify();
                 }
+                this.annots = Some(Arc::new(annots));
                 if links.iter().any(|l| !l.is_empty()) {
                     this.links = Some(Arc::new(links));
                     cx.notify();
@@ -863,6 +910,9 @@ impl Viewer {
         // A press outside the field being typed in ends the typing.
         self.finish_typing(true, cx);
         window.focus(&self.focus, cx);
+        if self.annot_press(event.position, cx) {
+            return;
+        }
         self.selection = self.spot_at(event.position, cx).map(|spot| Selection {
             anchor: spot,
             head: spot,
@@ -872,6 +922,9 @@ impl Viewer {
     }
 
     fn drag(&mut self, event: &gpui::MouseMoveEvent, cx: &mut Context<Self>) {
+        if self.annot_drag(event.position, cx) {
+            return;
+        }
         let spot = self.spot_at(event.position, cx);
         if !self.selecting || event.pressed_button != Some(gpui::MouseButton::Left) {
             self.selecting = false;
@@ -887,6 +940,9 @@ impl Viewer {
 
     fn release_pointer(&mut self, cx: &mut Context<Self>) {
         self.selecting = false;
+        if self.annot_release(cx) {
+            return;
+        }
         // A click without a drag selects nothing.
         if self.selection.is_some_and(|s| s.anchor == s.head) {
             self.selection = None;
@@ -1219,12 +1275,12 @@ impl Viewer {
         let th = self.theme;
         let thumb = th.katna.text_dim & 0xffff_ff00 | 0x99;
         // Contents only when the file has an outline.
-        let tab = if self.contents.is_some() {
-            self.tab
-        } else {
-            PaneTab::Pages
+        let tab = match self.tab {
+            PaneTab::Contents if self.contents.is_none() => PaneTab::Pages,
+            tab => tab,
         };
         let body = match (tab, self.contents.as_ref()) {
+            (PaneTab::Comments, _) => self.comments(window, cx),
             (PaneTab::Contents, Some(contents)) => {
                 let rows = contents.rows().into_iter().map(|row| {
                     let (path, dest) = (row.path.clone(), row.dest);
@@ -1255,14 +1311,11 @@ impl Viewer {
                     .flex()
                     .flex_col()
                     .children(rows);
-                contents.bar.clone().wrap(
-                    "contents-scroll",
-                    &contents.scroll,
-                    list,
-                    thumb,
-                    window,
-                    cx,
-                )
+                contents
+                    .bar
+                    .clone()
+                    .wrap("contents-scroll", &contents.scroll, list, thumb, window, cx)
+                    .into_any_element()
             }
             _ => {
                 let list = list(
@@ -1270,14 +1323,11 @@ impl Viewer {
                     cx.processor(|this, ix, window, cx| this.render_thumb(ix, window, cx)),
                 )
                 .size_full();
-                self.thumbs.bar.clone().wrap(
-                    "thumbs-scroll",
-                    &self.thumbs.list,
-                    list,
-                    thumb,
-                    window,
-                    cx,
-                )
+                self.thumbs
+                    .bar
+                    .clone()
+                    .wrap("thumbs-scroll", &self.thumbs.list, list, thumb, window, cx)
+                    .into_any_element()
             }
         };
         let tab_button = |id: &'static str, which: PaneTab, label: String| {
@@ -1326,6 +1376,11 @@ impl Viewer {
                 t("pane-contents", &[]),
             ));
         }
+        header = header.child(tab_button(
+            "tab-comments",
+            PaneTab::Comments,
+            t("pane-comments", &[]),
+        ));
         let actions = (tab == PaneTab::Pages).then(|| self.page_actions(cx));
         Some(
             div()
@@ -1865,6 +1920,9 @@ impl Viewer {
         let (outline, links, fields) = (cos.outline(), cos.links(), cos.form());
         self.contents = (!outline.is_empty()).then(|| Contents::new(outline));
         self.links = links.iter().any(|l| !l.is_empty()).then(|| Arc::new(links));
+        self.annots = Some(Arc::new(cos.annotations()));
+        self.chosen = None;
+        self.comment = None;
         // A form's changes are in the file now.
         self.form = Form::new(Arc::new(cos), fields);
         self.content = Content::Ready(Opened {
@@ -2189,33 +2247,40 @@ impl Viewer {
             _ => Vec::new(),
         };
         // The page's links, as areas to click.
-        let links: Vec<AnyElement> =
-            match (self.links.as_ref().and_then(|l| l.get(page)), transform) {
-                (Some(links), Some(transform)) => links
-                    .iter()
-                    .enumerate()
-                    .map(|(i, link)| {
-                        let b = katna_pdf_render::map_rect(transform, link.rect);
-                        let target = link.target.clone();
-                        let area = div()
-                            .id(("link", i))
-                            .absolute()
-                            .left(desktop_px(b[0] * shown))
-                            .top(desktop_px(b[1] * shown))
-                            .w(desktop_px((b[2] - b[0]) * shown))
-                            .h(desktop_px((b[3] - b[1]) * shown))
-                            .cursor_pointer()
-                            .on_click(cx.listener(move |this, _, _, cx| this.follow(&target, cx)));
-                        match &link.target {
-                            katna_pdf_cos::LinkTarget::Uri(uri) => {
-                                area.tip(uri.clone(), &self.theme.katna).into_any_element()
-                            }
-                            katna_pdf_cos::LinkTarget::Page(_) => area.into_any_element(),
+        // Not while drawing: the pointer is the tool's.
+        let links: Vec<AnyElement> = match (
+            self.links
+                .as_ref()
+                .filter(|_| self.tool.is_none())
+                .and_then(|l| l.get(page)),
+            transform,
+        ) {
+            (Some(links), Some(transform)) => links
+                .iter()
+                .enumerate()
+                .map(|(i, link)| {
+                    let b = katna_pdf_render::map_rect(transform, link.rect);
+                    let target = link.target.clone();
+                    let area = div()
+                        .id(("link", i))
+                        .absolute()
+                        .left(desktop_px(b[0] * shown))
+                        .top(desktop_px(b[1] * shown))
+                        .w(desktop_px((b[2] - b[0]) * shown))
+                        .h(desktop_px((b[3] - b[1]) * shown))
+                        .cursor_pointer()
+                        .on_click(cx.listener(move |this, _, _, cx| this.follow(&target, cx)));
+                    match &link.target {
+                        katna_pdf_cos::LinkTarget::Uri(uri) => {
+                            area.tip(uri.clone(), &self.theme.katna).into_any_element()
                         }
-                    })
-                    .collect(),
-                _ => Vec::new(),
-            };
+                        katna_pdf_cos::LinkTarget::Page(_) => area.into_any_element(),
+                    }
+                })
+                .collect(),
+            _ => Vec::new(),
+        };
+        let overlays = self.annot_overlays(page, transform);
         // Matches on this page, the current one stronger, and the
         // selected text.
         let accent = self.theme.katna.accent & 0xffff_ff00;
@@ -2257,21 +2322,28 @@ impl Viewer {
             .bg(self.paper())
             .shadow_sm()
             .relative()
-            .cursor(gpui::CursorStyle::IBeam)
+            .cursor(match self.tool {
+                Some(tool) if tool.markup().is_none() => gpui::CursorStyle::Crosshair,
+                _ => gpui::CursorStyle::IBeam,
+            })
             .children(image.map(|image| img(ImageSource::Render(image)).size_full()))
             .children(marks)
+            .children(overlays)
             .children(links)
             .children(fields)
             .child({
-                // Notes where the page is, for the pointer.
+                // Notes where the page is, for the pointer: where it is
+                // painted, as the list may lay a page out elsewhere first.
                 let record = self.page_bounds.clone();
                 gpui::canvas(
-                    move |bounds, _, _| {
+                    |_, _, _| {},
+                    move |bounds, _, _, _| {
                         record.borrow_mut().insert(page, bounds);
                     },
-                    |_, _, _, _| {},
                 )
                 .absolute()
+                .top_0()
+                .left_0()
                 .size_full()
             })
             .into_any_element()
@@ -2334,6 +2406,22 @@ impl Viewer {
                 th,
                 cx.listener(|this, _, window, cx| this.open_search(window, cx)),
             ));
+            bar = bar.child(
+                widgets::icon_button_colored(
+                    "annotate",
+                    "pen",
+                    18.0,
+                    if self.tools {
+                        th.katna.accent
+                    } else {
+                        th.katna.text_dim
+                    },
+                    &th.katna,
+                )
+                .when(self.tools, |b| b.bg(th.field))
+                .tip(t("annotate", &[]), &th.katna)
+                .on_click(cx.listener(|this, _, _, cx| this.toggle_tools(cx))),
+            );
         }
         bar = bar
             .child(icon_button(
@@ -2689,7 +2777,9 @@ impl Render for Viewer {
             self.shown = shown;
             self.list.remeasure();
         }
+        self.open_comment_now(window, cx);
         let pane = self.pane(window, cx);
+        let tools = self.tools_row(cx);
         let find_bar = self.find_bar(cx);
         let notice = self.notice.clone().map(|notice| {
             div()
@@ -2806,6 +2896,8 @@ impl Render for Viewer {
             .on_action(cx.listener(|this, _: &ToggleNight, _, cx| this.toggle_night(cx)))
             .on_action(cx.listener(|this, _: &Find, window, cx| this.open_search(window, cx)))
             .on_action(cx.listener(|this, _: &CopyText, _, cx| this.copy_text(cx)))
+            .on_action(cx.listener(|this, _: &DeleteAnnotation, _, cx| this.delete_chosen(cx)))
+            .on_action(cx.listener(|this, _: &PutToolDown, _, cx| this.cancel_tool(cx)))
             .on_action(cx.listener(|this, _: &FindNext, _, cx| this.step_search(true, cx)))
             .on_action(cx.listener(|this, _: &FindPrevious, _, cx| this.step_search(false, cx)))
             .on_action(cx.listener(|this, _: &ScrollDown, _, cx| {
@@ -2837,6 +2929,7 @@ impl Render for Viewer {
                     .flex()
                     .flex_col()
                     .child(self.toolbar(cx))
+                    .children(tools)
                     .children(find_bar)
                     .children(notice)
                     .child(pages),

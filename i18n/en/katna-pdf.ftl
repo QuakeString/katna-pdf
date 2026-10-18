@@ -31,6 +31,7 @@ colors-invert-lightness = Invert lightness
 colors-sepia = Sepia paper
 colors-black-white = Black and white
 search-open = Find (Ctrl+F)
+annotate = Annotate
 
 ## Find in the document
 search-placeholder = Find in the document
@@ -44,6 +45,7 @@ search-close = Close (Esc)
 ## The side pane beside the pages
 pane-pages = Pages
 pane-contents = Contents
+pane-comments = Comments
 
 ## Tabs
 tab-empty = New tab
@@ -75,5 +77,27 @@ pages-extract = Save the pages picked as a new PDF
 pages-extract-name = { $name } (pages).pdf
 pages-extracted = The pages were saved as { $name }.
 pages-failed = The pages could not be changed: { $error }
+
+## Annotating
+tool-highlight = Highlight text
+tool-underline = Underline text
+tool-strikeout = Strike text out
+tool-squiggly = Squiggle under text
+tool-note = Note
+tool-free-text = Text box
+tool-ink = Pen
+tool-rectangle = Rectangle
+tool-ellipse = Ellipse
+tool-line = Line
+tool-arrow = Arrow
+tool-stamp = Stamp
+tool-colour = Colour
+annot-shape = Shape
+annot-other = Annotation
+annotate-failed = The annotation could not be added: { $error }
+comment-placeholder = Write a comment
+comment-page = Page { $page }
+comment-delete = Delete (Del)
+comments-none = No comments or annotations yet. Pick a tool with the pen button above the page.
 error-invalid = { $name } is damaged or is not a PDF.
 error-read = { $name } could not be read: { $error }

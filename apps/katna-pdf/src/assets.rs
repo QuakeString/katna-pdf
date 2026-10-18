@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Icons built into the binary, served to GPUI's `svg()` element. They are
+//! Icons built into the binary, served to GPUI's `svg()` element. Most are
 //! Katna Mail's (`apps/katna-mail/icons/` in the Katna repository), so
-//! both apps look alike.
+//! both apps look alike; the annotation shapes, ink and stamp are drawn
+//! here in the same style.
 
 use std::borrow::Cow;
 
@@ -34,6 +35,46 @@ const ICONS: &[(&str, &[u8])] = &[
         include_bytes!("../icons/rotate-cw.svg"),
     ),
     ("icons/trash.svg", include_bytes!("../icons/trash.svg")),
+    (
+        "icons/format-squiggle.svg",
+        include_bytes!("../icons/format-squiggle.svg"),
+    ),
+    (
+        "icons/format-strike.svg",
+        include_bytes!("../icons/format-strike.svg"),
+    ),
+    (
+        "icons/format-text.svg",
+        include_bytes!("../icons/format-text.svg"),
+    ),
+    (
+        "icons/format-underline.svg",
+        include_bytes!("../icons/format-underline.svg"),
+    ),
+    (
+        "icons/highlight.svg",
+        include_bytes!("../icons/highlight.svg"),
+    ),
+    ("icons/ink.svg", include_bytes!("../icons/ink.svg")),
+    ("icons/notes.svg", include_bytes!("../icons/notes.svg")),
+    ("icons/pen.svg", include_bytes!("../icons/pen.svg")),
+    (
+        "icons/shape-arrow.svg",
+        include_bytes!("../icons/shape-arrow.svg"),
+    ),
+    (
+        "icons/shape-circle.svg",
+        include_bytes!("../icons/shape-circle.svg"),
+    ),
+    (
+        "icons/shape-line.svg",
+        include_bytes!("../icons/shape-line.svg"),
+    ),
+    (
+        "icons/shape-square.svg",
+        include_bytes!("../icons/shape-square.svg"),
+    ),
+    ("icons/stamp.svg", include_bytes!("../icons/stamp.svg")),
     (
         "icons/chevron-down.svg",
         include_bytes!("../icons/chevron-down.svg"),
