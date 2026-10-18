@@ -203,7 +203,7 @@ change-other = other changes
 signer-revocation-unknown = Whether { $name }'s certificate was revoked could not be checked: { $why }
 signer-trust-root = Trust { $root }
 signer-trust-failed = The certificate could not be kept: { $error }
-signatures-roots = Signers are checked against your system's root certificates and the ones in { $folder } (put India's CCA root certificates there).
+signatures-roots = Signers are checked against your system's root certificates, India's CCA roots (built in), and the ones in { $folder }.
 
 ## The menu bar (KDE's global menu)
 menu-file = _File

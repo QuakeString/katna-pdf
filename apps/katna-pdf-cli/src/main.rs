@@ -50,8 +50,8 @@ usage: katna-pdf-cli COMMAND [--json] ...
   verify FILE [--trust PATH] [--online]
                                   the signatures, each checked: intact, what it covers,
                                   who signed, and whether their certificate chains to a
-                                  root the system trusts, or one in PATH (a certificate
-                                  file or a folder of them, such as India's CCA roots);
+                                  root the system trusts, India's CCA roots (built in),
+                                  or one in PATH (a certificate file or a folder of them);
                                   with --online, missing issuers are fetched and
                                   revocation is asked of OCSP responders and CRLs
   annots FILE                     the annotations, page by page
@@ -917,7 +917,7 @@ fn verify(args: &[String], json: bool) -> Done {
     let [file] = args.words()?;
     let bytes = std::fs::read(file).map_err(|e| failed(format!("{file}: {e}")))?;
     let doc = Document::load(bytes.clone()).map_err(|e| failed(format!("{file}: {e}")))?;
-    let mut roots = katna_pdf_sign::Roots::system();
+    let mut roots = katna_pdf_sign::Roots::standard();
     if let Some(path) = args.option("--trust") {
         let path = std::path::Path::new(path);
         let added = if path.is_dir() {
