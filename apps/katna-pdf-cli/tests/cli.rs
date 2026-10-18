@@ -408,6 +408,18 @@ fn files_are_signed_with_a_token() {
         "{out}"
     );
     assert_eq!(out.matches("\"name\":").count(), 1, "{out}");
+    // The setup, step by step: the driver sees the token.
+    let out = Command::new(env!("CARGO_BIN_EXE_katna-pdf-cli"))
+        .args(["token-check", "--json"])
+        .env("SOFTHSM2_CONF", &conf)
+        .env("KATNA_PDF_PKCS11", SOFTHSM)
+        .output()
+        .unwrap();
+    let out = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.contains("\"tokens\":[{\"label\":\"Katna Test Token\",\"certificates\":1}]"),
+        "{out}"
+    );
 
     let input = d.join("in.pdf");
     std::fs::write(&input, pdf(1)).unwrap();
