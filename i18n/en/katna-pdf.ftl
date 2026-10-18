@@ -16,6 +16,7 @@ page-of = { $page } / { $count }
 zoom-in = Zoom in (Ctrl+=)
 zoom-out = Zoom out (Ctrl+-)
 zoom-fit-width = Fit width (Ctrl+1)
+zoom-fit-page = Fit page (Ctrl+2)
 zoom-actual = Actual size (Ctrl+0)
 open-file = Open a file (Ctrl+O)
 side-pane-toggle = Side pane (F7)
