@@ -33,6 +33,7 @@ des.workspace = true
 rc2.workspace = true
 cbc.workspace = true
 rand_core.workspace = true
+image = { workspace = true, features = ["png", "jpeg"] }
 
 [lints]
 workspace = true

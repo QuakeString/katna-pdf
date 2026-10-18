@@ -65,6 +65,19 @@ pub struct SignRequest {
     /// Certify the file, allowing these changes after; only the first
     /// signature may.
     pub certify: Option<Allowed>,
+    /// A picture shown in the signature's box, such as a scanned
+    /// handwritten signature.
+    pub picture: Option<Picture>,
+}
+
+/// A picture: 8-bit RGB, row by row, with an alpha channel when it has
+/// see-through parts.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Picture {
+    pub width: u32,
+    pub height: u32,
+    pub rgb: Vec<u8>,
+    pub alpha: Option<Vec<u8>>,
 }
 
 impl SignRequest {
@@ -76,6 +89,7 @@ impl SignRequest {
             time: SystemTime::now(),
             contents_len: CONTENTS_LEN,
             certify: None,
+            picture: None,
         }
     }
 }
@@ -385,7 +399,8 @@ impl Document {
                             _ => continue,
                         }
                     };
-                    let ap = update.add(appearance(widget.rect, lines));
+                    let ap = appearance(&mut update, widget.rect, lines, request.picture.as_ref());
+                    let ap = update.add(ap);
                     wdict.set("AP", Dict(vec![(Name::new("N"), Object::Ref(ap))]));
                     let flags = wdict.get("F").and_then(Object::as_int).unwrap_or(0);
                     wdict.set("F", flags | SIGNED_WIDGET_FLAGS);
@@ -408,7 +423,7 @@ impl Document {
                     page,
                     rect,
                     request.field_name.clone(),
-                    Some((sig, lines)),
+                    Some((sig, lines, request.picture.as_ref())),
                 )?;
             }
         }
@@ -497,7 +512,8 @@ impl Document {
 
     /// Puts a new signature field, its widget and itself in one, on page
     /// `page` at `rect` and in `form`; signed with signature dictionary
-    /// `signed.0` and showing lines `signed.1` when given.
+    /// `signed.0` and showing lines `signed.1` and picture `signed.2`
+    /// when given.
     fn put_field(
         &self,
         update: &mut Update,
@@ -505,7 +521,7 @@ impl Document {
         page: usize,
         rect: [f32; 4],
         name: Option<String>,
-        signed: Option<(Ref, &[String])>,
+        signed: Option<(Ref, &[String], Option<&Picture>)>,
     ) -> Result<(), SignError> {
         let &page_ref = self.pages().get(page).ok_or(SignError::NoPage)?;
         let taken: Vec<String> = self.form().into_iter().map(|f| f.name).collect();
@@ -526,11 +542,12 @@ impl Document {
         widget.set("Rect", reals(&rect));
         widget.set("P", Object::Ref(page_ref));
         match signed {
-            Some((sig, lines)) => {
+            Some((sig, lines, picture)) => {
                 widget.set("F", SIGNED_WIDGET_FLAGS);
                 widget.set("V", Object::Ref(sig));
                 if rect[2] > rect[0] && rect[3] > rect[1] {
-                    let ap = update.add(appearance(rect, lines));
+                    let ap = appearance(update, rect, lines, picture);
+                    let ap = update.add(ap);
                     widget.set("AP", Dict(vec![(Name::new("N"), Object::Ref(ap))]));
                 }
             }
@@ -599,20 +616,58 @@ fn trim_padding(contents: &mut Vec<u8>) {
     }
 }
 
-/// A signature's appearance: `lines` of text fitted into `rect`.
-fn appearance(rect: [f32; 4], lines: &[String]) -> Object {
+/// A signature's appearance: `picture`, when given, at the left (or
+/// filling the box when there is no text), and `lines` of text fitted
+/// into the rest of `rect`.
+fn appearance(
+    update: &mut Update,
+    rect: [f32; 4],
+    lines: &[String],
+    picture: Option<&Picture>,
+) -> Object {
     let (w, h) = ((rect[2] - rect[0]).abs(), (rect[3] - rect[1]).abs());
     let mut content = String::new();
-    if !lines.is_empty() && w > 0.0 && h > 0.0 {
+    let pad = (h.min(w) * 0.06).clamp(1.0, 4.0);
+    let mut resources = Dict::new();
+    // Where the text starts.
+    let mut left = 0.0;
+    if let Some(picture) = picture.filter(|p| p.width > 0 && p.height > 0 && w > 0.0 && h > 0.0) {
+        let room_w = if lines.is_empty() { w } else { w * 0.45 } - 2.0 * pad;
+        let room_h = h - 2.0 * pad;
+        let aspect = picture.width as f32 / picture.height as f32;
+        let (dw, dh) = if room_w / room_h > aspect {
+            (room_h * aspect, room_h)
+        } else {
+            (room_w, room_w / aspect)
+        };
+        let x = if lines.is_empty() {
+            (w - dw) / 2.0
+        } else {
+            pad
+        };
+        let y = (h - dh) / 2.0;
+        content.push_str(&format!(
+            "q {dw:.2} 0 0 {dh:.2} {x:.2} {y:.2} cm /Pic Do Q\n"
+        ));
+        let image = image_stream(update, picture);
+        let image = update.add(Object::Stream(image));
+        resources.set(
+            "XObject",
+            Dict(vec![(Name::new("Pic"), Object::Ref(image))]),
+        );
+        left = x + dw;
+    }
+    let text_w = w - left;
+    if !lines.is_empty() && text_w > 0.0 && h > 0.0 {
         // Helvetica's average width is about half its size.
         let longest = lines.iter().map(|l| l.chars().count()).max().unwrap_or(1) as f32;
-        let pad = (h.min(w) * 0.06).clamp(1.0, 4.0);
         let size = ((h - 2.0 * pad) / (lines.len() as f32 * 1.2))
-            .min((w - 2.0 * pad) / (longest.max(1.0) * 0.52))
+            .min((text_w - 2.0 * pad) / (longest.max(1.0) * 0.52))
             .clamp(2.0, 12.0);
         let lead = size * 1.2;
         content.push_str(&format!(
-            "BT /Helv {size:.2} Tf 0 g {lead:.2} TL {pad:.2} {:.2} Td\n",
+            "BT /Helv {size:.2} Tf 0 g {lead:.2} TL {:.2} {:.2} Td\n",
+            left + pad,
             h - pad - size
         ));
         for (i, line) in lines.iter().enumerate() {
@@ -630,10 +685,10 @@ fn appearance(rect: [f32; 4], lines: &[String]) -> Object {
         (Name::new("BaseFont"), Object::name("Helvetica")),
         (Name::new("Encoding"), Object::name("WinAnsiEncoding")),
     ]);
-    let resources = Dict(vec![(
-        Name::new("Font"),
+    resources.set(
+        "Font",
         Object::Dict(Dict(vec![(Name::new("Helv"), Object::Dict(font))])),
-    )]);
+    );
     let dict = Dict(vec![
         (Name::new("Type"), Object::name("XObject")),
         (Name::new("Subtype"), Object::name("Form")),
@@ -644,6 +699,45 @@ fn appearance(rect: [f32; 4], lines: &[String]) -> Object {
         dict,
         data: content.into_bytes(),
     })
+}
+
+/// `picture` as an image XObject, its see-through parts as a soft mask
+/// of its own.
+fn image_stream(update: &mut Update, picture: &Picture) -> Stream {
+    let image = |data: &[u8], gray: bool| {
+        let (filter, data) = match deflate(data) {
+            Some(packed) => (Some(Object::name("FlateDecode")), packed),
+            None => (None, data.to_vec()),
+        };
+        let mut dict = Dict(vec![
+            (Name::new("Type"), Object::name("XObject")),
+            (Name::new("Subtype"), Object::name("Image")),
+            (Name::new("Width"), Object::Int(i64::from(picture.width))),
+            (Name::new("Height"), Object::Int(i64::from(picture.height))),
+            (
+                Name::new("ColorSpace"),
+                Object::name(if gray { "DeviceGray" } else { "DeviceRGB" }),
+            ),
+            (Name::new("BitsPerComponent"), Object::Int(8)),
+        ]);
+        if let Some(filter) = filter {
+            dict.set("Filter", filter);
+        }
+        Stream { dict, data }
+    };
+    let mut stream = image(&picture.rgb, false);
+    if let Some(alpha) = &picture.alpha {
+        let mask = update.add(Object::Stream(image(alpha, true)));
+        stream.dict.set("SMask", Object::Ref(mask));
+    }
+    stream
+}
+
+fn deflate(data: &[u8]) -> Option<Vec<u8>> {
+    use std::io::Write as _;
+    let mut e = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+    e.write_all(data).ok()?;
+    e.finish().ok()
 }
 
 #[cfg(test)]

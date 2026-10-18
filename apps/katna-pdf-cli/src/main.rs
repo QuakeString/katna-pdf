@@ -34,12 +34,15 @@ usage: katna-pdf-cli COMMAND [--json] ...
           (--password-env VAR | --password-file F | --password PW)
           [--page N --rect L,B,R,T] [--reason R] [--location L] [--contact C] [--digest 256|384|512]
           [--tsa URL] [--ltv] [--certify none|forms|comments] [--field NAME]
+          [--picture IMAGE]
                                   sign with the key in a certificate file, or on a
                                   token (LABEL, or any), unlocked with the password
                                   or PIN (PAdES B-B);
                                   visible in a box on page N when --rect is given;
                                   timestamped by the server at URL with --tsa (PAdES B-T);
                                   in the empty signature field NAME with --field;
+                                  showing a PNG or JPEG (a scanned handwritten
+                                  signature) beside the text with --picture;
                                   with long-term validation data (PAdES B-LT) with --ltv:
                                   the chain and OCSP answers or CRLs, fetched now;
                                   certified with --certify, allowing no changes after,
@@ -169,6 +172,7 @@ impl<'a> Args<'a> {
                     | "--trust"
                     | "--certify"
                     | "--field"
+                    | "--picture"
                     | "--name"
             ) {
                 let Some(value) = it.next() else {
@@ -685,6 +689,13 @@ fn sign(args: &[String], json: bool) -> Done {
     let id = id.as_ref();
     let reason = args.option("--reason").map(str::to_owned);
     let ltv = args.flag("--ltv");
+    let picture = match args.option("--picture") {
+        None => None,
+        Some(path) => {
+            let bytes = std::fs::read(path).map_err(|e| failed(format!("{path}: {e}")))?;
+            Some(katna_pdf_sign::picture(&bytes).map_err(|e| failed(format!("{path}: {e}")))?)
+        }
+    };
     let roots = trusted(&args)?;
     let fetch = katna_pdf_sign::revocation::Http::default();
     let certify = match args.option("--certify") {
@@ -756,6 +767,7 @@ fn sign(args: &[String], json: bool) -> Done {
             );
             request.time = time;
             request.certify = certify;
+            request.picture = picture.clone();
             let mut signed = katna_pdf_sign::sign_with(&doc, &request, id, digest, stamper)
                 .map_err(|e| failed(format!("{file}: {e}")))?;
             if ltv {
