@@ -19,6 +19,16 @@ zoom-actual = Actual size (Ctrl+0)
 open-file = Open a file (Ctrl+O)
 side-pane-toggle = Side pane (F7)
 night-pages = Night pages (Ctrl+Shift+N)
+search-open = Find (Ctrl+F)
+
+## Find in the document
+search-placeholder = Find in the document
+search-count = { $current } of { $total }
+search-searching = Searching…
+search-none = No matches
+search-previous = Previous match (Shift+F3)
+search-next = Next match (F3)
+search-close = Close (Esc)
 
 ## The side pane beside the pages
 pane-pages = Pages

@@ -14,6 +14,10 @@ const ICONS: &[(&str, &[u8])] = &[
         include_bytes!("../icons/chevron-down.svg"),
     ),
     (
+        "icons/chevron-up.svg",
+        include_bytes!("../icons/chevron-up.svg"),
+    ),
+    (
         "icons/chevron-right.svg",
         include_bytes!("../icons/chevron-right.svg"),
     ),
@@ -35,6 +39,7 @@ const ICONS: &[(&str, &[u8])] = &[
         "icons/folders-pane.svg",
         include_bytes!("../icons/folders-pane.svg"),
     ),
+    ("icons/search.svg", include_bytes!("../icons/search.svg")),
     ("icons/zoom-in.svg", include_bytes!("../icons/zoom-in.svg")),
     (
         "icons/zoom-out.svg",
