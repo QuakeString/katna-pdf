@@ -19,6 +19,7 @@ impl Viewer {
     pub(super) fn toggle_crop(&mut self, cx: &mut Context<Self>) {
         self.cropping = !self.cropping;
         if self.cropping {
+            self.leave_text_edit(cx);
             self.tool = None;
             self.organizer = false;
             self.signing = None;

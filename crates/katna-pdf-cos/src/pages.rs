@@ -237,7 +237,7 @@ impl Document {
 
 /// Page `page` of `doc` as a dictionary standing alone: the attributes it
 /// inherits copied in, its parent dropped.
-fn page_dict(doc: &Document, page: Ref) -> Dict {
+pub(crate) fn page_dict(doc: &Document, page: Ref) -> Dict {
     let mut dict = doc
         .get(page)
         .and_then(|o| o.as_dict().cloned())

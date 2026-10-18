@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Decoding the stream filters the object layer itself needs: Flate with
-//! PNG and TIFF predictors (xref and object streams). Page content and
-//! images are the renderer's job.
+//! PNG and TIFF predictors (xref and object streams), and the others a
+//! page's content may be written in for editing it (LZW, ASCII85,
+//! ASCIIHex, RunLength). Images are the renderer's job.
 
 use std::io::Read as _;
 
@@ -40,12 +41,156 @@ pub fn decode(dict: &Dict, data: &[u8]) -> Result<Vec<u8>, FilterError> {
                 let raw = inflate(&out)?;
                 predict(params.get(i).copied().flatten(), raw)?
             }
+            b"LZWDecode" | b"LZW" => {
+                let early = params
+                    .get(i)
+                    .copied()
+                    .flatten()
+                    .and_then(|p| p.int("EarlyChange"))
+                    != Some(0);
+                let raw = lzw(&out, early)?;
+                predict(params.get(i).copied().flatten(), raw)?
+            }
+            b"ASCII85Decode" | b"A85" => ascii85(&out)?,
+            b"ASCIIHexDecode" | b"AHx" => ascii_hex(&out),
+            b"RunLengthDecode" | b"RL" => run_length(&out),
             other => {
                 return Err(FilterError::Unsupported(
                     String::from_utf8_lossy(other).into_owned(),
                 ));
             }
         };
+    }
+    Ok(out)
+}
+
+fn ascii85(data: &[u8]) -> Result<Vec<u8>, FilterError> {
+    let mut out = Vec::with_capacity(data.len() * 4 / 5);
+    let mut group = [0u8; 5];
+    let mut n = 0;
+    let body = data.strip_prefix(b"<~").unwrap_or(data);
+    for &b in body {
+        match b {
+            b'~' => break,
+            b'z' if n == 0 => out.extend_from_slice(&[0; 4]),
+            b'!'..=b'u' => {
+                group[n] = b - b'!';
+                n += 1;
+                if n == 5 {
+                    let v = group.iter().fold(0u64, |a, d| a * 85 + u64::from(*d));
+                    let v = u32::try_from(v).map_err(|_| FilterError::Corrupt)?;
+                    out.extend_from_slice(&v.to_be_bytes());
+                    n = 0;
+                }
+            }
+            _ if crate::parse::is_white(b) => {}
+            _ => return Err(FilterError::Corrupt),
+        }
+    }
+    if n > 1 {
+        for d in group.iter_mut().skip(n) {
+            *d = 84;
+        }
+        let v = group.iter().fold(0u64, |a, d| a * 85 + u64::from(*d));
+        let v = u32::try_from(v).map_err(|_| FilterError::Corrupt)?;
+        out.extend_from_slice(&v.to_be_bytes()[..n - 1]);
+    }
+    Ok(out)
+}
+
+fn ascii_hex(data: &[u8]) -> Vec<u8> {
+    let digits: Vec<u8> = data
+        .iter()
+        .take_while(|b| **b != b'>')
+        .filter_map(|b| (*b as char).to_digit(16).map(|d| d as u8))
+        .collect();
+    digits
+        .chunks(2)
+        .map(|c| c[0] << 4 | c.get(1).copied().unwrap_or(0))
+        .collect()
+}
+
+fn run_length(data: &[u8]) -> Vec<u8> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < data.len() {
+        let n = data[i] as usize;
+        i += 1;
+        match n {
+            128 => break,
+            0..=127 => {
+                let end = (i + n + 1).min(data.len());
+                out.extend_from_slice(&data[i..end]);
+                i = end;
+            }
+            _ => {
+                if let Some(b) = data.get(i) {
+                    out.extend(std::iter::repeat_n(*b, 257 - n));
+                }
+                i += 1;
+            }
+        }
+    }
+    out
+}
+
+fn lzw(data: &[u8], early: bool) -> Result<Vec<u8>, FilterError> {
+    let mut out: Vec<u8> = Vec::new();
+    let mut table: Vec<Vec<u8>> = Vec::new();
+    let reset = |table: &mut Vec<Vec<u8>>| {
+        table.clear();
+        table.extend((0..=255u8).map(|b| vec![b]));
+        // 256 clears, 257 ends.
+        table.push(Vec::new());
+        table.push(Vec::new());
+    };
+    reset(&mut table);
+    let mut width = 9;
+    let mut prev: Option<Vec<u8>> = None;
+    let (mut acc, mut bits) = (0u32, 0u32);
+    for &b in data {
+        acc = acc << 8 | u32::from(b);
+        bits += 8;
+        while bits >= width {
+            let code = (acc >> (bits - width)) as usize & ((1 << width) - 1);
+            bits -= width;
+            match code {
+                256 => {
+                    reset(&mut table);
+                    width = 9;
+                    prev = None;
+                    continue;
+                }
+                257 => return Ok(out),
+                _ => {}
+            }
+            let entry = if code < table.len() {
+                table[code].clone()
+            } else if let Some(p) = &prev {
+                let mut e = p.clone();
+                e.push(p[0]);
+                e
+            } else {
+                return Err(FilterError::Corrupt);
+            };
+            out.extend_from_slice(&entry);
+            if out.len() as u64 > MAX_DECODED {
+                return Err(FilterError::TooLarge);
+            }
+            if let Some(p) = prev.take() {
+                let mut e = p;
+                e.push(entry[0]);
+                table.push(e);
+            }
+            prev = Some(entry);
+            let next = table.len() + usize::from(early);
+            width = match next {
+                0..512 => 9,
+                512..1024 => 10,
+                1024..2048 => 11,
+                _ => 12,
+            };
+        }
     }
     Ok(out)
 }
@@ -169,6 +314,24 @@ mod tests {
         d.set("Filter", Object::name("FlateDecode"));
         d.set("DecodeParms", parms);
         assert_eq!(decode(&d, &zlib(&raw)).unwrap(), [1, 2, 3, 2, 3, 4]);
+    }
+
+    #[test]
+    fn ascii_filters() {
+        assert_eq!(ascii85(b"<~87cURD]i,\"Ebo7~>").unwrap(), b"Hello World");
+        assert_eq!(ascii85(b"z~>").unwrap(), [0; 4]);
+        assert_eq!(ascii_hex(b"48 65 6c6C6>"), b"Hell`");
+        assert_eq!(
+            run_length(&[2, b'a', b'b', b'c', 254, b'x', 128]),
+            b"abcxxx"
+        );
+    }
+
+    #[test]
+    fn lzw_example() {
+        // ISO 32000-1 §7.4.4.2's example.
+        let data = [0x80, 0x0B, 0x60, 0x50, 0x22, 0x0C, 0x0C, 0x85, 0x01];
+        assert_eq!(lzw(&data, true).unwrap(), b"-----A---B");
     }
 
     #[test]

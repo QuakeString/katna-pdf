@@ -446,3 +446,80 @@ fn files_are_signed_with_a_token() {
     assert!(out.contains("\"signer\":\"Asha Verma\""), "{out}");
     let _ = std::fs::remove_dir_all(d);
 }
+
+#[test]
+fn text_is_listed_and_changed() {
+    let d = dir("text");
+    let file = d.join("letter.pdf");
+    let lines = [
+        "Dear Asha,".to_string(),
+        "  The total due is 500 rupees.".to_string(),
+    ];
+    std::fs::write(&file, katna_pdf_cos::text_pdf("Letter", &lines)).unwrap();
+    let (code, out) = run(&["text", s(&file)]);
+    assert_eq!(code, 0);
+    assert!(
+        out.contains("1:2      Helvetica-Bold 10pt: Dear Asha,"),
+        "{out}"
+    );
+    let (code, out) = run(&["text", "--json", s(&file)]);
+    assert_eq!(code, 0);
+    assert!(
+        out.contains("\"run\":\"1:3\",\"font\":\"Helvetica\""),
+        "{out}"
+    );
+
+    let changed = d.join("changed.pdf");
+    let (code, out) = run(&[
+        "edit-text",
+        s(&file),
+        "-o",
+        s(&changed),
+        "--replace",
+        "500",
+        "--to",
+        "750",
+    ]);
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("1 run changed"), "{out}");
+    let (_, out) = run(&["text", s(&changed)]);
+    assert!(out.contains("The total due is 750 rupees."), "{out}");
+
+    let again = d.join("again.pdf");
+    let (code, _) = run(&[
+        "edit-text",
+        s(&changed),
+        "-o",
+        s(&again),
+        "--run",
+        "1:2",
+        "--to",
+        "Dear Ravi,",
+    ]);
+    assert_eq!(code, 0);
+    let (_, out) = run(&["text", s(&again)]);
+    assert!(out.contains("Dear Ravi,") && out.contains("750"), "{out}");
+
+    let (code, _) = run(&[
+        "edit-text",
+        s(&file),
+        "-o",
+        s(&again),
+        "--run",
+        "9:1",
+        "--to",
+        "x",
+    ]);
+    assert_eq!(code, 2);
+    let (code, _) = run(&[
+        "edit-text",
+        s(&file),
+        "-o",
+        s(&again),
+        "--replace",
+        "nowhere",
+        "--to",
+        "x",
+    ]);
+    assert_eq!(code, 1);
+}

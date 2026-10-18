@@ -68,6 +68,12 @@ usage: katna-pdf-cli COMMAND [--json] ...
                                   with --online, missing issuers are fetched and
                                   revocation is asked of OCSP responders and CRLs;
                                   with --report, the same written as a PDF to keep or send
+  text FILE [--pages PAGES]       the text each page draws, in runs (a line's worth
+                                  in one font), numbered PAGE:RUN, with font and place
+  edit-text FILE -o OUT (--run PAGE:RUN | --replace OLD) --to NEW [--pages PAGES]
+                                  change a run's text, or OLD to NEW wherever a run
+                                  holds it; the run's own font is kept where it has
+                                  the letters, a standard font stands in where not
   annots FILE                     the annotations, page by page
   xfdf-export FILE -o OUT.xfdf    the annotations as XFDF
   xfdf-import FILE XFDF -o OUT    the annotations of XFDF added to the PDF
@@ -95,6 +101,8 @@ fn main() -> ExitCode {
         "ltv" => ltv(rest, json),
         "tokens" => tokens(rest, json),
         "token-check" => token_check(rest, json),
+        "text" => text(rest, json),
+        "edit-text" => edit_text(rest, json),
         "annots" => annots(rest, json),
         "xfdf-export" => xfdf_export(rest, json),
         "xfdf-import" => xfdf_import(rest, json),
@@ -181,6 +189,9 @@ impl<'a> Args<'a> {
                     | "--trust"
                     | "--certify"
                     | "--lock"
+                    | "--run"
+                    | "--replace"
+                    | "--to"
                     | "--field"
                     | "--picture"
                     | "--name"
@@ -1430,6 +1441,130 @@ fn annots(args: &[String], json: bool) -> Done {
         out = format!("{{\"annotations\":[{}]}}\n", items.join(","));
     }
     Ok(out)
+}
+
+fn text(args: &[String], json: bool) -> Done {
+    let args = Args::parse(args)?;
+    let [file] = args.words()?;
+    let doc = open(file)?;
+    let count = doc.pages().len();
+    let pages = match args.option("--pages") {
+        Some(spec) => ranges::parse(spec, count).map_err(failed)?,
+        None => (0..count).collect(),
+    };
+    let mut out = String::new();
+    let mut items = Vec::new();
+    for page in pages {
+        for (i, run) in doc.text_runs(page).iter().enumerate() {
+            if json {
+                items.push(format!(
+                    "{{\"run\":\"{}:{}\",\"font\":{},\"size\":{},\"rect\":[{}],\"text\":{}}}",
+                    page + 1,
+                    i + 1,
+                    string(&run.font),
+                    num(run.size),
+                    run.rect
+                        .iter()
+                        .map(|v| num(*v))
+                        .collect::<Vec<_>>()
+                        .join(","),
+                    string(&run.text),
+                ));
+            } else {
+                let _ = writeln!(
+                    out,
+                    "{:<8} {} {}pt: {}",
+                    format!("{}:{}", page + 1, i + 1),
+                    run.font,
+                    num(run.size),
+                    run.text
+                );
+            }
+        }
+    }
+    if json {
+        out = format!("{{\"runs\":[{}]}}\n", items.join(","));
+    }
+    Ok(out)
+}
+
+fn edit_text(args: &[String], json: bool) -> Done {
+    let args = Args::parse(args)?;
+    let [file] = args.words()?;
+    let out = args.output()?;
+    let new = args
+        .option("--to")
+        .ok_or_else(|| Failure::Usage("edit-text needs --to NEW".into()))?;
+    let doc = open(file)?;
+    let count = doc.pages().len();
+    // Each page's changes: (run, new text).
+    let mut edits: Vec<(usize, Vec<(usize, String)>)> = Vec::new();
+    match (args.option("--run"), args.option("--replace")) {
+        (Some(id), None) => {
+            let bad = || Failure::Usage(format!("--run {id}: PAGE:RUN, as `text` numbers them"));
+            let (page, run) = id.split_once(':').ok_or_else(bad)?;
+            let page = page
+                .parse::<usize>()
+                .ok()
+                .filter(|p| (1..=count).contains(p))
+                .ok_or_else(bad)?;
+            let run = run
+                .parse::<usize>()
+                .ok()
+                .filter(|r| *r >= 1)
+                .ok_or_else(bad)?;
+            if doc.text_runs(page - 1).len() < run {
+                return Err(bad());
+            }
+            edits.push((page - 1, vec![(run - 1, new.to_owned())]));
+        }
+        (None, Some(old)) if !old.is_empty() => {
+            let pages = match args.option("--pages") {
+                Some(spec) => ranges::parse(spec, count).map_err(failed)?,
+                None => (0..count).collect(),
+            };
+            for page in pages {
+                let changed: Vec<(usize, String)> = doc
+                    .text_runs(page)
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, r)| r.text.contains(old))
+                    .map(|(i, r)| (i, r.text.replace(old, new)))
+                    .collect();
+                if !changed.is_empty() {
+                    edits.push((page, changed));
+                }
+            }
+            if edits.is_empty() {
+                return Err(Failure::Failed(format!("no text holds “{old}”")));
+            }
+        }
+        _ => {
+            return Err(Failure::Usage(
+                "edit-text takes one of --run PAGE:RUN and --replace OLD".into(),
+            ));
+        }
+    }
+    let mut bytes = doc.bytes().to_vec();
+    let mut changed = 0;
+    for (page, page_edits) in edits {
+        let doc = Document::load(bytes).map_err(failed)?;
+        changed += page_edits.len();
+        bytes = doc.edit_text(page, &page_edits).map_err(failed)?;
+    }
+    write(&out, &bytes)?;
+    Ok(if json {
+        format!(
+            "{{\"written\":[{{\"file\":{},\"pages\":{count}}}],\"runs_changed\":{changed}}}\n",
+            string(&out.display().to_string())
+        )
+    } else {
+        format!(
+            "{} ({changed} run{} changed)\n",
+            out.display(),
+            if changed == 1 { "" } else { "s" }
+        )
+    })
 }
 
 fn xfdf_export(args: &[String], json: bool) -> Done {
