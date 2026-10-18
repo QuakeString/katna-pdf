@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Katna PDF's colours: Katna Mail's palette (docs/PLAN.md §2.6), as the
-//! mockups use it. Light or dark follows the desktop.
+//! Katna PDF's colours: Katna's shared palette (`katna_ui::theme`, the
+//! one Katna Mail uses; docs/PLAN.md §2.6), as the mockups use it. Light
+//! or dark follows the desktop.
 
-use gpui::{Hsla, WindowAppearance, rgb, rgba};
+use gpui::{Hsla, WindowAppearance, rgba};
+use katna_ui::theme::Theme as Katna;
 
 #[derive(Debug, Clone, Copy)]
 pub struct Theme {
@@ -36,34 +38,27 @@ impl Theme {
     }
 
     pub fn light() -> Self {
-        Self {
-            page: rgb(0xf6f8fc).into(),
-            card: rgb(0xffffff).into(),
-            backdrop: rgb(0xeceff4).into(),
-            text: rgb(0x1f1f1f).into(),
-            dim: rgb(0x444746).into(),
-            line: rgba(0x64798f1f).into(),
-            hover: rgba(0x1f1f1f12).into(),
-            field: rgb(0xe9eef6).into(),
-            accent: rgb(0x0b57d0).into(),
-            on_accent: rgb(0xffffff).into(),
-            error: rgb(0xb3261e).into(),
-        }
+        Self::from_katna(&Katna::new(false), 0xeceff4ff)
     }
 
     pub fn dark() -> Self {
+        Self::from_katna(&Katna::new(true), 0x0d0e10ff)
+    }
+
+    /// Katna's palette; `backdrop`, behind the pages, is Katna PDF's own.
+    fn from_katna(k: &Katna, backdrop: u32) -> Self {
         Self {
-            page: rgb(0x131416).into(),
-            card: rgb(0x1f2124).into(),
-            backdrop: rgb(0x0d0e10).into(),
-            text: rgb(0xe3e3e3).into(),
-            dim: rgb(0xc4c7c5).into(),
-            line: rgba(0xffffff12).into(),
-            hover: rgba(0xffffff14).into(),
-            field: rgb(0x2a2d31).into(),
-            accent: rgb(0xa8c7fa).into(),
-            on_accent: rgb(0x062e6f).into(),
-            error: rgb(0xf2b8b5).into(),
+            page: rgba(k.page).into(),
+            card: rgba(k.surface).into(),
+            backdrop: rgba(backdrop).into(),
+            text: rgba(k.text).into(),
+            dim: rgba(k.text_dim).into(),
+            line: rgba(k.outline).into(),
+            hover: rgba(k.hover).into(),
+            field: rgba(k.search).into(),
+            accent: rgba(k.accent).into(),
+            on_accent: rgba(k.on_accent).into(),
+            error: rgba(k.error).into(),
         }
     }
 }

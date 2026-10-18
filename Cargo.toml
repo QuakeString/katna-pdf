@@ -20,8 +20,8 @@ katna-pdf-cos = { path = "crates/katna-pdf-cos" }
 # Katna's shared UI crates, at a pinned commit of the Katna repository
 # (docs/PLAN.md §2.2). Move the pin deliberately, together with the
 # [patch.crates-io] entries below.
-katna-core = { git = "https://github.com/QuakeString/katna", rev = "fc6069710d6a9ab214d0a995c3d5b8603c63b1c1" }
-katna-ui = { git = "https://github.com/QuakeString/katna", rev = "fc6069710d6a9ab214d0a995c3d5b8603c63b1c1" }
+katna-core = { git = "https://github.com/QuakeString/katna", rev = "a201ec5c904a7da7f174f3da066a7dc9a9b78387" }
+katna-ui = { git = "https://github.com/QuakeString/katna", rev = "a201ec5c904a7da7f174f3da066a7dc9a9b78387" }
 
 # GPUI as Katna builds it: the same versions, patched from Katna's vendor/.
 gpui = { package = "gpui-pre", version = "=0.3.6" }
@@ -59,7 +59,7 @@ strip = true
 # hayro with Katna PDF's fixes; vendor/hayro/KATNA.md lists them.
 hayro = { path = "vendor/hayro" }
 hayro-interpret = { path = "vendor/hayro-interpret" }
-gpui-pre = { git = "https://github.com/QuakeString/katna", rev = "fc6069710d6a9ab214d0a995c3d5b8603c63b1c1" }
-gpui-pre-linux = { git = "https://github.com/QuakeString/katna", rev = "fc6069710d6a9ab214d0a995c3d5b8603c63b1c1" }
-gpui-pre-wgpu = { git = "https://github.com/QuakeString/katna", rev = "fc6069710d6a9ab214d0a995c3d5b8603c63b1c1" }
-gpui-pre-windows = { git = "https://github.com/QuakeString/katna", rev = "fc6069710d6a9ab214d0a995c3d5b8603c63b1c1" }
+gpui-pre = { git = "https://github.com/QuakeString/katna", rev = "a201ec5c904a7da7f174f3da066a7dc9a9b78387" }
+gpui-pre-linux = { git = "https://github.com/QuakeString/katna", rev = "a201ec5c904a7da7f174f3da066a7dc9a9b78387" }
+gpui-pre-wgpu = { git = "https://github.com/QuakeString/katna", rev = "a201ec5c904a7da7f174f3da066a7dc9a9b78387" }
+gpui-pre-windows = { git = "https://github.com/QuakeString/katna", rev = "a201ec5c904a7da7f174f3da066a7dc9a9b78387" }
