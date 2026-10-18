@@ -19,6 +19,7 @@ use hayro::{RenderCache, RenderSettings, render_into};
 
 use crate::recolor::Area;
 use crate::scene::{Scene, is_vector_heavy};
+use crate::text::{PageText, TextDevice};
 use crate::{Bitmap, Document, Engine, OpenError, Region, fit_scale};
 
 /// hayro, pure Rust, drawing on the CPU. Vector-heavy pages, such as CAD
@@ -200,6 +201,24 @@ impl Document for HayroDocument {
                 })
             })
             .collect()
+    }
+
+    fn text(&self, page: usize) -> PageText {
+        let (Some((w, h)), Some(pdf_page)) = (self.page_size(page), self.pdf.pages().get(page))
+        else {
+            return PageText::default();
+        };
+        let cache = InterpreterCache::new();
+        let mut context = Context::new(
+            pdf_page.initial_transform(true).to_kurbo(),
+            Rect::new(0.0, 0.0, f64::from(w), f64::from(h)),
+            &cache,
+            pdf_page.xref(),
+            InterpreterSettings::default(),
+        );
+        let mut device = TextDevice::default();
+        interpret_page(pdf_page, &mut context, &mut device);
+        device.text
     }
 
     fn render_region(&self, page: usize, scale: f32, region: Region) -> Option<Bitmap> {

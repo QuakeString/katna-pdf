@@ -25,7 +25,9 @@ fn pdf_with(pages: &[&str], flate: bool) -> Vec<u8> {
     for (i, content) in pages.iter().enumerate() {
         objects.push(
             format!(
-                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Contents {} 0 R >>",
+                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Contents {} 0 R \
+                 /Resources << /Font << /F1 << /Type /Font /Subtype /Type1 \
+                 /BaseFont /Helvetica >> >> >> >>",
                 4 + 2 * i
             )
             .into_bytes(),
@@ -363,4 +365,27 @@ fn finds_where_pictures_are_drawn() {
     let doc = Hayro.open(Arc::new(pdf(&[page])), "").unwrap();
     // y is flipped: the page's top is row 0.
     assert_eq!(doc.pictures(0, 2.0), [(40, 40, 240, 140)]);
+}
+
+#[test]
+fn reads_a_pages_text_with_where_it_is() {
+    // Two words on one line, then a second line; the second line's text
+    // is invisible (render mode 3), as an OCR layer's is.
+    let page = "BT /F1 12 Tf 10 50 Td (Hello) Tj 40 0 Td (world) Tj ET \
+                BT 3 Tr /F1 12 Tf 10 30 Td (Again) Tj ET";
+    let doc = Hayro.open(Arc::new(pdf(&[page])), "").unwrap();
+    let text = doc.text(0);
+    assert_eq!(text.text, "Hello world\nAgain");
+    assert_eq!(text.boxes.len(), text.text.chars().count());
+    // 'H' starts at x = 10; its box reaches up from the baseline, 50 pt
+    // above the bottom of the 100 pt page.
+    let h = text.boxes[0];
+    assert!(
+        (h[0] - 10.0).abs() < 0.01 && h[1] < 50.0 && h[3] > 50.0,
+        "{h:?}"
+    );
+    let found = text.find("WORLD again");
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0], 6..17);
+    assert_eq!(text.line_boxes(found[0].clone()).len(), 2);
 }
