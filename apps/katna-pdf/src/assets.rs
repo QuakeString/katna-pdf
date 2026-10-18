@@ -35,6 +35,18 @@ const ICONS: &[(&str, &[u8])] = &[
         include_bytes!("../icons/rotate-cw.svg"),
     ),
     ("icons/trash.svg", include_bytes!("../icons/trash.svg")),
+    (
+        "icons/signature.svg",
+        include_bytes!("../icons/signature.svg"),
+    ),
+    (
+        "icons/shield-check.svg",
+        include_bytes!("../icons/shield-check.svg"),
+    ),
+    (
+        "icons/shield-alert.svg",
+        include_bytes!("../icons/shield-alert.svg"),
+    ),
     ("icons/upload.svg", include_bytes!("../icons/upload.svg")),
     (
         "icons/format-squiggle.svg",

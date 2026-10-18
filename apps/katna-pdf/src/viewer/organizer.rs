@@ -78,6 +78,7 @@ impl Viewer {
         self.organizer = !self.organizer && matches!(self.content, Content::Ready(_));
         if self.organizer {
             self.cropping = false;
+            self.signing = None;
             self.draft = None;
         }
         if self.organizer && self.tools {

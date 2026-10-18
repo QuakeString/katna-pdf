@@ -36,6 +36,7 @@ use katna_ui::{ScrollBar, px, unpx};
 mod annots;
 mod crop;
 mod organizer;
+mod sign;
 
 use crate::annotate::Tool;
 use crate::contents::{self, Contents};
@@ -163,6 +164,7 @@ enum PaneTab {
     Pages,
     Contents,
     Comments,
+    Signatures,
 }
 
 /// What a viewer asks of the tabs around it.
@@ -318,6 +320,10 @@ pub struct Viewer {
     organizer: bool,
     /// A box dragged on a page crops it (`crop.rs`).
     cropping: bool,
+    /// The file's signatures, checked, once read; and signing, while
+    /// under way (`sign.rs`).
+    signatures: Option<sign::Rows>,
+    signing: Option<sign::Signing>,
     grid: gpui::ScrollHandle,
     grid_bar: ScrollBar,
     theme: Theme,
@@ -408,6 +414,8 @@ impl Viewer {
             thumbs: Thumbs::new(),
             organizer: false,
             cropping: false,
+            signatures: None,
+            signing: None,
             grid: gpui::ScrollHandle::new(),
             grid_bar: ScrollBar::default(),
             theme: Theme::for_appearance(window.appearance()),
@@ -486,6 +494,8 @@ impl Viewer {
         self.picked.clear();
         self.organizer = false;
         self.cropping = false;
+        self.signatures = None;
+        self.signing = None;
         self.anchor = None;
         self.edited = None;
         self.changing_pages = false;
@@ -590,23 +600,24 @@ impl Viewer {
     /// the file asks for it (`/PageMode /UseOutlines`).
     fn read_outline(&mut self, path: PathBuf, generation: u64, cx: &mut Context<Self>) {
         cx.spawn(async move |this, cx| {
-            let (outline, show, links, form, annots) = cx
+            let (outline, show, links, form, annots, signatures) = cx
                 .background_executor()
                 .spawn(async move {
                     let Some(doc) = std::fs::read(&path)
                         .ok()
                         .and_then(|bytes| katna_pdf_cos::Document::load(bytes).ok())
                     else {
-                        return (Vec::new(), false, Vec::new(), None, Vec::new());
+                        return (Vec::new(), false, Vec::new(), None, Vec::new(), Vec::new());
                     };
                     let show = doc
                         .catalog()
                         .is_some_and(|c| c.name("PageMode") == Some(b"UseOutlines"));
                     let (outline, links, fields) = (doc.outline(), doc.links(), doc.form());
                     let annots = doc.annotations();
+                    let signatures = sign::check(&doc);
                     // The object layer's copy is kept only for a form.
                     let form = (!fields.is_empty()).then(|| (Arc::new(doc), fields));
-                    (outline, show, links, form, annots)
+                    (outline, show, links, form, annots, signatures)
                 })
                 .await;
             this.update(cx, |this, cx| {
@@ -618,6 +629,7 @@ impl Viewer {
                     cx.notify();
                 }
                 this.annots = Some(Arc::new(annots));
+                this.signatures = Some(Arc::new(signatures));
                 if links.iter().any(|l| !l.is_empty()) {
                     this.links = Some(Arc::new(links));
                     cx.notify();
@@ -929,7 +941,10 @@ impl Viewer {
         // A press outside the field being typed in ends the typing.
         self.finish_typing(true, cx);
         window.focus(&self.focus, cx);
-        if self.crop_press(event.position, cx) || self.annot_press(event.position, cx) {
+        if self.sign_press(event.position, cx)
+            || self.crop_press(event.position, cx)
+            || self.annot_press(event.position, cx)
+        {
             return;
         }
         self.selection = self.spot_at(event.position, cx).map(|spot| Selection {
@@ -959,7 +974,7 @@ impl Viewer {
 
     fn release_pointer(&mut self, cx: &mut Context<Self>) {
         self.selecting = false;
-        if self.crop_release(cx) || self.annot_release(cx) {
+        if self.sign_release(cx) || self.crop_release(cx) || self.annot_release(cx) {
             return;
         }
         // A click without a drag selects nothing.
@@ -1308,10 +1323,14 @@ impl Viewer {
         // Contents only when the file has an outline.
         let tab = match self.tab {
             PaneTab::Contents if self.contents.is_none() => PaneTab::Pages,
+            PaneTab::Signatures if self.signatures.as_ref().is_none_or(|s| s.is_empty()) => {
+                PaneTab::Pages
+            }
             tab => tab,
         };
         let body = match (tab, self.contents.as_ref()) {
             (PaneTab::Comments, _) => self.comments(window, cx),
+            (PaneTab::Signatures, _) => self.signatures_list(cx),
             (PaneTab::Contents, Some(contents)) => {
                 let rows = contents.rows().into_iter().map(|row| {
                     let (path, dest) = (row.path.clone(), row.dest);
@@ -1412,6 +1431,13 @@ impl Viewer {
             PaneTab::Comments,
             t("pane-comments", &[]),
         ));
+        if self.signatures.as_ref().is_some_and(|s| !s.is_empty()) {
+            header = header.child(tab_button(
+                "tab-signatures",
+                PaneTab::Signatures,
+                t("pane-signatures", &[]),
+            ));
+        }
         let actions = match tab {
             PaneTab::Pages => Some(self.page_actions(cx)),
             PaneTab::Comments if self.annots.is_some() => Some(self.comment_actions(cx)),
@@ -1997,6 +2023,7 @@ impl Viewer {
         self.contents = (!outline.is_empty()).then(|| Contents::new(outline));
         self.links = links.iter().any(|l| !l.is_empty()).then(|| Arc::new(links));
         self.annots = Some(Arc::new(cos.annotations()));
+        self.signatures = Some(Arc::new(sign::check(&cos)));
         self.chosen = None;
         self.comment = None;
         // A form's changes are in the file now.
@@ -2358,6 +2385,7 @@ impl Viewer {
         };
         let mut overlays = self.annot_overlays(page, transform);
         overlays.extend(self.crop_overlay(page));
+        overlays.extend(self.sign_overlay(page));
         // Matches on this page, the current one stronger, and the
         // selected text.
         let accent = self.theme.katna.accent & 0xffff_ff00;
@@ -2515,6 +2543,22 @@ impl Viewer {
                 .when(self.tools, |b| b.bg(th.field))
                 .tip(t("annotate", &[]), &th.katna)
                 .on_click(cx.listener(|this, _, _, cx| this.toggle_tools(cx))),
+            );
+            bar = bar.child(
+                widgets::icon_button_colored(
+                    "sign",
+                    "signature",
+                    18.0,
+                    if self.signing.is_some() {
+                        th.katna.accent
+                    } else {
+                        th.katna.text_dim
+                    },
+                    &th.katna,
+                )
+                .when(self.signing.is_some(), |b| b.bg(th.field))
+                .tip(t("sign", &[]), &th.katna)
+                .on_click(cx.listener(|this, _, _, cx| this.toggle_signing(cx))),
             );
         }
         bar = bar
@@ -2872,8 +2916,11 @@ impl Render for Viewer {
             self.list.remeasure();
         }
         self.open_comment_now(window, cx);
+        self.focus_signing(window, cx);
         let pane = self.pane(window, cx);
         let tools = self.tools_row(cx);
+        let signatures_line = self.signatures_line(cx);
+        let signing_card = self.signing_card(cx);
         let find_bar = self.find_bar(cx);
         let notice = self.notice.clone().map(|notice| {
             div()
@@ -2993,7 +3040,9 @@ impl Render for Viewer {
             .on_action(cx.listener(|this, _: &CopyText, _, cx| this.copy_text(cx)))
             .on_action(cx.listener(|this, _: &DeleteAnnotation, _, cx| this.delete_chosen(cx)))
             .on_action(cx.listener(|this, _: &PutToolDown, _, cx| {
-                if this.cropping {
+                if this.signing.is_some() {
+                    this.toggle_signing(cx);
+                } else if this.cropping {
                     this.toggle_crop(cx);
                 } else if this.organizer {
                     this.toggle_organizer(cx);
@@ -3034,8 +3083,18 @@ impl Render for Viewer {
                     .child(self.toolbar(cx))
                     .children(tools)
                     .children(find_bar)
+                    .children(signatures_line)
                     .children(notice)
-                    .child(pages),
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_h_0()
+                            .relative()
+                            .flex()
+                            .flex_col()
+                            .child(pages)
+                            .children(signing_card),
+                    ),
             )
     }
 }

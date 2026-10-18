@@ -25,6 +25,8 @@ pub struct Theme {
     /// The page-number field.
     pub field: Hsla,
     pub error: Hsla,
+    /// A signature that holds.
+    pub valid: u32,
     /// The palette itself, for Katna's shared controls
     /// (`katna_ui::widgets`).
     pub katna: Katna,
@@ -39,15 +41,16 @@ impl Theme {
     }
 
     pub fn light() -> Self {
-        Self::from_katna(&Katna::new(false), 0xeceff4ff)
+        Self::from_katna(&Katna::new(false), 0xeceff4ff, 0x1e8e3eff)
     }
 
     pub fn dark() -> Self {
-        Self::from_katna(&Katna::new(true), 0x0d0e10ff)
+        Self::from_katna(&Katna::new(true), 0x0d0e10ff, 0x81c995ff)
     }
 
-    /// Katna's palette; `backdrop`, behind the pages, is Katna PDF's own.
-    fn from_katna(k: &Katna, backdrop: u32) -> Self {
+    /// Katna's palette; `backdrop`, behind the pages, and `valid` (a
+    /// green readable on the card) are Katna PDF's own.
+    fn from_katna(k: &Katna, backdrop: u32, valid: u32) -> Self {
         Self {
             page: rgba(k.page).into(),
             card: rgba(k.surface).into(),
@@ -58,6 +61,7 @@ impl Theme {
             hover: rgba(k.hover).into(),
             field: rgba(k.search).into(),
             error: rgba(k.error).into(),
+            valid,
             katna: *k,
         }
     }
