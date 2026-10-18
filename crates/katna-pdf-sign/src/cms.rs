@@ -201,6 +201,8 @@ pub struct Stamp {
     pub authority: Option<String>,
     /// The token is the authority's, and is over this signature.
     pub valid: bool,
+    /// When, as a point in time.
+    pub at: Option<std::time::SystemTime>,
 }
 
 /// The content timestamp token `token` (DER) carries: its TSTInfo.
@@ -234,6 +236,7 @@ fn check_stamp(token: &[u8], signature: &[u8]) -> Stamp {
         time: None,
         authority: None,
         valid: false,
+        at: None,
     };
     let Some(content) = token_content(token) else {
         return none;
@@ -241,6 +244,7 @@ fn check_stamp(token: &[u8], signature: &[u8]) -> Stamp {
     let Ok(tst) = x509_tsp::TstInfo::from_der(&content) else {
         return none;
     };
+    let at = Some(tst.gen_time.to_system_time());
     let time = katna_pdf_cos::pdf_date(tst.gen_time.to_system_time());
     let time = crate::readable_pdf_date(&time);
     let imprint = &tst.message_imprint;
@@ -249,13 +253,14 @@ fn check_stamp(token: &[u8], signature: &[u8]) -> Stamp {
     match check(token, &[&content]) {
         Ok(c) => Stamp {
             time,
+            at,
             authority: Some(common_name(&c.signer.tbs_certificate.subject)),
             valid: imprint_matches
                 && c.digest_matches
                 && c.signature_valid
                 && c.certificate_named != Some(false),
         },
-        Err(_) => Stamp { time, ..none },
+        Err(_) => Stamp { time, at, ..none },
     }
 }
 
@@ -275,6 +280,8 @@ pub struct Checked {
     pub certificate_named: Option<bool>,
     /// The signing time the signature itself states, if any (UTC).
     pub signing_time: Option<String>,
+    /// The same, as a point in time.
+    pub signed_at: Option<std::time::SystemTime>,
     /// The timestamp it carries, checked, if any.
     pub timestamp: Option<Stamp>,
 }
@@ -371,6 +378,7 @@ pub fn check(der: &[u8], parts: &[&[u8]]) -> Result<Checked, CheckError> {
             let mut digest_matches = false;
             let mut named = None;
             let mut time = None;
+            let mut at = None;
             for attr in walk::children(attrs.value).ok_or(Malformed)? {
                 let [kind, values] = walk::children(attr.value).ok_or(Malformed)?[..] else {
                     return Err(Malformed);
@@ -389,18 +397,22 @@ pub fn check(der: &[u8], parts: &[&[u8]]) -> Result<Checked, CheckError> {
                     Some(o) if o == oid::SIGNING_CERTIFICATE && named.is_none() => {
                         named = Some(names(&value, &signer, false));
                     }
-                    Some(o) if o == oid::SIGNING_TIME => time = walk::time(&value),
+                    Some(o) if o == oid::SIGNING_TIME => {
+                        time = walk::time(&value);
+                        at = walk::system_time(&value);
+                    }
                     _ => {}
                 }
             }
             // Signed as a SET.
             let mut message = attrs.raw.to_vec();
             message[0] = 0x31;
-            (digest_matches, named, time, message)
+            (digest_matches, named, (time, at), message)
         }
         // Without attributes the signature is over the bytes themselves.
-        None => (true, None, None, parts.concat()),
+        None => (true, None, (None, None), parts.concat()),
     };
+    let (signing_time, signed_at) = signing_time;
     let signature_valid = verify(&signer, signature_alg, hash, &message, signature.value)?;
     Ok(Checked {
         signer,
@@ -409,6 +421,7 @@ pub fn check(der: &[u8], parts: &[&[u8]]) -> Result<Checked, CheckError> {
         signature_valid,
         certificate_named,
         signing_time,
+        signed_at,
         timestamp,
     })
 }
@@ -479,7 +492,7 @@ fn names(value: &walk::Tlv<'_>, cert: &Certificate, v2: bool) -> bool {
 }
 
 /// Whether `signature` is `cert`'s key's over `message`.
-fn verify(
+pub(crate) fn verify(
     cert: &Certificate,
     alg: &walk::Tlv<'_>,
     digest: Hash,

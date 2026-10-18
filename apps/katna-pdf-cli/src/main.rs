@@ -13,7 +13,7 @@ use katna_pdf_cos::{
     AnnotKind, Coverage, Document, Object, PageSource, Placement, SignRequest, SigningInfo,
     compose, text_string,
 };
-use katna_pdf_sign::{Digest, Signer, common_name, p12, pkcs11};
+use katna_pdf_sign::{Digest, Signer, Trust, common_name, p12, pkcs11};
 
 mod ranges;
 
@@ -40,8 +40,10 @@ usage: katna-pdf-cli COMMAND [--json] ...
                                   visible in a box on page N when --rect is given;
                                   timestamped by the server at URL with --tsa (PAdES B-T)
   tokens [--module LIB]           the signing tokens plugged in (ePass2003 and others)
-  verify FILE                     the signatures, each checked: intact, what it covers,
-                                  who signed (trust in the signer is not checked yet)
+  verify FILE [--trust PATH]      the signatures, each checked: intact, what it covers,
+                                  who signed, and whether their certificate chains to a
+                                  root the system trusts, or one in PATH (a certificate
+                                  file or a folder of them, such as India's CCA roots)
   annots FILE                     the annotations, page by page
   xfdf-export FILE -o OUT.xfdf    the annotations as XFDF
   xfdf-import FILE XFDF -o OUT    the annotations of XFDF added to the PDF
@@ -149,6 +151,7 @@ impl<'a> Args<'a> {
                     | "--token"
                     | "--module"
                     | "--cert"
+                    | "--trust"
             ) {
                 let Some(value) = it.next() else {
                     return Err(Failure::Usage(format!("{a} needs a value")));
@@ -793,7 +796,21 @@ fn verify(args: &[String], json: bool) -> Done {
     let [file] = args.words()?;
     let bytes = std::fs::read(file).map_err(|e| failed(format!("{file}: {e}")))?;
     let doc = Document::load(bytes.clone()).map_err(|e| failed(format!("{file}: {e}")))?;
-    let checks = katna_pdf_sign::check(&doc, &bytes);
+    let mut roots = katna_pdf_sign::Roots::system();
+    if let Some(path) = args.option("--trust") {
+        let path = std::path::Path::new(path);
+        let added = if path.is_dir() {
+            roots.add_folder(path)
+        } else {
+            let bytes =
+                std::fs::read(path).map_err(|e| failed(format!("{}: {e}", path.display())))?;
+            roots.add_file(&bytes)
+        };
+        if added == 0 {
+            return Err(failed(format!("{}: no certificates in it", path.display())));
+        }
+    }
+    let checks = katna_pdf_sign::check(&doc, &bytes, &roots);
     let mut out = String::new();
     let mut items = Vec::new();
     for c in &checks {
@@ -805,10 +822,24 @@ fn verify(args: &[String], json: bool) -> Done {
         };
         let (signer, problem, time) = (c.signer(), c.problem(), c.time());
         let stamp = c.result.as_ref().ok().and_then(|r| r.timestamp.clone());
+        let (trust, root) = match &c.trust {
+            None => ("unknown", None),
+            Some(Trust::Trusted { root }) => ("trusted", Some(root.clone())),
+            Some(Trust::Untrusted { root, complete }) => (
+                if *complete {
+                    "untrusted-root"
+                } else {
+                    "incomplete"
+                },
+                Some(common_name(&root.tbs_certificate.subject)),
+            ),
+            Some(Trust::Expired { name }) => ("expired", Some(name.clone())),
+            Some(Trust::Forged { name }) => ("forged", Some(name.clone())),
+        };
         if json {
             let opt = |v: &Option<String>| v.as_deref().map_or("null".into(), string);
             items.push(format!(
-                "{{\"field\":{},\"page\":{},\"intact\":{},\"covers\":{},\"signer\":{},\"time\":{},\"reason\":{},\"location\":{},\"sub_filter\":{},\"timestamp\":{},\"problem\":{}}}",
+                "{{\"field\":{},\"page\":{},\"intact\":{},\"covers\":{},\"signer\":{},\"time\":{},\"reason\":{},\"location\":{},\"sub_filter\":{},\"timestamp\":{},\"trust\":{{\"state\":{},\"certificate\":{}}},\"problem\":{}}}",
                 string(&s.name),
                 s.page.map_or("null".into(), |p| (p + 1).to_string()),
                 c.intact(),
@@ -824,6 +855,8 @@ fn verify(args: &[String], json: bool) -> Done {
                     opt(&t.time),
                     opt(&t.authority)
                 )),
+                string(trust),
+                opt(&root),
                 opt(&problem),
             ));
         } else {
@@ -842,6 +875,23 @@ fn verify(args: &[String], json: bool) -> Done {
                 }
             };
             line("signed by", &signer);
+            line(
+                "identity",
+                &Some(match (trust, &root) {
+                    ("trusted", Some(r)) => format!("vouched for by {r}"),
+                    ("untrusted-root", Some(r)) => {
+                        format!("NOT VERIFIED: {r} is not a trusted root")
+                    }
+                    ("incomplete", Some(r)) => {
+                        format!("NOT VERIFIED: the issuer of {r} was not sent with the signature")
+                    }
+                    ("expired", Some(r)) => format!("NOT VERIFIED: {r} was not valid at the time"),
+                    ("forged", Some(r)) => {
+                        format!("NOT VERIFIED: {r} was not issued by its issuer")
+                    }
+                    _ => "unknown".to_owned(),
+                }),
+            );
             line("time", &time);
             line("reason", &s.info.reason);
             line("location", &s.info.location);

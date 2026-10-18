@@ -14,6 +14,7 @@ mod keys;
 mod oid;
 pub mod p12;
 pub mod pkcs11;
+pub mod trust;
 pub mod tsa;
 mod walk;
 
@@ -22,6 +23,8 @@ use katna_pdf_cos::{Coverage, Document, SignError, SignRequest, Signature};
 pub use crate::cms::{CheckError, Checked, Stamp, common_name};
 pub use crate::keys::{KeyKind, Signer, SignerError, SoftKey};
 pub use crate::p12::{Identity, P12Error};
+pub use crate::trust::{Roots, Trust};
+pub use x509_cert::Certificate;
 
 /// The digest a signature is made with.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -240,6 +243,9 @@ pub struct SignatureCheck {
     pub signature: Signature,
     pub coverage: Coverage,
     pub result: Result<Checked, CheckError>,
+    /// Whether the signer's certificate chains to a trusted root, when
+    /// the signature could be read.
+    pub trust: Option<Trust>,
 }
 
 impl SignatureCheck {
@@ -286,8 +292,9 @@ impl SignatureCheck {
     }
 }
 
-/// Every signature of `doc`, whose bytes are `file`, checked.
-pub fn check(doc: &Document, file: &[u8]) -> Vec<SignatureCheck> {
+/// Every signature of `doc`, whose bytes are `file`, checked, and its
+/// signer's certificate chained to `roots`.
+pub fn check(doc: &Document, file: &[u8], roots: &Roots) -> Vec<SignatureCheck> {
     doc.signatures()
         .into_iter()
         .map(|signature| {
@@ -299,13 +306,30 @@ pub fn check(doc: &Document, file: &[u8]) -> Vec<SignatureCheck> {
                 ),
                 Some(parts) => cms::check(&signature.contents, &parts),
             };
+            let trust = result
+                .as_ref()
+                .ok()
+                .map(|r| trust::chain(&r.signer, &r.certificates, roots, checked_at(r)));
             SignatureCheck {
                 signature,
                 coverage,
                 result,
+                trust,
             }
         })
         .collect()
+}
+
+/// When a signature's certificates should have been valid: when its
+/// timestamp says it was signed, or, without one, when it says it was
+/// signed itself, or else now.
+fn checked_at(r: &Checked) -> std::time::SystemTime {
+    r.timestamp
+        .as_ref()
+        .filter(|s| s.valid)
+        .and_then(|s| s.at)
+        .or(r.signed_at)
+        .unwrap_or_else(std::time::SystemTime::now)
 }
 
 #[cfg(test)]

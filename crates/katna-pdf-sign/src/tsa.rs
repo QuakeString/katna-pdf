@@ -255,7 +255,7 @@ mod tests {
         let request = SignRequest::new(Placement::Invisible, SigningInfo::default());
         let file = crate::sign_with(&doc, &request, &id, Digest::Sha256, Some(stamper)).unwrap();
         let doc = Document::load(file.clone()).unwrap();
-        crate::check(&doc, &file).remove(0)
+        crate::check(&doc, &file, &crate::Roots::new()).remove(0)
     }
 
     #[test]

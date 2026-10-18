@@ -28,7 +28,9 @@ cargo run --release -p katna-pdf-bench -- file.pdf
   Rust: certificate files (`p12.rs`), CMS / PAdES B-B (`cms.rs`),
   timestamps for B-T (`tsa.rs`, RFC 3161 over ureq + rustls), USB
   tokens through PKCS#11 modules (`pkcs11.rs`; OpenSC, ePass2003 and
-  other makers' drivers; `KATNA_PDF_PKCS11` adds one). The
+  other makers' drivers; `KATNA_PDF_PKCS11` adds one), and signers'
+  certificates chained to trusted roots (`trust.rs`: the system's, plus
+  a folder of the person's own, such as India's CCA roots). The
   PDF side (fields, byte ranges) is `katna-pdf-cos`'s `sign.rs`.
 - `apps/katna-pdf` — the app window.
 - `apps/katna-pdf-cli` — the command line: info, merge, split, pages,

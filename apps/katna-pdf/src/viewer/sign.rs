@@ -7,11 +7,11 @@
 //! copy is saved as a new file and opened in place of this one.
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock, RwLock};
 
 use gpui::{AnyElement, Context, Entity, Focusable as _, Subscription, Window, div, prelude::*};
 use katna_pdf_cos::{Coverage, Placement, SignRequest, SigningInfo};
-use katna_pdf_sign::pkcs11;
+use katna_pdf_sign::{Certificate, Roots, Trust, common_name, pkcs11};
 use katna_ui::px;
 use katna_ui::scale::desktop_px;
 use katna_ui::text_input::{InputEvent, TextInput};
@@ -39,11 +39,91 @@ pub(super) struct SigRow {
     pub whole: bool,
     pub problem: Option<String>,
     pub stamp: Option<katna_pdf_sign::Stamp>,
+    /// Whether who signed is vouched for, when the signature could be
+    /// read.
+    pub vouched: Option<Vouched>,
+}
+
+/// Whether a signer is who their certificate says.
+#[derive(Debug, Clone)]
+pub(super) enum Vouched {
+    /// Their certificate was issued under this trusted root.
+    By(String),
+    /// It is not vouched for: why, and the root that, once trusted,
+    /// would vouch for it.
+    Not {
+        why: String,
+        root: Option<Arc<Certificate>>,
+    },
+}
+
+impl SigRow {
+    fn unverified(&self) -> bool {
+        self.intact && matches!(self.vouched, Some(Vouched::Not { .. }))
+    }
+}
+
+fn vouched(trust: &Trust) -> Vouched {
+    let not = |why| Vouched::Not { why, root: None };
+    match trust {
+        Trust::Trusted { root } => Vouched::By(root.clone()),
+        Trust::Untrusted { root, complete } => {
+            let name = common_name(&root.tbs_certificate.subject);
+            if *complete {
+                Vouched::Not {
+                    why: t("signer-root-untrusted", &[("root", &name)]),
+                    root: Some(Arc::new((**root).clone())),
+                }
+            } else {
+                not(t("signer-chain-incomplete", &[("name", &name)]))
+            }
+        }
+        Trust::Expired { name } => not(t("signer-expired", &[("name", name)])),
+        Trust::Forged { name } => not(t("signer-forged", &[("name", name)])),
+    }
+}
+
+/// The folder of root certificates the person trusts, beside the
+/// system's: the ones they trusted from a signature, and any they put
+/// there (India's CCA roots, a company's own).
+pub(super) fn trusted_folder() -> Option<PathBuf> {
+    katna_core::paths::Paths::from_env()
+        .ok()
+        .map(|paths| paths.data_dir().join("pdf").join("trusted"))
+}
+
+/// The roots trusted: read once, then added to as the person trusts more.
+static ROOTS: OnceLock<RwLock<Arc<Roots>>> = OnceLock::new();
+
+fn roots_lock() -> &'static RwLock<Arc<Roots>> {
+    ROOTS.get_or_init(|| {
+        let mut roots = Roots::system();
+        if let Some(folder) = trusted_folder() {
+            roots.add_folder(&folder);
+        }
+        RwLock::new(Arc::new(roots))
+    })
+}
+
+fn roots() -> Arc<Roots> {
+    roots_lock().read().map(|r| r.clone()).unwrap_or_default()
+}
+
+/// Trusts `cert` as a root from now on.
+fn trust_root(cert: &Certificate) -> std::io::Result<()> {
+    let folder = trusted_folder().ok_or_else(|| std::io::Error::other("no data folder"))?;
+    Roots::keep(&folder, cert)?;
+    if let Ok(mut roots) = roots_lock().write() {
+        let mut more = (**roots).clone();
+        more.add(cert.clone());
+        *roots = Arc::new(more);
+    }
+    Ok(())
 }
 
 /// The signatures of `doc`, checked.
 pub(super) fn check(doc: &katna_pdf_cos::Document) -> Vec<SigRow> {
-    katna_pdf_sign::check(doc, doc.bytes())
+    katna_pdf_sign::check(doc, doc.bytes(), &roots())
         .into_iter()
         .map(|c| SigRow {
             name: c.signature.name.clone(),
@@ -56,6 +136,7 @@ pub(super) fn check(doc: &katna_pdf_cos::Document) -> Vec<SigRow> {
             whole: c.coverage == Coverage::Whole,
             problem: c.problem(),
             stamp: c.result.as_ref().ok().and_then(|r| r.timestamp.clone()),
+            vouched: c.trust.as_ref().map(vouched),
         })
         .collect()
 }
@@ -911,16 +992,21 @@ impl Viewer {
         let rows = self.signatures.as_ref().filter(|r| !r.is_empty())?;
         let th = self.theme;
         let bad = rows.iter().filter(|r| !r.intact).count();
+        let unverified = rows.iter().any(SigRow::unverified);
         let changed = rows.last().is_some_and(|r| r.intact && !r.whole);
         let count = rows.len().to_string();
         let message = match (bad, rows.len(), &rows[0].signer) {
+            (0, 1, Some(signer)) if unverified => t("signed-by-unverified", &[("name", signer)]),
+            (0, _, _) if unverified => t("signed-unverified", &[("count", &count)]),
             (0, 1, Some(signer)) if !changed => t("signed-by", &[("name", signer)]),
             (0, _, _) if !changed => t("signed-all", &[("count", &count)]),
             (0, _, _) => t("signed-changed", &[("count", &count)]),
             _ if bad == 1 => t("signed-bad-one", &[]),
             _ => t("signed-bad", &[("count", &bad.to_string())]),
         };
-        let (icon, colour) = if bad == 0 {
+        let (icon, colour) = if bad == 0 && unverified {
+            ("shield-check", th.katna.warning)
+        } else if bad == 0 {
             ("shield-check", th.valid)
         } else {
             ("shield-alert", th.katna.error)
@@ -979,8 +1065,29 @@ impl Viewer {
                     th.katna.error,
                     t("signature-bad", &[("problem", problem)]),
                 ),
-                None if row.whole => ("shield-check", th.valid, t("signature-intact", &[])),
-                None => ("shield-check", th.valid, t("signature-intact-changed", &[])),
+                None => {
+                    let state = if row.whole {
+                        t("signature-intact", &[])
+                    } else {
+                        t("signature-intact-changed", &[])
+                    };
+                    let colour = if row.unverified() {
+                        th.katna.warning
+                    } else {
+                        th.valid
+                    };
+                    ("shield-check", colour, state)
+                }
+            };
+            let (identity, root) = match (&row.vouched, row.intact) {
+                (Some(Vouched::By(root)), true) => (
+                    Some((t("signer-vouched", &[("root", root)]), th.valid)),
+                    None,
+                ),
+                (Some(Vouched::Not { why, root }), true) => {
+                    (Some((why.clone(), th.katna.warning)), root.clone())
+                }
+                _ => (None, None),
             };
             let mut details = Vec::new();
             if let Some(time) = &row.time {
@@ -1046,21 +1153,74 @@ impl Viewer {
                                     .text_color(if row.intact { th.text } else { th.error })
                                     .child(state),
                             )
+                            .children(identity.map(|(line, colour)| {
+                                div()
+                                    .text_size(px(text::SMALL))
+                                    .text_color(gpui::rgba(colour))
+                                    .child(line)
+                            }))
+                            .children(root.map(|root| {
+                                let name = common_name(&root.tbs_certificate.subject);
+                                div().flex().child(
+                                    widgets::outlined_button(
+                                        ("trust-root", i),
+                                        t("signer-trust-root", &[("root", &name)]),
+                                        &th.katna,
+                                    )
+                                    .on_click(cx.listener(
+                                        move |this, _, _, cx| {
+                                            cx.stop_propagation();
+                                            this.trust(&root, cx);
+                                        },
+                                    )),
+                                )
+                            }))
                             .children(details.into_iter().map(|d| {
                                 div().text_size(px(text::SMALL)).text_color(th.dim).child(d)
                             })),
                     ),
             );
         }
+        let folder = trusted_folder()
+            .map(|f| f.display().to_string())
+            .unwrap_or_default();
         list = list.child(
             div()
                 .px(px(space::S4))
                 .py(px(space::S3))
                 .text_size(px(text::SMALL))
                 .text_color(th.dim)
-                .child(t("signatures-trust", &[])),
+                .child(t("signatures-roots", &[("folder", &folder)])),
         );
         list.into_any_element()
+    }
+}
+
+impl Viewer {
+    /// Trusts `root` from now on, and so every signer it vouches for.
+    fn trust(&mut self, root: &Certificate, cx: &mut Context<Self>) {
+        if let Err(e) = trust_root(root) {
+            self.notice = Some(t("signer-trust-failed", &[("error", &e.to_string())]));
+            cx.notify();
+            return;
+        }
+        let name = common_name(&root.tbs_certificate.subject);
+        if let Some(rows) = &self.signatures {
+            let rows = rows
+                .iter()
+                .cloned()
+                .map(|mut row| {
+                    if let Some(Vouched::Not { root: Some(r), .. }) = &row.vouched
+                        && **r == *root
+                    {
+                        row.vouched = Some(Vouched::By(name.clone()));
+                    }
+                    row
+                })
+                .collect();
+            self.signatures = Some(Arc::new(rows));
+        }
+        cx.notify();
     }
 }
 

@@ -176,6 +176,22 @@ fn files_are_signed_and_verified() {
     assert!(out.contains("\"page\":2"), "{out}");
     assert!(out.contains("\"reason\":\"Checked\""), "{out}");
     assert!(out.contains("\"covers\":\"whole\""), "{out}");
+    assert!(
+        out.contains(
+            "\"trust\":{\"state\":\"untrusted-root\",\"certificate\":\"Katna Test Root\"}"
+        ),
+        "{out}"
+    );
+    let ca = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../crates/katna-pdf-sign/tests/data/ca.pem"
+    );
+    let (code, out) = run(&["verify", s(&signed), "--trust", ca]);
+    assert_eq!(code, 0);
+    assert!(
+        out.contains("identity: vouched for by Katna Test Root"),
+        "{out}"
+    );
 
     let (code, _) = run(&[
         "sign",

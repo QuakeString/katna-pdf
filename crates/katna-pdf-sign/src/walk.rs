@@ -103,6 +103,14 @@ pub fn time(tlv: &Tlv<'_>) -> Option<String> {
     ))
 }
 
+/// A UTCTime or GeneralizedTime as a point in time.
+pub fn system_time(tlv: &Tlv<'_>) -> Option<std::time::SystemTime> {
+    use der::Decode as _;
+    x509_cert::time::Time::from_der(tlv.raw)
+        .ok()
+        .map(|t| t.to_system_time())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -127,5 +135,8 @@ mod tests {
             time(&read(&t).unwrap().0).unwrap(),
             "2026-10-18 12:00:00 UTC"
         );
+        let at = system_time(&read(&t).unwrap().0).unwrap();
+        let secs = at.duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+        assert_eq!(secs, 1_792_324_800);
     }
 }
