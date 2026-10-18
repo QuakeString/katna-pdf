@@ -6,9 +6,10 @@
 //! page the usual way reads and flattens every stroke for every tile, so
 //! a tile at 3200 % costs as much as the whole sheet. Instead the page is
 //! read once into a [`Scene`]: every path, with its colour, stroke, clip
-//! and bounding box, in compact arrays, and every box in an R-tree. A tile
-//! then draws only what the tree finds inside it, and anything smaller
-//! than a pixel at that zoom is drawn as a dot (level of detail).
+//! and bounding box, in compact arrays, and every box in a grid
+//! (`grid.rs`). A tile then draws only what the grid finds inside it, and
+//! anything smaller than a pixel at that zoom is drawn as a dot (level of
+//! detail).
 //!
 //! A page uses a scene only when it is vector-heavy ([`is_vector_heavy`])
 //! and holds nothing the scene cannot draw yet: images, shadings and
@@ -34,10 +35,9 @@ use hayro::vello_cpu::peniko::Fill;
 use hayro::vello_cpu::{
     Pixmap, RasterizerSettings, RenderContext, RenderSettings, Resources, TargetInit,
 };
-use rstar::primitives::{GeomWithData, Rectangle};
-use rstar::{AABB, RTree};
 
 use crate::Bitmap;
+use crate::grid::Grid;
 
 /// A page with at least this many path segments is vector-heavy.
 pub const HEAVY_SEGMENTS: usize = 50_000;
@@ -102,7 +102,9 @@ pub struct Scene {
     /// Clip paths; an item's clip is its innermost one, and each clip
     /// knows the one around it. Index 0 is "no clip".
     clips: Vec<Clip>,
-    tree: RTree<GeomWithData<Rectangle<[f32; 2]>, u32>>,
+    /// Each item's box in page points, clip applied: `[x0, y0, x1, y1]`.
+    boxes: Vec<[f32; 4]>,
+    grid: Grid,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -115,14 +117,13 @@ enum Verb {
 }
 
 /// One drawn path. Its points are in the coordinates of its transform;
-/// `bbox` is in page points, clip applied.
+/// its box is in [`Scene::boxes`].
 struct Item {
     verbs: (u32, u32),
     points: u32,
     style: u32,
     transform: u32,
     clip: u32,
-    bbox: [f32; 4],
 }
 
 #[derive(Clone, PartialEq)]
@@ -176,16 +177,10 @@ impl Scene {
             styles,
             transforms,
             clips,
+            boxes,
             ..
         } = builder;
-        let boxes = items
-            .iter()
-            .enumerate()
-            .map(|(i, item)| {
-                let [x0, y0, x1, y1] = item.bbox;
-                GeomWithData::new(Rectangle::from_corners([x0, y0], [x1, y1]), i as u32)
-            })
-            .collect();
+        let grid = Grid::new([w, h], &boxes);
         Ok(Scene {
             size: (w, h),
             verbs,
@@ -194,7 +189,8 @@ impl Scene {
             styles,
             transforms,
             clips,
-            tree: RTree::bulk_load(boxes),
+            boxes,
+            grid,
         })
     }
 
@@ -221,9 +217,8 @@ impl Scene {
             + self.transforms.capacity() * size_of::<Affine>()
             + self.styles.capacity() * size_of::<Style>()
             + self.clips.capacity() * size_of::<Clip>()
-            // The R-tree's leaves and, at a fanout of 6, about a fifth more
-            // for its inner nodes.
-            + self.items.len() * size_of::<GeomWithData<Rectangle<[f32; 2]>, u32>>() * 6 / 5
+            + self.boxes.capacity() * size_of::<[f32; 4]>()
+            + self.grid.memory()
     }
 
     /// Draws the `width`×`height` pixel region whose top left is at
@@ -240,21 +235,15 @@ impl Scene {
         // The region in page points, grown by a pixel for strokes and dots
         // that reach in from just outside.
         let pad = 1.0 / scale;
-        let lo = [
+        let region = [
             (origin.0 / scale - pad) as f32,
             (origin.1 / scale - pad) as f32,
-        ];
-        let hi = [
             ((origin.0 + f64::from(width)) / scale + pad) as f32,
             ((origin.1 + f64::from(height)) / scale + pad) as f32,
         ];
-        let mut found: Vec<u32> = self
-            .tree
-            .locate_in_envelope_intersecting(AABB::from_corners(lo, hi))
-            .map(|g| g.data)
-            .collect();
-        // Draw in the page's order, so later items cover earlier ones.
-        found.sort_unstable();
+        // In the page's order, so later items cover earlier ones.
+        let mut found = Vec::new();
+        self.grid.find(region, &self.boxes, &mut found);
 
         let mut ctx = RenderContext::new_with(
             w16,
@@ -287,7 +276,7 @@ impl Scene {
             let style = &self.styles[item.style as usize];
             let [r, g, b, a] = style.color;
             ctx.set_paint(AlphaColor::from_rgba8(r, g, b, a));
-            let [x0, y0, x1, y1] = item.bbox.map(f64::from);
+            let [x0, y0, x1, y1] = self.boxes[i as usize].map(f64::from);
             if (x1 - x0) * scale < DOT && (y1 - y0) * scale < DOT {
                 let (cx, cy) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0);
                 let half = DOT / 2.0 / scale;
@@ -387,6 +376,7 @@ struct Builder {
     verbs: Vec<Verb>,
     points: Vec<[f32; 2]>,
     items: Vec<Item>,
+    boxes: Vec<[f32; 4]>,
     styles: Vec<Style>,
     style_ids: HashMap<StyleKey, u32>,
     transforms: Vec<Affine>,
@@ -400,6 +390,8 @@ struct Builder {
     glyphs: HashMap<u128, ((u32, u32), u32)>,
     groups: usize,
     unsupported: Option<Unsupported>,
+    /// The style the last item used.
+    last_style: Option<u32>,
 }
 
 /// A style's identity for sharing: colour, how it is drawn, and the
@@ -456,6 +448,21 @@ impl Builder {
     }
 
     fn style(&mut self, color: [u8; 4], draw: Draw) -> u32 {
+        // A drawing uses one style many times in a row: check the last
+        // one before hashing.
+        if let Some(last) = self.last_style
+            && let Some(style) = self.styles.get(last as usize)
+            && style.color == color
+            && style.draw == draw
+        {
+            return last;
+        }
+        let id = self.intern_style(color, draw);
+        self.last_style = Some(id);
+        id
+    }
+
+    fn intern_style(&mut self, color: [u8; 4], draw: Draw) -> u32 {
         let key = match &draw {
             Draw::Fill(fill) => StyleKey(color, *fill as u8, [0; 4], Vec::new()),
             Draw::Stroke { stroke, text } => StyleKey(
@@ -509,13 +516,13 @@ impl Builder {
             style,
             transform,
             clip: self.current_clip(),
-            bbox: [
-                bbox.x0 as f32,
-                bbox.y0 as f32,
-                bbox.x1 as f32,
-                bbox.y1 as f32,
-            ],
         });
+        self.boxes.push([
+            bbox.x0 as f32,
+            bbox.y0 as f32,
+            bbox.x1 as f32,
+            bbox.y1 as f32,
+        ]);
     }
 
     fn color(&mut self, props: &DrawProps<'_>) -> Option<[u8; 4]> {

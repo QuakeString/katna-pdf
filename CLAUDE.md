@@ -19,7 +19,7 @@ cargo run --release -p katna-pdf-bench -- file.pdf
 
 - `crates/katna-pdf-render` — the page renderer behind an `Engine` trait
   (hayro today); `scene.rs` draws vector-heavy pages such as CAD
-  drawings from an R-tree (`docs/bakeoff/2026-10-cad.md`). No GPUI.
+  drawings from a grid index (`docs/bakeoff/2026-10-cad.md`). No GPUI.
 - `crates/katna-pdf-cos` — our own PDF object layer: parsing, xref and
   object streams, repair, incremental updates. No GPUI, no C.
 - `apps/katna-pdf` — the app window.
