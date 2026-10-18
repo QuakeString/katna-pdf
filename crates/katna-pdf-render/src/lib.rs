@@ -106,6 +106,41 @@ pub trait Document: Send + Sync {
     fn text(&self, _page: usize) -> text::PageText {
         text::PageText::default()
     }
+
+    /// The transform from page `page`'s user space, as the file counts
+    /// (from the bottom left, before its rotation and crop), to points
+    /// from the top left of the page shown: `[a, b, c, d, e, f]`.
+    fn page_transform(&self, _page: usize) -> Option<[f64; 6]> {
+        None
+    }
+}
+
+/// `point` in page user space, mapped by a [`Document::page_transform`].
+pub fn map_point(transform: [f64; 6], (x, y): (f32, f32)) -> (f32, f32) {
+    let [a, b, c, d, e, f] = transform;
+    let (x, y) = (f64::from(x), f64::from(y));
+    ((a * x + c * y + e) as f32, (b * x + d * y + f) as f32)
+}
+
+/// A rectangle in page user space (left, bottom, right, top), mapped by
+/// a [`Document::page_transform`] to left, top, right, bottom.
+pub fn map_rect(transform: [f64; 6], rect: [f32; 4]) -> [f32; 4] {
+    let corners = [
+        (rect[0], rect[1]),
+        (rect[2], rect[1]),
+        (rect[0], rect[3]),
+        (rect[2], rect[3]),
+    ]
+    .map(|p| map_point(transform, p));
+    corners.iter().fold(
+        [
+            f32::INFINITY,
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+            f32::NEG_INFINITY,
+        ],
+        |r, &(x, y)| [r[0].min(x), r[1].min(y), r[2].max(x), r[3].max(y)],
+    )
 }
 
 /// `scale`, made smaller if a `w`×`h` point page drawn at it would pass

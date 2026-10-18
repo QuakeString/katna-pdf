@@ -48,18 +48,12 @@ impl Document {
         let Object::Dict(outlines) = self.resolve_key(&catalog, "Outlines") else {
             return Vec::new();
         };
-        let mut reader = OutlineReader {
-            doc: self,
-            catalog,
-            pages: None,
-            seen: HashSet::new(),
-            items: 0,
-        };
+        let mut reader = OutlineReader::new(self, catalog);
         reader.children(&outlines, 0)
     }
 }
 
-struct OutlineReader<'a> {
+pub(crate) struct OutlineReader<'a> {
     doc: &'a Document,
     catalog: Dict,
     /// Each page object's index, found on first need.
@@ -68,7 +62,18 @@ struct OutlineReader<'a> {
     items: usize,
 }
 
-impl OutlineReader<'_> {
+impl<'a> OutlineReader<'a> {
+    /// A reader of `doc`'s destinations.
+    pub(crate) fn new(doc: &'a Document, catalog: Dict) -> Self {
+        Self {
+            doc,
+            catalog,
+            pages: None,
+            seen: HashSet::new(),
+            items: 0,
+        }
+    }
+
     /// The items under `parent`, following `/First` and each `/Next`.
     fn children(&mut self, parent: &Dict, depth: usize) -> Vec<OutlineItem> {
         let mut out = Vec::new();
@@ -103,7 +108,7 @@ impl OutlineReader<'_> {
     }
 
     /// An item's `/Dest`, or the destination of its `/A` go-to action.
-    fn item_destination(&mut self, item: &Dict) -> Option<Destination> {
+    pub(crate) fn item_destination(&mut self, item: &Dict) -> Option<Destination> {
         if let Some(dest) = item.get("Dest") {
             return self.destination(&self.doc.resolve(dest), 0);
         }
@@ -160,7 +165,7 @@ impl OutlineReader<'_> {
         })
     }
 
-    fn page_indices(&mut self) -> &HashMap<Ref, usize> {
+    pub(crate) fn page_indices(&mut self) -> &HashMap<Ref, usize> {
         self.pages.get_or_insert_with(|| {
             self.doc
                 .pages()
