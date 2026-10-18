@@ -3609,6 +3609,7 @@ version = "0.0.0"
 dependencies = [
  "ashpd",
  "async-channel",
+ "futures-lite",
  "gpui-pre",
  "gpui-pre-platform",
  "image",
@@ -3616,7 +3617,9 @@ dependencies = [
  "katna-pdf-cos",
  "katna-pdf-render",
  "katna-pdf-sign",
+ "katna-platform",
  "katna-ui",
+ "zbus",
 ]
 
 [[package]]

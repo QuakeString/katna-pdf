@@ -8,6 +8,13 @@ pub fn app_id() -> String {
     format!("{}.Pdf", katna_core::ids::PREFIX)
 }
 
+/// Where the menu bar is served on the session bus, for KDE's global
+/// menu (`menu.rs`).
+#[cfg(target_os = "linux")]
+pub fn menu_bar_path() -> String {
+    format!("/{}/Pdf/MenuBar", katna_core::ids::PREFIX.replace('.', "/"))
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::Path;

@@ -13,6 +13,8 @@ mod form;
 mod history;
 mod ids;
 mod instance;
+#[cfg(target_os = "linux")]
+mod menu;
 mod organize;
 mod print;
 mod search;
@@ -73,10 +75,18 @@ fn main() -> ExitCode {
             cx.set_global(history::History::load());
             katna_ui::text_input::bind_keys(cx);
             viewer::bind_keys(cx);
+            // Before the window opens, so it carries the menu's address.
+            #[cfg(target_os = "linux")]
+            let clicks = menu::serve(cx);
             let Some(window) = open_window(std::mem::take(&mut files), cx) else {
                 cx.quit();
                 return;
             };
+            #[cfg(target_os = "linux")]
+            if let Some(clicks) = clicks {
+                cx.spawn(async move |cx| menu::run(window, clicks, cx).await)
+                    .detach();
+            }
             cx.activate(true);
             if let Some(requests) = requests.clone() {
                 cx.spawn(async move |cx| serve(window, requests, cx).await)
