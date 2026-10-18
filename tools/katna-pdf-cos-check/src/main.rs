@@ -57,11 +57,13 @@ fn check(file: &Path) -> String {
     };
     let load_ms = started.elapsed().as_secs_f64() * 1000.0;
     let pages = doc.pages().len();
+    let outline = doc.outline();
     let mut out = format!(
-        "load=ok repaired={} encrypted={} pages={pages} hayro={} load_ms={load_ms:.2}",
+        "load=ok repaired={} encrypted={} pages={pages} hayro={} load_ms={load_ms:.2} outline={}",
         doc.was_repaired(),
         doc.is_encrypted(),
         hayro_pages.map_or("failed".into(), |n| n.to_string()),
+        outline_summary(&outline, pages),
     );
     let update = match doc.update() {
         Err(e) => format!(
@@ -100,6 +102,27 @@ fn check(file: &Path) -> String {
     };
     out.push_str(&format!(" update={update}"));
     out
+}
+
+/// How many outline items there are, and how many go to a page that is
+/// not in the file (`none`, or e.g. `12/1bad`).
+fn outline_summary(outline: &[katna_pdf_cos::OutlineItem], pages: usize) -> String {
+    fn count(items: &[katna_pdf_cos::OutlineItem], pages: usize, n: &mut usize, bad: &mut usize) {
+        for item in items {
+            *n += 1;
+            if item.dest.is_some_and(|d| d.page >= pages) {
+                *bad += 1;
+            }
+            count(&item.children, pages, n, bad);
+        }
+    }
+    let (mut n, mut bad) = (0, 0);
+    count(outline, pages, &mut n, &mut bad);
+    match (n, bad) {
+        (0, _) => "none".into(),
+        (n, 0) => n.to_string(),
+        (n, bad) => format!("{n}/{bad}bad"),
+    }
 }
 
 fn sweep(dir: &Path) -> ExitCode {
