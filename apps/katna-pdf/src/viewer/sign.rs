@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock, RwLock};
 
 use gpui::{AnyElement, Context, Entity, Focusable as _, Subscription, Window, div, prelude::*};
-use katna_pdf_cos::{Coverage, Placement, SignRequest, SigningInfo};
+use katna_pdf_cos::{Allowed, Change, Coverage, FieldKind, Placement, SignRequest, SigningInfo};
 use katna_pdf_sign::{Certificate, Revocation, Roots, Trust, common_name, pkcs11};
 use katna_ui::px;
 use katna_ui::scale::desktop_px;
@@ -44,6 +44,73 @@ pub(super) struct SigRow {
     pub vouched: Option<Vouched>,
     /// Whether their certificates were revoked, once asked online.
     pub revocation: Option<Revocation>,
+    /// What it allows after it, when it certifies the file.
+    pub certifies: Option<Allowed>,
+}
+
+/// What signing needs to know of the file.
+#[derive(Debug, Clone, Default)]
+pub(super) struct Signable {
+    /// Its signature fields not signed yet.
+    pub fields: Vec<EmptyField>,
+    /// How it is certified, if it is.
+    pub certified: Option<Allowed>,
+    /// Whether it holds a signature.
+    pub signed: bool,
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct EmptyField {
+    pub name: String,
+    pub page: usize,
+    /// Left, bottom, right, top in the page's own space.
+    pub rect: [f32; 4],
+}
+
+/// What signing `doc` needs to know of it.
+pub(super) fn signable(doc: &katna_pdf_cos::Document) -> Signable {
+    let signed: Vec<_> = doc.signatures().into_iter().map(|s| s.field).collect();
+    let fields = doc
+        .form()
+        .into_iter()
+        .filter(|f| f.kind == FieldKind::Signature && !signed.contains(&f.id) && !f.read_only)
+        .filter_map(|f| {
+            let w = f.widgets.first()?;
+            let seen = w.rect[2] - w.rect[0] > 1.0 && w.rect[3] - w.rect[1] > 1.0;
+            seen.then(|| EmptyField {
+                name: f.name.clone(),
+                page: w.page,
+                rect: w.rect,
+            })
+        })
+        .collect();
+    Signable {
+        fields,
+        certified: doc.certification(),
+        signed: !signed.is_empty(),
+    }
+}
+
+/// The text id naming what a certification allows.
+fn allowed_id(allowed: Allowed) -> &'static str {
+    match allowed {
+        Allowed::Nothing => "certify-nothing",
+        Allowed::FormFilling => "certify-forms",
+        Allowed::Comments => "certify-comments",
+    }
+}
+
+fn change_id(change: Change) -> &'static str {
+    match change {
+        Change::FormFilled => "change-form",
+        Change::Signed => "change-signed",
+        Change::Commented => "change-comments",
+        Change::NewField => "change-new-field",
+        Change::Dss => "change-dss",
+        Change::Pages => "change-pages",
+        Change::Content => "change-content",
+        Change::Other => "change-other",
+    }
 }
 
 /// Whether a signer is who their certificate says.
@@ -150,6 +217,14 @@ fn rows(checks: Vec<katna_pdf_sign::SignatureCheck>) -> Vec<SigRow> {
                     "signer-revoked",
                     &[("name", name), ("when", when.as_deref().unwrap_or("?"))],
                 )),
+                _ if c.intact() && !c.forbidden.is_empty() => {
+                    let changes: Vec<String> =
+                        c.forbidden.iter().map(|f| t(change_id(*f), &[])).collect();
+                    Some(t(
+                        "signer-changed-after-certifying",
+                        &[("changes", &changes.join(", "))],
+                    ))
+                }
                 _ => c.problem(),
             };
             SigRow {
@@ -165,14 +240,22 @@ fn rows(checks: Vec<katna_pdf_sign::SignatureCheck>) -> Vec<SigRow> {
                 stamp: c.result.as_ref().ok().and_then(|r| r.timestamp.clone()),
                 vouched: c.trust.as_ref().map(vouched),
                 revocation: c.revocation.clone(),
+                certifies: c.signature.certify,
             }
         })
         .collect()
 }
 
 /// Where the signature goes.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 enum Placed {
+    /// In the file's empty signature field `name`, shown on page `page`
+    /// at `shown`.
+    Field {
+        name: String,
+        page: usize,
+        shown: [f32; 4],
+    },
     /// In a box on page `page`: `shown` in points from its top left as
     /// shown, `rect` in its own space.
     Box {
@@ -227,6 +310,8 @@ pub(super) struct Signing {
     server: Entity<TextInput>,
     /// Other files to sign at the same time, with the key unlocked once.
     others: Vec<PathBuf>,
+    /// Certify the file, allowing these changes after.
+    certify: Option<Allowed>,
     error: Option<String>,
     busy: bool,
     /// Put the keys in the password field on the next frame.
@@ -290,6 +375,7 @@ impl Viewer {
             timestamp,
             server,
             others: Vec::new(),
+            certify: None,
             error: None,
             busy: false,
             focus: false,
@@ -379,6 +465,10 @@ impl Viewer {
         if !self.signing.as_ref().is_some_and(|s| s.placed.is_none()) {
             return false;
         }
+        // A certified file is signed in its own fields only.
+        if self.signable.certified.is_some() {
+            return true;
+        }
         if let Some((page, point)) = self.page_point(position) {
             self.selection = None;
             self.draft = Some(Draft {
@@ -434,11 +524,63 @@ impl Viewer {
         }
     }
 
+    /// The box being dragged, or placed, on page `page`; while placing,
+    /// the file's empty signature fields there, to click.
+    pub(super) fn sign_overlay(&self, page: usize, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let Some(signing) = self.signing.as_ref() else {
+            return Vec::new();
+        };
+        let mut out: Vec<AnyElement> = self.sign_box(page).into_iter().collect();
+        let Content::Ready(opened) = &self.content else {
+            return out;
+        };
+        let (Some(transform), true) = (
+            opened.doc.page_transform(page),
+            signing.placed.is_none() && self.signable.certified != Some(Allowed::Nothing),
+        ) else {
+            return out;
+        };
+        let shown = self.shown;
+        let accent = self.theme.katna.accent;
+        for (i, field) in self.signable.fields.iter().enumerate() {
+            if field.page != page {
+                continue;
+            }
+            let b = katna_pdf_render::map_rect(transform, field.rect);
+            let placed = Placed::Field {
+                name: field.name.clone(),
+                page,
+                shown: b,
+            };
+            out.push(
+                div()
+                    .id(("sign-field", i))
+                    .absolute()
+                    .left(desktop_px(b[0] * shown))
+                    .top(desktop_px(b[1] * shown))
+                    .w(desktop_px((b[2] - b[0]) * shown))
+                    .h(desktop_px((b[3] - b[1]) * shown))
+                    .border_2()
+                    .border_dashed()
+                    .border_color(gpui::rgba(accent))
+                    .bg(gpui::rgba(accent & 0xffff_ff00 | 0x1a))
+                    .hover(move |s| s.bg(gpui::rgba(accent & 0xffff_ff00 | 0x40)))
+                    .cursor_pointer()
+                    .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .on_click(cx.listener(move |this, _, _, cx| this.place(placed.clone(), cx)))
+                    .tip(field.name.clone(), &self.theme.katna)
+                    .into_any_element(),
+            );
+        }
+        out
+    }
+
     /// The box being dragged, or placed, on page `page`.
-    pub(super) fn sign_overlay(&self, page: usize) -> Option<AnyElement> {
+    fn sign_box(&self, page: usize) -> Option<AnyElement> {
         let signing = self.signing.as_ref()?;
-        let [x0, y0, x1, y1] = match (signing.placed, &self.draft) {
-            (Some(Placed::Box { page: p, shown, .. }), _) if p == page => shown,
+        let [x0, y0, x1, y1] = match (&signing.placed, &self.draft) {
+            (Some(Placed::Box { page: p, shown, .. }), _) if *p == page => *shown,
+            (Some(Placed::Field { page: p, shown, .. }), _) if *p == page => *shown,
             (None, Some(draft)) if draft.page == page => {
                 let (from, to) = (draft.path.first()?, draft.path.last()?);
                 [
@@ -532,9 +674,10 @@ impl Viewer {
         let Some(signing) = self.signing.as_mut() else {
             return;
         };
-        let Some(placed) = signing.placed.filter(|_| !signing.busy) else {
+        let Some(placed) = signing.placed.clone().filter(|_| !signing.busy) else {
             return;
         };
+        let certify = signing.certify;
         let source = signing.source;
         let certificate = signing.certificate.clone();
         let found = match (source, &signing.tokens) {
@@ -634,6 +777,7 @@ impl Viewer {
                         reason,
                         location,
                         tsa: tsa.clone(),
+                        certify,
                     };
                     // This file: into the file chosen, or into the folder.
                     let first = if others.is_empty() {
@@ -729,6 +873,14 @@ impl Viewer {
     /// right corner, so the pages do not move as it comes and goes.
     fn placing_card(&self, cx: &mut Context<Self>) -> AnyElement {
         let th = self.theme;
+        let fields = !self.signable.fields.is_empty();
+        let (say, free) = match self.signable.certified {
+            Some(Allowed::Nothing) => ("sign-certified-locked", false),
+            Some(_) if fields => ("sign-place-field", false),
+            Some(_) => ("sign-certified-full", false),
+            None if fields => ("sign-place-or-field", true),
+            None => ("sign-place", true),
+        };
         div()
             .id("signing-place")
             .absolute()
@@ -752,12 +904,14 @@ impl Viewer {
                     .min_w_0()
                     .text_size(px(text::SMALL))
                     .text_color(th.text)
-                    .child(t("sign-place", &[])),
+                    .child(t(say, &[])),
             )
-            .child(
-                widgets::outlined_button("sign-hidden", t("sign-hidden", &[]), &th.katna)
-                    .on_click(cx.listener(|this, _, _, cx| this.place(Placed::Hidden, cx))),
-            )
+            .when(free, |d| {
+                d.child(
+                    widgets::outlined_button("sign-hidden", t("sign-hidden", &[]), &th.katna)
+                        .on_click(cx.listener(|this, _, _, cx| this.place(Placed::Hidden, cx))),
+                )
+            })
             .child(icon_button(
                 "sign-cancel",
                 "close",
@@ -878,28 +1032,7 @@ impl Viewer {
                                 cx.notify();
                             }
                         }))
-                        .child(
-                            div()
-                                .size(px(18.0))
-                                .flex_none()
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .rounded(px(radius::XS))
-                                .border_2()
-                                .border_color(gpui::rgba(if signing.timestamp {
-                                    th.katna.accent
-                                } else {
-                                    th.katna.text_dim
-                                }))
-                                .when(signing.timestamp, |d| {
-                                    d.bg(gpui::rgba(th.katna.accent)).child(widgets::icon(
-                                        "check",
-                                        th.katna.on_accent,
-                                        14.0,
-                                    ))
-                                }),
-                        )
+                        .child(check_box(signing.timestamp, th))
                         .child(
                             div()
                                 .text_size(px(text::SMALL))
@@ -908,6 +1041,7 @@ impl Viewer {
                         ),
                 )
                 .when(signing.timestamp, |d| d.child(field(&signing.server)))
+                .when(!self.signable.signed, |d| d.child(self.certify_choice(cx)))
                 .child(
                     div()
                         .flex()
@@ -994,6 +1128,68 @@ impl Viewer {
                 )
                 .into_any_element(),
         )
+    }
+
+    /// Whether to certify the file, and what it then allows.
+    fn certify_choice(&self, cx: &mut Context<Self>) -> AnyElement {
+        let th = self.theme;
+        let certify = self.signing.as_ref().and_then(|s| s.certify);
+        let set = |allowed: Option<Allowed>| {
+            cx.listener(move |this: &mut Self, _: &gpui::ClickEvent, _, cx| {
+                if let Some(signing) = this.signing.as_mut() {
+                    signing.certify = allowed;
+                    cx.notify();
+                }
+            })
+        };
+        let choice = |allowed: Allowed| {
+            let on = certify == Some(allowed);
+            let id = allowed_id(allowed);
+            let button = if on {
+                widgets::filled_button(id, t(id, &[]), &th.katna)
+            } else {
+                widgets::outlined_button(id, t(id, &[]), &th.katna)
+            };
+            button
+                .tip(t(&format!("{id}-tip"), &[]), &th.katna)
+                .on_click(set(Some(allowed)))
+        };
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(space::S1))
+            .child(
+                div()
+                    .id("sign-certify")
+                    .flex()
+                    .items_center()
+                    .gap(px(space::S2))
+                    .py(px(space::S1))
+                    .cursor_pointer()
+                    .on_click(set(match certify {
+                        Some(_) => None,
+                        None => Some(Allowed::FormFilling),
+                    }))
+                    .child(check_box(certify.is_some(), th))
+                    .child(
+                        div()
+                            .text_size(px(text::SMALL))
+                            .text_color(th.text)
+                            .child(t("sign-certify", &[])),
+                    ),
+            )
+            .when(certify.is_some(), |d| {
+                d.child(
+                    div()
+                        .flex()
+                        .flex_wrap()
+                        .gap(px(space::S1))
+                        .child(choice(Allowed::Nothing))
+                        .child(choice(Allowed::FormFilling))
+                        .child(choice(Allowed::Comments)),
+                )
+            })
+            .into_any_element()
     }
 
     /// Certificate file or token: two buttons side by side, the one in
@@ -1237,6 +1433,15 @@ impl Viewer {
                 _ => (None, None),
             };
             let mut details = Vec::new();
+            if let Some(allowed) = row.certifies {
+                details.push(t(
+                    "signer-certifies",
+                    &[(
+                        "allowed",
+                        &t(&allowed_id(allowed).replace("certify", "allowed"), &[]),
+                    )],
+                ));
+            }
             match &row.revocation {
                 Some(Revocation::Good) => details.push(t("signer-not-revoked", &[])),
                 Some(Revocation::Unknown { name, why }) => details.push(t(
@@ -1411,12 +1616,37 @@ fn unlock(file: Option<PathBuf>, found: Option<Found>, secret: &str) -> Result<K
     Ok(Box::new(id))
 }
 
+/// A box ticked or not.
+fn check_box(on: bool, th: super::Theme) -> gpui::Div {
+    div()
+        .size(px(18.0))
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(radius::XS))
+        .border_2()
+        .border_color(gpui::rgba(if on {
+            th.katna.accent
+        } else {
+            th.katna.text_dim
+        }))
+        .when(on, |d| {
+            d.bg(gpui::rgba(th.katna.accent)).child(widgets::icon(
+                "check",
+                th.katna.on_accent,
+                14.0,
+            ))
+        })
+}
+
 /// What goes into each signature of one signing.
 struct What {
     placed: Placed,
     reason: Option<String>,
     location: Option<String>,
     tsa: Option<String>,
+    certify: Option<Allowed>,
 }
 
 /// Signs PDF `bytes` with `id` as `what` says, and writes the signed
@@ -1430,16 +1660,29 @@ fn sign_one(
 ) -> Result<(), String> {
     let doc = katna_pdf_cos::Document::load(bytes).map_err(|e| e.to_string())?;
     let time = std::time::SystemTime::now();
-    let placement = match what.placed {
+    let lines = || {
+        katna_pdf_sign::appearance_lines(
+            id,
+            &katna_pdf_sign::shown_date(time),
+            what.reason.as_deref(),
+        )
+    };
+    let placement = match &what.placed {
         Placed::Hidden => Placement::Invisible,
         Placed::Box { page, rect, .. } => Placement::Visible {
-            page: page.min(doc.pages().len().saturating_sub(1)),
-            rect,
-            lines: katna_pdf_sign::appearance_lines(
-                id,
-                &katna_pdf_sign::shown_date(time),
-                what.reason.as_deref(),
-            ),
+            page: (*page).min(doc.pages().len().saturating_sub(1)),
+            rect: *rect,
+            lines: lines(),
+        },
+        // The field of the same name, in each file.
+        Placed::Field { name, .. } => Placement::Field {
+            id: doc
+                .form()
+                .into_iter()
+                .find(|f| &f.name == name && f.kind == FieldKind::Signature)
+                .ok_or_else(|| t("sign-no-field", &[("name", name)]))?
+                .id,
+            lines: lines(),
         },
     };
     let mut request = SignRequest::new(
@@ -1452,6 +1695,7 @@ fn sign_one(
         },
     );
     request.time = time;
+    request.certify = what.certify;
     let server = what.tsa.as_deref().map(katna_pdf_sign::tsa::Server::new);
     let signed = katna_pdf_sign::sign_with(
         &doc,
@@ -1584,13 +1828,14 @@ mod tests {
             reason: Some("Approved".into()),
             location: None,
             tsa: None,
+            certify: None,
         };
         let file = Path::new("/somewhere/report.pdf");
         let first = free_name(&folder, file);
         sign_one(pdf.clone(), &what, &id, &first).unwrap();
         let second = free_name(&folder, file);
         assert_ne!(first, second);
-        sign_one(pdf, &what, &id, &second).unwrap();
+        sign_one(pdf.clone(), &what, &id, &second).unwrap();
         for target in [first, second] {
             let doc = katna_pdf_cos::Document::load(std::fs::read(&target).unwrap()).unwrap();
             let checks = katna_pdf_sign::check(&doc, doc.bytes(), &Roots::new());
@@ -1599,6 +1844,32 @@ mod tests {
             assert_eq!(checks[0].signature.page, Some(1));
         }
         assert!(sign_one(b"nope".to_vec(), &what, &id, &folder.join("x.pdf")).is_err());
+
+        // Into a field of the file, certifying it: then the field is
+        // found as signed, and the file as certified.
+        let form = katna_pdf_cos::Document::load(pdf)
+            .unwrap()
+            .add_signature_field(0, [20.0, 20.0, 120.0, 60.0], Some("Author".into()))
+            .unwrap();
+        let empty = signable(&katna_pdf_cos::Document::load(form.clone()).unwrap());
+        assert_eq!(empty.fields.len(), 1);
+        assert!(!empty.signed && empty.certified.is_none());
+        let what = What {
+            placed: Placed::Field {
+                name: "Author".into(),
+                page: 0,
+                shown: [0.0; 4],
+            },
+            certify: Some(Allowed::FormFilling),
+            ..what
+        };
+        let target = folder.join("certified.pdf");
+        sign_one(form, &what, &id, &target).unwrap();
+        let doc = katna_pdf_cos::Document::load(std::fs::read(&target).unwrap()).unwrap();
+        let after = signable(&doc);
+        assert!(after.fields.is_empty() && after.signed);
+        assert_eq!(after.certified, Some(Allowed::FormFilling));
+        assert_eq!(check(&doc)[0].certifies, Some(Allowed::FormFilling));
         let _ = std::fs::remove_dir_all(folder);
     }
 }

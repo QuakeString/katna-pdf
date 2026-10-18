@@ -33,10 +33,11 @@ cargo run --release -p katna-pdf-bench -- file.pdf
   a folder of the person's own, such as India's CCA roots), and
   revocation checked online (`revocation.rs`: OCSP, then CRLs; missing
   issuers fetched from the certificate's AIA URL). The
-  PDF side (fields, byte ranges) is `katna-pdf-cos`'s `sign.rs`.
+  PDF side (fields, byte ranges) is `katna-pdf-cos`'s `sign.rs`, and
+  certified files' allowed changes (DocMDP) its `mdp.rs`.
 - `apps/katna-pdf` — the app window.
 - `apps/katna-pdf-cli` — the command line: info, merge, split, pages,
-  rotate, crop, sign, verify, annotations and XFDF; `--json` for scripts and agents.
+  rotate, crop, sign (and certify), add-field, verify, annotations and XFDF; `--json` for scripts and agents.
 - `tools/katna-pdf-cos-check` — runs katna-pdf-cos over a folder of PDFs
   (loads, page counts against hayro, update round trips).
 - `vendor/hayro`, `vendor/hayro-interpret` — hayro with our patches

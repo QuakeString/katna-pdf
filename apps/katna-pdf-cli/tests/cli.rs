@@ -249,6 +249,59 @@ fn files_are_signed_and_verified() {
     let _ = std::fs::remove_dir_all(d);
 }
 
+#[test]
+fn files_are_certified_with_fields_for_others() {
+    let d = dir("certify");
+    let input = d.join("in.pdf");
+    std::fs::write(&input, pdf(2)).unwrap();
+    let data = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../crates/katna-pdf-sign/tests/data/"
+    );
+    let (rsa, ec) = (format!("{data}rsa-aes.p12"), format!("{data}ec-p256.p12"));
+    let (form, certified, signed) = (d.join("form.pdf"), d.join("cert.pdf"), d.join("both.pdf"));
+    let sign = |input: &Path, out: &Path, p12: &str, more: &[&str]| {
+        let mut args = vec![
+            "sign",
+            s(input),
+            "-o",
+            s(out),
+            "--p12",
+            p12,
+            "--password",
+            "katna",
+        ];
+        args.extend(more);
+        run(&args).0
+    };
+    let (code, _) = run(&[
+        "add-field",
+        s(&input),
+        "-o",
+        s(&form),
+        "--page",
+        "2",
+        "--rect",
+        "10,10,90,60",
+        "--name",
+        "Approver",
+    ]);
+    assert_eq!(code, 0);
+    assert_eq!(sign(&form, &certified, &rsa, &["--certify", "forms"]), 0);
+    // Not in a box of one's own: in the field left for it.
+    assert_eq!(sign(&certified, &signed, &ec, &[]), 1);
+    assert_eq!(sign(&certified, &signed, &ec, &["--field", "Approver"]), 0);
+    let (code, out) = run(&["verify", "--json", s(&signed)]);
+    assert_eq!(code, 0);
+    assert!(
+        out.contains("\"certifies\":{\"allows\":\"forms\",\"forbidden_changes\":[]}"),
+        "{out}"
+    );
+    assert!(!out.contains("\"intact\":false"), "{out}");
+    assert_eq!(sign(&form, &certified, &rsa, &["--certify", "all"]), 2);
+    let _ = std::fs::remove_dir_all(d);
+}
+
 /// SoftHSM, a token in software, where it is installed (CI installs
 /// it on Linux): signing with a token goes through it as through an
 /// ePass2003's driver.

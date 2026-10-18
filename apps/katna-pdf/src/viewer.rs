@@ -326,6 +326,8 @@ pub struct Viewer {
     /// The file's signatures, checked, once read; and signing, while
     /// under way (`sign.rs`).
     signatures: Option<sign::Rows>,
+    /// What signing needs to know of the file.
+    signable: Arc<sign::Signable>,
     signing: Option<sign::Signing>,
     grid: gpui::ScrollHandle,
     grid_bar: ScrollBar,
@@ -418,6 +420,7 @@ impl Viewer {
             organizer: false,
             cropping: false,
             signatures: None,
+            signable: Arc::default(),
             signing: None,
             grid: gpui::ScrollHandle::new(),
             grid_bar: ScrollBar::default(),
@@ -498,6 +501,7 @@ impl Viewer {
         self.organizer = false;
         self.cropping = false;
         self.signatures = None;
+        self.signable = Arc::default();
         self.signing = None;
         self.anchor = None;
         self.edited = None;
@@ -604,14 +608,22 @@ impl Viewer {
     fn read_outline(&mut self, path: PathBuf, generation: u64, cx: &mut Context<Self>) {
         let again = path.clone();
         cx.spawn(async move |this, cx| {
-            let (outline, show, links, form, annots, signatures) = cx
+            let (outline, show, links, form, annots, signatures, signable) = cx
                 .background_executor()
                 .spawn(async move {
                     let Some(doc) = std::fs::read(&path)
                         .ok()
                         .and_then(|bytes| katna_pdf_cos::Document::load(bytes).ok())
                     else {
-                        return (Vec::new(), false, Vec::new(), None, Vec::new(), Vec::new());
+                        return (
+                            Vec::new(),
+                            false,
+                            Vec::new(),
+                            None,
+                            Vec::new(),
+                            Vec::new(),
+                            sign::Signable::default(),
+                        );
                     };
                     let show = doc
                         .catalog()
@@ -619,9 +631,10 @@ impl Viewer {
                     let (outline, links, fields) = (doc.outline(), doc.links(), doc.form());
                     let annots = doc.annotations();
                     let signatures = sign::check(&doc);
+                    let signable = sign::signable(&doc);
                     // The object layer's copy is kept only for a form.
                     let form = (!fields.is_empty()).then(|| (Arc::new(doc), fields));
-                    (outline, show, links, form, annots, signatures)
+                    (outline, show, links, form, annots, signatures, signable)
                 })
                 .await;
             this.update(cx, |this, cx| {
@@ -637,6 +650,7 @@ impl Viewer {
                     this.check_signatures_online(again, generation, cx);
                 }
                 this.signatures = Some(Arc::new(signatures));
+                this.signable = Arc::new(signable);
                 if links.iter().any(|l| !l.is_empty()) {
                     this.links = Some(Arc::new(links));
                     cx.notify();
@@ -2055,6 +2069,7 @@ impl Viewer {
         self.links = links.iter().any(|l| !l.is_empty()).then(|| Arc::new(links));
         self.annots = Some(Arc::new(cos.annotations()));
         self.signatures = Some(Arc::new(sign::check(&cos)));
+        self.signable = Arc::new(sign::signable(&cos));
         self.chosen = None;
         self.comment = None;
         // A form's changes are in the file now.
@@ -2416,7 +2431,7 @@ impl Viewer {
         };
         let mut overlays = self.annot_overlays(page, transform);
         overlays.extend(self.crop_overlay(page));
-        overlays.extend(self.sign_overlay(page));
+        overlays.extend(self.sign_overlay(page, cx));
         // Matches on this page, the current one stronger, and the
         // selected text.
         let accent = self.theme.katna.accent & 0xffff_ff00;
