@@ -13,7 +13,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
-use katna_pdf_render::scene::page_scene;
+use katna_pdf_render::scene::{page_scene, quick_reader_agrees};
 use katna_pdf_render::{Bitmap, Document, Engine, Hayro, HayroPlain, Region};
 
 const VIEW: (u32, u32) = (1920, 1080);
@@ -36,7 +36,9 @@ pub fn run(files: &[String]) -> bool {
 
 /// `--scene-check`: draws page 1 of each file from a scene, vector-heavy
 /// or not, and the usual way, and prints how much the two differ. A check
-/// that scenes draw what hayro draws, on ordinary files too.
+/// that scenes draw what hayro draws, on ordinary files too. The last
+/// column says whether our quick reader read the page (`quick`), and
+/// `QUICK-DIFFERS` if it read it unlike hayro.
 pub fn check(files: &[String]) -> bool {
     for file in files {
         let name = file.rsplit(['/', '\\']).next().unwrap_or(file);
@@ -52,7 +54,7 @@ pub fn check(files: &[String]) -> bool {
             }
             None => continue,
         };
-        let Ok(plain) = HayroPlain.open(bytes, "") else {
+        let Ok(plain) = HayroPlain.open(bytes.clone(), "") else {
             continue;
         };
         let (w, h) = scene.size();
@@ -65,7 +67,18 @@ pub fn check(files: &[String]) -> bool {
         };
         let a = scene.render(1.5, (0.0, 0.0), size);
         let b = plain.render_region(0, 1.5, region);
-        println!("{name}\t{}\t{:.3}", scene.len(), differs(&[a], &[b]));
+        // Whether our quick reader read the page, and into what hayro's
+        // interpreter reads.
+        let quick = match quick_reader_agrees(bytes.clone(), 0) {
+            Some(true) => "quick",
+            Some(false) => "QUICK-DIFFERS",
+            None => "hayro",
+        };
+        println!(
+            "{name}\t{}\t{:.3}\t{quick}",
+            scene.len(),
+            differs(&[a], &[b])
+        );
     }
     true
 }

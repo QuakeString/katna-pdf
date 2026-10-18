@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use katna_pdf_render::scene::{HEAVY_SEGMENTS, Unsupported, page_scene};
+use katna_pdf_render::scene::{HEAVY_SEGMENTS, Unsupported, page_scene, quick_reader_agrees};
 use katna_pdf_render::{Bitmap, Engine, Hayro, HayroPlain, OpenError, Region};
 
 /// A PDF with one 200 × 100 pt page per entry of `pages`, each a content
@@ -248,4 +248,49 @@ fn a_drawing_with_an_image_is_drawn_the_usual_way() {
         .unwrap();
     let b = HayroPlain.open(bytes, "").unwrap().render(0, 1.0).unwrap();
     assert_eq!(a, b);
+}
+
+#[test]
+fn the_quick_reader_reads_plain_paths_as_hayro_does() {
+    let pages = [
+        SQUARE,
+        // Strokes, caps, joins, dashes, curves, closes, and colours.
+        "1 0 0 RG 2 w 1 J 1 j 4 M [3 0 2] 1 d 10 10 m 50 10 l 50 50 l h S \
+         0.5 g 2 J 2 j [] 0 d 60 10 m 70 40 80 40 90 10 c 95 20 100 15 v 100 10 110 15 y s",
+        // Fills of every kind, a zero-sized one, and one point twice.
+        "0 0 1 rg 10 10 m 40 10 l 40 40 l 10 40 l f* 0.2 0.4 0.6 rg 50 10 30 30 re B \
+         50 50 m 90 50 l f 60 60 m 60 60 l S 1 0 0 1 5 5 cm 10 60 20 20 re b*",
+        // Clips: a rectangle inside the page, one covering only that, one
+        // covering the page, a triangle,
+        // with saves and restores around and between them.
+        "q 20 20 100 50 re W n 0 g 0 0 200 100 re f q 10 10 150 70 re W n 0.5 g 0 0 200 100 re f Q \
+         q -10 -10 300 300 re W* n \
+         10 10 m 150 10 l 80 90 l h W n 1 0 0 rg 0 0 200 100 re f Q 0 1 0 rg \
+         30 30 40 40 re f Q 0 0 1 RG 5 w 0 0 m 200 100 l S Q Q",
+        // Odd but valid numbers, comments and white space.
+        "% a comment\n+1 -.5 0 1. 0 0 cm\t.5 G 1.000 w 0 0 m\r\n-0 100 l 007 50 l S",
+    ];
+    let bytes = Arc::new(pdf(&pages));
+    for i in 0..pages.len() {
+        assert_eq!(
+            quick_reader_agrees(bytes.clone(), i),
+            Some(true),
+            "page {i}"
+        );
+    }
+}
+
+#[test]
+fn the_quick_reader_leaves_other_pages_to_hayro() {
+    let pages = [
+        "BT /F1 12 Tf (text) Tj ET",
+        "0 0 0 1 k 10 10 50 50 re f",
+        "/GS1 gs 10 10 50 50 re f",
+        "1 2 m 3 l S",
+        "10 10 m 20 20l S",
+    ];
+    let bytes = Arc::new(pdf(&pages));
+    for i in 0..pages.len() {
+        assert_eq!(quick_reader_agrees(bytes.clone(), i), None, "page {i}");
+    }
 }
