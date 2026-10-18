@@ -19,7 +19,7 @@ pub mod trust;
 pub mod tsa;
 mod walk;
 
-use katna_pdf_cos::{Coverage, Document, SignError, SignRequest, Signature};
+use katna_pdf_cos::{Allowed, Change, Coverage, Document, SignError, SignRequest, Signature};
 
 pub use crate::cms::{CheckError, Checked, Stamp, common_name};
 pub use crate::keys::{KeyKind, Signer, SignerError, SoftKey};
@@ -251,6 +251,9 @@ pub struct SignatureCheck {
     /// Whether the signer's certificates were revoked, once asked
     /// ([`check_online`]).
     pub revocation: Option<Revocation>,
+    /// When it certifies the file: the changes made after it that it
+    /// does not allow.
+    pub forbidden: Vec<Change>,
 }
 
 impl SignatureCheck {
@@ -285,7 +288,14 @@ impl SignatureCheck {
     /// Why it does not hold, in a few words; `None` when it does.
     pub fn problem(&self) -> Option<String> {
         if self.intact() {
-            return None;
+            if self.forbidden.is_empty() {
+                return None;
+            }
+            let changes: Vec<&str> = self.forbidden.iter().map(|c| change_text(*c)).collect();
+            return Some(format!(
+                "after it certified the file, changes it does not allow were made ({})",
+                changes.join(", ")
+            ));
         }
         Some(match &self.result {
             Err(e) => e.to_string(),
@@ -294,6 +304,29 @@ impl SignatureCheck {
             Ok(_) if self.coverage == Coverage::Broken => "its byte range is wrong".into(),
             Ok(_) => "it names another certificate than the one that signed".into(),
         })
+    }
+}
+
+/// A kind of change, in a few words.
+pub fn change_text(change: Change) -> &'static str {
+    match change {
+        Change::FormFilled => "form filled in",
+        Change::Signed => "signed",
+        Change::Commented => "comments",
+        Change::NewField => "signature fields added",
+        Change::Dss => "validation data",
+        Change::Pages => "pages",
+        Change::Content => "page content",
+        Change::Other => "other changes",
+    }
+}
+
+/// Which changes a certification allows, in a few words.
+pub fn allowed_text(allowed: Allowed) -> &'static str {
+    match allowed {
+        Allowed::Nothing => "no changes",
+        Allowed::FormFilling => "form filling and signing",
+        Allowed::Comments => "form filling, signing and comments",
     }
 }
 
@@ -315,12 +348,21 @@ pub fn check(doc: &Document, file: &[u8], roots: &Roots) -> Vec<SignatureCheck> 
                 .as_ref()
                 .ok()
                 .map(|r| trust::chain(&r.signer, &r.certificates, roots, checked_at(r)));
+            let forbidden = match (signature.certify, coverage) {
+                (Some(allowed), Coverage::Revision(end)) => doc
+                    .changes_since(end)
+                    .into_iter()
+                    .filter(|c| !allowed.permits(*c))
+                    .collect(),
+                _ => Vec::new(),
+            };
             SignatureCheck {
                 signature,
                 coverage,
                 result,
                 trust,
                 revocation: None,
+                forbidden,
             }
         })
         .collect()

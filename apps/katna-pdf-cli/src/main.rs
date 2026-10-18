@@ -10,8 +10,8 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use katna_pdf_cos::{
-    AnnotKind, Coverage, Document, Object, PageSource, Placement, SignRequest, SigningInfo,
-    compose, text_string,
+    Allowed, AnnotKind, Coverage, Document, Object, PageSource, Placement, SignRequest,
+    SigningInfo, compose, text_string,
 };
 use katna_pdf_sign::{Digest, Revocation, Signer, Trust, common_name, p12, pkcs11};
 
@@ -33,13 +33,19 @@ usage: katna-pdf-cli COMMAND [--json] ...
   sign FILE... -o OUT (--p12 CERT.pfx | --token LABEL [--cert NAME] [--module LIB])
           (--password-env VAR | --password-file F | --password PW)
           [--page N --rect L,B,R,T] [--reason R] [--location L] [--contact C] [--digest 256|384|512]
-          [--tsa URL]
+          [--tsa URL] [--certify none|forms|comments] [--field NAME]
                                   sign with the key in a certificate file, or on a
                                   token (LABEL, or any), unlocked with the password
                                   or PIN (PAdES B-B);
                                   visible in a box on page N when --rect is given;
                                   timestamped by the server at URL with --tsa (PAdES B-T);
+                                  in the empty signature field NAME with --field;
+                                  certified with --certify, allowing no changes after,
+                                  form filling and signing (of the file's own empty
+                                  signature fields), or comments too;
                                   many files at once, unlocked once, into folder OUT
+  add-field FILE -o OUT --rect L,B,R,T [--page N] [--name NAME]
+                                  an empty signature field, for someone to sign later
   tokens [--module LIB]           the signing tokens plugged in (ePass2003 and others)
   verify FILE [--trust PATH] [--online]
                                   the signatures, each checked: intact, what it covers,
@@ -71,6 +77,7 @@ fn main() -> ExitCode {
         "crop" => crop(rest, json),
         "sign" => sign(rest, json),
         "verify" => verify(rest, json),
+        "add-field" => add_field(rest, json),
         "tokens" => tokens(rest, json),
         "annots" => annots(rest, json),
         "xfdf-export" => xfdf_export(rest, json),
@@ -156,6 +163,9 @@ impl<'a> Args<'a> {
                     | "--module"
                     | "--cert"
                     | "--trust"
+                    | "--certify"
+                    | "--field"
+                    | "--name"
             ) {
                 let Some(value) = it.next() else {
                     return Err(Failure::Usage(format!("{a} needs a value")));
@@ -670,45 +680,49 @@ fn sign(args: &[String], json: bool) -> Done {
     };
     let id = id.as_ref();
     let reason = args.option("--reason").map(str::to_owned);
+    let certify = match args.option("--certify") {
+        None => None,
+        Some("none") => Some(Allowed::Nothing),
+        Some("forms") => Some(Allowed::FormFilling),
+        Some("comments") => Some(Allowed::Comments),
+        Some(other) => {
+            return Err(Failure::Usage(format!(
+                "--certify {other}: none, forms or comments"
+            )));
+        }
+    };
     let server = args.option("--tsa").map(katna_pdf_sign::tsa::Server::new);
     let stamper = server
         .as_ref()
         .map(|s| s as &dyn katna_pdf_sign::tsa::Stamper);
     let placement = |doc: &Document, time| -> Result<Placement, Failure> {
+        let lines = || {
+            katna_pdf_sign::appearance_lines(
+                id,
+                &katna_pdf_sign::shown_date(time),
+                reason.as_deref(),
+            )
+        };
+        if let Some(name) = args.option("--field") {
+            let field = doc
+                .form()
+                .into_iter()
+                .find(|f| f.name == name && f.kind == katna_pdf_cos::FieldKind::Signature)
+                .ok_or_else(|| failed(format!("no signature field named {name}")))?;
+            return Ok(Placement::Field {
+                id: field.id,
+                lines: lines(),
+            });
+        }
         Ok(match (args.option("--page"), args.option("--rect")) {
             (None, None) => Placement::Invisible,
             (page, Some(rect)) => {
-                let page = match page {
-                    None => 0,
-                    Some(p) => {
-                        p.parse::<usize>()
-                            .ok()
-                            .filter(|p| (1..=doc.pages().len()).contains(p))
-                            .ok_or_else(|| Failure::Usage(format!("--page {p}: no such page")))?
-                            - 1
-                    }
-                };
-                let rect = match rect
-                    .split(',')
-                    .map(|n| n.trim().parse::<f32>().ok().filter(|n| n.is_finite()))
-                    .collect::<Option<Vec<_>>>()
-                    .as_deref()
-                {
-                    Some(&[l, b, r, t]) if r > l && t > b => [l, b, r, t],
-                    _ => {
-                        return Err(Failure::Usage(format!(
-                            "--rect {rect}: left,bottom,right,top"
-                        )));
-                    }
-                };
+                let page = page_number(doc, page)?;
+                let rect = parse_rect(rect)?;
                 Placement::Visible {
                     page,
                     rect,
-                    lines: katna_pdf_sign::appearance_lines(
-                        id,
-                        &katna_pdf_sign::shown_date(time),
-                        reason.as_deref(),
-                    ),
+                    lines: lines(),
                 }
             }
             (Some(_), None) => {
@@ -734,6 +748,7 @@ fn sign(args: &[String], json: bool) -> Done {
                 },
             );
             request.time = time;
+            request.certify = certify;
             let signed = katna_pdf_sign::sign_with(&doc, &request, id, digest, stamper)
                 .map_err(|e| failed(format!("{file}: {e}")))?;
             let out = target(file)?;
@@ -760,6 +775,53 @@ fn sign(args: &[String], json: bool) -> Done {
 }
 
 /// The modules to look for tokens with: `module`, or those installed.
+/// Page `page` (counted from 1; the first when `None`) of `doc`, counted
+/// from 0.
+fn page_number(doc: &Document, page: Option<&str>) -> Result<usize, Failure> {
+    match page {
+        None => Ok(0),
+        Some(p) => p
+            .parse::<usize>()
+            .ok()
+            .filter(|p| (1..=doc.pages().len()).contains(p))
+            .map(|p| p - 1)
+            .ok_or_else(|| Failure::Usage(format!("--page {p}: no such page"))),
+    }
+}
+
+/// A box: `left,bottom,right,top`.
+fn parse_rect(rect: &str) -> Result<[f32; 4], Failure> {
+    match rect
+        .split(',')
+        .map(|n| n.trim().parse::<f32>().ok().filter(|n| n.is_finite()))
+        .collect::<Option<Vec<_>>>()
+        .as_deref()
+    {
+        Some(&[l, b, r, t]) if r > l && t > b => Ok([l, b, r, t]),
+        _ => Err(Failure::Usage(format!(
+            "--rect {rect}: left,bottom,right,top"
+        ))),
+    }
+}
+
+/// Adds an empty signature field, for someone to sign later.
+fn add_field(args: &[String], json: bool) -> Done {
+    let args = Args::parse(args)?;
+    let [file] = args.words()?;
+    let out = args.output()?;
+    let doc = open(file)?;
+    let page = page_number(&doc, args.option("--page"))?;
+    let rect = parse_rect(
+        args.option("--rect")
+            .ok_or_else(|| Failure::Usage("say where with --rect".into()))?,
+    )?;
+    let bytes = doc
+        .add_signature_field(page, rect, args.option("--name").map(str::to_owned))
+        .map_err(|e| failed(format!("{file}: {e}")))?;
+    write(&out, &bytes)?;
+    Ok(wrote(&[(out, doc.pages().len())], json))
+}
+
 fn modules(module: Option<&str>) -> Result<Vec<pkcs11::Module>, Failure> {
     let paths = match module {
         Some(m) => vec![PathBuf::from(m)],
@@ -923,7 +985,7 @@ fn verify(args: &[String], json: bool) -> Done {
         if json {
             let opt = |v: &Option<String>| v.as_deref().map_or("null".into(), string);
             items.push(format!(
-                "{{\"field\":{},\"page\":{},\"intact\":{},\"covers\":{},\"signer\":{},\"time\":{},\"reason\":{},\"location\":{},\"sub_filter\":{},\"timestamp\":{},\"trust\":{{\"state\":{},\"certificate\":{}}},\"revocation\":{},\"problem\":{}}}",
+                "{{\"field\":{},\"page\":{},\"intact\":{},\"covers\":{},\"signer\":{},\"time\":{},\"reason\":{},\"location\":{},\"sub_filter\":{},\"timestamp\":{},\"trust\":{{\"state\":{},\"certificate\":{}}},\"revocation\":{},\"certifies\":{},\"problem\":{}}}",
                 string(&s.name),
                 s.page.map_or("null".into(), |p| (p + 1).to_string()),
                 c.intact(),
@@ -945,6 +1007,19 @@ fn verify(args: &[String], json: bool) -> Done {
                     "{{\"state\":{},\"detail\":{}}}",
                     string(state),
                     opt(detail)
+                )),
+                s.certify.map_or("null".into(), |a| format!(
+                    "{{\"allows\":{},\"forbidden_changes\":[{}]}}",
+                    string(match a {
+                        Allowed::Nothing => "none",
+                        Allowed::FormFilling => "forms",
+                        Allowed::Comments => "comments",
+                    }),
+                    c.forbidden
+                        .iter()
+                        .map(|f| string(katna_pdf_sign::change_text(*f)))
+                        .collect::<Vec<_>>()
+                        .join(",")
                 )),
                 opt(&problem),
             ));
@@ -987,6 +1062,11 @@ fn verify(args: &[String], json: bool) -> Done {
                     Some(d) => format!("{state}: {d}"),
                     None => (*state).to_owned(),
                 }),
+            );
+            line(
+                "certifies",
+                &s.certify
+                    .map(|a| format!("the file, allowing {}", katna_pdf_sign::allowed_text(a))),
             );
             line("time", &time);
             line("reason", &s.info.reason);

@@ -13,8 +13,9 @@ use std::time::SystemTime;
 
 use crate::annots::{pdf_date, reals};
 use crate::forms::{literal, text_object};
+use crate::mdp::Allowed;
 use crate::object::{Dict, Name, Object, Ref, Stream};
-use crate::write::{UpdateError, write_object};
+use crate::write::{Update, UpdateError, write_object};
 use crate::{Document, FieldKind};
 
 /// Room for the signature when none is asked for: enough for a signature
@@ -61,6 +62,9 @@ pub struct SignRequest {
     pub time: SystemTime,
     /// Bytes kept for the signature.
     pub contents_len: usize,
+    /// Certify the file, allowing these changes after; only the first
+    /// signature may.
+    pub certify: Option<Allowed>,
 }
 
 impl SignRequest {
@@ -71,6 +75,7 @@ impl SignRequest {
             info,
             time: SystemTime::now(),
             contents_len: CONTENTS_LEN,
+            certify: None,
         }
     }
 }
@@ -87,6 +92,15 @@ pub enum SignError {
         length: usize,
         room: usize,
     },
+    /// The file is certified and allows no more signatures.
+    Certified,
+    /// The file is certified: only its own empty signature fields may
+    /// be signed.
+    CertifiedFieldsOnly,
+    /// Only the first signature may certify a file.
+    AlreadySigned,
+    /// The form has a field of the name asked for already.
+    NameTaken,
 }
 
 impl std::fmt::Display for SignError {
@@ -99,6 +113,12 @@ impl std::fmt::Display for SignError {
                 f,
                 "the signature takes {length} bytes; {room} were kept for it"
             ),
+            SignError::Certified => f.write_str("the file is certified and allows no more changes"),
+            SignError::CertifiedFieldsOnly => {
+                f.write_str("the file is certified: only its empty signature fields can be signed")
+            }
+            SignError::NameTaken => f.write_str("the form has a field of that name"),
+            SignError::AlreadySigned => f.write_str("only the first signature can certify a file"),
         }
     }
 }
@@ -166,6 +186,8 @@ pub struct Signature {
     pub info: SigningInfo,
     /// `/M`, as written.
     pub time: Option<String>,
+    /// What changes it allows after it, when it certifies the file.
+    pub certify: Option<Allowed>,
 }
 
 /// How much of a file a signature covers.
@@ -269,6 +291,7 @@ impl Document {
                     contact: text("ContactInfo"),
                 },
                 time: text("M"),
+                certify: self.docmdp(&v),
             });
         }
         out
@@ -277,8 +300,17 @@ impl Document {
     /// The file with a signature field filled but for the signature
     /// itself, as an incremental update.
     pub fn prepare_signature(&self, request: &SignRequest) -> Result<Prepared, SignError> {
+        if request.certify.is_some() && !self.signatures().is_empty() {
+            return Err(SignError::AlreadySigned);
+        }
+        match self.certification() {
+            Some(Allowed::Nothing) => return Err(SignError::Certified),
+            Some(_) if !matches!(request.placement, Placement::Field { .. }) => {
+                return Err(SignError::CertifiedFieldsOnly);
+            }
+            _ => {}
+        }
         let mut update = self.update()?;
-        let pages = self.pages();
         let mut sig = Dict::new();
         sig.set("Type", Object::name("Sig"));
         sig.set("Filter", Object::name("Adobe.PPKLite"));
@@ -311,16 +343,25 @@ impl Document {
                 sig.set(key, text_object(value));
             }
         }
+        if let Some(allowed) = request.certify {
+            let params = Dict(vec![
+                (Name::new("Type"), Object::name("TransformParams")),
+                (Name::new("P"), Object::Int(allowed.level())),
+                (Name::new("V"), Object::name("1.2")),
+            ]);
+            let reference = Dict(vec![
+                (Name::new("Type"), Object::name("SigRef")),
+                (Name::new("TransformMethod"), Object::name("DocMDP")),
+                (Name::new("TransformParams"), Object::Dict(params)),
+            ]);
+            sig.set("Reference", vec![Object::Dict(reference)]);
+        }
         let sig = update.add(Object::Dict(sig));
 
         let form_ref = self
             .catalog()
             .and_then(|c| c.get("AcroForm").and_then(Object::as_ref));
         let mut form = self.acro_form().unwrap_or_default();
-        let mut fields = match self.resolve_key(&form, "Fields") {
-            Object::Array(a) => a,
-            _ => Vec::new(),
-        };
         match &request.placement {
             Placement::Field { id, lines } => {
                 let field = self
@@ -361,67 +402,40 @@ impl Document {
                     Placement::Visible { page, rect, lines } => (*page, *rect, lines.as_slice()),
                     _ => (0, [0.0; 4], &[][..]),
                 };
-                let &page_ref = pages.get(page).ok_or(SignError::NoPage)?;
-                let taken: Vec<String> = self.form().into_iter().map(|f| f.name).collect();
-                let name = request.field_name.clone().unwrap_or_else(|| {
-                    (1..)
-                        .map(|n| format!("Signature{n}"))
-                        .find(|n| !taken.contains(n))
-                        .unwrap_or_default()
-                });
-                let mut widget = Dict::new();
-                widget.set("Type", Object::name("Annot"));
-                widget.set("Subtype", Object::name("Widget"));
-                widget.set("FT", Object::name("Sig"));
-                widget.set("T", text_object(&name));
-                widget.set("F", SIGNED_WIDGET_FLAGS);
-                widget.set("Rect", reals(&rect));
-                widget.set("P", Object::Ref(page_ref));
-                widget.set("V", Object::Ref(sig));
-                if rect[2] > rect[0] && rect[3] > rect[1] {
-                    let ap = update.add(appearance(rect, lines));
-                    widget.set("AP", Dict(vec![(Name::new("N"), Object::Ref(ap))]));
-                }
-                let widget = update.add(Object::Dict(widget));
-                fields.push(Object::Ref(widget));
-                // On the page.
-                let Some(Object::Dict(mut page_dict)) = self.get(page_ref) else {
-                    return Err(SignError::NoPage);
-                };
-                let mut annots = match self.resolve_key(&page_dict, "Annots") {
-                    Object::Array(a) => a,
-                    _ => Vec::new(),
-                };
-                annots.push(Object::Ref(widget));
-                match page_dict.get("Annots").and_then(Object::as_ref) {
-                    Some(list) => update.replace(list, Object::Array(annots)),
-                    None => {
-                        page_dict.set("Annots", annots);
-                        update.replace(page_ref, Object::Dict(page_dict));
-                    }
-                }
-                // In the form.
-                match form.get("Fields").and_then(Object::as_ref) {
-                    Some(list) => update.replace(list, Object::Array(fields)),
-                    None => form.set("Fields", fields),
-                }
+                self.put_field(
+                    &mut update,
+                    &mut form,
+                    page,
+                    rect,
+                    request.field_name.clone(),
+                    Some((sig, lines)),
+                )?;
             }
         }
         // Signatures present, and changes appended only (ISO 32000-2
         // §12.7.3).
         form.set("SigFlags", 3);
+        let mut catalog = None;
         match form_ref {
             Some(r) => update.replace(r, Object::Dict(form)),
             None => {
-                let catalog_ref = self
-                    .trailer()
-                    .get("Root")
-                    .and_then(Object::as_ref)
-                    .ok_or(SignError::Update(UpdateError::Repaired))?;
-                let mut catalog = self.catalog().unwrap_or_default();
-                catalog.set("AcroForm", Object::Dict(form));
-                update.replace(catalog_ref, Object::Dict(catalog));
+                let mut dict = self.catalog().unwrap_or_default();
+                dict.set("AcroForm", Object::Dict(form));
+                catalog = Some(dict);
             }
+        }
+        if request.certify.is_some() {
+            catalog
+                .get_or_insert_with(|| self.catalog().unwrap_or_default())
+                .set("Perms", Dict(vec![(Name::new("DocMDP"), Object::Ref(sig))]));
+        }
+        if let Some(catalog) = catalog {
+            let catalog_ref = self
+                .trailer()
+                .get("Root")
+                .and_then(Object::as_ref)
+                .ok_or(SignError::Update(UpdateError::Repaired))?;
+            update.replace(catalog_ref, Object::Dict(catalog));
         }
 
         let start = self.bytes().len();
@@ -448,6 +462,109 @@ impl Document {
         written.push(b']');
         bytes[range_at..range_at + placeholder.len()].copy_from_slice(&written);
         Ok(Prepared { bytes, range })
+    }
+
+    /// The file with an empty signature field added on page `page` at
+    /// `rect`, named `name` (a free `Signature<n>` when `None`), for
+    /// someone to sign later; as an incremental update.
+    pub fn add_signature_field(
+        &self,
+        page: usize,
+        rect: [f32; 4],
+        name: Option<String>,
+    ) -> Result<Vec<u8>, SignError> {
+        let mut update = self.update()?;
+        let form_ref = self
+            .catalog()
+            .and_then(|c| c.get("AcroForm").and_then(Object::as_ref));
+        let mut form = self.acro_form().unwrap_or_default();
+        self.put_field(&mut update, &mut form, page, rect, name, None)?;
+        match form_ref {
+            Some(r) => update.replace(r, Object::Dict(form)),
+            None => {
+                let catalog_ref = self
+                    .trailer()
+                    .get("Root")
+                    .and_then(Object::as_ref)
+                    .ok_or(SignError::Update(UpdateError::Repaired))?;
+                let mut catalog = self.catalog().unwrap_or_default();
+                catalog.set("AcroForm", Object::Dict(form));
+                update.replace(catalog_ref, Object::Dict(catalog));
+            }
+        }
+        Ok(update.finish())
+    }
+
+    /// Puts a new signature field, its widget and itself in one, on page
+    /// `page` at `rect` and in `form`; signed with signature dictionary
+    /// `signed.0` and showing lines `signed.1` when given.
+    fn put_field(
+        &self,
+        update: &mut Update,
+        form: &mut Dict,
+        page: usize,
+        rect: [f32; 4],
+        name: Option<String>,
+        signed: Option<(Ref, &[String])>,
+    ) -> Result<(), SignError> {
+        let &page_ref = self.pages().get(page).ok_or(SignError::NoPage)?;
+        let taken: Vec<String> = self.form().into_iter().map(|f| f.name).collect();
+        if name.as_ref().is_some_and(|n| taken.contains(n)) {
+            return Err(SignError::NameTaken);
+        }
+        let name = name.unwrap_or_else(|| {
+            (1..)
+                .map(|n| format!("Signature{n}"))
+                .find(|n| !taken.contains(n))
+                .unwrap_or_default()
+        });
+        let mut widget = Dict::new();
+        widget.set("Type", Object::name("Annot"));
+        widget.set("Subtype", Object::name("Widget"));
+        widget.set("FT", Object::name("Sig"));
+        widget.set("T", text_object(&name));
+        widget.set("Rect", reals(&rect));
+        widget.set("P", Object::Ref(page_ref));
+        match signed {
+            Some((sig, lines)) => {
+                widget.set("F", SIGNED_WIDGET_FLAGS);
+                widget.set("V", Object::Ref(sig));
+                if rect[2] > rect[0] && rect[3] > rect[1] {
+                    let ap = update.add(appearance(rect, lines));
+                    widget.set("AP", Dict(vec![(Name::new("N"), Object::Ref(ap))]));
+                }
+            }
+            // Printed.
+            None => widget.set("F", 4),
+        }
+        let widget = update.add(Object::Dict(widget));
+        // On the page.
+        let Some(Object::Dict(mut page_dict)) = self.get(page_ref) else {
+            return Err(SignError::NoPage);
+        };
+        let mut annots = match self.resolve_key(&page_dict, "Annots") {
+            Object::Array(a) => a,
+            _ => Vec::new(),
+        };
+        annots.push(Object::Ref(widget));
+        match page_dict.get("Annots").and_then(Object::as_ref) {
+            Some(list) => update.replace(list, Object::Array(annots)),
+            None => {
+                page_dict.set("Annots", annots);
+                update.replace(page_ref, Object::Dict(page_dict));
+            }
+        }
+        // In the form.
+        let mut fields = match self.resolve_key(form, "Fields") {
+            Object::Array(a) => a,
+            _ => Vec::new(),
+        };
+        fields.push(Object::Ref(widget));
+        match form.get("Fields").and_then(Object::as_ref) {
+            Some(list) => update.replace(list, Object::Array(fields)),
+            None => form.set("Fields", fields),
+        }
+        Ok(())
     }
 }
 

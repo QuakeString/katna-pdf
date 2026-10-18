@@ -7,9 +7,12 @@
 use std::io::Write as _;
 
 use katna_pdf_cos::{
-    AnnotChanges, AnnotKind, Annotation, Coverage, Document, Placement, SignRequest, SigningInfo,
+    Allowed, AnnotChanges, AnnotKind, Annotation, Change, Coverage, Document, Object, Placement,
+    SignError, SignRequest, SigningInfo,
 };
-use katna_pdf_sign::{Digest, P12Error, Roots, Signer, Trust, check, common_name, p12, sign};
+use katna_pdf_sign::{
+    Digest, P12Error, Roots, Signer, SigningError, Trust, check, common_name, p12, sign,
+};
 
 fn data(name: &str) -> Vec<u8> {
     std::fs::read(format!("{}/tests/data/{name}", env!("CARGO_MANIFEST_DIR"))).unwrap()
@@ -173,4 +176,97 @@ fn files_are_signed_again_and_with_every_key() {
     assert_eq!(checks[1].coverage, Coverage::Whole);
     assert_eq!(checks[0].signature.name, "Signature1");
     assert_eq!(checks[1].signature.name, "Signature2");
+}
+
+#[test]
+fn certified_files_allow_only_the_changes_they_say() {
+    let id = p12::open(&data("rsa-aes.p12"), "katna").unwrap();
+    let ec = p12::open(&data("ec-p256.p12"), "katna").unwrap();
+    let certify = |allowed| {
+        let mut request = SignRequest::new(Placement::Invisible, info());
+        request.certify = Some(allowed);
+        // With a field for another signer.
+        let form = Document::load(pdf())
+            .unwrap()
+            .add_signature_field(0, [10.0, 10.0, 110.0, 40.0], Some("Ravi".into()))
+            .unwrap();
+        let signed = sign(
+            &Document::load(form).unwrap(),
+            &request,
+            &id,
+            Digest::Sha256,
+        )
+        .unwrap();
+        let doc = Document::load(signed).unwrap();
+        assert_eq!(doc.certification(), Some(allowed));
+        doc
+    };
+    let forbidden = |file: Vec<u8>| {
+        let doc = Document::load(file.clone()).unwrap();
+        let c = check(&doc, &file, &Roots::new()).remove(0);
+        assert!(c.intact());
+        c.forbidden
+    };
+    let annotated = |doc: &Document| {
+        doc.annotate(&AnnotChanges {
+            put: vec![Annotation::new(0, AnnotKind::Note)],
+            remove: Vec::new(),
+        })
+        .unwrap()
+    };
+    let signed_again = |doc: &Document, placement| {
+        sign(
+            doc,
+            &SignRequest::new(placement, SigningInfo::default()),
+            &ec,
+            Digest::Sha256,
+        )
+    };
+    let field = |doc: &Document| Placement::Field {
+        id: doc.form().iter().find(|f| f.name == "Ravi").unwrap().id,
+        lines: vec!["Ravi".into()],
+    };
+    let rotated = |doc: &Document| {
+        let page = doc.pages()[0];
+        let Some(Object::Dict(mut dict)) = doc.get(page) else {
+            panic!()
+        };
+        dict.set("Rotate", 90);
+        let mut update = doc.update().unwrap();
+        update.replace(page, Object::Dict(dict));
+        update.finish()
+    };
+
+    // No changes: nothing at all, not even another signature.
+    let locked = certify(Allowed::Nothing);
+    assert_eq!(forbidden(annotated(&locked)), [Change::Commented]);
+    assert!(matches!(
+        signed_again(&locked, field(&locked)),
+        Err(SigningError::Pdf(SignError::Certified))
+    ));
+    // Form filling: others may sign the fields it has, but not add
+    // their own, comment or turn pages.
+    let forms = certify(Allowed::FormFilling);
+    assert_eq!(forbidden(signed_again(&forms, field(&forms)).unwrap()), []);
+    assert!(matches!(
+        signed_again(&forms, Placement::Invisible),
+        Err(SigningError::Pdf(SignError::CertifiedFieldsOnly))
+    ));
+    let added = forms
+        .add_signature_field(1, [10.0, 10.0, 110.0, 40.0], None)
+        .unwrap();
+    assert_eq!(forbidden(added), [Change::NewField]);
+    assert_eq!(forbidden(annotated(&forms)), [Change::Commented]);
+    assert_eq!(forbidden(rotated(&forms)), [Change::Pages]);
+    // Comments too.
+    let comments = certify(Allowed::Comments);
+    assert_eq!(forbidden(annotated(&comments)), []);
+    assert_eq!(forbidden(rotated(&comments)), [Change::Pages]);
+    // Only the first signature may certify.
+    let mut request = SignRequest::new(Placement::Invisible, info());
+    request.certify = Some(Allowed::Comments);
+    assert!(matches!(
+        sign(&comments, &request, &id, Digest::Sha256),
+        Err(SigningError::Pdf(SignError::AlreadySigned))
+    ));
 }
