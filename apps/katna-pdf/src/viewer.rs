@@ -36,6 +36,7 @@ use crate::contents::{self, Contents};
 use crate::history::History;
 use crate::search::{self, Found, Hit, Texts};
 use crate::select::{self, Selection, Spot};
+use crate::spread::Spread;
 use crate::text::t;
 use crate::theme::Theme;
 use crate::thumbnails::{self, Thumbs};
@@ -49,6 +50,7 @@ actions!(
         FitWidth,
         FitPage,
         ActualSize,
+        NextSpread,
         NextPage,
         PreviousPage,
         ScrollDown,
@@ -92,6 +94,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl--", ZoomOut, None),
         KeyBinding::new("ctrl-1", FitWidth, None),
         KeyBinding::new("ctrl-2", FitPage, None),
+        KeyBinding::new("ctrl-3", NextSpread, None),
         KeyBinding::new("ctrl-0", ActualSize, None),
         // Keys that mean something else while typing in a field.
         KeyBinding::new("pagedown", NextPage, Some(READING)),
@@ -191,6 +194,8 @@ pub struct Viewer {
     path: Option<PathBuf>,
     content: Content,
     zoom: Zoom,
+    /// One page a row or two.
+    spread: Spread,
     /// Points to logical pixels, as last laid out.
     shown: f32,
     list: ListState,
@@ -253,14 +258,19 @@ impl Viewer {
         let list = ListState::new(0, ListAlignment::Top, desktop_px(600.0));
         let weak = cx.entity().downgrade();
         list.set_scroll_handler(move |event, _, cx| {
-            let range = event.visible_range.clone();
-            weak.update(cx, |this, cx| this.scrolled(range, cx)).ok();
+            let rows = event.visible_range.clone();
+            weak.update(cx, |this, cx| {
+                let pages = this.spread.pages_on(rows, this.page_count());
+                this.scrolled(pages, cx);
+            })
+            .ok();
         });
         let mut this = Self {
             focus,
             path: None,
             content: Content::Empty,
             zoom: Zoom::FitWidth,
+            spread: Spread::default(),
             shown: 1.0,
             list,
             bar: ScrollBar::default(),
@@ -356,7 +366,7 @@ impl Viewer {
                 }
                 match opened {
                     Ok(opened) => {
-                        this.list.reset(opened.doc.page_count());
+                        this.list.reset(this.spread.rows(opened.doc.page_count()));
                         // Where it was left last time.
                         let page = this
                             .path
@@ -364,7 +374,7 @@ impl Viewer {
                             .and_then(|p| cx.global::<History>().page(p));
                         if let Some(page) = page.filter(|p| *p < opened.doc.page_count()) {
                             this.list.scroll_to(ListOffset {
-                                item_ix: page,
+                                item_ix: this.spread.row_of(page),
                                 offset_in_item: px(0.0),
                             });
                         }
@@ -556,7 +566,7 @@ impl Viewer {
         let gap = px(if hit.page == 0 { space::S5 } else { GAP / 2.0 });
         let below = desktop_px((top * self.shown - 96.0).max(0.0));
         self.list.scroll_to(ListOffset {
-            item_ix: hit.page,
+            item_ix: self.spread.row_of(hit.page),
             offset_in_item: gap + below,
         });
         cx.notify();
@@ -918,7 +928,7 @@ impl Viewer {
             y.clamp(0.0, height) * self.shown
         });
         self.list.scroll_to(ListOffset {
-            item_ix: page,
+            item_ix: self.spread.row_of(page),
             offset_in_item: if dest.top.is_some() {
                 gap + desktop_px(below_top)
             } else {
@@ -1095,7 +1105,10 @@ impl Viewer {
     /// Points to logical pixels for the current zoom, in a card
     /// `width` logical pixels wide whose pages' view is `height` high.
     fn points_to_pixels(&self, width: f32, height: f32) -> f32 {
-        let fit_width = |opened: &Opened| (width - 2.0 * MARGIN) / opened.widest;
+        let columns = self.spread.columns() as f32;
+        let fit_width = |opened: &Opened| {
+            (width - 2.0 * MARGIN - GAP * (columns - 1.0)) / (opened.widest * columns)
+        };
         let shown = match (&self.zoom, &self.content) {
             (Zoom::Fixed(zoom), _) => zoom * POINT,
             (Zoom::FitWidth, Content::Ready(opened)) => fit_width(opened),
@@ -1155,14 +1168,43 @@ impl Viewer {
             return;
         }
         self.list.scroll_to(ListOffset {
-            item_ix: page.min(count - 1),
+            item_ix: self.spread.row_of(page.min(count - 1)),
             offset_in_item: px(0.0),
         });
         cx.notify();
     }
 
+    /// Goes to the next row of pages, or the one before.
+    fn step_page(&mut self, forward: bool, cx: &mut Context<Self>) {
+        let count = self.page_count();
+        let row = self.list.logical_scroll_top().item_ix;
+        let row = if forward {
+            row + 1
+        } else {
+            row.saturating_sub(1)
+        };
+        if row < self.spread.rows(count) {
+            let page = self.spread.pages_in(row, count).start;
+            self.go_to_page(page, cx);
+        }
+    }
+
+    /// Goes round the layouts: one page, two, two with a cover.
+    fn next_spread(&mut self, cx: &mut Context<Self>) {
+        let page = self.current_page();
+        self.spread = self.spread.next();
+        if let Content::Ready(opened) = &self.content {
+            let count = opened.doc.page_count();
+            self.list.reset(self.spread.rows(count));
+            self.go_to_page(page, cx);
+        }
+        cx.notify();
+    }
+
+    /// The first page of the row at the top.
     fn current_page(&self) -> usize {
-        self.list.logical_scroll_top().item_ix
+        let row = self.list.logical_scroll_top().item_ix;
+        self.spread.pages_in(row, self.page_count()).start
     }
 
     /// The list scrolled: forget pages far from the new view.
@@ -1360,40 +1402,54 @@ impl Viewer {
             }
         }
         div()
+            .w(desktop_px(w * shown))
+            .h(desktop_px(h * shown))
+            .flex_shrink_0()
+            .bg(self.paper())
+            .shadow_sm()
+            .relative()
+            .cursor(gpui::CursorStyle::IBeam)
+            .children(image.map(|image| img(ImageSource::Render(image)).size_full()))
+            .children(marks)
+            .children(links)
+            .child({
+                // Notes where the page is, for the pointer.
+                let record = self.page_bounds.clone();
+                gpui::canvas(
+                    move |bounds, _, _| {
+                        record.borrow_mut().insert(page, bounds);
+                    },
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .size_full()
+            })
+            .into_any_element()
+    }
+
+    /// Row `row` of the page list: its pages side by side, centred.
+    fn render_row(
+        &mut self,
+        row: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let count = self.page_count();
+        let last = row + 1 == self.spread.rows(count);
+        let pages: Vec<AnyElement> = self
+            .spread
+            .pages_in(row, count)
+            .map(|page| self.render_page(page, window, cx))
+            .collect();
+        div()
             .w_full()
             .flex()
             .justify_center()
-            .pt(px(if page == 0 { space::S5 } else { GAP / 2.0 }))
-            .pb(px(if page + 1 == self.page_count() {
-                space::S5
-            } else {
-                GAP / 2.0
-            }))
-            .child(
-                div()
-                    .w(desktop_px(w * shown))
-                    .h(desktop_px(h * shown))
-                    .flex_shrink_0()
-                    .bg(self.paper())
-                    .shadow_sm()
-                    .relative()
-                    .cursor(gpui::CursorStyle::IBeam)
-                    .children(image.map(|image| img(ImageSource::Render(image)).size_full()))
-                    .children(marks)
-                    .children(links)
-                    .child({
-                        // Notes where the page is, for the pointer.
-                        let record = self.page_bounds.clone();
-                        gpui::canvas(
-                            move |bounds, _, _| {
-                                record.borrow_mut().insert(page, bounds);
-                            },
-                            |_, _, _, _| {},
-                        )
-                        .absolute()
-                        .size_full()
-                    }),
-            )
+            .items_start()
+            .gap(px(GAP))
+            .pt(px(if row == 0 { space::S5 } else { GAP / 2.0 }))
+            .pb(px(if last { space::S5 } else { GAP / 2.0 }))
+            .children(pages)
             .into_any_element()
     }
 
@@ -1507,6 +1563,20 @@ impl Viewer {
                     t("zoom-fit-page", &[]),
                     th,
                     cx.listener(|this, _, _, cx| this.set_zoom(Zoom::FitPage, cx)),
+                ))
+                .child(icon_button(
+                    "spread",
+                    "spread",
+                    t(
+                        match self.spread {
+                            Spread::Single => "spread-single",
+                            Spread::Facing => "spread-facing",
+                            Spread::Book => "spread-book",
+                        },
+                        &[],
+                    ),
+                    th,
+                    cx.listener(|this, _, _, cx| this.next_spread(cx)),
                 ))
                 .child(separator(th))
                 .child(icon_button(
@@ -1704,7 +1774,7 @@ impl Render for Viewer {
                 }
                 let pages = list(
                     self.list.clone(),
-                    cx.processor(|this, ix, window, cx| this.render_page(ix, window, cx)),
+                    cx.processor(|this, ix, window, cx| this.render_row(ix, window, cx)),
                 )
                 .size_full();
                 let thumb = th.katna.text_dim & 0xffff_ff00 | 0x99;
@@ -1777,14 +1847,9 @@ impl Render for Viewer {
             .on_action(
                 cx.listener(|this, _: &ActualSize, _, cx| this.set_zoom(Zoom::Fixed(1.0), cx)),
             )
-            .on_action(cx.listener(|this, _: &NextPage, _, cx| {
-                let page = this.current_page() + 1;
-                this.go_to_page(page, cx);
-            }))
-            .on_action(cx.listener(|this, _: &PreviousPage, _, cx| {
-                let page = this.current_page().saturating_sub(1);
-                this.go_to_page(page, cx);
-            }))
+            .on_action(cx.listener(|this, _: &NextPage, _, cx| this.step_page(true, cx)))
+            .on_action(cx.listener(|this, _: &PreviousPage, _, cx| this.step_page(false, cx)))
+            .on_action(cx.listener(|this, _: &NextSpread, _, cx| this.next_spread(cx)))
             .on_action(cx.listener(|this, _: &ToggleContents, _, cx| this.toggle_pane(cx)))
             .on_action(cx.listener(|this, _: &ToggleNight, _, cx| this.toggle_night(cx)))
             .on_action(cx.listener(|this, _: &Find, window, cx| this.open_search(window, cx)))

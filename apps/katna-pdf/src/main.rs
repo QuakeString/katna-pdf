@@ -12,6 +12,7 @@ mod ids;
 mod instance;
 mod search;
 mod select;
+mod spread;
 mod tabs;
 mod text;
 mod theme;
