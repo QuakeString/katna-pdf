@@ -270,3 +270,45 @@ fn certified_files_allow_only_the_changes_they_say() {
         Err(SigningError::Pdf(SignError::AlreadySigned))
     ));
 }
+
+#[test]
+fn a_picture_shows_in_the_box() {
+    let id = p12::open(&data("rsa-aes.p12"), "katna").unwrap();
+    // Two pixels, one see-through, as PNG.
+    let mut png = Vec::new();
+    image::RgbaImage::from_raw(2, 1, vec![0, 0, 255, 255, 0, 0, 0, 0])
+        .unwrap()
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .unwrap();
+    let picture = katna_pdf_sign::picture(&png).unwrap();
+    assert_eq!((picture.width, picture.height), (2, 1));
+    assert_eq!(picture.alpha.as_deref(), Some(&[255, 0][..]));
+    let mut request = SignRequest::new(
+        Placement::Visible {
+            page: 0,
+            rect: [20.0, 20.0, 220.0, 80.0],
+            lines: vec!["Asha Verma".into()],
+        },
+        info(),
+    );
+    request.picture = Some(picture);
+    let signed = sign(
+        &Document::load(pdf()).unwrap(),
+        &request,
+        &id,
+        Digest::Sha256,
+    )
+    .unwrap();
+    let doc = Document::load(signed.clone()).unwrap();
+    assert!(check(&doc, &signed, &Roots::new())[0].intact());
+    let images: Vec<_> = doc
+        .object_numbers()
+        .filter_map(|n| match doc.get(katna_pdf_cos::Ref::new(n, 0)) {
+            Some(Object::Stream(s)) if s.dict.name("Subtype") == Some(b"Image") => Some(s),
+            _ => None,
+        })
+        .collect();
+    // The picture and its mask.
+    assert_eq!(images.len(), 2);
+    assert!(images.iter().any(|s| s.dict.get("SMask").is_some()));
+}

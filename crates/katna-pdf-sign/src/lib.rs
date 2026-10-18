@@ -179,6 +179,41 @@ pub fn sign_with(
     prepared.finish(&signature).map_err(SigningError::Pdf)
 }
 
+/// Widest a picture in a signature box is kept, in pixels: enough for
+/// print, small in the file.
+const PICTURE_WIDTH: u32 = 900;
+
+/// The picture in a PNG or JPEG file `bytes`, such as a scanned
+/// handwritten signature, to show in a signature's box; made smaller
+/// when it is large.
+pub fn picture(bytes: &[u8]) -> Result<katna_pdf_cos::Picture, String> {
+    let image = image::load_from_memory(bytes).map_err(|e| e.to_string())?;
+    let image = if image.width() > PICTURE_WIDTH {
+        image.resize(
+            PICTURE_WIDTH,
+            u32::MAX,
+            image::imageops::FilterType::Triangle,
+        )
+    } else {
+        image
+    };
+    let rgba = image.to_rgba8();
+    let (width, height) = rgba.dimensions();
+    let mut rgb = Vec::with_capacity((width * height * 3) as usize);
+    let mut alpha = Vec::with_capacity((width * height) as usize);
+    for p in rgba.pixels() {
+        rgb.extend_from_slice(&p.0[..3]);
+        alpha.push(p.0[3]);
+    }
+    let see_through = alpha.iter().any(|&a| a < 255);
+    Ok(katna_pdf_cos::Picture {
+        width,
+        height,
+        rgb,
+        alpha: see_through.then_some(alpha),
+    })
+}
+
 /// Lines for a visible signature: who signed, when, and why.
 pub fn appearance_lines(signer: &dyn Signer, date: &str, reason: Option<&str>) -> Vec<String> {
     let name = common_name(&signer.certificate().tbs_certificate.subject);

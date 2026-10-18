@@ -321,6 +321,9 @@ pub(super) struct Signing {
     timestamp: bool,
     /// Whether to keep the validation data in the file (PAdES B-LT).
     long_term: bool,
+    /// A picture to show in the box, such as a scanned handwritten
+    /// signature.
+    picture: Option<PathBuf>,
     server: Entity<TextInput>,
     /// Other files to sign at the same time, with the key unlocked once.
     others: Vec<PathBuf>,
@@ -388,6 +391,7 @@ impl Viewer {
             location,
             timestamp,
             long_term: read_note("long-term").as_deref().map(str::trim) != Some("off"),
+            picture: remembered_picture(),
             server,
             others: Vec::new(),
             certify: None,
@@ -649,6 +653,30 @@ impl Viewer {
         .detach();
     }
 
+    /// Asks for a picture to show in the box.
+    fn choose_picture(&mut self, cx: &mut Context<Self>) {
+        let chosen = cx.prompt_for_paths(gpui::PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some(t("sign-picture-choose", &[]).into()),
+        });
+        cx.spawn(async move |this, cx| {
+            if let Ok(Ok(Some(paths))) = chosen.await
+                && let Some(file) = paths.into_iter().next()
+            {
+                this.update(cx, |this, cx| {
+                    if let Some(signing) = this.signing.as_mut() {
+                        signing.picture = Some(file);
+                        cx.notify();
+                    }
+                })
+                .ok();
+            }
+        })
+        .detach();
+    }
+
     /// Asks for other files to sign at the same time.
     fn choose_others(&mut self, cx: &mut Context<Self>) {
         let chosen = cx.prompt_for_paths(gpui::PathPromptOptions {
@@ -716,6 +744,11 @@ impl Viewer {
         let (reason, location) = (value(&signing.reason), value(&signing.location));
         let tsa = value(&signing.server).filter(|_| signing.timestamp);
         let long_term = signing.long_term;
+        // A picture only shows in a box.
+        let picture_file = signing
+            .picture
+            .clone()
+            .filter(|_| !matches!(placed, Placed::Hidden));
         let others = signing.others.clone();
         let folder = path.parent().map(Path::to_path_buf).unwrap_or_default();
         let stem = path
@@ -788,6 +821,15 @@ impl Viewer {
                         Some(bytes) => bytes.to_vec(),
                         None => std::fs::read(&path).map_err(|e| e.to_string())?,
                     };
+                    let picture = match &picture_file {
+                        None => None,
+                        Some(file) => Some(
+                            std::fs::read(file)
+                                .map_err(|e| e.to_string())
+                                .and_then(|b| katna_pdf_sign::picture(&b))
+                                .map_err(|e| format!("{}: {e}", file_name(file)))?,
+                        ),
+                    };
                     let what = What {
                         placed,
                         reason,
@@ -795,6 +837,7 @@ impl Viewer {
                         tsa: tsa.clone(),
                         certify,
                         long_term,
+                        picture,
                     };
                     // This file: into the file chosen, or into the folder.
                     let first = if others.is_empty() {
@@ -825,6 +868,9 @@ impl Viewer {
                         _ => write_note("source", "token"),
                     }
                     write_note("long-term", if long_term { "on" } else { "off" });
+                    if let Some(file) = &picture_file {
+                        write_note("picture", &file.to_string_lossy());
+                    }
                     if let Some(url) = &tsa {
                         write_note("timestamp", &format!("on\n{url}\n"));
                     } else {
@@ -1036,6 +1082,9 @@ impl Viewer {
                 .child(field(&signing.password))
                 .child(field(&signing.reason))
                 .child(field(&signing.location))
+                .when(!matches!(signing.placed, Some(Placed::Hidden)), |d| {
+                    d.child(self.picture_row(cx))
+                })
                 .child(
                     div()
                         .id("sign-timestamp")
@@ -1169,6 +1218,52 @@ impl Viewer {
                 )
                 .into_any_element(),
         )
+    }
+
+    /// The picture shown in the box: none, or a file, to choose or drop.
+    fn picture_row(&self, cx: &mut Context<Self>) -> AnyElement {
+        let th = self.theme;
+        let picture = self.signing.as_ref().and_then(|s| s.picture.clone());
+        div()
+            .flex()
+            .items_center()
+            .gap(px(space::S2))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .text_ellipsis()
+                    .whitespace_nowrap()
+                    .text_size(px(text::SMALL))
+                    .text_color(if picture.is_some() { th.text } else { th.dim })
+                    .child(match &picture {
+                        Some(file) => t("sign-picture", &[("name", &file_name(file))]),
+                        None => t("sign-picture-none", &[]),
+                    }),
+            )
+            .when(picture.is_some(), |d| {
+                d.child(
+                    widgets::outlined_button(
+                        "sign-picture-clear",
+                        t("sign-picture-clear", &[]),
+                        &th.katna,
+                    )
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        if let Some(signing) = this.signing.as_mut() {
+                            signing.picture = None;
+                            write_note("picture", "");
+                            cx.notify();
+                        }
+                    })),
+                )
+            })
+            .child(
+                widgets::outlined_button("sign-picture-choose", t("sign-choose", &[]), &th.katna)
+                    .tip(t("sign-picture-tip", &[]), &th.katna)
+                    .on_click(cx.listener(|this, _, _, cx| this.choose_picture(cx))),
+            )
+            .into_any_element()
     }
 
     /// Whether to certify the file, and what it then allows.
@@ -1742,6 +1837,7 @@ struct What {
     certify: Option<Allowed>,
     /// Keep the validation data in the file, fetched now.
     long_term: bool,
+    picture: Option<katna_pdf_cos::Picture>,
 }
 
 /// Signs PDF `bytes` with `id` as `what` says, and writes the signed
@@ -1791,6 +1887,7 @@ fn sign_one(
     );
     request.time = time;
     request.certify = what.certify;
+    request.picture = what.picture.clone();
     let server = what.tsa.as_deref().map(katna_pdf_sign::tsa::Server::new);
     let signed = katna_pdf_sign::sign_with(
         &doc,
@@ -1860,6 +1957,12 @@ fn write_note(name: &str, text: &str) {
         }
         let _ = std::fs::write(note, text);
     }
+}
+
+/// The picture last shown in a signature's box, if it is still there.
+fn remembered_picture() -> Option<PathBuf> {
+    let path = PathBuf::from(read_note("picture")?.trim_end_matches('\n'));
+    path.is_file().then_some(path)
 }
 
 fn remembered_certificate() -> Option<PathBuf> {
@@ -1939,6 +2042,7 @@ mod tests {
             tsa: None,
             certify: None,
             long_term: false,
+            picture: None,
         };
         let file = Path::new("/somewhere/report.pdf");
         let first = free_name(&folder, file);

@@ -3672,6 +3672,7 @@ dependencies = [
  "der",
  "des",
  "hmac",
+ "image",
  "katna-pdf-cos",
  "p256",
  "p384",
