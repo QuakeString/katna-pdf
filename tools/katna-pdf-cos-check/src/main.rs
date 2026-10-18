@@ -6,7 +6,9 @@
 //! - does it load, and did its cross-reference data need repair;
 //! - does it find the same number of pages as hayro (the renderer);
 //! - does an incremental update (a new /Info and a changed catalog) load
-//!   again, in both katna-pdf-cos and hayro, with the same pages.
+//!   again, in both katna-pdf-cos and hayro, with the same pages;
+//! - how many form fields it has, and whether filling its text fields in
+//!   reads back.
 //!
 //! Each file runs in a child process with a time limit, so a hang or a
 //! crash is counted, not fatal.
@@ -103,7 +105,43 @@ fn check(file: &Path) -> String {
         }
     };
     out.push_str(&format!(" update={update}"));
+    out.push_str(&format!(" form={}", form_check(&doc, pages)));
     out
+}
+
+/// How many form fields there are, and whether filling the text fields
+/// in gives a file both readers open: e.g. `12/fill=ok`, `none`.
+fn form_check(doc: &Document, pages: usize) -> String {
+    let fields = doc.form();
+    if fields.is_empty() {
+        return "none".into();
+    }
+    let changes: Vec<_> = fields
+        .iter()
+        .filter(|f| matches!(f.kind, katna_pdf_cos::FieldKind::Text { .. }) && !f.read_only)
+        .map(|f| (f.id, katna_pdf_cos::FieldValue::Text("Katna PDF".into())))
+        .collect();
+    let fill: String = match doc.fill(&changes) {
+        Err(_) => "skipped".into(),
+        Ok(filled) => {
+            let hayro = Hayro
+                .open(Arc::new(filled.clone()), "")
+                .ok()
+                .map(|d| d.page_count());
+            match Document::load(filled) {
+                Ok(again) if again.pages().len() == pages && hayro == Some(pages) => {
+                    let ok = again
+                        .form()
+                        .iter()
+                        .filter(|f| changes.iter().any(|(id, _)| *id == f.id))
+                        .all(|f| f.value.as_deref() == Some("Katna PDF"));
+                    if ok { "ok" } else { "value_lost" }.into()
+                }
+                _ => "reload_failed".into(),
+            }
+        }
+    };
+    format!("{}/fill={fill}", fields.len())
 }
 
 /// How many outline items there are, and how many go to a page that is

@@ -33,6 +33,7 @@ use katna_ui::widgets::{self, Tip};
 use katna_ui::{ScrollBar, px, unpx};
 
 use crate::contents::{self, Contents};
+use crate::form::{Editing, Form};
 use crate::history::History;
 use crate::search::{self, Found, Hit, Texts};
 use crate::select::{self, Selection, Spot};
@@ -52,6 +53,7 @@ actions!(
         ActualSize,
         NextSpread,
         Print,
+        Save,
         NextPage,
         PreviousPage,
         ScrollDown,
@@ -91,6 +93,7 @@ pub fn bind_keys(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("ctrl-o", Open, None),
         KeyBinding::new("ctrl-p", Print, None),
+        KeyBinding::new("ctrl-s", Save, None),
         KeyBinding::new("ctrl-=", ZoomIn, None),
         KeyBinding::new("ctrl-+", ZoomIn, None),
         KeyBinding::new("ctrl--", ZoomOut, None),
@@ -219,8 +222,13 @@ pub struct Viewer {
     released: Vec<Arc<RenderImage>>,
     /// Bumped on each open, so a late page of the last file is dropped.
     generation: u64,
+    /// Bumped when the file shown changes in place (a form filled in),
+    /// so a page drawn from the old one is drawn again.
+    revision: u64,
     /// The document's outline, once read, if it has one.
     contents: Option<Contents>,
+    /// The form, once read, if the file has fields to fill in.
+    form: Option<Form>,
     /// Each page's links, once read.
     links: Option<Arc<Vec<Vec<katna_pdf_cos::Link>>>>,
     /// Each page's text, read on first need, for search.
@@ -234,6 +242,8 @@ pub struct Viewer {
     /// A line shown under the toolbar until dismissed, such as why
     /// printing failed.
     notice: Option<String>,
+    /// The form's changes the person was told closing would lose.
+    close_warned: Option<u64>,
     /// The text selected with the pointer, and whether it is being
     /// dragged out now.
     selection: Option<Selection>,
@@ -294,13 +304,16 @@ impl Viewer {
             visible: 0..0,
             released: Vec::new(),
             generation: 0,
+            revision: 0,
             contents: None,
+            form: None,
             links: None,
             texts: None,
             search: None,
             password: None,
             focus_password: false,
             notice: None,
+            close_warned: None,
             selection: None,
             selecting: false,
             reading_text: Default::default(),
@@ -374,6 +387,7 @@ impl Viewer {
         let generation = self.generation;
         self.content = Content::Opening(name.clone());
         self.contents = None;
+        self.form = None;
         self.links = None;
         self.texts = None;
         self.selection = None;
@@ -473,24 +487,31 @@ impl Viewer {
     /// the file asks for it (`/PageMode /UseOutlines`).
     fn read_outline(&mut self, path: PathBuf, generation: u64, cx: &mut Context<Self>) {
         cx.spawn(async move |this, cx| {
-            let (outline, show, links) = cx
+            let (outline, show, links, form) = cx
                 .background_executor()
                 .spawn(async move {
                     let Some(doc) = std::fs::read(&path)
                         .ok()
                         .and_then(|bytes| katna_pdf_cos::Document::load(bytes).ok())
                     else {
-                        return (Vec::new(), false, Vec::new());
+                        return (Vec::new(), false, Vec::new(), None);
                     };
                     let show = doc
                         .catalog()
                         .is_some_and(|c| c.name("PageMode") == Some(b"UseOutlines"));
-                    (doc.outline(), show, doc.links())
+                    let (outline, links, fields) = (doc.outline(), doc.links(), doc.form());
+                    // The object layer's copy is kept only for a form.
+                    let form = (!fields.is_empty()).then(|| (Arc::new(doc), fields));
+                    (outline, show, links, form)
                 })
                 .await;
             this.update(cx, |this, cx| {
                 if this.generation != generation {
                     return;
+                }
+                if let Some((source, fields)) = form {
+                    this.form = Form::new(source, fields);
+                    cx.notify();
                 }
                 if links.iter().any(|l| !l.is_empty()) {
                     this.links = Some(Arc::new(links));
@@ -800,6 +821,8 @@ impl Viewer {
     }
 
     fn press(&mut self, event: &gpui::MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        // A press outside the field being typed in ends the typing.
+        self.finish_typing(true, cx);
         window.focus(&self.focus, cx);
         self.selection = self.spot_at(event.position, cx).map(|spot| Selection {
             anchor: spot,
@@ -950,7 +973,7 @@ impl Viewer {
         let width = opened.doc.page_size(page).map_or(612.0, |(w, _)| w);
         let scale = thumbnails::WIDTH * katna_ui::scale::scale() * scale_factor / width.max(1.0);
         let doc = opened.doc.clone();
-        let generation = self.generation;
+        let (generation, revision) = (self.generation, self.revision);
         let night = self.night_pages();
         cx.spawn(async move |this, cx| {
             let image = cx
@@ -960,6 +983,14 @@ impl Viewer {
             this.update(cx, |this, cx| {
                 if this.generation != generation {
                     this.released.extend(image);
+                    return;
+                }
+                if this.revision != revision {
+                    // Drawn from the file before it changed.
+                    this.released.extend(image);
+                    this.thumbs.dropped();
+                    this.pump_thumbs(scale_factor, cx);
+                    cx.notify();
                     return;
                 }
                 match image {
@@ -1262,6 +1293,207 @@ impl Viewer {
         }
     }
 
+    /// A fillable widget was clicked: a text field is typed into, a check
+    /// box or radio button changes at once.
+    fn form_click(
+        &mut self,
+        field: usize,
+        widget: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(form) = self.form.as_mut() else {
+            return;
+        };
+        if let Some(value) = form.clicked(field, widget) {
+            if form.set(field, value) {
+                self.refill(field, cx);
+            }
+            return;
+        }
+        if form
+            .editing
+            .as_ref()
+            .is_some_and(|e| e.field == field && e.widget == widget)
+        {
+            return;
+        }
+        self.finish_typing(true, cx);
+        let Some(form) = self.form.as_mut() else {
+            return;
+        };
+        let value = form.fields[field].value.clone().unwrap_or_default();
+        let masked = matches!(
+            form.fields[field].kind,
+            katna_pdf_cos::FieldKind::Text { password: true, .. }
+        );
+        let accent = gpui::rgba(self.theme.katna.accent).into();
+        let input = cx.new(|cx| {
+            let mut input = TextInput::new("", cx);
+            input.set_masked(masked, cx);
+            input.set_accent(accent);
+            input.set_text(value, cx);
+            input.select_all_text(cx);
+            input
+        });
+        let sub = cx.subscribe(&input, |this, _, event, cx| match event {
+            InputEvent::Submit => this.finish_typing(true, cx),
+            InputEvent::Cancel => this.finish_typing(false, cx),
+            InputEvent::Changed => {}
+        });
+        window.focus(&input.focus_handle(cx), cx);
+        form.editing = Some(Editing {
+            field,
+            widget,
+            input,
+            _input: sub,
+        });
+        cx.notify();
+    }
+
+    /// Ends typing in a text field, keeping what was typed or not.
+    fn finish_typing(&mut self, keep: bool, cx: &mut Context<Self>) {
+        let Some(form) = self.form.as_mut() else {
+            return;
+        };
+        let Some(editing) = form.editing.take() else {
+            return;
+        };
+        cx.notify();
+        if !keep {
+            return;
+        }
+        let mut text = editing.input.read(cx).text().to_owned();
+        if let katna_pdf_cos::FieldKind::Text {
+            max_len: Some(max), ..
+        } = form.fields[editing.field].kind
+        {
+            text = text.chars().take(max).collect();
+        }
+        if form.set(editing.field, katna_pdf_cos::FieldValue::Text(text)) {
+            self.refill(editing.field, cx);
+        }
+    }
+
+    /// Writes the form's changes into the file and draws the pages of
+    /// field `field` again from it.
+    fn refill(&mut self, field: usize, cx: &mut Context<Self>) {
+        let Some(form) = self.form.as_ref() else {
+            return;
+        };
+        let source = form.source.clone();
+        let changes = form.changes.clone();
+        let mine = form.generation;
+        let pages = form.pages_of(field);
+        let generation = self.generation;
+        cx.spawn(async move |this, cx| {
+            let filled = cx
+                .background_executor()
+                .spawn(async move {
+                    let bytes = Arc::new(source.fill(&changes).map_err(|e| e.to_string())?);
+                    let doc = Hayro.open(bytes.clone(), "").map_err(|e| e.to_string())?;
+                    Ok::<_, String>((bytes, doc))
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                if this.generation != generation
+                    || this.form.as_ref().is_none_or(|f| f.generation != mine)
+                {
+                    return;
+                }
+                match filled {
+                    Ok((bytes, doc)) => {
+                        if let Some(form) = this.form.as_mut() {
+                            form.filled = Some(bytes);
+                        }
+                        this.swap_doc(doc, &pages);
+                    }
+                    Err(error) => {
+                        this.notice = Some(t("form-failed", &[("error", &error)]));
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Shows `doc`, the same file with changes, in place of the one shown;
+    /// `pages` are the pages that changed and are drawn again.
+    fn swap_doc(&mut self, doc: Arc<dyn Document>, pages: &[usize]) {
+        let Content::Ready(opened) = &mut self.content else {
+            return;
+        };
+        opened.doc = doc;
+        self.revision += 1;
+        for page in pages {
+            // Kept on screen until drawn again.
+            if let Some(drawn) = self.pages.get_mut(page) {
+                drawn.scale = 0.0;
+            }
+            self.drawing.remove(page);
+            self.released.extend(self.thumbs.forget(*page));
+        }
+        self.texts = Some(search::texts(self.page_count()));
+    }
+
+    /// Whether the tab may close: not at first when a filled-in form is
+    /// not saved; the notice says so, and closing again closes.
+    pub fn may_close(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(form) = self.form.as_ref().filter(|f| f.dirty()) else {
+            return true;
+        };
+        if self.close_warned == Some(form.generation) {
+            return true;
+        }
+        self.close_warned = Some(form.generation);
+        self.notice = Some(t("unsaved-close", &[]));
+        cx.notify();
+        false
+    }
+
+    /// Writes the filled-in form over the file opened.
+    fn save(&mut self, cx: &mut Context<Self>) {
+        self.finish_typing(true, cx);
+        let (Some(path), Some(form)) = (self.path.clone(), self.form.as_ref()) else {
+            return;
+        };
+        if !form.dirty() {
+            return;
+        }
+        let Some(bytes) = form.filled.clone() else {
+            // Still being written; Save again once it is.
+            return;
+        };
+        let mine = form.generation;
+        cx.spawn(async move |this, cx| {
+            let saved = cx
+                .background_executor()
+                .spawn(async move {
+                    save_over(&path, &bytes).map_err(|e| e.to_string())?;
+                    katna_pdf_cos::Document::load(bytes.to_vec()).map_err(|e| e.to_string())
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                match saved {
+                    Ok(source) => {
+                        if let Some(form) = this.form.as_mut()
+                            && form.generation == mine
+                        {
+                            form.saved(Arc::new(source));
+                        }
+                        this.notice = None;
+                    }
+                    Err(error) => this.notice = Some(t("save-failed", &[("error", &error)])),
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     /// Hands the open file to the desktop's print dialog.
     fn print(&mut self, cx: &mut Context<Self>) {
         let (Some(path), Content::Ready(opened)) = (self.path.clone(), &self.content) else {
@@ -1383,16 +1615,23 @@ impl Viewer {
             }
             self.drawing.insert(page, scale);
             let doc = opened.doc.clone();
-            let generation = self.generation;
+            let (generation, revision) = (self.generation, self.revision);
             cx.spawn(async move |this, cx| {
                 let image = cx
                     .background_executor()
                     .spawn(async move { draw(doc.as_ref(), page, scale, night) })
                     .await;
                 this.update(cx, |this, cx| {
-                    if this.generation != generation {
+                    if this.generation != generation || this.revision != revision {
                         if let Some(image) = image {
                             this.released.push(image);
+                        }
+                        if this.generation == generation && this.drawing.get(&page) == Some(&scale)
+                        {
+                            // Drawn from the file before it changed:
+                            // asked for again on the next frame.
+                            this.drawing.remove(&page);
+                            cx.notify();
                         }
                         return;
                     }
@@ -1436,6 +1675,59 @@ impl Viewer {
         let image = self.pages.get(&page).map(|d| d.image.clone());
         self.laid_out(page);
         self.want(page, device, cx);
+        // The form's fields to fill in, and the one being typed in.
+        let fields: Vec<AnyElement> = match (&self.form, transform) {
+            (Some(form), Some(transform)) => {
+                let tint = self.theme.katna.accent & 0xffff_ff00;
+                form.on_page(page)
+                    .map(|(f, w, widget)| {
+                        let b = katna_pdf_render::map_rect(transform, widget.rect);
+                        let area = div()
+                            .id(("field", f * 1000 + w))
+                            .absolute()
+                            .left(desktop_px(b[0] * shown))
+                            .top(desktop_px(b[1] * shown))
+                            .w(desktop_px((b[2] - b[0]) * shown))
+                            .h(desktop_px((b[3] - b[1]) * shown));
+                        let typing = form
+                            .editing
+                            .as_ref()
+                            .filter(|e| e.field == f && e.widget == w);
+                        if let Some(editing) = typing {
+                            let size = ((b[3] - b[1]) * 0.7).clamp(4.0, 12.0) * shown;
+                            return area
+                                .flex()
+                                .items_center()
+                                .px(desktop_px(2.0 * shown))
+                                .bg(self.paper())
+                                .border_1()
+                                .border_color(gpui::rgb(self.theme.katna.accent >> 8))
+                                .text_size(desktop_px(size))
+                                .text_color(if self.night_pages() {
+                                    gpui::rgb(0xe6e6e6)
+                                } else {
+                                    gpui::rgb(0x000000)
+                                })
+                                .cursor(gpui::CursorStyle::IBeam)
+                                // Presses inside stay in the field.
+                                .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| {
+                                    cx.stop_propagation()
+                                })
+                                .child(editing.input.clone())
+                                .into_any_element();
+                        }
+                        area.bg(gpui::rgba(tint | 0x14))
+                            .hover(move |s| s.bg(gpui::rgba(tint | 0x33)))
+                            .cursor_pointer()
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.form_click(f, w, window, cx)
+                            }))
+                            .into_any_element()
+                    })
+                    .collect()
+            }
+            _ => Vec::new(),
+        };
         // The page's links, as areas to click.
         let links: Vec<AnyElement> =
             match (self.links.as_ref().and_then(|l| l.get(page)), transform) {
@@ -1509,6 +1801,7 @@ impl Viewer {
             .children(image.map(|image| img(ImageSource::Render(image)).size_full()))
             .children(marks)
             .children(links)
+            .children(fields)
             .child({
                 // Notes where the page is, for the pointer.
                 let record = self.page_bounds.clone();
@@ -1601,7 +1894,14 @@ impl Viewer {
                     .font_weight(FontWeight::SEMIBOLD)
                     .text_color(th.text)
                     .child(title),
-            );
+            )
+            .when(self.form.as_ref().is_some_and(Form::dirty), |bar| {
+                bar.child(
+                    widgets::filled_button("save", t("save", &[]), &th.katna)
+                        .tip(t("save-tip", &[]), &th.katna)
+                        .on_click(cx.listener(|this, _, _, cx| this.save(cx))),
+                )
+            });
         if self.page_count() > 0 {
             let page = (self.current_page() + 1).to_string();
             let count = self.page_count().to_string();
@@ -2030,6 +2330,7 @@ impl Render for Viewer {
             .on_action(cx.listener(|this, _: &PreviousPage, _, cx| this.step_page(false, cx)))
             .on_action(cx.listener(|this, _: &NextSpread, _, cx| this.next_spread(cx)))
             .on_action(cx.listener(|this, _: &Print, _, cx| this.print(cx)))
+            .on_action(cx.listener(|this, _: &Save, _, cx| this.save(cx)))
             .on_action(cx.listener(|this, _: &ToggleContents, _, cx| this.toggle_pane(cx)))
             .on_action(cx.listener(|this, _: &ToggleNight, _, cx| this.toggle_night(cx)))
             .on_action(cx.listener(|this, _: &Find, window, cx| this.open_search(window, cx)))
@@ -2099,6 +2400,22 @@ fn shown_with(visible: &Range<usize>, top: usize, page: usize) -> Range<usize> {
     } else {
         top.min(page)..top.max(page) + 1
     }
+}
+
+/// Writes `bytes` over the file at `path`: to a new file beside it
+/// first, then moved over it, so a failure leaves the old one whole.
+fn save_over(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let mut new = path.as_os_str().to_owned();
+    new.push(".katna-new");
+    let new = PathBuf::from(new);
+    std::fs::write(&new, bytes)?;
+    // Keep the file's permissions.
+    if let Ok(meta) = std::fs::metadata(path) {
+        std::fs::set_permissions(&new, meta.permissions()).ok();
+    }
+    std::fs::rename(&new, path).inspect_err(|_| {
+        std::fs::remove_file(&new).ok();
+    })
 }
 
 fn file_name(path: &Path) -> String {

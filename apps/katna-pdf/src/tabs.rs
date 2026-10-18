@@ -150,6 +150,14 @@ impl Tabs {
         if self.tabs.len() == 1 && self.viewer(cx).path().is_none() {
             return;
         }
+        // A filled-in form not saved: the tab says so the first time.
+        if !self.tabs[i]
+            .viewer
+            .update(cx, |viewer, cx| viewer.may_close(cx))
+        {
+            self.activate(i, window, cx);
+            return;
+        }
         self.tabs[i]
             .viewer
             .update(cx, |viewer, _| viewer.release(window));

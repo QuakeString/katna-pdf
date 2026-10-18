@@ -10,6 +10,7 @@
 
 mod document;
 mod filter;
+mod forms;
 mod links;
 mod object;
 mod outline;
@@ -18,6 +19,7 @@ mod write;
 
 pub use document::{Document, Entry, LoadError, XrefKind};
 pub use filter::{FilterError, decode};
+pub use forms::{Field, FieldKind, FieldValue, Widget};
 pub use links::{Link, LinkTarget};
 pub use object::{Dict, Name, Object, Ref, Stream};
 pub use outline::{Destination, OutlineItem, text_string};

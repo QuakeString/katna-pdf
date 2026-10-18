@@ -102,6 +102,19 @@ impl Thumbs {
         freed
     }
 
+    /// Page `page` changed: its thumbnail is drawn again when next
+    /// asked for. Returns the old one to free.
+    pub fn forget(&mut self, page: usize) -> Option<Arc<RenderImage>> {
+        self.failed.remove(&page);
+        self.images.remove(&page)
+    }
+
+    /// The page being drawn was drawn from a file since changed: it is
+    /// asked for again when next on screen.
+    pub fn dropped(&mut self) {
+        self.drawing = None;
+    }
+
     /// Drawing `page` failed.
     pub fn failed(&mut self, page: usize) {
         self.drawing = None;
