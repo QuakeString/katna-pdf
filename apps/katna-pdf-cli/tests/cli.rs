@@ -141,3 +141,56 @@ fn mistakes_are_told_apart_from_failures() {
     assert_eq!(run(&["merge", "x.pdf"]).0, 2);
     assert_eq!(run(&["frobnicate"]).0, 2);
 }
+
+#[test]
+fn files_are_signed_and_verified() {
+    let d = dir("sign");
+    let input = d.join("in.pdf");
+    std::fs::write(&input, pdf(2)).unwrap();
+    let p12 = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../crates/katna-pdf-sign/tests/data/rsa-aes.p12"
+    );
+    let signed = d.join("signed.pdf");
+    let (code, _) = run(&[
+        "sign",
+        s(&input),
+        "-o",
+        s(&signed),
+        "--p12",
+        p12,
+        "--password",
+        "katna",
+        "--page",
+        "2",
+        "--rect",
+        "10,10,90,60",
+        "--reason",
+        "Checked",
+    ]);
+    assert_eq!(code, 0);
+    let (code, out) = run(&["verify", "--json", s(&signed)]);
+    assert_eq!(code, 0);
+    assert!(out.contains("\"intact\":true"), "{out}");
+    assert!(out.contains("\"signer\":\"Asha Verma\""), "{out}");
+    assert!(out.contains("\"page\":2"), "{out}");
+    assert!(out.contains("\"reason\":\"Checked\""), "{out}");
+    assert!(out.contains("\"covers\":\"whole\""), "{out}");
+
+    let (code, _) = run(&[
+        "sign",
+        s(&input),
+        "-o",
+        s(&signed),
+        "--p12",
+        p12,
+        "--password",
+        "nope",
+    ]);
+    assert_eq!(code, 1);
+    let (code, _) = run(&["sign", s(&input), "-o", s(&signed), "--p12", p12]);
+    assert_eq!(code, 2);
+    let (code, out) = run(&["verify", s(&input)]);
+    assert_eq!((code, out.as_str()), (0, "no signatures\n"));
+    let _ = std::fs::remove_dir_all(d);
+}

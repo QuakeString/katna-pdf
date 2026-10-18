@@ -175,7 +175,7 @@ impl Document {
         Ok(update.finish())
     }
 
-    fn acro_form(&self) -> Option<Dict> {
+    pub(crate) fn acro_form(&self) -> Option<Dict> {
         let catalog = self.catalog()?;
         match self.resolve_key(&catalog, "AcroForm") {
             Object::Dict(form) => Some(form),

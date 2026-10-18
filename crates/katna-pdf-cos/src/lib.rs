@@ -17,6 +17,7 @@ mod object;
 mod outline;
 mod pages;
 mod parse;
+mod sign;
 mod write;
 mod xfdf;
 
@@ -30,5 +31,8 @@ pub use links::{Link, LinkTarget};
 pub use object::{Dict, Name, Object, Ref, Stream};
 pub use outline::{Destination, OutlineItem, text_string};
 pub use pages::{ComposeError, PageInfo, PageSource, compose};
+pub use sign::{
+    CONTENTS_LEN, Coverage, Placement, Prepared, SignError, SignRequest, Signature, SigningInfo,
+};
 pub use write::{Update, UpdateError, write_object};
 pub use xfdf::{XfdfAnnotation, XfdfError, from_xfdf, to_xfdf};
