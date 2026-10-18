@@ -10,6 +10,7 @@ mod contents;
 mod ids;
 mod instance;
 mod search;
+mod select;
 mod tabs;
 mod text;
 mod theme;

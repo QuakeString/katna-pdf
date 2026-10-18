@@ -11,9 +11,11 @@
 //! Each tab holds one viewer (`tabs.rs`); opening files is the tabs' job,
 //! so the viewer only says when it is asked to ([`ViewerEvent`]).
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -32,6 +34,7 @@ use katna_ui::{ScrollBar, px, unpx};
 
 use crate::contents::{self, Contents};
 use crate::search::{self, Found, Hit, Texts};
+use crate::select::{self, Selection, Spot};
 use crate::text::t;
 use crate::theme::Theme;
 use crate::thumbnails::{self, Thumbs};
@@ -52,6 +55,7 @@ actions!(
         Find,
         FindNext,
         FindPrevious,
+        CopyText,
         ScrollUp,
         CloseTab,
         NextTab,
@@ -93,6 +97,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("shift-space", PreviousPage, Some(READING)),
         KeyBinding::new("down", ScrollDown, Some(READING)),
         KeyBinding::new("up", ScrollUp, Some(READING)),
+        KeyBinding::new("ctrl-c", CopyText, Some(READING)),
         KeyBinding::new("ctrl-f", Find, None),
         KeyBinding::new("f3", FindNext, None),
         KeyBinding::new("shift-f3", FindPrevious, None),
@@ -198,6 +203,14 @@ pub struct Viewer {
     texts: Option<Texts>,
     /// The find bar, while open.
     search: Option<SearchBar>,
+    /// The text selected with the pointer, and whether it is being
+    /// dragged out now.
+    selection: Option<Selection>,
+    selecting: bool,
+    /// Pages whose text is being read for the pointer.
+    reading_text: std::collections::HashSet<usize>,
+    /// Where each page shown was laid out last frame, in the window.
+    page_bounds: Rc<RefCell<HashMap<usize, gpui::Bounds<gpui::Pixels>>>>,
     /// Whether the side pane is shown, and which of its tabs.
     pane: bool,
     tab: PaneTab,
@@ -246,6 +259,10 @@ impl Viewer {
             contents: None,
             texts: None,
             search: None,
+            selection: None,
+            selecting: false,
+            reading_text: Default::default(),
+            page_bounds: Rc::default(),
             pane: false,
             tab: PaneTab::Pages,
             thumbs: Thumbs::new(),
@@ -280,6 +297,8 @@ impl Viewer {
         self.content = Content::Opening(name.clone());
         self.contents = None;
         self.texts = None;
+        self.selection = None;
+        self.reading_text.clear();
         if let Some(bar) = self.search.as_mut() {
             bar.generation.fetch_add(1, Ordering::Relaxed);
             bar.found = Found::default();
@@ -589,6 +608,124 @@ impl Viewer {
                 ))
                 .into_any_element(),
         )
+    }
+
+    /// The page and character under `position` in the window, if a page
+    /// shown is there and its text has been read. Reading starts here if
+    /// it has not, so it is ready by the time the pointer presses.
+    fn spot_at(
+        &mut self,
+        position: gpui::Point<gpui::Pixels>,
+        cx: &mut Context<Self>,
+    ) -> Option<Spot> {
+        let shown = desktop_px(self.shown);
+        let (page, bounds) = {
+            let bounds = self.page_bounds.borrow();
+            // The page under the pointer, or the nearest one above or
+            // below it.
+            bounds
+                .iter()
+                .min_by(|(_, a), (_, b)| {
+                    let away = |r: &gpui::Bounds<gpui::Pixels>| {
+                        let above = r.top() - position.y;
+                        let below = position.y - r.bottom();
+                        above.max(below).max(px(0.0))
+                    };
+                    away(a)
+                        .partial_cmp(&away(b))
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
+                .map(|(page, bounds)| (*page, *bounds))?
+        };
+        let texts = self.texts.clone()?;
+        let Some(text) = texts.get(page)?.get() else {
+            self.read_text(page, cx);
+            return None;
+        };
+        let point = (
+            (position.x - bounds.left()) / shown,
+            (position.y - bounds.top()) / shown,
+        );
+        let index = select::char_at(text, point)?;
+        Some(Spot { page, index })
+    }
+
+    /// Reads page `page`'s text on a background thread, if not read yet.
+    fn read_text(&mut self, page: usize, cx: &mut Context<Self>) {
+        let (Some(texts), Content::Ready(opened)) = (self.texts.clone(), &self.content) else {
+            return;
+        };
+        if texts.get(page).is_none_or(|t| t.get().is_some()) || !self.reading_text.insert(page) {
+            return;
+        }
+        let doc = opened.doc.clone();
+        cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .spawn(async move {
+                    texts[page].get_or_init(|| doc.text(page));
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                this.reading_text.remove(&page);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn press(&mut self, event: &gpui::MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        window.focus(&self.focus, cx);
+        self.selection = self.spot_at(event.position, cx).map(|spot| Selection {
+            anchor: spot,
+            head: spot,
+        });
+        self.selecting = self.selection.is_some();
+        cx.notify();
+    }
+
+    fn drag(&mut self, event: &gpui::MouseMoveEvent, cx: &mut Context<Self>) {
+        let spot = self.spot_at(event.position, cx);
+        if !self.selecting || event.pressed_button != Some(gpui::MouseButton::Left) {
+            self.selecting = false;
+            return;
+        }
+        if let (Some(selection), Some(spot)) = (self.selection.as_mut(), spot)
+            && selection.head != spot
+        {
+            selection.head = spot;
+            cx.notify();
+        }
+    }
+
+    fn release_pointer(&mut self, cx: &mut Context<Self>) {
+        self.selecting = false;
+        // A click without a drag selects nothing.
+        if self.selection.is_some_and(|s| s.anchor == s.head) {
+            self.selection = None;
+            cx.notify();
+        }
+    }
+
+    /// The selected text, pages joined by line breaks.
+    fn selected_text(&self) -> Option<String> {
+        let selection = self.selection?;
+        let texts = self.texts.as_ref()?;
+        let parts: Vec<String> = selection
+            .pages()
+            .filter_map(|page| {
+                let text = texts.get(page)?.get()?;
+                let range = selection.on_page(page, text.boxes.len())?;
+                Some(select::text_of(text, range))
+            })
+            .collect();
+        (!parts.is_empty()).then(|| parts.join("\n"))
+    }
+
+    fn copy_text(&mut self, cx: &mut Context<Self>) {
+        if let Some(text) = self.selected_text() {
+            cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
+        }
     }
 
     /// Whether pages are shown as night pages: as set by hand, otherwise
@@ -1078,9 +1215,27 @@ impl Viewer {
         let image = self.pages.get(&page).map(|d| d.image.clone());
         self.laid_out(page);
         self.want(page, device, cx);
-        // Matches on this page, the current one stronger.
+        // Matches on this page, the current one stronger, and the
+        // selected text.
         let accent = self.theme.katna.accent & 0xffff_ff00;
         let mut marks = Vec::new();
+        let mark = |b: &[f32; 4], alpha: u32| {
+            div()
+                .absolute()
+                .left(desktop_px(b[0] * shown))
+                .top(desktop_px(b[1] * shown))
+                .w(desktop_px((b[2] - b[0]) * shown))
+                .h(desktop_px((b[3] - b[1]) * shown))
+                .rounded(px(radius::XS / 2.0))
+                .bg(gpui::rgba(accent | alpha))
+        };
+        if let (Some(selection), Some(text)) = (
+            self.selection,
+            self.texts.as_ref().and_then(|t| t.get(page)?.get()),
+        ) && let Some(range) = selection.on_page(page, text.boxes.len())
+        {
+            marks.extend(text.line_boxes(range).iter().map(|b| mark(b, 0x55)));
+        }
         if let Some(bar) = &self.search {
             for (i, hit) in bar.found.hits.iter().enumerate() {
                 if hit.page != page {
@@ -1091,18 +1246,7 @@ impl Viewer {
                 } else {
                     0x33
                 };
-                for b in &hit.boxes {
-                    marks.push(
-                        div()
-                            .absolute()
-                            .left(desktop_px(b[0] * shown))
-                            .top(desktop_px(b[1] * shown))
-                            .w(desktop_px((b[2] - b[0]) * shown))
-                            .h(desktop_px((b[3] - b[1]) * shown))
-                            .rounded(px(radius::XS / 2.0))
-                            .bg(gpui::rgba(accent | alpha)),
-                    );
-                }
+                marks.extend(hit.boxes.iter().map(|b| mark(b, alpha)));
             }
         }
         div()
@@ -1123,8 +1267,21 @@ impl Viewer {
                     .bg(self.paper())
                     .shadow_sm()
                     .relative()
+                    .cursor(gpui::CursorStyle::IBeam)
                     .children(image.map(|image| img(ImageSource::Render(image)).size_full()))
-                    .children(marks),
+                    .children(marks)
+                    .child({
+                        // Notes where the page is, for the pointer.
+                        let record = self.page_bounds.clone();
+                        gpui::canvas(
+                            move |bounds, _, _| {
+                                record.borrow_mut().insert(page, bounds);
+                            },
+                            |_, _, _, _| {},
+                        )
+                        .absolute()
+                        .size_full()
+                    }),
             )
             .into_any_element()
     }
@@ -1338,10 +1495,22 @@ impl Render for Viewer {
                 )
                 .size_full();
                 let thumb = th.katna.text_dim & 0xffff_ff00 | 0x99;
+                // Pages laid out last frame are noted again as they are
+                // laid out now.
+                self.page_bounds.borrow_mut().clear();
                 div()
                     .flex_1()
                     .min_h_0()
                     .bg(th.backdrop)
+                    .on_mouse_down(
+                        gpui::MouseButton::Left,
+                        cx.listener(|this, event, window, cx| this.press(event, window, cx)),
+                    )
+                    .on_mouse_move(cx.listener(|this, event, _, cx| this.drag(event, cx)))
+                    .on_mouse_up(
+                        gpui::MouseButton::Left,
+                        cx.listener(|this, _, _, cx| this.release_pointer(cx)),
+                    )
                     .child(self.bar.clone().wrap(
                         "pages-scroll",
                         &self.list,
@@ -1375,6 +1544,7 @@ impl Render for Viewer {
             .on_action(cx.listener(|this, _: &ToggleContents, _, cx| this.toggle_pane(cx)))
             .on_action(cx.listener(|this, _: &ToggleNight, _, cx| this.toggle_night(cx)))
             .on_action(cx.listener(|this, _: &Find, window, cx| this.open_search(window, cx)))
+            .on_action(cx.listener(|this, _: &CopyText, _, cx| this.copy_text(cx)))
             .on_action(cx.listener(|this, _: &FindNext, _, cx| this.step_search(true, cx)))
             .on_action(cx.listener(|this, _: &FindPrevious, _, cx| this.step_search(false, cx)))
             .on_action(cx.listener(|this, _: &ScrollDown, _, cx| {
