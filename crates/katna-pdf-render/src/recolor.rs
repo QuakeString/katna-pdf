@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Night pages (docs/PLAN.md §4.5, "Katna dark page"): a drawn page shown
+//! Page colours for reading (docs/PLAN.md §4.5): Okular's "change colors"
+//! modes, and night pages ("Katna dark page"): a drawn page shown
 //! dark for reading at night. Lightness is flipped and hue kept, so white
 //! paper turns a soft dark grey, black ink a soft light grey, and a red
 //! heading stays red. Photos are dimmed, not flipped, since a flipped
@@ -12,6 +13,99 @@
 //! must stay the same as there.
 
 use crate::Bitmap;
+
+/// How a drawn page's colours are changed for reading.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PageColors {
+    /// As the file draws it.
+    #[default]
+    Normal,
+    /// Lightness flipped, hue kept and photos dimmed, softly: Katna's
+    /// own, as Mail shows PDFs at night.
+    Night,
+    /// Every colour turned to its opposite, photos too.
+    Invert,
+    /// Lightness flipped and hue kept, photos too, with nothing softened.
+    InvertLightness,
+    /// White paper made warm, ink kept.
+    Sepia,
+    /// Ink made black and paper white, for faint scans.
+    BlackWhite,
+}
+
+/// Sepia's paper.
+const SEPIA: [u8; 3] = [244, 236, 216];
+/// How much Black and white stretches the contrast round mid grey.
+const CONTRAST: i32 = 4;
+
+impl PageColors {
+    pub const ALL: [PageColors; 6] = [
+        PageColors::Normal,
+        PageColors::Night,
+        PageColors::Invert,
+        PageColors::InvertLightness,
+        PageColors::Sepia,
+        PageColors::BlackWhite,
+    ];
+
+    /// One colour in this mode; for night pages, outside photos.
+    pub fn pixel(self, rgb: [u8; 3]) -> [u8; 3] {
+        let max = rgb[0].max(rgb[1]).max(rgb[2]);
+        let min = rgb[0].min(rgb[1]).min(rgb[2]);
+        match self {
+            PageColors::Normal => rgb,
+            PageColors::Night => flip(rgb),
+            PageColors::Invert => rgb.map(|c| 255 - c),
+            PageColors::InvertLightness => {
+                rgb.map(|c| (255 + u16::from(c) - u16::from(max) - u16::from(min)) as u8)
+            }
+            PageColors::Sepia => {
+                let mut out = rgb;
+                for (c, p) in out.iter_mut().zip(SEPIA) {
+                    *c = (u16::from(*c) * u16::from(p) / 255) as u8;
+                }
+                out
+            }
+            PageColors::BlackWhite => {
+                // Grey as Qt's qGray counts it, then stretched.
+                let grey =
+                    (i32::from(rgb[0]) * 11 + i32::from(rgb[1]) * 16 + i32::from(rgb[2]) * 5) / 32;
+                let v = ((grey - 128) * CONTRAST + 128).clamp(0, 255) as u8;
+                [v; 3]
+            }
+        }
+    }
+
+    /// The paper's colour in this mode.
+    pub fn paper(self) -> [u8; 3] {
+        self.pixel([255, 255, 255])
+    }
+
+    /// The ink's colour in this mode.
+    pub fn ink(self) -> [u8; 3] {
+        self.pixel([0, 0, 0])
+    }
+
+    /// `bitmap` (a drawn page, RGBA) in this mode; `pictures` are where
+    /// it holds pictures, which night pages dim instead of flipping.
+    pub fn apply(self, bitmap: &mut Bitmap, pictures: &[Area]) {
+        match self {
+            PageColors::Normal => {}
+            PageColors::Night => darken(bitmap, pictures),
+            mode => {
+                // A page holds few colours, so remember the last.
+                let mut last = ([255, 255, 255], mode.paper());
+                for px in bitmap.rgba.as_chunks_mut::<4>().0 {
+                    let rgb = [px[0], px[1], px[2]];
+                    if rgb != last.0 {
+                        last = (rgb, mode.pixel(rgb));
+                    }
+                    px[..3].copy_from_slice(&last.1);
+                }
+            }
+        }
+    }
+}
 
 /// How much photos are dimmed to.
 const PHOTO: f32 = 0.72;
@@ -102,6 +196,28 @@ mod tests {
         // A red heading stays red.
         let [r, g, b] = flip([200, 30, 30]);
         assert!(r > g && g == b);
+    }
+
+    #[test]
+    fn each_mode_turns_paper_and_ink() {
+        let red = [200, 30, 30];
+        assert_eq!(PageColors::Normal.pixel(red), red);
+        assert_eq!(PageColors::Invert.paper(), [0, 0, 0]);
+        assert_eq!(PageColors::Invert.pixel(red), [55, 225, 225]);
+        assert_eq!(PageColors::InvertLightness.paper(), [0, 0, 0]);
+        assert_eq!(PageColors::InvertLightness.pixel(red), [225, 55, 55]);
+        assert_eq!(PageColors::Sepia.paper(), SEPIA);
+        assert_eq!(PageColors::Sepia.ink(), [0, 0, 0]);
+        assert_eq!(PageColors::BlackWhite.pixel([180, 180, 180]), [255; 3]);
+        assert_eq!(PageColors::BlackWhite.pixel([90, 90, 90]), [0; 3]);
+        assert_eq!(PageColors::Night.paper(), flip([255, 255, 255]));
+        let mut bitmap = Bitmap {
+            width: 1,
+            height: 1,
+            rgba: vec![200, 30, 30, 255],
+        };
+        PageColors::Invert.apply(&mut bitmap, &[]);
+        assert_eq!(bitmap.rgba, [55, 225, 225, 255]);
     }
 
     #[test]
