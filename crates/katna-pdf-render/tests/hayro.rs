@@ -4,7 +4,9 @@
 
 use std::sync::Arc;
 
-use katna_pdf_render::scene::{HEAVY_SEGMENTS, Unsupported, page_scene, quick_reader_agrees};
+use katna_pdf_render::scene::{
+    HEAVY_SEGMENTS, Unsupported, drawn_while_reading, page_scene, quick_reader_agrees,
+};
 use katna_pdf_render::{Bitmap, Engine, Hayro, HayroPlain, OpenError, Region};
 
 /// A PDF with one 200 × 100 pt page per entry of `pages`, each a content
@@ -338,6 +340,31 @@ fn a_drawing_of_hairlines_is_drawn_as_hayro_draws_it() {
         let b = usual.render(0, scale).unwrap();
         assert!(differs(&a, &b) < 0.005, "at {scale}: {}", differs(&a, &b));
     }
+}
+
+#[test]
+fn a_drawing_is_drawn_while_it_is_read_as_its_scene_draws_it() {
+    // Hairlines only, in several compressed pieces, with one glyph-free
+    // clip read before most of the lines.
+    let page = drawing("")
+        .replace(
+            "1 0 0 rg 60 30 40 20 re f 2 w [4 2] 0 d 0 g 20 50 m 180 50 l S\n",
+            "",
+        )
+        .replace(" l S\n", " l S % padding so the page comes in pieces\n");
+    assert!(page.len() > 2 << 20, "{} bytes", page.len());
+    let bytes = Arc::new(pdf_with(&[&page], true));
+    let scene = page_scene(bytes.clone(), 0).unwrap().unwrap();
+    for scale in [1.0, 2.5] {
+        let first = drawn_while_reading(bytes.clone(), 0, scale).expect("drawn while read");
+        let (w, h) = scene.size();
+        let size = ((w * scale).round() as u32, (h * scale).round() as u32);
+        let later = scene.render(scale, (0.0, 0.0), size).unwrap();
+        assert!(first == later, "at {scale}: {}", differs(&first, &later));
+    }
+    // A page that is not all hairlines is left to its scene.
+    let bytes = Arc::new(pdf_with(&[&drawing("")], true));
+    assert!(drawn_while_reading(bytes, 0, 1.0).is_none());
 }
 
 #[test]

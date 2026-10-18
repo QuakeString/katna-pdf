@@ -4,10 +4,10 @@
 //! against the budgets in docs/PLAN.md §2.5, drawing page 1 from a scene
 //! and the usual way side by side.
 //!
-//! Each step draws a 1920×1080 view as 512-pixel tiles on every core, as
-//! the app does: the whole sheet fitted to the view, then 100 %, 400 % and
-//! 3200 % around the sheet's middle. The scene's first view includes
-//! reading the page into the scene; later views reuse it.
+//! Each step draws a 1920×1080 view as the app does: the whole sheet
+//! fitted to the view as one page, then 100 %, 400 % and 3200 % around
+//! the sheet's middle as 512-pixel tiles on every core. The scene's first
+//! view includes reading the page into the scene; later views reuse it.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -118,8 +118,8 @@ fn measure(file: &str) -> Result<(), String> {
         ("3200 %", 32.0),
     ];
     for (i, (label, scale)) in steps.into_iter().enumerate() {
-        let (scene_ms, a) = view(scene.as_ref(), w, h, scale);
-        let (plain_ms, b) = view(plain.as_ref(), w, h, scale);
+        let (scene_ms, a) = view(scene.as_ref(), w, h, scale, i == 0);
+        let (plain_ms, b) = view(plain.as_ref(), w, h, scale, i == 0);
         // Opening counts toward the first view, as in the budget.
         let (scene_ms, plain_ms) = if i == 0 {
             (scene_ms + scene_open, plain_ms + plain_open)
@@ -146,7 +146,8 @@ fn measure(file: &str) -> Result<(), String> {
     // The same views again, now the scene is built: a second visit.
     let again: Duration = steps
         .iter()
-        .map(|&(_, scale)| view(scene.as_ref(), w, h, scale).0)
+        .enumerate()
+        .map(|(i, &(_, scale))| view(scene.as_ref(), w, h, scale, i == 0).0)
         .max()
         .unwrap_or_default();
     println!(
@@ -161,8 +162,20 @@ fn ms(d: Duration) -> f64 {
 }
 
 /// Draws the [`VIEW`]-sized view of page 1 at `scale` centred on the
-/// page, as tiles on every core. Returns the time and the tiles.
-fn view(doc: &dyn Document, w: f32, h: f32, scale: f32) -> (Duration, Vec<Option<Bitmap>>) {
+/// page, as tiles on every core, or as the whole page when `whole`.
+/// Returns the time and the tiles.
+fn view(
+    doc: &dyn Document,
+    w: f32,
+    h: f32,
+    scale: f32,
+    whole: bool,
+) -> (Duration, Vec<Option<Bitmap>>) {
+    if whole {
+        let started = Instant::now();
+        let page = doc.render(0, scale);
+        return (started.elapsed(), vec![page]);
+    }
     let (pw, ph) = ((w * scale) as u32, (h * scale) as u32);
     let (vw, vh) = (VIEW.0.min(pw), VIEW.1.min(ph));
     let (x0, y0) = ((pw - vw) / 2, (ph - vh) / 2);

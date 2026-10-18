@@ -99,6 +99,33 @@ impl HayroDocument {
         .clone()
     }
 
+    /// Draws the `size` pixel region at `origin` of page `page` at
+    /// `scale` from the page's scene, if it should have one. The first
+    /// draw reads the page into its scene and draws while it reads.
+    fn draw_scene(
+        &self,
+        page: usize,
+        scale: f32,
+        origin: (f64, f64),
+        size: (u32, u32),
+    ) -> Option<Option<Bitmap>> {
+        let cell = self.scenes.as_ref()?.get(page)?;
+        let mut first = None;
+        let scene = cell
+            .get_or_init(|| {
+                let pages = self.pdf.pages();
+                let pdf_page = pages.get(page)?;
+                if !is_vector_heavy(pdf_page) {
+                    return None;
+                }
+                let (scene, drawn) = Scene::build_drawing(pdf_page, scale, origin, size);
+                first = drawn;
+                scene.ok().map(Arc::new)
+            })
+            .clone()?;
+        Some(first.or_else(|| scene.render(scale, origin, size)))
+    }
+
     /// Draws page `page` through `transform` (from the page's own
     /// coordinates to pixels) into a `width`×`height` bitmap.
     fn draw(
@@ -113,8 +140,8 @@ impl HayroDocument {
         if w16 == 0 || h16 == 0 {
             return None;
         }
-        if let Some(scene) = self.scene(page) {
-            return scene.render(scale, origin, size);
+        if let Some(drawn) = self.draw_scene(page, scale, origin, size) {
+            return drawn;
         }
         let pages = self.pdf.pages();
         let pdf_page = pages.get(page)?;

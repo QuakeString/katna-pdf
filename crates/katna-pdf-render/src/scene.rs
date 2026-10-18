@@ -44,6 +44,7 @@ use hayro::vello_cpu::{
 use crate::Bitmap;
 use crate::grid::Grid;
 
+mod first;
 mod hairline;
 mod plain;
 
@@ -178,6 +179,18 @@ pub fn page_scene(bytes: Arc<Vec<u8>>, page: usize) -> Option<Result<Scene, Unsu
     Some(Scene::build(pages.get(page)?))
 }
 
+/// Page `page` of the PDF in `bytes` drawn whole at `scale` while it is
+/// read ([`Scene::build_drawing`]); `None` when it is not drawn that way.
+/// For tools and tests.
+pub fn drawn_while_reading(bytes: Arc<Vec<u8>>, page: usize, scale: f32) -> Option<Bitmap> {
+    let pdf = Pdf::new_with_password(bytes, "").ok()?;
+    let pages = pdf.pages();
+    let page = pages.get(page)?;
+    let (w, h) = page.render_dimensions();
+    let size = ((w * scale).round() as u32, (h * scale).round() as u32);
+    Scene::build_drawing(page, scale, (0.0, 0.0), size).1
+}
+
 /// Whether our quick reader reads page `page` of the PDF in `bytes` into
 /// exactly the scene hayro's interpreter does; `None` when it leaves the
 /// page to hayro, or there is no such page. For tools that check it.
@@ -185,10 +198,10 @@ pub fn quick_reader_agrees(bytes: Arc<Vec<u8>>, page: usize) -> Option<bool> {
     let pdf = Pdf::new_with_password(bytes, "").ok()?;
     let pages = pdf.pages();
     let page = pages.get(page)?;
-    let (quick, true) = Scene::read(page, true) else {
+    let (quick, true) = Scene::read(page, true, &mut |_| {}) else {
         return None;
     };
-    let (hayro, _) = Scene::read(page, false);
+    let (hayro, _) = Scene::read(page, false, &mut |_| {});
     Some(match (quick, hayro) {
         (Ok(a), Ok(b)) => a.same_as(&b),
         _ => false,
@@ -235,7 +248,7 @@ enum Verb {
 
 /// One drawn path. Its points are in the coordinates of its transform;
 /// its box is in [`Scene::boxes`].
-#[derive(PartialEq)]
+#[derive(Clone, PartialEq)]
 struct Item {
     verbs: (u32, u32),
     points: u32,
@@ -256,7 +269,7 @@ enum Draw {
     Stroke { stroke: Stroke, text: bool },
 }
 
-#[derive(PartialEq)]
+#[derive(Clone, PartialEq)]
 struct Clip {
     parent: u32,
     verbs: (u32, u32),
@@ -267,12 +280,33 @@ struct Clip {
 impl Scene {
     /// Reads `page` into a scene, or says what on it a scene cannot draw.
     pub fn build(page: &Page<'_>) -> Result<Scene, Unsupported> {
-        Scene::read(page, true).0
+        Scene::read(page, true, &mut |_| {}).0
+    }
+
+    /// [`Scene::build`], drawing the `size` pixel region at `origin` of
+    /// the page at `scale` while the page is read, as [`Scene::render`]
+    /// would draw it. The drawing is `None` when the page is not one the
+    /// quick reader reads or not all hairlines; [`Scene::render`] then
+    /// draws it from the scene.
+    pub fn build_drawing(
+        page: &Page<'_>,
+        scale: f32,
+        origin: (f64, f64),
+        size: (u32, u32),
+    ) -> (Result<Scene, Unsupported>, Option<Bitmap>) {
+        first::draw_while_reading(f64::from(scale), origin, size, |progress| {
+            Scene::read(page, true, progress)
+        })
     }
 
     /// Reads `page`, with our quick reader when `quick` and the page
-    /// suits it; true with the scene when it did.
-    fn read(page: &Page<'_>, quick: bool) -> (Result<Scene, Unsupported>, bool) {
+    /// suits it; true with the scene when it did. The quick reader shows
+    /// `progress` what it has read after each piece of the page.
+    fn read(
+        page: &Page<'_>,
+        quick: bool,
+        progress: &mut dyn FnMut(&Builder),
+    ) -> (Result<Scene, Unsupported>, bool) {
         let (w, h) = page.render_dimensions();
         let transform = page.initial_transform(true).to_kurbo();
         let cache = InterpreterCache::new();
@@ -308,8 +342,13 @@ impl Scene {
                             return false;
                         };
                         pending.drain(..read);
+                        progress(reader.builder());
                         true
                     }) && reader.feed(&pending, true).is_some()
+                        && {
+                            progress(reader.builder());
+                            true
+                        }
                 }
                 None => page
                     .page_stream()
@@ -479,7 +518,7 @@ impl Scene {
         let mut chain: Vec<u32> = Vec::new();
         for i in found {
             let item = &self.items[i as usize];
-            self.clip_chain(item.clip, &mut chain);
+            clip_chain(self, item.clip, &mut chain);
             let keep = open.iter().zip(&chain).take_while(|(a, b)| a == b).count();
             for _ in keep..open.len() {
                 ctx.pop_clip();
@@ -549,134 +588,217 @@ impl Scene {
         scale: f64,
         size: (u32, u32),
     ) -> Option<Vec<u8>> {
-        let tile = Rect::new(0.0, 0.0, f64::from(size.0), f64::from(size.1));
-        // Each clip's rectangle in pixels, the clips around it applied.
-        let mut clips: HashMap<u32, Rect> = HashMap::new();
-        let mut clip_path = BezPath::new();
-        let mut chain = Vec::new();
-        // Most items share their clip with the one before.
-        let mut last: Option<(u32, Rect)> = None;
-        let mut clip_of = |c: u32| -> Option<Rect> {
-            if c == 0 {
-                return Some(tile);
-            }
-            if let Some((id, rect)) = last
-                && id == c
-            {
-                return Some(rect);
-            }
-            if let Some(&rect) = clips.get(&c) {
-                last = Some((c, rect));
-                return Some(rect);
-            }
-            self.clip_chain(c, &mut chain);
-            let mut rect = tile;
-            for &c in &chain {
-                let clip = &self.clips[c as usize];
-                self.path(clip.verbs, clip.points, &mut clip_path);
-                clip_path.apply_affine(view);
-                rect = rect.intersect(hairline::as_rect(&clip_path)?);
-            }
-            clips.insert(c, rect);
-            last = Some((c, rect));
-            Some(rect)
-        };
-        let is_dot = |b: &[f32; 4]| {
-            f64::from(b[2] - b[0]) * scale < DOT && f64::from(b[3] - b[1]) * scale < DOT
-        };
-        for &i in found {
-            let item = &self.items[i as usize];
-            clip_of(item.clip)?;
-            if is_dot(&self.boxes[i as usize]) {
-                continue;
-            }
-            let Draw::Stroke {
-                stroke,
-                text: false,
-            } = &self.styles[item.style as usize].draw
-            else {
-                return None;
-            };
-            let [a, b, c, d, _, _] = (view * self.transforms[item.transform as usize]).as_coeffs();
-            let (sx, sy) = ((a * a + b * b).sqrt(), (c * c + d * d).sqrt());
-            if !stroke.dash_pattern.is_empty()
-                || (sx - sy).abs() > 1e-3 * sx.max(sy)
-                || stroke.width * sx > 1.0
-            {
-                return None;
-            }
+        let mut hairlines = Hairlines::new(view, scale, size);
+        if !found.iter().all(|&i| hairlines.fits(self, i)) {
+            return None;
         }
-        let mut path = BezPath::new();
         let mut canvas = hairline::Canvas::new(size.0, size.1);
         for &i in found {
-            let item = &self.items[i as usize];
-            let clip = clip_of(item.clip)?;
-            let style = &self.styles[item.style as usize];
-            let bbox = self.boxes[i as usize].map(f64::from);
-            if is_dot(&self.boxes[i as usize]) {
-                let centre =
-                    view * Point::new((bbox[0] + bbox[2]) / 2.0, (bbox[1] + bbox[3]) / 2.0);
-                let half = DOT / 2.0;
-                let dot = Rect::new(
-                    centre.x - half,
-                    centre.y - half,
-                    centre.x + half,
-                    centre.y + half,
-                );
-                canvas.fill_rect(dot, style.color, clip);
-                continue;
-            }
-            let Draw::Stroke { stroke, .. } = &style.draw else {
-                return None;
-            };
-            // The caps lengthen each piece by about as much area as
-            // they add.
-            let cap = match stroke.start_cap {
-                Cap::Butt => 0.0,
-                Cap::Square => 0.5,
-                Cap::Round => std::f64::consts::PI / 8.0,
-            };
-            self.path(item.verbs, item.points, &mut path);
-            let transform = view * self.transforms[item.transform as usize];
-            canvas.stroke(&path, transform, style.color, cap, clip);
+            hairlines.draw(self, i, &mut canvas)?;
         }
         Some(canvas.into_rgba())
     }
 
-    /// The clips around clip `c`, outermost first.
-    fn clip_chain(&self, mut c: u32, chain: &mut Vec<u32>) {
-        chain.clear();
-        while c != 0 {
-            chain.push(c);
-            c = self.clips[c as usize].parent;
+    fn path(&self, verbs: (u32, u32), first: u32, out: &mut BezPath) {
+        let start = verbs.0 as usize;
+        build_path(
+            &self.verbs[start..start + verbs.1 as usize],
+            &self.points[first as usize..],
+            out,
+        );
+    }
+}
+
+/// The path of `verbs`, whose points start `points`, into `out`.
+fn build_path(verbs: &[Verb], points: &[[f32; 2]], out: &mut BezPath) {
+    out.truncate(0);
+    let mut p = 0;
+    let mut pt = || {
+        let [x, y] = points[p];
+        p += 1;
+        Point::new(f64::from(x), f64::from(y))
+    };
+    for verb in verbs {
+        match verb {
+            Verb::Move => out.move_to(pt()),
+            Verb::Line => out.line_to(pt()),
+            Verb::Quad => {
+                let a = pt();
+                out.quad_to(a, pt());
+            }
+            Verb::Cubic => {
+                let (a, b) = (pt(), pt());
+                out.curve_to(a, b, pt());
+            }
+            Verb::Close => out.close_path(),
         }
-        chain.reverse();
+    }
+}
+
+/// Where a scene's items are kept: a whole scene, or the pieces of one
+/// being read (`first.rs`).
+trait Store {
+    fn item(&self, i: u32) -> &Item;
+    fn bbox(&self, i: u32) -> &[f32; 4];
+    fn style(&self, s: u32) -> &Style;
+    fn transform(&self, t: u32) -> &Affine;
+    fn clip(&self, c: u32) -> &Clip;
+    fn path(&self, verbs: (u32, u32), first: u32, out: &mut BezPath);
+}
+
+impl Store for Scene {
+    fn item(&self, i: u32) -> &Item {
+        &self.items[i as usize]
+    }
+
+    fn bbox(&self, i: u32) -> &[f32; 4] {
+        &self.boxes[i as usize]
+    }
+
+    fn style(&self, s: u32) -> &Style {
+        &self.styles[s as usize]
+    }
+
+    fn transform(&self, t: u32) -> &Affine {
+        &self.transforms[t as usize]
+    }
+
+    fn clip(&self, c: u32) -> &Clip {
+        &self.clips[c as usize]
     }
 
     fn path(&self, verbs: (u32, u32), first: u32, out: &mut BezPath) {
-        out.truncate(0);
-        let mut p = first as usize;
-        let mut pt = || {
-            let [x, y] = self.points[p];
-            p += 1;
-            Point::new(f64::from(x), f64::from(y))
-        };
-        for verb in &self.verbs[verbs.0 as usize..(verbs.0 + verbs.1) as usize] {
-            match verb {
-                Verb::Move => out.move_to(pt()),
-                Verb::Line => out.line_to(pt()),
-                Verb::Quad => {
-                    let a = pt();
-                    out.quad_to(a, pt());
-                }
-                Verb::Cubic => {
-                    let (a, b) = (pt(), pt());
-                    out.curve_to(a, b, pt());
-                }
-                Verb::Close => out.close_path(),
-            }
+        Scene::path(self, verbs, first, out);
+    }
+}
+
+/// Draws items with the quick rasterizer (`hairline.rs`) on a tile seen
+/// through `view`: dots and one-pixel lines, clipped only by rectangles.
+struct Hairlines {
+    view: Affine,
+    scale: f64,
+    tile: Rect,
+    /// Each clip's rectangle in pixels, the clips around it applied.
+    clips: HashMap<u32, Rect>,
+    /// Most items share their clip with the one before.
+    last: Option<(u32, Rect)>,
+    chain: Vec<u32>,
+    clip_path: BezPath,
+    path: BezPath,
+}
+
+impl Hairlines {
+    fn new(view: Affine, scale: f64, size: (u32, u32)) -> Self {
+        Hairlines {
+            view,
+            scale,
+            tile: Rect::new(0.0, 0.0, f64::from(size.0), f64::from(size.1)),
+            clips: HashMap::new(),
+            last: None,
+            chain: Vec::new(),
+            clip_path: BezPath::new(),
+            path: BezPath::new(),
         }
     }
+
+    /// Clip `c` as a rectangle in pixels; `None` when it is not one.
+    fn clip_of(&mut self, store: &impl Store, c: u32) -> Option<Rect> {
+        if c == 0 {
+            return Some(self.tile);
+        }
+        if let Some((id, rect)) = self.last
+            && id == c
+        {
+            return Some(rect);
+        }
+        if let Some(&rect) = self.clips.get(&c) {
+            self.last = Some((c, rect));
+            return Some(rect);
+        }
+        clip_chain(store, c, &mut self.chain);
+        let mut rect = self.tile;
+        for &c in &self.chain {
+            let clip = store.clip(c);
+            store.path(clip.verbs, clip.points, &mut self.clip_path);
+            self.clip_path.apply_affine(self.view);
+            rect = rect.intersect(hairline::as_rect(&self.clip_path)?);
+        }
+        self.clips.insert(c, rect);
+        self.last = Some((c, rect));
+        Some(rect)
+    }
+
+    fn is_dot(&self, b: &[f32; 4]) -> bool {
+        f64::from(b[2] - b[0]) * self.scale < DOT && f64::from(b[3] - b[1]) * self.scale < DOT
+    }
+
+    /// Whether item `i` can be drawn this way.
+    fn fits(&mut self, store: &impl Store, i: u32) -> bool {
+        let item = store.item(i);
+        if self.clip_of(store, item.clip).is_none() {
+            return false;
+        }
+        if self.is_dot(store.bbox(i)) {
+            return true;
+        }
+        let Draw::Stroke {
+            stroke,
+            text: false,
+        } = &store.style(item.style).draw
+        else {
+            return false;
+        };
+        let [a, b, c, d, _, _] = (self.view * *store.transform(item.transform)).as_coeffs();
+        let (sx, sy) = ((a * a + b * b).sqrt(), (c * c + d * d).sqrt());
+        stroke.dash_pattern.is_empty()
+            && (sx - sy).abs() <= 1e-3 * sx.max(sy)
+            && stroke.width * sx <= 1.0
+    }
+
+    /// Draws item `i`, which [`Hairlines::fits`].
+    fn draw(&mut self, store: &impl Store, i: u32, canvas: &mut hairline::Canvas) -> Option<()> {
+        let item = store.item(i);
+        let clip = self.clip_of(store, item.clip)?;
+        let style = store.style(item.style);
+        let b = *store.bbox(i);
+        if self.is_dot(&b) {
+            let bbox = b.map(f64::from);
+            let centre =
+                self.view * Point::new((bbox[0] + bbox[2]) / 2.0, (bbox[1] + bbox[3]) / 2.0);
+            let half = DOT / 2.0;
+            let dot = Rect::new(
+                centre.x - half,
+                centre.y - half,
+                centre.x + half,
+                centre.y + half,
+            );
+            canvas.fill_rect(dot, style.color, clip);
+            return Some(());
+        }
+        let Draw::Stroke { stroke, .. } = &style.draw else {
+            return None;
+        };
+        // The caps lengthen each piece by about as much area as they add.
+        let cap = match stroke.start_cap {
+            Cap::Butt => 0.0,
+            Cap::Square => 0.5,
+            Cap::Round => std::f64::consts::PI / 8.0,
+        };
+        store.path(item.verbs, item.points, &mut self.path);
+        let transform = self.view * *store.transform(item.transform);
+        canvas.stroke(&self.path, transform, style.color, cap, clip);
+        Some(())
+    }
+}
+
+/// The clips around clip `c`, outermost first.
+fn clip_chain(store: &impl Store, mut c: u32, chain: &mut Vec<u32>) {
+    chain.clear();
+    while c != 0 {
+        chain.push(c);
+        c = store.clip(c).parent;
+    }
+    chain.reverse();
 }
 
 /// `stroke`, at least a pixel wide on screen (a quarter pixel for text), as

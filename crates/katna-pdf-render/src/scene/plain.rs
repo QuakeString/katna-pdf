@@ -57,6 +57,11 @@ impl<'b> Quick<'b> {
     pub(super) fn feed(&mut self, content: &[u8], last: bool) -> Option<usize> {
         self.0.run(content, last)
     }
+
+    /// What has been read so far.
+    pub(super) fn builder(&self) -> &Builder {
+        self.0.builder
+    }
 }
 
 #[derive(Clone)]
