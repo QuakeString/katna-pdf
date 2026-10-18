@@ -2112,11 +2112,7 @@ impl Viewer {
             return None;
         }
         let rows = entries.into_iter().enumerate().map(|(i, entry)| {
-            let folder = entry
-                .path
-                .parent()
-                .map(|p| p.display().to_string())
-                .unwrap_or_default();
+            let folder = entry.path.parent().map(short_folder).unwrap_or_default();
             let name = file_name(&entry.path);
             let path = entry.path;
             div()
@@ -2416,6 +2412,19 @@ fn save_over(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     std::fs::rename(&new, path).inspect_err(|_| {
         std::fs::remove_file(&new).ok();
     })
+}
+
+/// A folder as people read it: the home folder as `~`.
+fn short_folder(folder: &Path) -> String {
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    match home
+        .as_deref()
+        .and_then(|home| folder.strip_prefix(home).ok())
+    {
+        Some(rest) if rest.as_os_str().is_empty() => "~".into(),
+        Some(rest) => format!("~{}{}", std::path::MAIN_SEPARATOR, rest.display()),
+        None => folder.display().to_string(),
+    }
 }
 
 fn file_name(path: &Path) -> String {
