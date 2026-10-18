@@ -12,6 +12,7 @@ mod instance;
 mod tabs;
 mod text;
 mod theme;
+mod thumbnails;
 mod viewer;
 
 use std::path::PathBuf;
