@@ -49,7 +49,7 @@ cargo run --release -p katna-pdf-bench -- file.pdf
 
 - License: GPL-3.0-or-later. Every source file starts with
   `// SPDX-License-Identifier: GPL-3.0-or-later`.
-- GPUI, `katna-core` and `katna-ui` come from Katna's repository at one
+- GPUI, `katna-core`, `katna-ui` and `katna-platform` come from Katna's repository at one
   pinned rev (root `Cargo.toml`); move all of them together.
 - GPUI only in `apps/katna-pdf` (enforced by `deny.toml`).
 - Pure Rust where possible; TLS is `rustls` only. No `unsafe` code.

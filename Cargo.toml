@@ -23,6 +23,7 @@ katna-pdf-sign = { path = "crates/katna-pdf-sign" }
 # [patch.crates-io] entries below.
 katna-core = { git = "https://github.com/QuakeString/katna", rev = "a201ec5c904a7da7f174f3da066a7dc9a9b78387" }
 katna-ui = { git = "https://github.com/QuakeString/katna", rev = "a201ec5c904a7da7f174f3da066a7dc9a9b78387" }
+katna-platform = { git = "https://github.com/QuakeString/katna", rev = "a201ec5c904a7da7f174f3da066a7dc9a9b78387" }
 
 # GPUI as Katna builds it: the same versions, patched from Katna's vendor/.
 gpui = { package = "gpui-pre", version = "=0.3.6" }
@@ -35,6 +36,8 @@ hayro = "0.8.0"
 image = { version = "0.25", default-features = false }
 # Requests from later launches to the running app (already in GPUI's tree).
 async-channel = "2.5"
+futures-lite = "2.6"
+zbus = { version = "5.19", default-features = false, features = ["async-io"] }
 # The desktop's print dialog (XDG print portal), as Katna Mail uses it;
 # already in GPUI's tree for file dialogs.
 ashpd = { version = "0.13", default-features = false, features = ["async-io", "print"] }

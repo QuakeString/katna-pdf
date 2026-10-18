@@ -23,5 +23,11 @@ async-channel.workspace = true
 [target.'cfg(not(windows))'.dependencies]
 ashpd.workspace = true
 
+# KDE's global menu (`menu.rs`).
+[target.'cfg(target_os = "linux")'.dependencies]
+katna-platform.workspace = true
+futures-lite.workspace = true
+zbus.workspace = true
+
 [lints]
 workspace = true

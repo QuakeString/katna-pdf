@@ -77,6 +77,9 @@ actions!(
         PreviousTab,
         DeleteAnnotation,
         PutToolDown,
+        Annotate,
+        Organize,
+        Sign,
         Quit
     ]
 );
@@ -3039,6 +3042,9 @@ impl Render for Viewer {
             .on_action(cx.listener(|this, _: &Find, window, cx| this.open_search(window, cx)))
             .on_action(cx.listener(|this, _: &CopyText, _, cx| this.copy_text(cx)))
             .on_action(cx.listener(|this, _: &DeleteAnnotation, _, cx| this.delete_chosen(cx)))
+            .on_action(cx.listener(|this, _: &Annotate, _, cx| this.toggle_tools(cx)))
+            .on_action(cx.listener(|this, _: &Organize, _, cx| this.toggle_organizer(cx)))
+            .on_action(cx.listener(|this, _: &Sign, _, cx| this.toggle_signing(cx)))
             .on_action(cx.listener(|this, _: &PutToolDown, _, cx| {
                 if this.signing.is_some() {
                     this.toggle_signing(cx);
