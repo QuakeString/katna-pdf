@@ -23,7 +23,9 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use der::{Decode as _, Encode as _};
-use katna_pdf_cos::{Allowed, Change, Coverage, Document, Dss, SignError, SignRequest, Signature};
+use katna_pdf_cos::{
+    Allowed, Change, Coverage, Document, Dss, Lock, SignError, SignRequest, Signature,
+};
 
 pub use crate::cms::{CheckError, Checked, Stamp, common_name};
 pub use crate::keys::{KeyKind, Signer, SignerError, SoftKey};
@@ -320,6 +322,8 @@ pub struct SignatureCheck {
     pub forbidden: Vec<Change>,
     /// What was changed after it, when the file was changed after it.
     pub later: BTreeSet<Change>,
+    /// The fields it locks that were changed after it, by full name.
+    pub unlocked: Vec<String>,
     /// The validation data the file keeps.
     known: Arc<Dss>,
 }
@@ -356,6 +360,12 @@ impl SignatureCheck {
     /// Why it does not hold, in a few words; `None` when it does.
     pub fn problem(&self) -> Option<String> {
         if self.intact() {
+            if !self.unlocked.is_empty() {
+                return Some(format!(
+                    "fields it locked were changed after it ({})",
+                    self.unlocked.join(", ")
+                ));
+            }
             if self.forbidden.is_empty() {
                 return None;
             }
@@ -386,6 +396,15 @@ pub fn change_text(change: Change) -> &'static str {
         Change::Pages => "pages",
         Change::Content => "page content",
         Change::Other => "other changes",
+    }
+}
+
+/// Which fields a signature locks, in a few words.
+pub fn lock_text(lock: &Lock) -> String {
+    match lock {
+        Lock::All => "all form fields".into(),
+        Lock::Include(names) => names.join(", "),
+        Lock::Exclude(names) => format!("all form fields but {}", names.join(", ")),
     }
 }
 
@@ -443,6 +462,15 @@ pub fn check(doc: &Document, file: &[u8], roots: &Roots) -> Vec<SignatureCheck> 
                 Coverage::Revision(end) => doc.changes_since(end),
                 _ => BTreeSet::new(),
             };
+            let unlocked = match (&signature.lock, coverage) {
+                (Some(lock), Coverage::Revision(end)) => doc
+                    .fields_changed_since(end)
+                    .into_iter()
+                    .filter(|(name, sig)| lock.covers(name, *sig))
+                    .map(|(name, _)| name)
+                    .collect(),
+                _ => Vec::new(),
+            };
             let forbidden = match signature.certify {
                 Some(allowed) => later
                     .iter()
@@ -459,6 +487,7 @@ pub fn check(doc: &Document, file: &[u8], roots: &Roots) -> Vec<SignatureCheck> 
                 revocation,
                 forbidden,
                 later,
+                unlocked,
                 known: known.clone(),
             }
         })

@@ -32,7 +32,7 @@ pub use dss::Dss;
 pub use filter::{FilterError, decode};
 pub use forms::{Field, FieldKind, FieldValue, Widget};
 pub use links::{Link, LinkTarget};
-pub use mdp::{Allowed, Change};
+pub use mdp::{Allowed, Change, Lock};
 pub use object::{Dict, Name, Object, Ref, Stream};
 pub use outline::{Destination, OutlineItem, text_string};
 pub use pages::{ComposeError, PageInfo, PageSource, compose};

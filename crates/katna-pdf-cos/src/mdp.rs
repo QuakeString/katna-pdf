@@ -3,7 +3,8 @@
 //! Certified files (ISO 32000-2 §12.8.2.2, DocMDP): the first signature
 //! of a file may certify it, saying which changes it still allows, and
 //! what was changed after a revision, sorted into the kinds of change
-//! certification speaks of.
+//! certification speaks of. And locked fields (§12.8.2.4, FieldMDP): any
+//! signature may lock form fields, whose values may not change after.
 
 use std::collections::{BTreeSet, HashMap};
 
@@ -74,7 +75,161 @@ pub enum Change {
     Other,
 }
 
+/// Which form fields a signature locks (`/Action` and `/Fields` of its
+/// FieldMDP). Signature fields stay free to sign whatever is locked,
+/// unless named.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Lock {
+    /// Every field.
+    All,
+    /// The fields named, by their full names.
+    Include(Vec<String>),
+    /// Every field but those named.
+    Exclude(Vec<String>),
+}
+
+impl Lock {
+    /// Whether the field named `name` is locked; `signature` when it is
+    /// a signature field.
+    pub fn covers(&self, name: &str, signature: bool) -> bool {
+        // A field is named by its full name, or by one of its parents'.
+        let named = |names: &[String]| {
+            names.iter().any(|n| {
+                name == n
+                    || name
+                        .strip_prefix(n.as_str())
+                        .is_some_and(|rest| rest.starts_with('.'))
+            })
+        };
+        match self {
+            Lock::Include(names) => named(names),
+            _ if signature => false,
+            Lock::All => true,
+            Lock::Exclude(names) => !named(names),
+        }
+    }
+
+    /// As `/TransformParams` of a FieldMDP reference, or a field's
+    /// `/Lock` (ISO 32000-2 Table 237).
+    pub(crate) fn params(&self, kind: &str) -> Dict {
+        let mut d = Dict::new();
+        d.set("Type", Object::name(kind));
+        let (action, names) = match self {
+            Lock::All => ("All", None),
+            Lock::Include(n) => ("Include", Some(n)),
+            Lock::Exclude(n) => ("Exclude", Some(n)),
+        };
+        d.set("Action", Object::name(action));
+        if let Some(names) = names {
+            d.set(
+                "Fields",
+                names
+                    .iter()
+                    .map(|n| crate::forms::text_object(n))
+                    .collect::<Vec<_>>(),
+            );
+        }
+        if kind == "TransformParams" {
+            d.set("V", Object::name("1.2"));
+        }
+        d
+    }
+}
+
 impl Document {
+    /// The fields a `/Lock` or FieldMDP `/TransformParams` dictionary
+    /// locks.
+    pub(crate) fn lock_of(&self, params: &Dict) -> Option<Lock> {
+        let names = || match self.resolve_key(params, "Fields") {
+            Object::Array(a) => a
+                .iter()
+                .filter_map(|o| match self.resolve(o) {
+                    Object::String { bytes, .. } => Some(crate::text_string(&bytes)),
+                    _ => None,
+                })
+                .collect(),
+            _ => Vec::new(),
+        };
+        match params.name("Action")? {
+            b"All" => Some(Lock::All),
+            b"Include" => Some(Lock::Include(names())),
+            b"Exclude" => Some(Lock::Exclude(names())),
+            _ => None,
+        }
+    }
+
+    /// The fields signature dictionary `sig` locks, if any.
+    pub(crate) fn fieldmdp(&self, sig: &Dict) -> Option<Lock> {
+        let Object::Array(refs) = self.resolve_key(sig, "Reference") else {
+            return None;
+        };
+        refs.iter().find_map(|r| {
+            let Object::Dict(r) = self.resolve(r) else {
+                return None;
+            };
+            if r.name("TransformMethod") != Some(b"FieldMDP") {
+                return None;
+            }
+            match self.resolve_key(&r, "TransformParams") {
+                Object::Dict(params) => self.lock_of(&params),
+                _ => None,
+            }
+        })
+    }
+
+    /// The full names of the form fields whose values were changed,
+    /// added or removed since the revision of the file that ended at
+    /// byte `end`, each with whether it is a signature field.
+    pub fn fields_changed_since(&self, end: usize) -> Vec<(String, bool)> {
+        let Some(Ok(old)) = self.bytes().get(..end).map(|b| Document::load(b.to_vec())) else {
+            return Vec::new();
+        };
+        let before: HashMap<String, (Option<String>, bool)> = old
+            .form()
+            .into_iter()
+            .map(|f| {
+                let sig = f.kind == crate::FieldKind::Signature;
+                (f.name, (f.value, sig))
+            })
+            .collect();
+        let now = self.form();
+        let mut out: Vec<(String, bool)> = now
+            .iter()
+            .filter(|f| {
+                let sig = f.kind == crate::FieldKind::Signature;
+                // A signature field's value is its signature, which the
+                // field list does not show; signing is seen by `V`.
+                let value = if sig {
+                    self.get(f.id).and_then(|o| match o {
+                        Object::Dict(d) => d.get("V").cloned(),
+                        _ => None,
+                    })
+                } else {
+                    None
+                };
+                match before.get(&f.name) {
+                    None => true,
+                    Some(_) if sig => {
+                        let old_v = old.get(f.id).and_then(|o| match o {
+                            Object::Dict(d) => d.get("V").cloned(),
+                            _ => None,
+                        });
+                        value != old_v
+                    }
+                    Some((v, _)) => *v != f.value,
+                }
+            })
+            .map(|f| (f.name.clone(), f.kind == crate::FieldKind::Signature))
+            .collect();
+        for (name, (_, sig)) in &before {
+            if !now.iter().any(|f| &f.name == name) {
+                out.push((name.clone(), *sig));
+            }
+        }
+        out.sort();
+        out
+    }
+
     /// How the file is certified: what its certification signature
     /// allows, if it has one.
     pub fn certification(&self) -> Option<Allowed> {

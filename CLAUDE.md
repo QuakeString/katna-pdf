@@ -38,7 +38,7 @@ cargo run --release -p katna-pdf-bench -- file.pdf
   data, then online by OCSP, then CRLs; missing issuers fetched from the
   certificate's AIA URL). The
   PDF side (fields, byte ranges) is `katna-pdf-cos`'s `sign.rs`, , certified
-  files' allowed changes (DocMDP) its `mdp.rs`, and long-term validation
+  files' allowed changes (DocMDP) and locked fields (FieldMDP) its `mdp.rs`, and long-term validation
   data (PAdES B-LT DSS) its `dss.rs`.
 - `apps/katna-pdf` — the app window.
 - `apps/katna-pdf-cli` — the command line: info, merge, split, pages,

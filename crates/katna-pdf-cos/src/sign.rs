@@ -13,7 +13,7 @@ use std::time::SystemTime;
 
 use crate::annots::{pdf_date, reals};
 use crate::forms::{literal, text_object};
-use crate::mdp::Allowed;
+use crate::mdp::{Allowed, Lock};
 use crate::object::{Dict, Name, Object, Ref, Stream};
 use crate::write::{Update, UpdateError, write_object};
 use crate::{Document, FieldKind};
@@ -71,6 +71,10 @@ pub struct SignRequest {
     /// A document timestamp (PAdES B-LTA) rather than a signature: an
     /// RFC 3161 token over the file, kept in a field not seen.
     pub document_timestamp: bool,
+    /// Lock form fields: their values may not change after. When
+    /// signing an empty field that says what to lock (its `/Lock`), that
+    /// is used if this is `None`.
+    pub lock: Option<Lock>,
 }
 
 /// A picture: 8-bit RGB, row by row, with an alpha channel when it has
@@ -94,6 +98,7 @@ impl SignRequest {
             certify: None,
             picture: None,
             document_timestamp: false,
+            lock: None,
         }
     }
 
@@ -213,6 +218,8 @@ pub struct Signature {
     pub time: Option<String>,
     /// What changes it allows after it, when it certifies the file.
     pub certify: Option<Allowed>,
+    /// The form fields it locks.
+    pub lock: Option<Lock>,
 }
 
 /// How much of a file a signature covers.
@@ -317,6 +324,7 @@ impl Document {
                 },
                 time: text("M"),
                 certify: self.docmdp(&v),
+                lock: self.fieldmdp(&v),
             });
         }
         out
@@ -379,18 +387,43 @@ impl Document {
                 sig.set(key, text_object(value));
             }
         }
+        let mut references = Vec::new();
         if let Some(allowed) = request.certify {
             let params = Dict(vec![
                 (Name::new("Type"), Object::name("TransformParams")),
                 (Name::new("P"), Object::Int(allowed.level())),
                 (Name::new("V"), Object::name("1.2")),
             ]);
-            let reference = Dict(vec![
+            references.push(Object::Dict(Dict(vec![
                 (Name::new("Type"), Object::name("SigRef")),
                 (Name::new("TransformMethod"), Object::name("DocMDP")),
                 (Name::new("TransformParams"), Object::Dict(params)),
-            ]);
-            sig.set("Reference", vec![Object::Dict(reference)]);
+            ])));
+        }
+        // The lock asked for, or the one the field to sign asks for.
+        let lock = request.lock.clone().or_else(|| match &request.placement {
+            Placement::Field { id, .. } => match self.get(*id) {
+                Some(Object::Dict(field)) => match self.resolve_key(&field, "Lock") {
+                    Object::Dict(lock) => self.lock_of(&lock),
+                    _ => None,
+                },
+                _ => None,
+            },
+            _ => None,
+        });
+        let lock = lock.filter(|_| !request.document_timestamp);
+        if let Some(lock) = &lock {
+            references.push(Object::Dict(Dict(vec![
+                (Name::new("Type"), Object::name("SigRef")),
+                (Name::new("TransformMethod"), Object::name("FieldMDP")),
+                (
+                    Name::new("TransformParams"),
+                    Object::Dict(lock.params("TransformParams")),
+                ),
+            ])));
+        }
+        if !references.is_empty() {
+            sig.set("Reference", references);
         }
         let sig = update.add(Object::Dict(sig));
 
@@ -447,6 +480,23 @@ impl Document {
                     request.field_name.clone(),
                     Some((sig, lines, request.picture.as_ref())),
                 )?;
+            }
+        }
+        // Locked fields are made read-only too, so that apps which do
+        // not read the lock still keep them as signed.
+        if let Some(lock) = &lock {
+            for field in self.form() {
+                if field.kind == FieldKind::Signature
+                    || field.read_only
+                    || !lock.covers(&field.name, false)
+                {
+                    continue;
+                }
+                if let Some(Object::Dict(mut dict)) = self.get(field.id) {
+                    let flags = dict.get("Ff").and_then(Object::as_int).unwrap_or(0);
+                    dict.set("Ff", flags | 1);
+                    update.replace(field.id, Object::Dict(dict));
+                }
             }
         }
         // Signatures present, and changes appended only (ISO 32000-2
