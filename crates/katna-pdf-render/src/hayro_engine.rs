@@ -11,7 +11,7 @@ use hayro::hayro_interpret::{
     BlendMode, ClipPath, Context, Device, DrawMode, DrawProps, Image, ImageDrawProps,
     InterpreterCache, InterpreterSettings, SoftMask, interpret_page,
 };
-use hayro::hayro_syntax::{LoadPdfError, Pdf};
+use hayro::hayro_syntax::{DecryptionError, LoadPdfError, Pdf};
 use hayro::kurbo::{Affine, BezPath, Rect};
 use hayro::vello_cpu::color::palette::css::WHITE;
 use hayro::vello_cpu::{Pixmap, RasterizerSettings, RenderContext, Resources, TargetInit};
@@ -54,7 +54,9 @@ impl Engine for HayroPlain {
 
 fn open(bytes: Arc<Vec<u8>>, password: &str, scenes: bool) -> Result<Arc<dyn Document>, OpenError> {
     let pdf = Pdf::new_with_password(bytes, password).map_err(|err| match err {
-        LoadPdfError::Decryption(_) => OpenError::Locked,
+        LoadPdfError::Decryption(DecryptionError::PasswordProtected) => OpenError::Locked,
+        LoadPdfError::Decryption(DecryptionError::UnsupportedAlgorithm) => OpenError::Unsupported,
+        LoadPdfError::Decryption(_) => OpenError::Invalid,
         LoadPdfError::Invalid => OpenError::Invalid,
     })?;
     let sizes: Vec<_> = pdf

@@ -44,6 +44,11 @@ tab-empty = New tab
 
 ## Opening
 opening = Opening { $name }…
-error-locked = { $name } is protected by a password. Opening protected files comes next.
+error-encryption = { $name } is encrypted in a way Katna PDF cannot read yet.
+locked-title = { $name } is protected
+locked-detail = Enter its password to open it.
+locked-wrong = That password did not open it. Try again.
+locked-open = Open
+password-placeholder = Password
 error-invalid = { $name } is damaged or is not a PDF.
 error-read = { $name } could not be read: { $error }

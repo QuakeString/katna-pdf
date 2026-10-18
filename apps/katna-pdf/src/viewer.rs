@@ -168,6 +168,11 @@ enum Content {
     Empty,
     Opening(String),
     Failed(String),
+    /// It needs a password; `wrong` once one given did not open it.
+    Locked {
+        name: String,
+        wrong: bool,
+    },
     Ready(Opened),
 }
 
@@ -220,6 +225,10 @@ pub struct Viewer {
     texts: Option<Texts>,
     /// The find bar, while open.
     search: Option<SearchBar>,
+    /// The password field, while a file asks for one, and whether to put
+    /// the keys in it on the next frame.
+    password: Option<(Entity<TextInput>, Subscription)>,
+    focus_password: bool,
     /// The text selected with the pointer, and whether it is being
     /// dragged out now.
     selection: Option<Selection>,
@@ -284,6 +293,8 @@ impl Viewer {
             links: None,
             texts: None,
             search: None,
+            password: None,
+            focus_password: false,
             selection: None,
             selecting: false,
             reading_text: Default::default(),
@@ -316,7 +327,42 @@ impl Viewer {
     /// Reads and opens `path` off the UI thread; the card says "Opening…"
     /// meanwhile.
     pub fn open(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        self.open_with(path, String::new(), cx);
+    }
+
+    /// Opens the file asking for a password with the one typed.
+    fn unlock(&mut self, cx: &mut Context<Self>) {
+        let (Some(path), Some((input, _))) = (self.path.clone(), &self.password) else {
+            return;
+        };
+        let password = input.read(cx).text().to_owned();
+        if !password.is_empty() {
+            self.open_with(path, password, cx);
+        }
+    }
+
+    /// The password field, made on first need.
+    fn password_field(&mut self, cx: &mut Context<Self>) -> Entity<TextInput> {
+        if let Some((input, _)) = &self.password {
+            return input.clone();
+        }
+        let input = cx.new(|cx| {
+            let mut input = TextInput::new(t("password-placeholder", &[]), cx);
+            input.set_masked(true, cx);
+            input
+        });
+        let sub = cx.subscribe(&input, |this, _, event, cx| {
+            if matches!(event, InputEvent::Submit) {
+                this.unlock(cx);
+            }
+        });
+        self.password = Some((input.clone(), sub));
+        input
+    }
+
+    fn open_with(&mut self, path: PathBuf, password: String, cx: &mut Context<Self>) {
         let name = file_name(&path);
+        let tried = !password.is_empty();
         self.path = Some(path.clone());
         self.generation += 1;
         let generation = self.generation;
@@ -342,17 +388,24 @@ impl Viewer {
                             "error-read",
                             &[("name", &name), ("error", &err.to_string())],
                         )
-                    })?;
-                    let doc = Hayro.open(Arc::new(bytes), "").map_err(|err| match err {
-                        OpenError::Locked => t("error-locked", &[("name", &name)]),
-                        OpenError::Invalid => t("error-invalid", &[("name", &name)]),
-                    })?;
+                    });
+                    // `None` when it asks for a password.
+                    let bytes = bytes.map_err(Some)?;
+                    let doc = Hayro
+                        .open(Arc::new(bytes), &password)
+                        .map_err(|err| match err {
+                            OpenError::Locked => None,
+                            OpenError::Invalid => Some(t("error-invalid", &[("name", &name)])),
+                            OpenError::Unsupported => {
+                                Some(t("error-encryption", &[("name", &name)]))
+                            }
+                        })?;
                     let (widest, tallest) = (0..doc.page_count())
                         .filter_map(|p| doc.page_size(p))
                         .fold((1.0_f32, 1.0_f32), |(w, h), (pw, ph)| {
                             (w.max(pw), h.max(ph))
                         });
-                    Ok::<_, String>(Opened {
+                    Ok::<_, Option<String>>(Opened {
                         name,
                         doc,
                         widest,
@@ -383,8 +436,22 @@ impl Viewer {
                         this.released.extend(old);
                         this.visible = 0..1;
                         this.content = Content::Ready(opened);
+                        this.password = None;
                     }
-                    Err(message) => this.content = Content::Failed(message),
+                    Err(Some(message)) => this.content = Content::Failed(message),
+                    Err(None) => {
+                        let input = this.password_field(cx);
+                        let accent = gpui::rgba(this.theme.katna.accent).into();
+                        input.update(cx, |input, cx| {
+                            input.set_accent(accent);
+                            input.select_all_text(cx);
+                        });
+                        this.focus_password = true;
+                        this.content = Content::Locked {
+                            name: file_name(this.path.as_deref().unwrap_or(Path::new(""))),
+                            wrong: tried,
+                        };
+                    }
                 }
                 cx.notify();
             })
@@ -1599,6 +1666,52 @@ impl Viewer {
             .gap(px(space::S4))
             .max_w(px(420.0));
         let body = match &self.content {
+            Content::Locked { name, wrong } => {
+                let field = self.password.as_ref().map(|(input, _)| {
+                    div()
+                        .w(px(280.0))
+                        .h(px(36.0))
+                        .flex()
+                        .items_center()
+                        .px(px(space::S3))
+                        .rounded(px(radius::SM))
+                        .bg(th.field)
+                        .text_size(px(text::BODY))
+                        .text_color(th.text)
+                        .child(input.clone())
+                });
+                body.child(
+                    svg()
+                        .path("icons/lock.svg")
+                        .size(px(48.0))
+                        .text_color(th.dim),
+                )
+                .child(
+                    div()
+                        .text_size(px(text::TITLE))
+                        .text_color(th.text)
+                        .text_center()
+                        .child(t("locked-title", &[("name", name)])),
+                )
+                .child(
+                    div()
+                        .text_size(px(text::SMALL))
+                        .text_color(if *wrong { th.error } else { th.dim })
+                        .child(t(
+                            if *wrong {
+                                "locked-wrong"
+                            } else {
+                                "locked-detail"
+                            },
+                            &[],
+                        )),
+                )
+                .children(field)
+                .child(
+                    widgets::filled_button("unlock", t("locked-open", &[]), &th.katna)
+                        .on_click(cx.listener(|this, _, _, cx| this.unlock(cx))),
+                )
+            }
             Content::Opening(name) => body.child(
                 div()
                     .text_size(px(text::BODY))
@@ -1739,6 +1852,11 @@ impl Render for Viewer {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         for image in self.released.drain(..) {
             window.drop_image(image).ok();
+        }
+        if std::mem::take(&mut self.focus_password)
+            && let Some((input, _)) = &self.password
+        {
+            window.focus(&input.focus_handle(cx), cx);
         }
         let th = self.theme;
         // The pages' width: the window less its padding and the pane.
