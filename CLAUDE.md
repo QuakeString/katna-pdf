@@ -24,7 +24,7 @@ cargo run --release -p katna-pdf-bench -- file.pdf
   object streams, repair, incremental updates. No GPUI, no C.
 - `apps/katna-pdf` — the app window.
 - `apps/katna-pdf-cli` — the command line: info, merge, split, pages,
-  rotate, annotations and XFDF; `--json` for scripts and agents.
+  rotate, crop, annotations and XFDF; `--json` for scripts and agents.
 - `tools/katna-pdf-cos-check` — runs katna-pdf-cos over a folder of PDFs
   (loads, page counts against hayro, update round trips).
 - `vendor/hayro`, `vendor/hayro-interpret` — hayro with our patches

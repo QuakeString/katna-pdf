@@ -74,6 +74,7 @@ pages-earlier = Move the pages picked up
 pages-later = Move the pages picked down
 pages-delete = Delete the pages picked
 pages-insert = Insert the pages of another PDF after the pages picked
+pages-crop = Crop: drag a box on a page to keep only that part, of the pages picked with it too; click a page to uncrop it
 pages-extract = Save the pages picked as a new PDF
 pages-extract-name = { $name } (pages).pdf
 pages-extracted = The pages were saved as { $name }.

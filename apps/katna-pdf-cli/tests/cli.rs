@@ -96,6 +96,44 @@ fn files_are_merged_split_and_described() {
 }
 
 #[test]
+fn pages_are_cropped_and_uncropped() {
+    let d = dir("crop");
+    let a = d.join("a.pdf");
+    std::fs::write(&a, pdf(2)).unwrap();
+    let boxed = d.join("boxed.pdf");
+    let (code, text) = run(&["crop", s(&a), "-o", s(&boxed), "--box", "10,20,60,120"]);
+    assert_eq!(code, 0, "{text}");
+    let (_, text) = run(&["info", "--json", s(&boxed)]);
+    assert!(text.contains("{\"width\":50,\"height\":100,"), "{text}");
+    // Margins come off what is shown, on the second page only.
+    let cut = d.join("cut.pdf");
+    let (code, _) = run(&[
+        "crop",
+        s(&boxed),
+        "-o",
+        s(&cut),
+        "--margins",
+        "10,0,0,5",
+        "--pages",
+        "2",
+    ]);
+    assert_eq!(code, 0);
+    let (_, text) = run(&["info", "--json", s(&cut)]);
+    assert!(text.contains("{\"width\":45,\"height\":90,"), "{text}");
+    let back = d.join("back.pdf");
+    assert_eq!(run(&["crop", s(&cut), "-o", s(&back), "--uncrop"]).0, 0);
+    let (_, text) = run(&["info", "--json", s(&back)]);
+    assert!(text.contains("{\"width\":100,\"height\":200,"), "{text}");
+    assert!(text.contains("{\"width\":101,\"height\":200,"), "{text}");
+    assert_eq!(run(&["crop", s(&a), "-o", s(&back)]).0, 2);
+    assert_eq!(
+        run(&["crop", s(&a), "-o", s(&back), "--box", "5,5,1,1"]).0,
+        2
+    );
+    std::fs::remove_dir_all(d).ok();
+}
+
+#[test]
 fn mistakes_are_told_apart_from_failures() {
     let (code, text) = run(&["info", "--json", "/no/such.pdf"]);
     assert_eq!(code, 1);

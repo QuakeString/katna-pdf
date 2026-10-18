@@ -22,6 +22,10 @@ usage: katna-pdf-cli COMMAND [--json] ...
   pages FILE PAGES -o OUT         the pages listed, in that order
   rotate FILE -o OUT [--by DEG] [--pages PAGES]
                                   turn pages clockwise (90, 180, 270, -90; default 90)
+  crop FILE -o OUT (--box L,B,R,T | --margins M | --uncrop) [--pages PAGES]
+                                  keep a box of each page, in points from its media
+                                  box's corner; or cut margins off what is shown now
+                                  (M: all sides, or top,right,bottom,left); or uncrop
   annots FILE                     the annotations, page by page
   xfdf-export FILE -o OUT.xfdf    the annotations as XFDF
   xfdf-import FILE XFDF -o OUT    the annotations of XFDF added to the PDF
@@ -42,6 +46,7 @@ fn main() -> ExitCode {
         "split" => split(rest, json),
         "pages" => pages(rest, json),
         "rotate" => rotate(rest, json),
+        "crop" => crop(rest, json),
         "annots" => annots(rest, json),
         "xfdf-export" => xfdf_export(rest, json),
         "xfdf-import" => xfdf_import(rest, json),
@@ -86,31 +91,44 @@ fn failed(e: impl std::fmt::Display) -> Failure {
     Failure::Failed(e.to_string())
 }
 
-/// The arguments of a command: the words, and the values of options.
+/// The arguments of a command: the words, the values of options and the
+/// flags.
 struct Args<'a> {
     words: Vec<&'a str>,
     options: Vec<(&'a str, &'a str)>,
+    flags: Vec<&'a str>,
 }
 
 impl<'a> Args<'a> {
-    /// `args`, with `-o`, `--every`, `--by` and `--pages` taking values.
+    /// `args`, with `-o`, `--every`, `--by`, `--pages`, `--box` and
+    /// `--margins` taking values, and `--uncrop` a flag.
     fn parse(args: &'a [String]) -> Result<Self, Failure> {
         let mut words = Vec::new();
         let mut options = Vec::new();
+        let mut flags = Vec::new();
         let mut it = args.iter();
         while let Some(a) = it.next() {
-            if matches!(a.as_str(), "-o" | "--every" | "--by" | "--pages") {
+            if matches!(
+                a.as_str(),
+                "-o" | "--every" | "--by" | "--pages" | "--box" | "--margins"
+            ) {
                 let Some(value) = it.next() else {
                     return Err(Failure::Usage(format!("{a} needs a value")));
                 };
                 options.push((a.as_str(), value.as_str()));
+            } else if a == "--uncrop" {
+                flags.push(a.as_str());
             } else if a.starts_with("--") {
                 return Err(Failure::Usage(format!("unknown option {a}")));
             } else {
                 words.push(a.as_str());
             }
         }
-        Ok(Args { words, options })
+        Ok(Args {
+            words,
+            options,
+            flags,
+        })
     }
 
     fn option(&self, name: &str) -> Option<&'a str> {
@@ -118,6 +136,10 @@ impl<'a> Args<'a> {
             .iter()
             .find(|(k, _)| *k == name)
             .map(|(_, v)| *v)
+    }
+
+    fn flag(&self, name: &str) -> bool {
+        self.flags.contains(&name)
     }
 
     fn output(&self) -> Result<PathBuf, Failure> {
@@ -330,6 +352,7 @@ fn merge(args: &[String], json: bool) -> Done {
                 doc,
                 page,
                 turns: 0,
+                crop: None,
             })
         })
         .collect();
@@ -364,6 +387,7 @@ fn split(args: &[String], json: bool) -> Done {
                 doc: &doc,
                 page,
                 turns: 0,
+                crop: None,
             })
             .collect();
         let bytes = compose(None, &sources).map_err(failed)?;
@@ -386,6 +410,7 @@ fn pages(args: &[String], json: bool) -> Done {
             doc: &doc,
             page,
             turns: 0,
+            crop: None,
         })
         .collect();
     let bytes = compose(Some(&doc), &sources).map_err(failed)?;
@@ -416,11 +441,104 @@ fn rotate(args: &[String], json: bool) -> Done {
             doc: &doc,
             page,
             turns: if turned.contains(&page) { by / 90 } else { 0 },
+            crop: None,
         })
         .collect();
     let bytes = compose(Some(&doc), &sources).map_err(failed)?;
     write(&out, &bytes)?;
     Ok(wrote(&[(out, count)], json))
+}
+
+fn crop(args: &[String], json: bool) -> Done {
+    let args = Args::parse(args)?;
+    let [file] = args.words()?;
+    let out = args.output()?;
+    let numbers = |name: &str, value: &str| -> Result<Vec<f32>, Failure> {
+        value
+            .split(',')
+            .map(|n| n.trim().parse::<f32>().ok().filter(|n| n.is_finite()))
+            .collect::<Option<Vec<_>>>()
+            .ok_or_else(|| Failure::Usage(format!("{name} {value}: numbers, comma between")))
+    };
+    let how = match (
+        args.option("--box"),
+        args.option("--margins"),
+        args.flag("--uncrop"),
+    ) {
+        (Some(b), None, false) => match numbers("--box", b)?[..] {
+            [l, b, r, t] if r > l && t > b => Cut::Box([l, b, r, t]),
+            _ => return Err(Failure::Usage(format!("--box {b}: left,bottom,right,top"))),
+        },
+        (None, Some(m), false) => match numbers("--margins", m)?[..] {
+            [a] => Cut::Margins([a; 4]),
+            [t, r, b, l] => Cut::Margins([t, r, b, l]),
+            _ => {
+                return Err(Failure::Usage(format!(
+                    "--margins {m}: one number, or top,right,bottom,left"
+                )));
+            }
+        },
+        (None, None, true) => Cut::Uncrop,
+        _ => {
+            return Err(Failure::Usage(
+                "crop takes one of --box, --margins and --uncrop".into(),
+            ));
+        }
+    };
+    let doc = open(file)?;
+    let count = doc.pages().len();
+    let cropped = match args.option("--pages") {
+        Some(spec) => ranges::parse(spec, count).map_err(failed)?,
+        None => (0..count).collect(),
+    };
+    let sources: Vec<PageSource> = (0..count)
+        .map(|page| {
+            let info = doc.page_info(page);
+            let crop = info
+                .filter(|_| cropped.contains(&page))
+                .map(|info| match how {
+                    Cut::Box([l, b, r, t]) => {
+                        let m = info.media;
+                        [m[0] + l, m[1] + b, m[0] + r, m[1] + t]
+                    }
+                    Cut::Margins(cut) => margins(info.crop, info.rotate, cut),
+                    Cut::Uncrop => info.media,
+                });
+            PageSource {
+                doc: &doc,
+                page,
+                turns: 0,
+                crop,
+            }
+        })
+        .collect();
+    let bytes = compose(Some(&doc), &sources).map_err(failed)?;
+    write(&out, &bytes)?;
+    Ok(wrote(&[(out, count)], json))
+}
+
+/// How `crop` cuts each page.
+#[derive(Clone, Copy)]
+enum Cut {
+    Box([f32; 4]),
+    /// Top, right, bottom, left, as the page is shown.
+    Margins([f32; 4]),
+    Uncrop,
+}
+
+/// `crop` (left, bottom, right, top) less margins `cut` (top, right,
+/// bottom, left) of the page as shown, turned `rotate` degrees.
+fn margins(crop: [f32; 4], rotate: i64, cut: [f32; 4]) -> [f32; 4] {
+    // The margins shown as they lie in the page's own space: turning the
+    // page clockwise brings its left side to the top.
+    let [top, right, bottom, left] = cut;
+    let [t, r, b, l] = match rotate {
+        90 => [right, bottom, left, top],
+        180 => [bottom, left, top, right],
+        270 => [left, top, right, bottom],
+        _ => [top, right, bottom, left],
+    };
+    [crop[0] + l, crop[1] + b, crop[2] - r, crop[3] - t]
 }
 
 fn annots(args: &[String], json: bool) -> Done {
@@ -554,5 +672,17 @@ mod tests {
     #[test]
     fn json_strings_are_escaped() {
         assert_eq!(string("a\"b\\\n\u{1}é"), "\"a\\\"b\\\\\\n\\u0001é\"");
+    }
+
+    #[test]
+    fn margins_follow_the_page_as_shown() {
+        let crop = [0.0, 0.0, 100.0, 200.0];
+        // Top 1, right 2, bottom 3, left 4.
+        let cut = [1.0, 2.0, 3.0, 4.0];
+        assert_eq!(margins(crop, 0, cut), [4.0, 3.0, 98.0, 199.0]);
+        // Turned a quarter clockwise, the page's left side is at the top.
+        assert_eq!(margins(crop, 90, cut), [1.0, 4.0, 97.0, 198.0]);
+        assert_eq!(margins(crop, 180, cut), [2.0, 1.0, 96.0, 197.0]);
+        assert_eq!(margins(crop, 270, cut), [3.0, 2.0, 99.0, 196.0]);
     }
 }

@@ -68,11 +68,13 @@ fn pages_are_reordered_turned_and_dropped() {
                 doc: &doc,
                 page: 2,
                 turns: 0,
+                crop: None,
             },
             PageSource {
                 doc: &doc,
                 page: 0,
                 turns: 1,
+                crop: None,
             },
         ],
     )
@@ -106,17 +108,20 @@ fn files_are_merged_and_pages_repeated() {
             doc: &a,
             page,
             turns: 0,
+            crop: None,
         })
         .collect();
     pages.extend((0..3).map(|page| PageSource {
         doc: &b,
         page,
         turns: -1,
+        crop: None,
     }));
     pages.push(PageSource {
         doc: &a,
         page: 0,
         turns: 0,
+        crop: None,
     });
     let new = Document::load(compose(Some(&a), &pages).unwrap()).unwrap();
     assert_eq!(new.pages().len(), 7);
@@ -136,6 +141,7 @@ fn a_split_off_page_stands_alone() {
                 doc: &doc,
                 page: 1,
                 turns: 0,
+                crop: None,
             }],
         )
         .unwrap(),
@@ -154,7 +160,8 @@ fn a_split_off_page_stands_alone() {
             &[PageSource {
                 doc: &doc,
                 page: 3,
-                turns: 0
+                turns: 0,
+                crop: None
             }]
         )
         .err(),
@@ -172,6 +179,7 @@ fn a_composed_file_composes_again() {
                 doc,
                 page,
                 turns: turns[page],
+                crop: None,
             })
             .collect()
     };
@@ -199,6 +207,7 @@ fn a_composed_file_composes_again() {
             doc: &once,
             page,
             turns: 0,
+            crop: None,
         })
         .collect();
     let twice = Document::load(compose(Some(&once), &swapped).unwrap()).unwrap();
@@ -222,4 +231,38 @@ fn page_boxes_and_turns_are_read_through_the_tree() {
     assert_eq!(second.size(), (200.0, 300.0));
     assert_eq!(doc.page_info(2).unwrap().rotate, 270);
     assert!(doc.page_info(3).is_none());
+}
+
+#[test]
+fn pages_are_cropped_within_their_media_and_uncropped() {
+    let doc = three();
+    let crop = |doc: &Document, page, crop| {
+        Document::load(
+            compose(
+                Some(doc),
+                &[PageSource {
+                    doc,
+                    page,
+                    turns: 0,
+                    crop: Some(crop),
+                }],
+            )
+            .unwrap(),
+        )
+        .unwrap()
+    };
+    // Cut to the media box where it reaches past it.
+    let cropped = crop(&doc, 1, [10.0, 20.0, 400.0, 150.0]);
+    let info = cropped.page_info(0).unwrap();
+    assert_eq!(info.crop, [10.0, 20.0, 300.0, 150.0]);
+    assert_eq!(info.media, [0.0, 0.0, 300.0, 200.0]);
+    assert_eq!(info.size(), (130.0, 290.0));
+    // The media box uncrops.
+    let uncropped = crop(&cropped, 0, info.media);
+    assert_eq!(uncropped.page_info(0).unwrap().crop, info.media);
+    let page = uncropped.get(uncropped.pages()[0]).unwrap();
+    assert!(page.as_dict().unwrap().get("CropBox").is_none());
+    // Nothing left: the crop is not changed.
+    let none = crop(&cropped, 0, [500.0, 500.0, 600.0, 600.0]);
+    assert_eq!(none.page_info(0).unwrap().crop, info.crop);
 }

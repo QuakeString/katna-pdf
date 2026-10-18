@@ -907,7 +907,7 @@ fn ellipse(c: &mut String, b: [f32; 4]) {
     );
 }
 
-fn reals(values: &[f32]) -> Object {
+pub(crate) fn reals(values: &[f32]) -> Object {
     Object::Array(
         values
             .iter()
