@@ -7,8 +7,9 @@
 
 use std::path::Path;
 
-/// How printing went.
+/// How printing went. Windows only ever says there is no dialog.
 #[derive(Debug)]
+#[cfg_attr(windows, allow(dead_code))]
 pub enum Printed {
     /// Sent to the printer, or the dialog was closed.
     Done,
