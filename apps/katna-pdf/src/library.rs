@@ -38,6 +38,9 @@ const CELL_WIDTH: f32 = COVER + 2.0 * space::S3;
 const CELL_HEIGHT: f32 = COVER_BOX + 64.0;
 /// Covers kept drawn; beyond this the ones farthest from view are freed.
 const KEEP: usize = 240;
+/// How long a folder must be quiet after a change before it is read
+/// again, so a copy of many files is read once.
+const SETTLE: std::time::Duration = std::time::Duration::from_secs(2);
 /// Pages found by a search, at most.
 const HITS: usize = 40;
 const HITS_SHOWN: usize = 6;
@@ -101,6 +104,8 @@ pub struct LibraryView {
     grid: UniformListScrollHandle,
     /// The grid's width last frame, for how many covers a row holds.
     width: Rc<Cell<f32>>,
+    /// Watches the folders; dropped and made again when they change.
+    watcher: Option<notify::RecommendedWatcher>,
     _inputs: [Subscription; 2],
 }
 
@@ -158,9 +163,11 @@ impl LibraryView {
             tags_field,
             grid: UniformListScrollHandle::new(),
             width: Rc::new(Cell::new(800.0)),
+            watcher: None,
             _inputs: [searching, tagging],
         };
         this.reload(cx);
+        this.watch(cx);
         this
     }
 
@@ -173,6 +180,58 @@ impl LibraryView {
         window.focus(&self.search.focus_handle(cx), cx);
         self.reload(cx);
         self.scan(cx);
+    }
+
+    /// Watches the folders, to read them again when a PDF in them is
+    /// added, changed, moved or taken away.
+    fn watch(&mut self, cx: &mut Context<Self>) {
+        use notify::{EventKind, RecursiveMode, Watcher};
+        self.watcher = None;
+        let folders = self
+            .lib
+            .as_ref()
+            .ok()
+            .and_then(|lib| lib.folders().ok())
+            .unwrap_or_default();
+        if folders.is_empty() {
+            return;
+        }
+        let (sender, changes) = async_channel::unbounded();
+        let watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
+            let Ok(event) = event else {
+                return;
+            };
+            let pdf = event
+                .paths
+                .iter()
+                .any(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("pdf")));
+            // A folder moved or taken away may hold PDFs.
+            let gone = matches!(
+                event.kind,
+                EventKind::Remove(_) | EventKind::Modify(notify::event::ModifyKind::Name(_))
+            );
+            if (pdf || gone) && !matches!(event.kind, EventKind::Access(_)) {
+                let _ = sender.try_send(());
+            }
+        });
+        let Ok(mut watcher) = watcher else {
+            return;
+        };
+        for folder in &folders {
+            let _ = watcher.watch(folder, RecursiveMode::Recursive);
+        }
+        self.watcher = Some(watcher);
+        cx.spawn(async move |this, cx| {
+            // Ends when the watcher, and so its sender, is dropped.
+            while changes.recv().await.is_ok() {
+                cx.background_executor().timer(SETTLE).await;
+                while changes.try_recv().is_ok() {}
+                if this.update(cx, |this, cx| this.scan(cx)).is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
     }
 
     /// Reads the folders in the background; the grid fills in as it goes.
@@ -375,6 +434,7 @@ impl LibraryView {
                         }
                     }
                     this.reload(cx);
+                    this.watch(cx);
                     this.scan(cx);
                 })
                 .ok();
@@ -390,6 +450,7 @@ impl LibraryView {
         if self.place == Place::Folder(folder) {
             self.place = Place::All;
         }
+        self.watch(cx);
         self.reload(cx);
     }
 

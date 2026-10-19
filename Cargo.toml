@@ -82,6 +82,8 @@ zune-core = "0.5"
 # The library's catalog and full-text index (docs/PLAN.md §4.6): SQLite
 # with FTS5, at the version Katna uses.
 rusqlite = { version = "0.40", features = ["bundled"] }
+# Watched folders read again when their PDFs change (the library).
+notify = { version = "8", default-features = false, features = ["macos_fsevent"] }
 zune-jpeg = "0.5"
 hayro-ccitt = { version = "0.4", default-features = false }
 hayro-jbig2 = { version = "0.3", default-features = false, features = ["std", "simd"] }

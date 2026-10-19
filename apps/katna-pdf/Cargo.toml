@@ -12,6 +12,7 @@ publish.workspace = true
 katna-pdf-render.workspace = true
 katna-pdf-cos.workspace = true
 katna-pdf-library.workspace = true
+notify.workspace = true
 katna-pdf-sign.workspace = true
 katna-core.workspace = true
 jiff = { version = "0.2.37", default-features = false, features = ["std", "tz-system", "tzdb-zoneinfo", "tzdb-bundle-always"] }
