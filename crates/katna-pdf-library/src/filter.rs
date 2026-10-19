@@ -230,7 +230,11 @@ impl Filter {
             let folder = folder.replace('/', &sep.to_string());
             let folder = folder.trim_end_matches(sep);
             let exact = arg(Value::Text(folder.to_owned()), &mut args);
-            let below = arg(Value::Text(format!("{}{sep}%", escape(folder))), &mut args);
+            // The separator escaped too: on Windows it is LIKE's escape.
+            let below = arg(
+                Value::Text(format!("{}%", escape(&format!("{folder}{sep}")))),
+                &mut args,
+            );
             wheres.push(format!("(path = {exact} OR path LIKE {below} ESCAPE '\\')"));
         }
         let mut sql = String::from(
