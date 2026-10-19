@@ -9,7 +9,13 @@ repository.workspace = true
 publish.workspace = true
 
 [dependencies]
+aes.workspace = true
+cbc.workspace = true
 flate2.workspace = true
+md-5.workspace = true
+rand_core.workspace = true
+sha2.workspace = true
+unicode-normalization.workspace = true
 hayro-cmap.workspace = true
 phf.workspace = true
 

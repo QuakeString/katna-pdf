@@ -59,6 +59,14 @@ usage: katna-pdf-cli COMMAND [--json] ...
                                   text in a standard font (Helvetica, Times-Roman,
                                   Courier, -Bold and so on), its first baseline at X,Y;
                                   a line runs from L,B to R,T
+  lock FILE -o OUT [--user PW] [--owner PW] [--allow WHAT,…]
+                                  a password put on (AES-256): --user opens it (none:
+                                  anyone may), with only what --allow lets (print,
+                                  print-well, change, copy, comment, fill, assemble;
+                                  all without it); --owner opens it fully
+  unlock FILE -o OUT --owner PW   the password taken off, given the owner's
+                                  (any command opens a locked file with the password
+                                  in KATNA_PDF_OPEN_PASSWORD)
   meta FILE -o OUT [--title T] [--author A] [--subject S] [--keywords K]
        [--creator C] [--producer P]
                                   the document's properties changed (`info` shows
@@ -130,6 +138,8 @@ fn main() -> ExitCode {
         "insert" => insert(rest, json),
         "stamp" => stamp(rest, json),
         "meta" => meta(rest, json),
+        "lock" => lock(rest, json),
+        "unlock" => unlock(rest, json),
         "objects" => objects(rest, json),
         "object" => object(rest, json),
         "ltv" => ltv(rest, json),
@@ -240,6 +250,9 @@ impl<'a> Args<'a> {
                     | "--report"
                     | "--place"
                     | "--title"
+                    | "--user"
+                    | "--owner"
+                    | "--allow"
                     | "--author"
                     | "--subject"
                     | "--keywords"
@@ -305,9 +318,25 @@ impl<'a> Args<'a> {
     }
 }
 
+/// Opens a file; a locked one with the password in
+/// `KATNA_PDF_OPEN_PASSWORD`, when set.
 fn open(path: &str) -> Result<Document, Failure> {
+    open_with(
+        path,
+        std::env::var("KATNA_PDF_OPEN_PASSWORD").ok().as_deref(),
+    )
+}
+
+fn open_with(path: &str, password: Option<&str>) -> Result<Document, Failure> {
     let bytes = std::fs::read(path).map_err(|e| failed(format!("{path}: {e}")))?;
-    Document::load(bytes).map_err(|e| failed(format!("{path}: {e}")))
+    let mut doc = Document::load(bytes).map_err(|e| failed(format!("{path}: {e}")))?;
+    if let Some(password) = password
+        && doc.is_encrypted()
+    {
+        doc.unlock(password)
+            .map_err(|e| failed(format!("{path}: {e}")))?;
+    }
+    Ok(doc)
 }
 
 fn write(path: &Path, bytes: &[u8]) -> Result<(), Failure> {
@@ -1104,6 +1133,74 @@ fn number_option(
             .filter(|v| v.is_finite() && ok(*v))
             .ok_or_else(|| Failure::Usage(format!("{name} {v}: not a number it takes"))),
     }
+}
+
+/// Puts a password on a file.
+fn lock(args: &[String], json: bool) -> Done {
+    let args = Args::parse(args)?;
+    let [file] = args.words()?;
+    let out = args.output()?;
+    let doc = open(file)?;
+    let permissions = match args.option("--allow") {
+        None => katna_pdf_cos::Permissions::ALL,
+        Some(list) => {
+            let mut p = katna_pdf_cos::Permissions {
+                print: false,
+                print_well: false,
+                change: false,
+                copy: false,
+                comment: false,
+                fill_forms: false,
+                assemble: false,
+            };
+            for what in list.split(',').map(str::trim).filter(|w| !w.is_empty()) {
+                match what {
+                    "print" => p.print = true,
+                    "print-well" => {
+                        p.print = true;
+                        p.print_well = true;
+                    }
+                    "change" => p.change = true,
+                    "copy" => p.copy = true,
+                    "comment" => p.comment = true,
+                    "fill" => p.fill_forms = true,
+                    "assemble" => p.assemble = true,
+                    _ => {
+                        return Err(Failure::Usage(format!(
+                            "--allow {what}: print, print-well, change, copy, comment, \
+                             fill or assemble"
+                        )));
+                    }
+                }
+            }
+            p
+        }
+    };
+    let user = args.option("--user").unwrap_or("");
+    let owner = args.option("--owner").unwrap_or("");
+    if user.is_empty() && owner.is_empty() && args.option("--allow").is_none() {
+        return Err(Failure::Usage(
+            "lock needs --user, --owner or --allow".into(),
+        ));
+    }
+    let bytes = doc
+        .lock(user, owner, permissions)
+        .map_err(|e| failed(format!("{file}: {e}")))?;
+    write(&out, &bytes)?;
+    Ok(wrote(&[(out, doc.pages().len())], json))
+}
+
+/// Takes a file's password off.
+fn unlock(args: &[String], json: bool) -> Done {
+    let args = Args::parse(args)?;
+    let [file] = args.words()?;
+    let out = args.output()?;
+    let doc = open_with(file, args.option("--owner"))?;
+    let bytes = doc
+        .without_lock()
+        .map_err(|e| failed(format!("{file}: {e}")))?;
+    write(&out, &bytes)?;
+    Ok(wrote(&[(out, doc.pages().len())], json))
 }
 
 /// Changes the document's properties.

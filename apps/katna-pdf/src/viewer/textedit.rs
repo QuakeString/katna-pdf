@@ -92,6 +92,7 @@ impl Viewer {
     /// Reads page `page`'s paragraphs in the background, from the file as
     /// changed so far.
     fn read_runs(&mut self, page: usize, cx: &mut Context<Self>) {
+        let key = self.key.clone();
         if self.runs.pages.contains_key(&page) || !self.runs.reading.insert(page) {
             return;
         }
@@ -108,7 +109,7 @@ impl Viewer {
                         Some(bytes) => bytes.to_vec(),
                         None => std::fs::read(&path).ok()?,
                     };
-                    let doc = katna_pdf_cos::Document::load(bytes).ok()?;
+                    let doc = super::cos(bytes, key.as_deref()).ok()?;
                     Some((doc.text_blocks(page), doc.page_objects(page)))
                 })
                 .await;
@@ -253,6 +254,22 @@ impl Viewer {
         change: impl FnOnce(&katna_pdf_cos::Document) -> Result<Vec<u8>, String> + Send + 'static,
         cx: &mut Context<Self>,
     ) {
+        let key = self.key.clone();
+        self.change_document_keyed(pages, failed, key, change, cx);
+    }
+
+    /// As [`Viewer::change_document`], the changed file opening with
+    /// password `after` (one just put on, or none once taken off).
+    pub(super) fn change_document_keyed(
+        &mut self,
+        pages: Vec<usize>,
+        failed: &'static str,
+        after: Option<Arc<str>>,
+        change: impl FnOnce(&katna_pdf_cos::Document) -> Result<Vec<u8>, String> + Send + 'static,
+        cx: &mut Context<Self>,
+    ) {
+        let key = self.key.clone();
+        let kept = after.clone();
         let (Some(path), Content::Ready(_)) = (self.path.clone(), &self.content) else {
             return;
         };
@@ -268,13 +285,13 @@ impl Viewer {
                         Some(bytes) => bytes.to_vec(),
                         None => std::fs::read(&path).map_err(|e| e.to_string())?,
                     };
-                    let base = katna_pdf_cos::Document::load(bytes).map_err(|e| e.to_string())?;
+                    let base = super::cos(bytes, key.as_deref()).map_err(|e| e.to_string())?;
                     let out = Arc::new(change(&base)?);
                     let doc = crate::engine::engine()
-                        .open(out.clone(), "")
+                        .open(out.clone(), after.as_deref().unwrap_or(""))
                         .map_err(|e| e.to_string())?;
                     let cos =
-                        katna_pdf_cos::Document::load(out.to_vec()).map_err(|e| e.to_string())?;
+                        super::cos(out.to_vec(), after.as_deref()).map_err(|e| e.to_string())?;
                     Ok::<_, String>((out, doc, cos))
                 })
                 .await;
@@ -284,6 +301,7 @@ impl Viewer {
                 }
                 match written {
                     Ok((bytes, doc, cos)) => {
+                        this.key = kept;
                         this.forget_runs();
                         this.show_annotated(bytes, doc, cos, &pages, None);
                     }

@@ -91,6 +91,17 @@ actions!(
     ]
 );
 
+/// Our object layer's copy of `bytes`, a locked file opened with `key`.
+pub(crate) fn cos(bytes: Vec<u8>, key: Option<&str>) -> Result<katna_pdf_cos::Document, String> {
+    let mut doc = katna_pdf_cos::Document::load(bytes).map_err(|e| e.to_string())?;
+    if let Some(key) = key
+        && doc.is_locked()
+    {
+        doc.unlock(key).map_err(|e| e.to_string())?;
+    }
+    Ok(doc)
+}
+
 /// Pages drawn at once.
 const WORKERS: usize = 3;
 /// Requests waiting beyond this many are dropped, oldest first.
@@ -281,6 +292,9 @@ pub struct Viewer {
     /// the keys in it on the next frame.
     password: Option<(Entity<TextInput>, Subscription)>,
     focus_password: bool,
+    /// The password the file was opened with, for our object layer's
+    /// copies too.
+    key: Option<Arc<str>>,
     /// A line shown under the toolbar until dismissed, such as why
     /// printing failed.
     notice: Option<String>,
@@ -415,6 +429,7 @@ impl Viewer {
             search: None,
             password: None,
             focus_password: false,
+            key: None,
             notice: None,
             close_warned: None,
             selection: None,
@@ -520,6 +535,7 @@ impl Viewer {
     fn open_with(&mut self, path: PathBuf, password: String, cx: &mut Context<Self>) {
         let name = file_name(&path);
         let tried = !password.is_empty();
+        self.key = tried.then(|| Arc::from(password.as_str()));
         self.path = Some(path.clone());
         self.generation += 1;
         let generation = self.generation;
@@ -646,6 +662,7 @@ impl Viewer {
     /// held while the first page is drawn. The pane opens by itself when
     /// the file asks for it (`/PageMode /UseOutlines`).
     fn read_outline(&mut self, path: PathBuf, generation: u64, cx: &mut Context<Self>) {
+        let key = self.key.clone();
         let again = path.clone();
         cx.spawn(async move |this, cx| {
             let (outline, show, links, form, annots, signatures, signable) = cx
@@ -653,7 +670,7 @@ impl Viewer {
                 .spawn(async move {
                     let Some(doc) = std::fs::read(&path)
                         .ok()
-                        .and_then(|bytes| katna_pdf_cos::Document::load(bytes).ok())
+                        .and_then(|bytes| cos(bytes, key.as_deref()).ok())
                     else {
                         return (
                             Vec::new(),
@@ -712,11 +729,12 @@ impl Viewer {
     /// Checks the signatures of `path` further, over the network: their
     /// issuers fetched, and whether their certificates were revoked.
     fn check_signatures_online(&mut self, path: PathBuf, generation: u64, cx: &mut Context<Self>) {
+        let key = self.key.clone();
         cx.spawn(async move |this, cx| {
             let rows = cx
                 .background_executor()
                 .spawn(async move {
-                    let doc = katna_pdf_cos::Document::load(std::fs::read(&path).ok()?).ok()?;
+                    let doc = cos(std::fs::read(&path).ok()?, key.as_deref()).ok()?;
                     Some(sign::check_online(&doc))
                 })
                 .await;
@@ -1751,13 +1769,14 @@ impl Viewer {
         let mine = form.generation;
         let pages = form.pages_of(field);
         let generation = self.generation;
+        let key = self.key.clone();
         cx.spawn(async move |this, cx| {
             let filled = cx
                 .background_executor()
                 .spawn(async move {
                     let bytes = Arc::new(source.fill(&changes).map_err(|e| e.to_string())?);
                     let doc = crate::engine::engine()
-                        .open(bytes.clone(), "")
+                        .open(bytes.clone(), key.as_deref().unwrap_or(""))
                         .map_err(|e| e.to_string())?;
                     Ok::<_, String>((bytes, doc))
                 })
@@ -1932,6 +1951,7 @@ impl Viewer {
 
     /// Asks where to save the pages picked as a file of their own.
     fn choose_extract(&mut self, cx: &mut Context<Self>) {
+        let key = self.key.clone();
         let Some(path) = self.path.clone() else {
             return;
         };
@@ -1958,7 +1978,7 @@ impl Viewer {
                         Some(bytes) => bytes.to_vec(),
                         None => std::fs::read(&path).map_err(|e| e.to_string())?,
                     };
-                    let doc = katna_pdf_cos::Document::load(bytes).map_err(|e| e.to_string())?;
+                    let doc = cos(bytes, key.as_deref()).map_err(|e| e.to_string())?;
                     let sources: Vec<_> = pages
                         .iter()
                         .map(|&page| katna_pdf_cos::PageSource {
@@ -1988,6 +2008,7 @@ impl Viewer {
     /// Writes the file with its pages changed, off the UI thread, and
     /// shows it; `picked` are the pages picked afterwards.
     fn change_pages(&mut self, change: Pages, picked: BTreeSet<usize>, cx: &mut Context<Self>) {
+        let key = self.key.clone();
         self.finish_typing(true, cx);
         let (Some(path), Content::Ready(opened)) = (self.path.clone(), &self.content) else {
             return;
@@ -2013,7 +2034,7 @@ impl Viewer {
                         Some(bytes) => bytes.to_vec(),
                         None => std::fs::read(&path).map_err(|e| e.to_string())?,
                     };
-                    let base = katna_pdf_cos::Document::load(bytes).map_err(|e| e.to_string())?;
+                    let base = cos(bytes, key.as_deref()).map_err(|e| e.to_string())?;
                     let (order, other, crop) = match change {
                         Pages::Order(order) => (order, None, None),
                         Pages::Crop { pages, crop } => {
@@ -2056,10 +2077,9 @@ impl Viewer {
                         katna_pdf_cos::compose(Some(&base), &sources).map_err(|e| e.to_string())?;
                     let bytes = Arc::new(out);
                     let doc = crate::engine::engine()
-                        .open(bytes.clone(), "")
+                        .open(bytes.clone(), key.as_deref().unwrap_or(""))
                         .map_err(|e| e.to_string())?;
-                    let cos =
-                        katna_pdf_cos::Document::load(bytes.to_vec()).map_err(|e| e.to_string())?;
+                    let cos = cos(bytes.to_vec(), key.as_deref()).map_err(|e| e.to_string())?;
                     Ok::<_, String>((bytes, doc, cos))
                 })
                 .await;
@@ -2172,6 +2192,7 @@ impl Viewer {
     /// Writes the changed file (a form filled in, pages changed) over
     /// the file opened.
     fn save(&mut self, cx: &mut Context<Self>) {
+        let key = self.key.clone();
         self.finish_typing(true, cx);
         let Some(path) = self.path.clone() else {
             return;
@@ -2190,7 +2211,7 @@ impl Viewer {
                 .background_executor()
                 .spawn(async move {
                     save_over(&path, &bytes).map_err(|e| e.to_string())?;
-                    katna_pdf_cos::Document::load(bytes.to_vec()).map_err(|e| e.to_string())
+                    cos(bytes.to_vec(), key.as_deref()).map_err(|e| e.to_string())
                 })
                 .await;
             this.update(cx, |this, cx| {

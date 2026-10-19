@@ -76,10 +76,10 @@ pub enum FieldValue {
 }
 
 impl Document {
-    /// The form's fields, or nothing if the file has no form. Encrypted
-    /// files' forms cannot be read yet.
+    /// The form's fields, or nothing if the file has no form, or is locked
+    /// and not opened with its password.
     pub fn form(&self) -> Vec<Field> {
-        if self.is_encrypted() {
+        if self.is_locked() {
             return Vec::new();
         }
         let Some(form) = self.acro_form() else {

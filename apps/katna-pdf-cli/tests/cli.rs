@@ -775,3 +775,39 @@ fn properties_are_changed() {
     assert!(!text.contains("Asha"), "{text}");
     assert!(text.contains("Minutes – Monday"), "{text}");
 }
+
+#[test]
+fn a_password_is_put_on_and_taken_off() {
+    let d = dir("lock");
+    let file = d.join("note.pdf");
+    std::fs::write(
+        &file,
+        katna_pdf_cos::text_pdf("Note", &["  Hello".to_string()]),
+    )
+    .unwrap();
+    let locked = d.join("locked.pdf");
+    let (code, out) = run(&[
+        "lock",
+        s(&file),
+        "-o",
+        s(&locked),
+        "--user",
+        "asha",
+        "--owner",
+        "boss",
+        "--allow",
+        "print,copy",
+    ]);
+    assert_eq!(code, 0, "{out}");
+    let (_, out) = run(&["text", s(&locked)]);
+    assert!(!out.contains("Hello"), "{out}");
+    let open = d.join("open.pdf");
+    let (code, out) = run(&["unlock", s(&locked), "-o", s(&open), "--owner", "asha"]);
+    assert_ne!(code, 0, "{out}");
+    let (code, out) = run(&["unlock", s(&locked), "-o", s(&open), "--owner", "boss"]);
+    assert_eq!(code, 0, "{out}");
+    let (_, out) = run(&["text", s(&open)]);
+    assert!(out.contains("Hello"), "{out}");
+    let (code, _) = run(&["lock", s(&file), "-o", s(&open), "--allow", "fly"]);
+    assert_ne!(code, 0);
+}

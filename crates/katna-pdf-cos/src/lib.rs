@@ -6,10 +6,12 @@
 //! updates that leave the original bytes untouched, as signing needs.
 //!
 //! It knows objects, not pages' looks: drawing stays with the renderer.
-//! v0 reads encrypted files' structure but cannot decrypt or update them.
+//! Locked files open with their password (an empty one is tried first);
+//! updates to them are locked with the same key.
 
 mod annots;
 mod content;
+mod crypt;
 mod document;
 mod dss;
 mod edit;
@@ -18,6 +20,7 @@ mod fonts;
 mod forms;
 mod insert;
 mod links;
+mod lock;
 mod mdp;
 mod meta;
 mod object;
@@ -36,6 +39,7 @@ pub use annots::{
     AnnotChanges, AnnotKind, Annotation, MarkupStyle, NOTE_SIZE, pdf_date, stamp_label,
 };
 pub use content::{Op, ops};
+pub use crypt::{Permissions, UnlockError};
 pub use document::{Document, Entry, LoadError, XrefKind};
 pub use dss::Dss;
 pub use edit::{EditError, TextBlock, TextRun};
@@ -43,6 +47,7 @@ pub use filter::{FilterError, decode};
 pub use forms::{Field, FieldKind, FieldValue, Widget};
 pub use insert::{Image, Insert, ShapeKind};
 pub use links::{Link, LinkTarget};
+pub use lock::LockError;
 pub use mdp::{Allowed, Change, Lock};
 pub use meta::Metadata;
 pub use object::{Dict, Name, Object, Ref, Stream};

@@ -27,10 +27,10 @@ pub enum LinkTarget {
 
 impl Document {
     /// Each page's links, in page order.
-    /// Encrypted files' addresses cannot be read yet, so they have none.
+    /// A locked file not opened with its password has none.
     pub fn links(&self) -> Vec<Vec<Link>> {
         let pages = self.pages();
-        if self.is_encrypted() {
+        if self.is_locked() {
             return vec![Vec::new(); pages.len()];
         }
         let Some(catalog) = self.catalog() else {
