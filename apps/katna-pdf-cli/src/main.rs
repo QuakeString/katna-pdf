@@ -10,8 +10,8 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use katna_pdf_cos::{
-    Allowed, AnnotKind, Change, Coverage, Document, Lock, Object, PageSource, Placement,
-    SignRequest, SigningInfo, compose, text_string,
+    Allowed, AnnotKind, Change, Coverage, Document, FieldEdit, FieldSpec, FormDesign, Lock,
+    NewField, Object, PageSource, Placement, SignRequest, SigningInfo, compose, text_string,
 };
 use katna_pdf_sign::{Digest, Revocation, Signer, Trust, common_name, p12, pkcs11};
 
@@ -93,6 +93,17 @@ usage: katna-pdf-cli COMMAND [--json] ...
   object FILE PAGE:OBJECT -o OUT (--rect L,B,R,T | --delete)
                                   a picture or shape moved and resized to fill the box,
                                   or taken out of the page
+  form FILE -o OUT [--add KIND:PAGE:L,B,R,T:NAME]... [--tip NAME=TEXT]...
+       [--required NAME]... [--optional NAME]... [--read-only NAME]...
+       [--rename NAME=NEW]... [--move NAME:L,B,R,T]... [--copy NAME:PAGES]...
+       [--remove NAME]... [--order PAGE:NAME,NAME,...]...
+                                  the form designed: fields added (KIND text, multiline,
+                                  password, check, radio=CHOICE, combo=A;B;C,
+                                  list=A;B;C, button=CAPTION or signature; radio
+                                  buttons with one NAME are one group), their tips and
+                                  flags set, renamed, moved, shown on more pages too,
+                                  taken out, and the order Tab goes through a page's
+                                  fields set
   add-field FILE -o OUT --rect L,B,R,T [--page N] [--name NAME]
                                   an empty signature field, for someone to sign later
   ltv FILE -o OUT [--trust PATH] [--tsa URL]
@@ -143,6 +154,7 @@ fn main() -> ExitCode {
         "sign" => sign(rest, json),
         "verify" => verify(rest, json),
         "add-field" => add_field(rest, json),
+        "form" => form(rest, json),
         "insert" => insert(rest, json),
         "stamp" => stamp(rest, json),
         "meta" => meta(rest, json),
@@ -276,6 +288,16 @@ impl<'a> Args<'a> {
                     | "--area"
                     | "--find"
                     | "--words"
+                    | "--add"
+                    | "--tip"
+                    | "--required"
+                    | "--optional"
+                    | "--read-only"
+                    | "--rename"
+                    | "--move"
+                    | "--copy"
+                    | "--remove"
+                    | "--order"
             ) {
                 let Some(value) = it.next() else {
                     return Err(Failure::Usage(format!("{a} needs a value")));
@@ -1515,6 +1537,190 @@ fn object(args: &[String], json: bool) -> Done {
     .map_err(|e| failed(format!("{file}: {e}")))?;
     write(&out, &bytes)?;
     Ok(wrote(&[(out, doc.pages().len())], json))
+}
+
+/// Designs the form: adds, changes, moves, copies, removes and orders
+/// fields.
+fn form(args: &[String], json: bool) -> Done {
+    let args = Args::parse(args)?;
+    let [file] = args.words()?;
+    let out = args.output()?;
+    let doc = open(file)?;
+    let count = doc.pages().len();
+    let fields = doc.form();
+    let page_of = |p: &str| {
+        p.parse::<usize>()
+            .ok()
+            .filter(|p| (1..=count).contains(p))
+            .map(|p| p - 1)
+            .ok_or_else(|| Failure::Usage(format!("{p}: no such page")))
+    };
+    let mut design = FormDesign::default();
+    for add in args.all("--add") {
+        let bad = || Failure::Usage(format!("--add {add}: KIND:PAGE:L,B,R,T:NAME"));
+        let mut parts = add.splitn(4, ':');
+        let (Some(kind), Some(page), Some(rect), Some(name)) =
+            (parts.next(), parts.next(), parts.next(), parts.next())
+        else {
+            return Err(bad());
+        };
+        let (kind, arg) = kind.split_once('=').unwrap_or((kind, ""));
+        let options = || arg.split(';').map(str::to_owned).collect::<Vec<_>>();
+        let text = |multiline, password| NewField::Text {
+            multiline,
+            password,
+            max_len: None,
+        };
+        let kind = match kind {
+            "text" => text(false, false),
+            "multiline" => text(true, false),
+            "password" => text(false, true),
+            "check" => NewField::CheckBox,
+            "radio" if !arg.is_empty() => NewField::Radio {
+                choice: arg.to_owned(),
+            },
+            "combo" | "list" if !arg.is_empty() => NewField::Choice {
+                options: options(),
+                combo: kind == "combo",
+                editable: false,
+            },
+            "button" => NewField::PushButton {
+                caption: arg.to_owned(),
+            },
+            "signature" => NewField::Signature,
+            _ => return Err(bad()),
+        };
+        design.add.push(FieldSpec {
+            page: page_of(page)?,
+            rect: parse_rect(rect)?,
+            name: name.to_owned(),
+            kind,
+            tooltip: String::new(),
+            required: false,
+            read_only: false,
+            value: None,
+        });
+    }
+    let field = |name: &str| {
+        fields
+            .iter()
+            .find(|f| f.name == name)
+            .ok_or_else(|| failed(format!("{file}: no field named {name}")))
+    };
+    let mut edits: Vec<FieldEdit> = Vec::new();
+    // A change to a field added here goes into what is added.
+    let mut change =
+        |name: &str, how: &dyn Fn(&mut FieldSpec, &mut FieldEdit)| -> Result<(), Failure> {
+            let mut scratch = FieldEdit::new(katna_pdf_cos::Ref::new(0, 0));
+            let mut added = false;
+            for spec in design.add.iter_mut().filter(|s| s.name == name) {
+                how(spec, &mut scratch);
+                added = true;
+            }
+            if added {
+                return Ok(());
+            }
+            let id = field(name)?.id;
+            let at = match edits.iter().position(|e| e.field == id) {
+                Some(i) => i,
+                None => {
+                    edits.push(FieldEdit::new(id));
+                    edits.len() - 1
+                }
+            };
+            let mut spec = FieldSpec {
+                page: 0,
+                rect: [0.0; 4],
+                name: String::new(),
+                kind: NewField::Signature,
+                tooltip: String::new(),
+                required: false,
+                read_only: false,
+                value: None,
+            };
+            how(&mut spec, &mut edits[at]);
+            Ok(())
+        };
+    for tip in args.all("--tip") {
+        let (name, text) = tip
+            .split_once('=')
+            .ok_or_else(|| Failure::Usage(format!("--tip {tip}: NAME=TEXT")))?;
+        change(name, &|s, e| {
+            s.tooltip = text.to_owned();
+            e.tooltip = Some(text.to_owned());
+        })?;
+    }
+    for name in args.all("--required") {
+        change(name, &|s, e| {
+            s.required = true;
+            e.required = Some(true);
+        })?;
+    }
+    for name in args.all("--optional") {
+        change(name, &|s, e| {
+            s.required = false;
+            e.required = Some(false);
+        })?;
+    }
+    for name in args.all("--read-only") {
+        change(name, &|s, e| {
+            s.read_only = true;
+            e.read_only = Some(true);
+        })?;
+    }
+    for rename in args.all("--rename") {
+        let (name, new) = rename
+            .split_once('=')
+            .ok_or_else(|| Failure::Usage(format!("--rename {rename}: NAME=NEW")))?;
+        change(name, &|s, e| {
+            s.name = new.to_owned();
+            e.name = Some(new.to_owned());
+        })?;
+    }
+    design.edit = edits;
+    for item in args.all("--move") {
+        let (name, rect) = item
+            .rsplit_once(':')
+            .ok_or_else(|| Failure::Usage(format!("--move {item}: NAME:L,B,R,T")))?;
+        let f = field(name)?;
+        let widget = f
+            .widgets
+            .first()
+            .ok_or_else(|| failed(format!("{name} is not shown")))?;
+        design.place.push((widget.id, parse_rect(rect)?));
+    }
+    for item in args.all("--copy") {
+        let (name, pages) = item
+            .rsplit_once(':')
+            .ok_or_else(|| Failure::Usage(format!("--copy {item}: NAME:PAGES")))?;
+        let pages = ranges::parse(pages, count).map_err(failed)?;
+        design.copy.push((field(name)?.id, pages));
+    }
+    for name in args.all("--remove") {
+        design.remove.push(field(name)?.id);
+    }
+    for item in args.all("--order") {
+        let (page, names) = item
+            .split_once(':')
+            .ok_or_else(|| Failure::Usage(format!("--order {item}: PAGE:NAME,NAME,...")))?;
+        let page = page_of(page)?;
+        let mut widgets = Vec::new();
+        for name in names.split(',') {
+            widgets.extend(
+                field(name)?
+                    .widgets
+                    .iter()
+                    .filter(|w| w.page == page)
+                    .map(|w| w.id),
+            );
+        }
+        design.order.push((page, widgets));
+    }
+    let bytes = doc
+        .design_form(&design)
+        .map_err(|e| failed(format!("{file}: {e}")))?;
+    write(&out, &bytes)?;
+    Ok(wrote(&[(out, count)], json))
 }
 
 /// Adds an empty signature field, for someone to sign later.

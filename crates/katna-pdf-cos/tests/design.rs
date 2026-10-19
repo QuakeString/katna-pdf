@@ -1,0 +1,333 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+//! Designing forms: fields added, changed, moved, copied, taken out and
+//! put in Tab order, and still fillable afterwards.
+
+use katna_pdf_cos::{
+    Document, FieldEdit, FieldKind, FieldSpec, FieldValue, FormDesign, FormError, NewField, Object,
+    text_pdf,
+};
+
+/// A blank file of `pages` pages.
+fn blank(pages: usize) -> Document {
+    let lines: Vec<String> = (0..pages * 60).map(|i| format!("line {i}")).collect();
+    let doc = Document::load(text_pdf("Form", &lines)).unwrap();
+    assert!(doc.pages().len() >= pages);
+    doc
+}
+
+fn spec(page: usize, y: f32, name: &str, kind: NewField) -> FieldSpec {
+    FieldSpec {
+        page,
+        rect: [100.0, y, 250.0, y + 20.0],
+        name: name.into(),
+        kind,
+        tooltip: String::new(),
+        required: false,
+        read_only: false,
+        value: None,
+    }
+}
+
+fn every_kind() -> Vec<FieldSpec> {
+    let mut name = spec(
+        0,
+        700.0,
+        "Name",
+        NewField::Text {
+            multiline: false,
+            password: false,
+            max_len: Some(40),
+        },
+    );
+    name.tooltip = "Your full name".into();
+    name.required = true;
+    let mut agree = spec(0, 660.0, "Agree", NewField::CheckBox);
+    agree.rect = [100.0, 660.0, 114.0, 674.0];
+    let mut yes = spec(
+        0,
+        620.0,
+        "Answer",
+        NewField::Radio {
+            choice: "Yes".into(),
+        },
+    );
+    yes.rect = [100.0, 620.0, 114.0, 634.0];
+    yes.value = Some(String::new());
+    let mut no = spec(
+        0,
+        620.0,
+        "Answer",
+        NewField::Radio {
+            choice: "No".into(),
+        },
+    );
+    no.rect = [140.0, 620.0, 154.0, 634.0];
+    let options = vec!["Delhi".to_string(), "Kolkata".into(), "Pune".into()];
+    let mut city = spec(
+        0,
+        580.0,
+        "City",
+        NewField::Choice {
+            options: options.clone(),
+            combo: true,
+            editable: false,
+        },
+    );
+    city.value = Some("Pune".into());
+    let mut list = spec(
+        0,
+        480.0,
+        "Cities",
+        NewField::Choice {
+            options,
+            combo: false,
+            editable: false,
+        },
+    );
+    list.rect = [100.0, 480.0, 250.0, 540.0];
+    vec![
+        name,
+        agree,
+        yes,
+        no,
+        city,
+        list,
+        spec(
+            0,
+            440.0,
+            "Send",
+            NewField::PushButton {
+                caption: "Send".into(),
+            },
+        ),
+        spec(0, 380.0, "Signature", NewField::Signature),
+    ]
+}
+
+fn designed(doc: &Document, design: &FormDesign) -> Document {
+    Document::load(doc.design_form(design).unwrap()).unwrap()
+}
+
+#[test]
+fn every_kind_of_field_is_added_and_fillable() {
+    let doc = designed(
+        &blank(1),
+        &FormDesign {
+            add: every_kind(),
+            ..FormDesign::default()
+        },
+    );
+    let form = doc.form();
+    let names: Vec<&str> = form.iter().map(|f| f.name.as_str()).collect();
+    assert_eq!(
+        names,
+        [
+            "Name",
+            "Agree",
+            "Answer",
+            "City",
+            "Cities",
+            "Send",
+            "Signature"
+        ]
+    );
+    let name = &form[0];
+    assert!(matches!(
+        name.kind,
+        FieldKind::Text {
+            max_len: Some(40),
+            ..
+        }
+    ));
+    assert!(name.required);
+    assert_eq!(name.tooltip.as_deref(), Some("Your full name"));
+    let answer = &form[2];
+    assert_eq!(answer.kind, FieldKind::Radio);
+    assert_eq!(answer.widgets.len(), 2);
+    assert_eq!(answer.value.as_deref(), Some("Yes"));
+    let ons: Vec<_> = answer.widgets.iter().map(|w| w.on.clone()).collect();
+    assert_eq!(ons, [Some("Yes".into()), Some("No".into())]);
+    assert_eq!(form[1].kind, FieldKind::CheckBox);
+    assert_eq!(form[1].widgets[0].on.as_deref(), Some("Yes"));
+    assert!(matches!(
+        form[3].kind,
+        FieldKind::Choice { combo: true, .. }
+    ));
+    assert_eq!(form[3].value.as_deref(), Some("Pune"));
+    assert!(matches!(
+        form[4].kind,
+        FieldKind::Choice { combo: false, .. }
+    ));
+    assert_eq!(form[5].kind, FieldKind::PushButton);
+    assert_eq!(form[6].kind, FieldKind::Signature);
+    // Every widget is on the page and has an appearance.
+    for f in &form {
+        for w in &f.widgets {
+            assert_eq!(w.page, 0);
+            let Some(Object::Dict(d)) = doc.get(w.id) else {
+                panic!()
+            };
+            assert!(d.get("AP").is_some(), "{}", f.name);
+        }
+    }
+    // Filled like any other form.
+    let filled = Document::load(
+        doc.fill(&[
+            (form[0].id, FieldValue::Text("Asha Rao".into())),
+            (form[1].id, FieldValue::State(Some("Yes".into()))),
+            (form[2].id, FieldValue::State(Some("No".into()))),
+        ])
+        .unwrap(),
+    )
+    .unwrap();
+    let form = filled.form();
+    assert_eq!(form[0].value.as_deref(), Some("Asha Rao"));
+    assert_eq!(form[1].value.as_deref(), Some("Yes"));
+    assert_eq!(form[2].value.as_deref(), Some("No"));
+}
+
+#[test]
+fn fields_are_changed_moved_and_taken_out() {
+    let doc = designed(
+        &blank(1),
+        &FormDesign {
+            add: every_kind(),
+            ..FormDesign::default()
+        },
+    );
+    let form = doc.form();
+    let mut rename = FieldEdit::new(form[0].id);
+    rename.name = Some("FullName".into());
+    rename.tooltip = Some(String::new());
+    rename.required = Some(false);
+    rename.read_only = Some(true);
+    rename.multiline = Some(true);
+    let mut cities = FieldEdit::new(form[4].id);
+    cities.options = Some(vec!["Chennai".into()]);
+    let changed = designed(
+        &doc,
+        &FormDesign {
+            edit: vec![rename, cities],
+            place: vec![(form[5].widgets[0].id, [300.0, 300.0, 400.0, 330.0])],
+            remove: vec![form[2].id],
+            ..FormDesign::default()
+        },
+    );
+    let after = changed.form();
+    assert_eq!(after.len(), form.len() - 1);
+    assert!(after.iter().all(|f| f.name != "Answer"));
+    let name = &after[0];
+    assert_eq!(name.name, "FullName");
+    assert!(name.read_only && !name.required);
+    assert_eq!(name.tooltip, None);
+    assert!(matches!(
+        name.kind,
+        FieldKind::Text {
+            multiline: true,
+            ..
+        }
+    ));
+    let list = after.iter().find(|f| f.name == "Cities").unwrap();
+    assert_eq!(
+        list.kind,
+        FieldKind::Choice {
+            options: vec!["Chennai".into()],
+            combo: false
+        }
+    );
+    let send = after.iter().find(|f| f.name == "Send").unwrap();
+    assert_eq!(send.widgets[0].rect, [300.0, 300.0, 400.0, 330.0]);
+    // The radio buttons left the page too.
+    let page = changed.get(changed.pages()[0]).unwrap();
+    let annots = match changed.resolve(page.as_dict().unwrap().get("Annots").unwrap()) {
+        Object::Array(a) => a,
+        _ => panic!(),
+    };
+    for w in &form[2].widgets {
+        assert!(!annots.contains(&Object::Ref(w.id)));
+    }
+    // A name another field has is refused.
+    let mut clash = FieldEdit::new(after[0].id);
+    clash.name = Some("City".into());
+    assert_eq!(
+        changed.design_form(&FormDesign {
+            edit: vec![clash],
+            ..FormDesign::default()
+        }),
+        Err(FormError::NameTaken("City".into()))
+    );
+    let other = spec(0, 100.0, "City", NewField::CheckBox);
+    assert_eq!(
+        changed.design_form(&FormDesign {
+            add: vec![other],
+            ..FormDesign::default()
+        }),
+        Err(FormError::NameTaken("City".into()))
+    );
+}
+
+#[test]
+fn fields_are_copied_to_other_pages_and_ordered() {
+    let doc = blank(2);
+    let text = NewField::Text {
+        multiline: false,
+        password: false,
+        max_len: None,
+    };
+    let doc = designed(
+        &doc,
+        &FormDesign {
+            add: vec![
+                spec(0, 700.0, "Ref", text.clone()),
+                spec(0, 600.0, "Second", text.clone()),
+                spec(0, 500.0, "Third", text.clone()),
+            ],
+            ..FormDesign::default()
+        },
+    );
+    let form = doc.form();
+    let copied = designed(
+        &doc,
+        &FormDesign {
+            copy: vec![(form[0].id, vec![1])],
+            order: vec![(
+                0,
+                vec![
+                    form[2].widgets[0].id,
+                    form[0].widgets[0].id,
+                    form[1].widgets[0].id,
+                ],
+            )],
+            ..FormDesign::default()
+        },
+    );
+    let after = copied.form();
+    let field = after.iter().find(|f| f.name == "Ref").unwrap();
+    let pages: Vec<usize> = field.widgets.iter().map(|w| w.page).collect();
+    assert_eq!(pages, [0, 1]);
+    assert_eq!(field.widgets[0].rect, field.widgets[1].rect);
+    // One value, shown on both pages.
+    let filled = Document::load(
+        copied
+            .fill(&[(field.id, FieldValue::Text("K-12".into()))])
+            .unwrap(),
+    )
+    .unwrap();
+    let field = filled.form().into_iter().find(|f| f.name == "Ref").unwrap();
+    assert_eq!(field.value.as_deref(), Some("K-12"));
+    // Tab goes Third, then Ref (its widget now a kid), then Second.
+    let page = copied.get(copied.pages()[0]).unwrap();
+    let annots: Vec<Object> = match copied.resolve(page.as_dict().unwrap().get("Annots").unwrap()) {
+        Object::Array(a) => a,
+        _ => panic!(),
+    };
+    let ids: Vec<Object> = [
+        after.iter().find(|f| f.name == "Third").unwrap().widgets[0].id,
+        after.iter().find(|f| f.name == "Ref").unwrap().widgets[0].id,
+        after.iter().find(|f| f.name == "Second").unwrap().widgets[0].id,
+    ]
+    .map(Object::Ref)
+    .to_vec();
+    assert_eq!(annots, ids);
+}

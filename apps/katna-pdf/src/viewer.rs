@@ -35,6 +35,7 @@ use katna_ui::{ScrollBar, px, unpx};
 
 mod annots;
 mod crop;
+mod design;
 mod insert;
 mod marks;
 mod objects;
@@ -336,6 +337,8 @@ pub struct Viewer {
     marking: Option<marks::Marking>,
     /// The redact tool, while in hand, and the areas it marked.
     redacting: Option<redact::Redacting>,
+    /// The form tool, while in hand.
+    designing: Option<design::Designing>,
     properties: Option<properties::Properties>,
     moving: Option<objects::Moving>,
     tool: Option<Tool>,
@@ -454,6 +457,7 @@ impl Viewer {
             picked_object: None,
             marking: None,
             redacting: None,
+            designing: None,
             properties: None,
             moving: None,
             tool: None,
@@ -557,6 +561,7 @@ impl Viewer {
         self.typing = None;
         self.adding = None;
         self.redacting = None;
+        self.designing = None;
         self.placing = None;
         self.picked_object = None;
         self.moving = None;
@@ -1050,6 +1055,7 @@ impl Viewer {
         self.finish_typing(true, cx);
         window.focus(&self.focus, cx);
         if self.sign_press(event.position, cx)
+            || self.design_press(event.position, cx)
             || self.redact_press(event.position, cx)
             || self.insert_press(event.position, window, cx)
             || self.object_press(event.position, cx)
@@ -1068,7 +1074,8 @@ impl Viewer {
     }
 
     fn drag(&mut self, event: &gpui::MouseMoveEvent, cx: &mut Context<Self>) {
-        if self.redact_drag(event.position, cx)
+        if self.design_drag(event.position, cx)
+            || self.redact_drag(event.position, cx)
             || self.insert_drag(event.position, cx)
             || self.object_drag(event.position, cx)
             || self.annot_drag(event.position, cx)
@@ -1092,6 +1099,7 @@ impl Viewer {
         self.selecting = false;
         if self.sign_release(cx)
             || self.crop_release(cx)
+            || self.design_release(cx)
             || self.redact_release(cx)
             || self.insert_release(cx)
             || self.object_release(cx)
@@ -2427,7 +2435,7 @@ impl Viewer {
         self.want(page, device, cx);
         // The form's fields to fill in, and the one being typed in.
         let fields: Vec<AnyElement> = match (&self.form, transform) {
-            (Some(form), Some(transform)) => {
+            (Some(form), Some(transform)) if self.designing.is_none() => {
                 let tint = self.theme.katna.accent & 0xffff_ff00;
                 form.on_page(page)
                     .map(|(f, w, widget)| {
@@ -3084,6 +3092,7 @@ impl Render for Viewer {
         let signing_card = self.signing_card(cx);
         let marks_card = self.marks_card(cx);
         let redact_card = self.redact_card(cx);
+        let design_card = self.design_card(cx);
         let properties_card = self.properties_card(cx);
         let find_bar = self.find_bar(cx);
         let notice = self.notice.clone().map(|notice| {
@@ -3275,6 +3284,7 @@ impl Render for Viewer {
                             .children(signing_card)
                             .children(marks_card)
                             .children(redact_card)
+                            .children(design_card)
                             .children(properties_card),
                     ),
             )

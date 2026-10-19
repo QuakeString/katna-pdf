@@ -157,6 +157,15 @@ impl Viewer {
             )
             .on_click(cx.listener(|this, _, _, cx| this.toggle_redacting(cx))),
         );
+        row = row.child(
+            button(
+                Adding::ALL.len() + 3,
+                "form",
+                "form-tool",
+                self.designing.is_some(),
+            )
+            .on_click(cx.listener(|this, _, _, cx| this.toggle_designing(cx))),
+        );
         row = row.child(separator(th));
         for (i, ink) in INKS.into_iter().enumerate() {
             let on = self.ink == i;
@@ -200,6 +209,7 @@ impl Viewer {
         self.adding = adding;
         if adding.is_some() {
             self.redacting = None;
+            self.designing = None;
         }
         self.placing = None;
         self.picked_object = None;
