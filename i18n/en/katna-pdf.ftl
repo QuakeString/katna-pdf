@@ -33,7 +33,7 @@ colors-black-white = Black and white
 search-open = Find (Ctrl+F)
 organize = Organize pages
 annotate = Annotate
-edit-text = Edit text: click a line on the page to change its words
+edit-text = Edit text: click a paragraph to change it; Enter starts a new line, Ctrl+Enter keeps the change
 text-edit-failed = The text could not be changed: { $error }
 
 ## Find in the document

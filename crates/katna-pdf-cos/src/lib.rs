@@ -33,7 +33,7 @@ pub use annots::{
 pub use content::{Op, ops};
 pub use document::{Document, Entry, LoadError, XrefKind};
 pub use dss::Dss;
-pub use edit::{EditError, TextRun};
+pub use edit::{EditError, TextBlock, TextRun};
 pub use filter::{FilterError, decode};
 pub use forms::{Field, FieldKind, FieldValue, Widget};
 pub use links::{Link, LinkTarget};

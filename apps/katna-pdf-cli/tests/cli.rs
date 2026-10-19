@@ -523,3 +523,45 @@ fn text_is_listed_and_changed() {
     ]);
     assert_eq!(code, 1);
 }
+
+#[test]
+fn a_paragraph_is_changed_and_wrapped() {
+    let d = dir("block");
+    let file = d.join("note.pdf");
+    let lines = [
+        "A note".to_string(),
+        "  The first line of a short note".to_string(),
+        "  and its second line.".to_string(),
+    ];
+    std::fs::write(&file, katna_pdf_cos::text_pdf("Note", &lines)).unwrap();
+    let (code, out) = run(&["text", "--blocks", s(&file)]);
+    assert_eq!(code, 0);
+    assert!(
+        out.contains(
+            "1:3      Helvetica 10pt, 2 lines: The first line of a short note and its second line."
+        ),
+        "{out}"
+    );
+    let changed = d.join("changed.pdf");
+    let (code, out) = run(&[
+        "edit-text",
+        s(&file),
+        "-o",
+        s(&changed),
+        "--block",
+        "1:3",
+        "--to",
+        "The first line of a short note, now longer, wraps on to its second line\nand a third.",
+    ]);
+    assert_eq!(code, 0, "{out}");
+    let (_, out) = run(&["text", s(&changed)]);
+    // Wrapped to the width of the longest line it had.
+    assert!(
+        out.contains("1:4      Helvetica 10pt: note, now longer, wraps on"),
+        "{out}"
+    );
+    assert!(
+        out.contains("1:6      Helvetica 10pt: and a third."),
+        "{out}"
+    );
+}

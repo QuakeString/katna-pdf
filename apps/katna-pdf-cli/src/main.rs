@@ -68,12 +68,16 @@ usage: katna-pdf-cli COMMAND [--json] ...
                                   with --online, missing issuers are fetched and
                                   revocation is asked of OCSP responders and CRLs;
                                   with --report, the same written as a PDF to keep or send
-  text FILE [--pages PAGES]       the text each page draws, in runs (a line's worth
-                                  in one font), numbered PAGE:RUN, with font and place
-  edit-text FILE -o OUT (--run PAGE:RUN | --replace OLD) --to NEW [--pages PAGES]
-                                  change a run's text, or OLD to NEW wherever a run
-                                  holds it; the run's own font is kept where it has
-                                  the letters, a standard font stands in where not
+  text FILE [--pages PAGES] [--blocks]
+                                  the text each page draws, in runs (a line's worth
+                                  in one font), numbered PAGE:RUN, with font and place;
+                                  with --blocks, in paragraphs, numbered PAGE:BLOCK
+  edit-text FILE -o OUT (--run PAGE:RUN | --block PAGE:BLOCK | --replace OLD) --to NEW
+            [--pages PAGES]       change a run's text, a paragraph's (its words wrapped
+                                  to its width, a line break in NEW starting a line),
+                                  or OLD to NEW wherever a run holds it; the run's own
+                                  font is kept where it has the letters, a standard
+                                  font stands in where not
   annots FILE                     the annotations, page by page
   xfdf-export FILE -o OUT.xfdf    the annotations as XFDF
   xfdf-import FILE XFDF -o OUT    the annotations of XFDF added to the PDF
@@ -190,6 +194,7 @@ impl<'a> Args<'a> {
                     | "--certify"
                     | "--lock"
                     | "--run"
+                    | "--block"
                     | "--replace"
                     | "--to"
                     | "--field"
@@ -201,7 +206,7 @@ impl<'a> Args<'a> {
                     return Err(Failure::Usage(format!("{a} needs a value")));
                 };
                 options.push((a.as_str(), value.as_str()));
-            } else if ["--uncrop", "--online", "--ltv", "--lta"].contains(&a.as_str()) {
+            } else if ["--uncrop", "--online", "--ltv", "--lta", "--blocks"].contains(&a.as_str()) {
                 flags.push(a.as_str());
             } else if a.starts_with("--") {
                 return Err(Failure::Usage(format!("unknown option {a}")));
@@ -1454,6 +1459,42 @@ fn text(args: &[String], json: bool) -> Done {
     };
     let mut out = String::new();
     let mut items = Vec::new();
+    if args.flag("--blocks") {
+        for page in pages {
+            for (i, block) in doc.text_blocks(page).iter().enumerate() {
+                if json {
+                    items.push(format!(
+                        "{{\"block\":\"{}:{}\",\"runs\":[{}],\"font\":{},\"size\":{},\"text\":{}}}",
+                        page + 1,
+                        i + 1,
+                        block
+                            .runs
+                            .iter()
+                            .map(|r| format!("\"{}:{}\"", page + 1, r + 1))
+                            .collect::<Vec<_>>()
+                            .join(","),
+                        string(&block.font),
+                        num(block.size),
+                        string(&block.text),
+                    ));
+                } else {
+                    let _ = writeln!(
+                        out,
+                        "{:<8} {} {}pt, {} lines: {}",
+                        format!("{}:{}", page + 1, i + 1),
+                        block.font,
+                        num(block.size),
+                        block.runs.len(),
+                        block.text.replace('\n', " / ")
+                    );
+                }
+            }
+        }
+        if json {
+            out = format!("{{\"blocks\":[{}]}}\n", items.join(","));
+        }
+        return Ok(out);
+    }
     for page in pages {
         for (i, run) in doc.text_runs(page).iter().enumerate() {
             if json {
@@ -1499,6 +1540,39 @@ fn edit_text(args: &[String], json: bool) -> Done {
     let count = doc.pages().len();
     // Each page's changes: (run, new text).
     let mut edits: Vec<(usize, Vec<(usize, String)>)> = Vec::new();
+    if let Some(id) = args.option("--block") {
+        let bad = || {
+            Failure::Usage(format!(
+                "--block {id}: PAGE:BLOCK, as `text --blocks` numbers them"
+            ))
+        };
+        let (page, block) = id.split_once(':').ok_or_else(bad)?;
+        let page = page
+            .parse::<usize>()
+            .ok()
+            .filter(|p| (1..=count).contains(p))
+            .ok_or_else(bad)?;
+        let block = block
+            .parse::<usize>()
+            .ok()
+            .and_then(|b| doc.text_blocks(page - 1).into_iter().nth(b.checked_sub(1)?))
+            .ok_or_else(bad)?;
+        let bytes = doc.edit_block(page - 1, &block.runs, new).map_err(failed)?;
+        write(&out, &bytes)?;
+        return Ok(if json {
+            format!(
+                "{{\"written\":[{{\"file\":{},\"pages\":{count}}}],\"runs_changed\":{}}}\n",
+                string(&out.display().to_string()),
+                block.runs.len()
+            )
+        } else {
+            format!(
+                "{} (a paragraph of {} lines changed)\n",
+                out.display(),
+                block.runs.len()
+            )
+        });
+    }
     match (args.option("--run"), args.option("--replace")) {
         (Some(id), None) => {
             let bad = || Failure::Usage(format!("--run {id}: PAGE:RUN, as `text` numbers them"));

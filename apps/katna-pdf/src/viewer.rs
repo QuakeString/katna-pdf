@@ -101,7 +101,7 @@ const MARGIN: f32 = 24.0;
 const GAP: f32 = 12.0;
 
 /// The viewer, when no text field in it has the keys.
-const READING: &str = "Viewer && !TextInput";
+const READING: &str = "Viewer && !TextInput && !TextArea";
 
 pub fn bind_keys(cx: &mut App) {
     cx.bind_keys([
@@ -2425,7 +2425,7 @@ impl Viewer {
                     let b = katna_pdf_render::map_rect(transform, link.rect);
                     let target = link.target.clone();
                     let area = div()
-                        .id(("link", i))
+                        .id(("link", page * 100_000 + i))
                         .absolute()
                         .left(desktop_px(b[0] * shown))
                         .top(desktop_px(b[1] * shown))

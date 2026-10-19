@@ -152,6 +152,11 @@ struct Piece {
     /// Text space to the page's at the operator's start, the move to
     /// the next line of `'` and `"` made.
     m: Matrix,
+    /// The text matrix at its start, the text line matrix, and the
+    /// graphics state's matrix.
+    tm: Matrix,
+    tlm: Matrix,
+    ctm: Matrix,
     /// How far it moves along its line, in text space.
     advance: f64,
     /// Where along it its glyphs start and end (moves before and after
@@ -200,15 +205,216 @@ impl Document {
         self.read_page(page).map(|p| runs(&p)).unwrap_or_default()
     }
 
+    /// The page's text in paragraphs: lines one under another in the
+    /// same font and size, each with its lines' runs.
+    pub fn text_blocks(&self, page: usize) -> Vec<TextBlock> {
+        self.read_page(page)
+            .map(|p| blocks(&p, &runs(&p)))
+            .unwrap_or_default()
+    }
+
     /// The file with the text of runs on page `page` changed: each
     /// `(index into text_runs, new text)`, as an incremental update.
     pub fn edit_text(&self, page: usize, edits: &[(usize, String)]) -> Result<Vec<u8>, EditError> {
-        let page_ref = *self.pages().get(page).ok_or(EditError::NoPage)?;
         let read = self.read_page(page).ok_or(EditError::Content)?;
         let all = runs(&read);
+        let edits: Vec<(usize, String)> = edits
+            .iter()
+            .map(|(i, t)| {
+                (
+                    *i,
+                    t.chars().filter(|c| !matches!(c, '\n' | '\r')).collect(),
+                )
+            })
+            .collect();
+        self.rewrite(
+            page,
+            &read,
+            &all,
+            &edits,
+            More {
+                moves: Vec::new(),
+                shift: true,
+                append: None,
+            },
+        )
+    }
+
+    /// The file with the paragraph of runs `lines` (indexes into
+    /// `text_runs`, top line first) on page `page` changed to `text`: its
+    /// words wrapped to the paragraph's width, `\n` starting a new line.
+    /// Lines the text still starts with stay as they were; lines left
+    /// over are emptied, and lines more are written under the last.
+    pub fn edit_block(
+        &self,
+        page: usize,
+        lines: &[usize],
+        text: &str,
+    ) -> Result<Vec<u8>, EditError> {
+        let read = self.read_page(page).ok_or(EditError::Content)?;
+        let all = runs(&read);
+        let old: Vec<&TextRun> = lines
+            .iter()
+            .map(|i| all.get(*i).ok_or(EditError::NoRun))
+            .collect::<Result<_, _>>()?;
+        let Some(top) = old.first() else {
+            return Err(EditError::NoRun);
+        };
+        let first = &read.pieces[top.ops[0]];
+        let inv = invert(&first.m).ok_or(EditError::NoRun)?;
+        let places: Vec<Place> = old.iter().map(|r| place(&read, &inv, r)).collect();
+        let size = first.size.abs();
+        let mut right = places.iter().map(|p| p.end).fold(f64::MIN, f64::max);
+        if old.len() == 1 {
+            // A line alone grows up to a margin as wide as its left one.
+            right = match self.page_info(page) {
+                Some(info) if first.m[1].abs() < 1e-9 && first.m[2].abs() < 1e-9 => {
+                    let crop = info.crop;
+                    let limit = (crop[2] - (top.rect[0] - crop[0])).max(top.rect[2]);
+                    right.max(apply(&inv, f64::from(limit), first.m[5]).0)
+                }
+                _ => f64::INFINITY,
+            };
+        }
+        let last = places[places.len() - 1];
+        let lead = match places.len() {
+            1 => 1.2 * size,
+            n => places[n - 2].y - last.y,
+        };
+        // The piece each line is written in, by line: a new one in the
+        // last's.
+        let piece_of = |j: usize| &read.pieces[old[j.min(old.len() - 1)].ops[0]];
+        let start_of = |j: usize| places.get(j).map_or(last.start, |p| p.start);
+        let align = align_of(&places, size);
+        // The room for line `j`: to the right edge, or the widest line's
+        // width when the lines are not lined up on the left.
+        let widest = places
+            .iter()
+            .map(|p| p.end - p.start)
+            .fold(f64::MIN, f64::max);
+        let room = |j: usize| match align {
+            Align::Left => right - start_of(j),
+            Align::Right | Align::Center => widest,
+        };
+        // Where a line `wide` wide starts.
+        let top_place = places[0];
+        let start_for = |j: usize, wide: f64| match align {
+            Align::Left => start_of(j),
+            Align::Right => top_place.end - wide,
+            Align::Center => (top_place.start + top_place.end - wide) / 2.0,
+        };
+        let width = |j: usize, line: &str| -> Result<f64, EditError> {
+            let run = old[j.min(old.len() - 1)];
+            let piece = piece_of(j);
+            let letters = letters(&read, run, &piece.font);
+            Ok(lay(line, &letters, piece, &read, None)? * scale_between(piece, first))
+        };
+        let text = text.replace("\r\n", "\n").replace('\r', "\n");
+        let mut new: Vec<String> = Vec::new();
+        // Lines kept as they were, while the text still starts with them.
+        let mut rest = text.as_str();
+        while let Some(run) = old.get(new.len()) {
+            match rest.strip_prefix(run.text.as_str()) {
+                Some(after) if after.is_empty() || after.starts_with([' ', '\n']) => {
+                    new.push(run.text.clone());
+                    rest = after.get(1..).unwrap_or("");
+                }
+                _ => break,
+            }
+        }
+        // The rest, wrapped.
+        if !rest.is_empty() {
+            for para in rest.split('\n') {
+                let mut line = String::new();
+                for word in para.split(' ').filter(|w| !w.is_empty()) {
+                    let j = new.len();
+                    let longer = if line.is_empty() {
+                        word.to_string()
+                    } else {
+                        format!("{line} {word}")
+                    };
+                    if line.is_empty() || width(j, &longer)? <= room(j) + 0.05 * size {
+                        line = longer;
+                    } else {
+                        new.push(std::mem::replace(&mut line, word.to_string()));
+                    }
+                }
+                new.push(line);
+            }
+        }
+        let mut edits: Vec<(usize, String)> = lines
+            .iter()
+            .enumerate()
+            .map(|(j, run)| (*run, new.get(j).cloned().unwrap_or_default()))
+            .collect();
+        edits.retain(|(i, t)| all[*i].text != *t);
+        // Lines not lined up on the left move to stay lined up as they
+        // were, by a move before their first piece, in its units.
+        let mut moves = Vec::new();
+        if align != Align::Left {
+            for (j, (run, line)) in edits.iter().enumerate() {
+                let j = lines.iter().position(|r| r == run).unwrap_or(j);
+                if line.is_empty() {
+                    continue;
+                }
+                let dx = start_for(j, width(j, line)?) - places[j].start;
+                let piece = piece_of(j);
+                if dx.abs() > 1e-3 && (piece.size * piece.stretch).abs() > 1e-9 {
+                    let units = dx * scale_between(first, piece);
+                    moves.push((*run, -units * 1000.0 / (piece.size * piece.stretch)));
+                }
+            }
+        }
+        let more = new.get(old.len()..).unwrap_or_default();
+        let append = if more.is_empty() {
+            None
+        } else {
+            let lefts = more
+                .iter()
+                .enumerate()
+                .map(|(k, line)| Ok(start_for(old.len() + k, width(old.len() + k, line)?)))
+                .collect::<Result<_, EditError>>()?;
+            Some(Append {
+                first: lines[0],
+                last: lines[lines.len() - 1],
+                lefts,
+                y: last.y,
+                lead,
+                lines: more.to_vec(),
+            })
+        };
+        self.rewrite(
+            page,
+            &read,
+            &all,
+            &edits,
+            More {
+                moves,
+                shift: old.len() == 1,
+                append,
+            },
+        )
+    }
+
+    /// Writes `edits` to runs of `all` into page `page`'s content, and
+    /// does `more`.
+    fn rewrite(
+        &self,
+        page: usize,
+        read: &Page,
+        all: &[TextRun],
+        edits: &[(usize, String)],
+        more: More,
+    ) -> Result<Vec<u8>, EditError> {
+        let More {
+            moves,
+            shift,
+            append,
+        } = more;
+        let page_ref = *self.pages().get(page).ok_or(EditError::NoPage)?;
         let mut update = self.update()?;
         // Standard fonts brought in for glyphs a font lacks, by name.
-        let mut stand_ins: Vec<(&'static str, Vec<u8>)> = Vec::new();
+        let mut stand_ins: StandIns = Vec::new();
         let full = page_dict(self, page_ref);
         let resources = match full.get("Resources").map(|r| self.resolve(r)) {
             Some(Object::Dict(d)) => d,
@@ -225,7 +431,7 @@ impl Document {
         for (index, text) in edits {
             let run = all.get(*index).ok_or(EditError::NoRun)?;
             let old: Vec<char> = run.text.chars().collect();
-            let new: Vec<char> = text.chars().filter(|c| !matches!(c, '\n' | '\r')).collect();
+            let new: Vec<char> = text.chars().collect();
             if old == new {
                 continue;
             }
@@ -288,38 +494,8 @@ impl Document {
                 let (px, py) = apply(&piece.m, x, 0.0);
                 apply(&inv, px, py).0
             };
-            // The fonts to write the new letters in: the piece's own, then
-            // the run's others, then the page's of the same name, as one
-            // font's glyphs often go on in another (a subset split in two).
-            let mut keys: Vec<&Vec<u8>> = vec![&fp.font];
-            for i in &run.ops {
-                let key = &read.pieces[*i].font;
-                if !keys.contains(&key) {
-                    keys.push(key);
-                }
-            }
-            let base = &read.fonts[&fp.font].base;
-            let mut more: Vec<&Vec<u8>> = read
-                .fonts
-                .iter()
-                .filter(|(k, f)| f.base == *base && !keys.contains(k))
-                .map(|(k, _)| k)
-                .collect();
-            more.sort();
-            keys.extend(more);
-            let encoders: Vec<HashMap<char, u32>> = keys
-                .iter()
-                .map(|k| {
-                    let used = read.used.get(*k).cloned().unwrap_or_default();
-                    read.fonts[*k].encoder(&used)
-                })
-                .collect();
-            let (name, metrics) = stand_in(base);
+            let letters = letters(read, run, &fp.font);
             let size = fp.size;
-            let advance = |w: f64, space: bool| {
-                (w * size + fp.char_spacing + if space { fp.word_spacing } else { 0.0 })
-                    * fp.stretch
-            };
             let mut w = Writer {
                 out: lead_in(&read.ops[fp.op]),
                 items: Vec::new(),
@@ -336,48 +512,13 @@ impl Document {
                 }
             }
             // The new text.
-            for segment in segments(&middle, &encoders, run.space)? {
-                match segment {
-                    Segment::Own(k, parts) => {
-                        w.font(keys[k]);
-                        let font = &read.fonts[keys[k]];
-                        for part in parts {
-                            match part {
-                                Part::Codes(codes) => {
-                                    let mut bytes = Vec::new();
-                                    for code in codes {
-                                        font.code_bytes(code, &mut bytes);
-                                        x += advance(
-                                            font.width(code),
-                                            font.single_byte() && code == 32,
-                                        );
-                                    }
-                                    w.string(bytes, !font.single_byte());
-                                }
-                                Part::Gap(gap) => {
-                                    x += gap / 1000.0 * size * fp.stretch;
-                                    w.items.push(number(-gap));
-                                }
-                            }
-                        }
-                    }
-                    Segment::Standard(bytes) => {
-                        let key = match stand_ins.iter().find(|(n, _)| *n == name) {
-                            Some((_, key)) => key.clone(),
-                            None => {
-                                let key = free_name(&font_dict, &stand_ins);
-                                stand_ins.push((name, key.clone()));
-                                key
-                            }
-                        };
-                        w.font(&key);
-                        for b in &bytes {
-                            x += advance(win_ansi_width(metrics, *b) / 1000.0, *b == 32);
-                        }
-                        w.string(bytes, false);
-                    }
-                }
-            }
+            x += lay(
+                &middle,
+                &letters,
+                fp,
+                read,
+                Some((&mut w, &mut stand_ins, &font_dict)),
+            )?;
             let new_end = x;
             // Where the change ended before, along the line.
             let mut before = 0.0;
@@ -424,7 +565,7 @@ impl Document {
                 replaced.insert(piece.op, out);
             }
             // Text placed afresh further along the same line moves with it.
-            if delta.abs() > 1e-3 {
+            if shift && delta.abs() > 1e-3 {
                 for (i, piece) in read.pieces.iter().enumerate() {
                     if piece.op <= lp.op || !piece.placed {
                         continue;
@@ -453,6 +594,62 @@ impl Document {
             }
             write_op(&mut out, &Op::new("TJ", vec![Object::Array(items)]));
             replaced.insert(piece.op, out);
+        }
+        for (run, n) in moves {
+            let op = read.pieces[all[run].ops[0]].op;
+            let existing = replaced.remove(&op);
+            replaced.insert(op, moved(read, op, existing, n));
+        }
+        // Lines more, after the last line's last operator, each placed
+        // under the one before; then the text state as that operator left
+        // it, for what follows.
+        if let Some(append) = append {
+            let run = &all[append.last];
+            let lp = &read.pieces[*run.ops.last().ok_or(EditError::NoRun)?];
+            let first = &read.pieces[all[append.first].ops[0]];
+            let letters = letters(read, run, &lp.font);
+            let back = invert(&lp.ctm).ok_or(EditError::NoRun)?;
+            let mut out = replaced
+                .remove(&lp.op)
+                .unwrap_or_else(|| read.content[read.ops[lp.op].span.clone()].to_vec());
+            let matrix = |out: &mut Vec<u8>, m: &Matrix| {
+                out.push(b' ');
+                write_op(out, &Op::new("Tm", m.iter().map(|v| number(*v)).collect()));
+            };
+            for (k, line) in append.lines.iter().enumerate() {
+                let y = append.y - append.lead * (k + 1) as f64;
+                let left = append.lefts[k];
+                matrix(&mut out, &mul(&mul(&translate(left, y), &first.m), &back));
+                let mut w = Writer {
+                    out: vec![b' '],
+                    items: Vec::new(),
+                    current: lp.font.clone(),
+                    size: lp.size,
+                };
+                lay(
+                    line,
+                    &letters,
+                    lp,
+                    read,
+                    Some((&mut w, &mut stand_ins, &font_dict)),
+                )?;
+                w.font(&lp.font);
+                out.extend(w.finish());
+            }
+            matrix(&mut out, &lp.tlm);
+            let end = mul(&translate(lp.advance, 0.0), &lp.tm);
+            if let Some(inv) = invert(&lp.tlm) {
+                let off = apply(&inv, end[4], end[5]).0;
+                if off.abs() > 1e-6 && (lp.size * lp.stretch).abs() > 1e-9 {
+                    out.push(b' ');
+                    let n = -off * 1000.0 / (lp.size * lp.stretch);
+                    write_op(
+                        &mut out,
+                        &Op::new("TJ", vec![Object::Array(vec![number(n)])]),
+                    );
+                }
+            }
+            replaced.insert(lp.op, out);
         }
         let splices = replaced
             .into_iter()
@@ -614,7 +811,7 @@ impl Page {
                         _ => continue,
                     };
                     let start = tm;
-                    let advance = self.show(&state, &items, i, start, placed);
+                    let advance = self.show(&state, &items, i, (start, tlm), placed);
                     placed = false;
                     tm = mul(&translate(advance, 0.0), &tm);
                 }
@@ -631,7 +828,7 @@ impl Page {
         state: &State,
         items: &[Object],
         op: usize,
-        tm: Matrix,
+        (tm, tlm): (Matrix, Matrix),
         placed: bool,
     ) -> f64 {
         let Some(key) = state.font.clone() else {
@@ -707,6 +904,9 @@ impl Page {
                 font: key,
                 size,
                 m: mul(&tm, &state.ctm),
+                tm,
+                tlm,
+                ctm: state.ctm,
                 advance,
                 rise: state.rise,
                 text,
@@ -804,6 +1004,359 @@ fn runs(page: &Page) -> Vec<TextRun> {
     }
     out.retain(|r| !r.text.trim().is_empty());
     out
+}
+
+/// A paragraph: lines one under another in the same font and size.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TextBlock {
+    /// Its lines' text, joined by a space where the words wrapped and by
+    /// a line break where the line ended before it had to.
+    pub text: String,
+    /// Its lines, as indexes into `text_runs`, top first.
+    pub runs: Vec<usize>,
+    pub font: String,
+    pub size: f32,
+    /// Where it is, as `TextRun::rect`.
+    pub rect: [f32; 4],
+}
+
+/// Where a line is, in the text space of its paragraph's first: where
+/// its glyphs start and end along it, and its baseline.
+#[derive(Clone, Copy)]
+struct Place {
+    start: f64,
+    end: f64,
+    y: f64,
+}
+
+/// A paragraph's text size in its first line's text space.
+fn size_of(page: &Page, runs: &[TextRun], block: &TextBlock) -> f64 {
+    page.pieces[runs[block.runs[0]].ops[0]].size.abs()
+}
+
+fn place(page: &Page, inv: &Matrix, run: &TextRun) -> Place {
+    let p = &page.pieces[run.ops[0]];
+    let q = &page.pieces[run.ops[run.ops.len() - 1]];
+    let (sx, sy) = apply(&p.m, p.ink.0, 0.0);
+    let (ex, ey) = apply(&q.m, q.ink.1, 0.0);
+    let (start, y) = apply(inv, sx, sy);
+    Place {
+        start,
+        end: apply(inv, ex, ey).0,
+        y,
+    }
+}
+
+/// What a rewrite does besides its edits: runs whose starts move (a
+/// `TJ` number before their first piece), whether text further along an
+/// edited line moves with it, and lines written under a paragraph.
+struct More {
+    moves: Vec<(usize, f64)>,
+    shift: bool,
+    append: Option<Append>,
+}
+
+/// Lines written under a paragraph's last: in the text space of its
+/// first line (run `first`), starting at `lefts`, each `lead` under the
+/// one before, the first under baseline `y`.
+struct Append {
+    first: usize,
+    last: usize,
+    lefts: Vec<f64>,
+    y: f64,
+    lead: f64,
+    lines: Vec<String>,
+}
+
+/// The page's runs joined into paragraphs: a run goes on a paragraph
+/// when it is the next run, in the same font and size and direction, a
+/// line's height or a little more under its last line, and starts where
+/// its lines after the first start (the first may be indented).
+fn blocks(page: &Page, runs: &[TextRun]) -> Vec<TextBlock> {
+    let mut out: Vec<TextBlock> = Vec::new();
+    // The places of the open paragraph's lines, in its first's space.
+    let mut places: Vec<Place> = Vec::new();
+    for (i, run) in runs.iter().enumerate() {
+        let joined = out.last().and_then(|block| {
+            let top = &runs[block.runs[0]];
+            if *block.runs.last()? + 1 != i
+                || (top.font != run.font && !top.stood_in && !run.stood_in)
+                || (top.size - run.size).abs() > 0.05 * top.size
+            {
+                return None;
+            }
+            let p0 = &page.pieces[top.ops[0]];
+            let p = &page.pieces[run.ops[0]];
+            let scale = p0.m[0].hypot(p0.m[1]).max(1e-9);
+            if (p0.m[0] - p.m[0]).abs() > 1e-3 * scale || (p0.m[1] - p.m[1]).abs() > 1e-3 * scale {
+                return None;
+            }
+            let here = place(page, &invert(&p0.m)?, run);
+            let size = p0.size.abs();
+            let last = places.last()?;
+            let gap = last.y - here.y;
+            if !(0.9 * size..=2.0 * size).contains(&gap) {
+                return None;
+            }
+            let steady = match places[..] {
+                [.., before, last] => (gap - (before.y - last.y)).abs() <= 0.15 * gap,
+                _ => true,
+            };
+            let mut with = places.clone();
+            with.push(here);
+            (steady && lined_up(&with, size)).then_some(here)
+        });
+        match (joined, out.last_mut()) {
+            (Some(here), Some(block)) => {
+                places.push(here);
+                block.runs.push(i);
+                block.rect = [
+                    block.rect[0].min(run.rect[0]),
+                    block.rect[1].min(run.rect[1]),
+                    block.rect[2].max(run.rect[2]),
+                    block.rect[3].max(run.rect[3]),
+                ];
+            }
+            _ => {
+                if let Some(block) = out.last_mut() {
+                    block.text = joined_text(runs, block, &places, size_of(page, runs, block));
+                }
+                let p = &page.pieces[run.ops[0]];
+                places = invert(&p.m)
+                    .map(|inv| vec![place(page, &inv, run)])
+                    .unwrap_or_default();
+                out.push(TextBlock {
+                    text: String::new(),
+                    runs: vec![i],
+                    font: run.font.clone(),
+                    size: run.size,
+                    rect: run.rect,
+                });
+            }
+        }
+    }
+    if let Some(block) = out.last_mut() {
+        block.text = joined_text(runs, block, &places, size_of(page, runs, block));
+    }
+    out
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Align {
+    Left,
+    Right,
+    Center,
+}
+
+/// Whether lines (two or more) line up as a paragraph's do: their starts
+/// (the first line's may be indented, or hang out), their ends, or their
+/// middles, within half of `size`.
+fn lined_up(places: &[Place], size: f64) -> bool {
+    let near = |a: f64, b: f64| (a - b).abs() < 0.5 * size;
+    let left = (places[0].start - 4.0 * size..=places[0].start + 0.5 * size)
+        .contains(&places[1].start)
+        && places[1..].iter().all(|p| near(p.start, places[1].start));
+    let middle = |p: &Place| (p.start + p.end) / 2.0;
+    left || places.iter().all(|p| near(p.end, places[0].end))
+        || places.iter().all(|p| near(middle(p), middle(&places[0])))
+}
+
+/// How a paragraph's lines line up: on the left unless only their ends
+/// or middles do.
+fn align_of(places: &[Place], size: f64) -> Align {
+    let near = |a: f64, b: f64| (a - b).abs() < 0.5 * size;
+    if places.len() < 2
+        || (places[0].start - 4.0 * size..=places[0].start + 0.5 * size).contains(&places[1].start)
+            && places[1..].iter().all(|p| near(p.start, places[1].start))
+    {
+        Align::Left
+    } else if places.iter().all(|p| near(p.end, places[0].end)) {
+        Align::Right
+    } else {
+        Align::Center
+    }
+}
+
+/// A line's first operator moved along by `n` (a `TJ` number) before it
+/// shows its text: its new bytes, from `existing` when it was rewritten.
+fn moved(read: &Page, op: usize, existing: Option<Vec<u8>>, n: f64) -> Vec<u8> {
+    let o = &read.ops[op];
+    let lead = lead_in(o);
+    let mut out = lead.clone();
+    write_op(
+        &mut out,
+        &Op::new("TJ", vec![Object::Array(vec![number(n)])]),
+    );
+    out.push(b' ');
+    match existing {
+        Some(bytes) => out.extend_from_slice(bytes.strip_prefix(lead.as_slice()).unwrap_or(&bytes)),
+        None if o.is("'") || o.is("\"") => {
+            if let Some(s) = o.operands.last() {
+                write_op(&mut out, &Op::new("Tj", vec![s.clone()]));
+            }
+        }
+        None => out.extend_from_slice(&read.content[o.span.clone()]),
+    }
+    while out.last() == Some(&b' ') {
+        out.pop();
+    }
+    out
+}
+
+/// A paragraph's lines joined: by a line break where the next line's
+/// first word would have fitted at the end of the line, as the line was
+/// ended on purpose there, else by a space.
+fn joined_text(runs: &[TextRun], block: &TextBlock, places: &[Place], size: f64) -> String {
+    let right = places.iter().map(|p| p.end).fold(f64::MIN, f64::max);
+    let widest = places
+        .iter()
+        .map(|p| p.end - p.start)
+        .fold(f64::MIN, f64::max);
+    let align = align_of(places, size);
+    let mut text = String::new();
+    for (j, i) in block.runs.iter().enumerate() {
+        let run = &runs[*i];
+        if j > 0 {
+            let (Some(prev), Some(next)) = (places.get(j - 1), places.get(j)) else {
+                text.push(' ');
+                text.push_str(&run.text);
+                continue;
+            };
+            // The next line's first word's width, as its share of the line.
+            let chars = run.text.chars().count().max(1) as f64;
+            let word = run.text.split(' ').next().unwrap_or("").chars().count() as f64;
+            let wide = (next.end - next.start) * (word + 1.0) / chars;
+            let room = match align {
+                Align::Left => right - prev.end,
+                Align::Right | Align::Center => widest - (prev.end - prev.start),
+            };
+            let ended = wide + size < room;
+            text.push(if ended { '\n' } else { ' ' });
+        }
+        text.push_str(&run.text);
+    }
+    text
+}
+
+/// The fonts new letters of a run are written in: `font`, then the
+/// run's others, then the page's of the same name, as one font's glyphs
+/// often go on in another (a subset split in two); each one's codes for
+/// the letters it has; and the standard font standing in for the rest.
+struct Letters<'a> {
+    keys: Vec<&'a Vec<u8>>,
+    encoders: Vec<HashMap<char, u32>>,
+    name: &'static str,
+    metrics: &'static phf::Map<&'static str, f32>,
+    /// The gap for a space no font has a glyph for.
+    space: f64,
+}
+
+fn letters<'a>(read: &'a Page, run: &TextRun, font: &'a Vec<u8>) -> Letters<'a> {
+    let mut keys: Vec<&Vec<u8>> = vec![font];
+    for i in &run.ops {
+        let key = &read.pieces[*i].font;
+        if !keys.contains(&key) {
+            keys.push(key);
+        }
+    }
+    let base = &read.fonts[font].base;
+    let mut more: Vec<&Vec<u8>> = read
+        .fonts
+        .iter()
+        .filter(|(k, f)| f.base == *base && !keys.contains(k))
+        .map(|(k, _)| k)
+        .collect();
+    more.sort();
+    keys.extend(more);
+    let encoders = keys
+        .iter()
+        .map(|k| {
+            let used = read.used.get(*k).cloned().unwrap_or_default();
+            read.fonts[*k].encoder(&used)
+        })
+        .collect();
+    let (name, metrics) = stand_in(base);
+    Letters {
+        keys,
+        encoders,
+        name,
+        metrics,
+        space: run.space,
+    }
+}
+
+/// Standard fonts brought in for glyphs a font lacks: name, and key.
+type StandIns = Vec<(&'static str, Vec<u8>)>;
+
+/// Where laid-out text is written: the writer, the standard fonts
+/// brought in so far, and the page's fonts (for a free name).
+type Out<'a> = (&'a mut Writer, &'a mut StandIns, &'a Dict);
+
+/// Lays `text` out in `letters`' fonts with `piece`'s size and spacing:
+/// writes it with `w` when given, bringing in the standing-in font as
+/// needed, and returns how far it moves the pen, in `piece`'s text space.
+fn lay(
+    text: &str,
+    letters: &Letters,
+    piece: &Piece,
+    read: &Page,
+    mut w: Option<Out>,
+) -> Result<f64, EditError> {
+    let size = piece.size;
+    let advance = |w: f64, space: bool| {
+        (w * size + piece.char_spacing + if space { piece.word_spacing } else { 0.0 })
+            * piece.stretch
+    };
+    let mut x = 0.0;
+    for segment in segments(text, &letters.encoders, letters.space)? {
+        match segment {
+            Segment::Own(k, parts) => {
+                let key = letters.keys[k];
+                if let Some((w, _, _)) = &mut w {
+                    w.font(key);
+                }
+                let font = &read.fonts[key];
+                for part in parts {
+                    match part {
+                        Part::Codes(codes) => {
+                            let mut bytes = Vec::new();
+                            for code in codes {
+                                font.code_bytes(code, &mut bytes);
+                                x += advance(font.width(code), font.single_byte() && code == 32);
+                            }
+                            if let Some((w, _, _)) = &mut w {
+                                w.string(bytes, !font.single_byte());
+                            }
+                        }
+                        Part::Gap(gap) => {
+                            x += gap / 1000.0 * size * piece.stretch;
+                            if let Some((w, _, _)) = &mut w {
+                                w.items.push(number(-gap));
+                            }
+                        }
+                    }
+                }
+            }
+            Segment::Standard(bytes) => {
+                for b in &bytes {
+                    x += advance(win_ansi_width(letters.metrics, *b) / 1000.0, *b == 32);
+                }
+                if let Some((w, stand_ins, font_dict)) = &mut w {
+                    let key = match stand_ins.iter().find(|(n, _)| *n == letters.name) {
+                        Some((_, key)) => key.clone(),
+                        None => {
+                            let key = free_name(font_dict, stand_ins);
+                            stand_ins.push((letters.name, key.clone()));
+                            key
+                        }
+                    };
+                    w.font(&key);
+                    w.string(bytes, false);
+                }
+            }
+        }
+    }
+    Ok(x)
 }
 
 /// Writes a text-showing operator's worth of strings and moves, with
@@ -1015,7 +1568,7 @@ fn segments(
 
 /// A name for a font brought in that neither the page's fonts nor those
 /// brought in already use.
-fn free_name(fonts: &Dict, taken: &[(&'static str, Vec<u8>)]) -> Vec<u8> {
+fn free_name(fonts: &Dict, taken: &StandIns) -> Vec<u8> {
     let mut k = 1;
     loop {
         let name = format!("{}{k}", String::from_utf8_lossy(STAND_IN));
