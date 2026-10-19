@@ -52,6 +52,13 @@ usage: katna-pdf-cli COMMAND [--json] ...
                                   locking form fields with --lock (all, or those
                                   named), which then may not change;
                                   many files at once, unlocked once, into folder OUT
+  insert FILE -o OUT [--page N] [--colour #RRGGBB] (--text TEXT --at X,Y [--font NAME]
+         [--size PT] | --image PICTURE --rect L,B,R,T | --shape rectangle|ellipse|line
+         --rect L,B,R,T [--fill])
+                                  text, a picture or a shape drawn into the page itself;
+                                  text in a standard font (Helvetica, Times-Roman,
+                                  Courier, -Bold and so on), its first baseline at X,Y;
+                                  a line runs from L,B to R,T
   add-field FILE -o OUT --rect L,B,R,T [--page N] [--name NAME]
                                   an empty signature field, for someone to sign later
   ltv FILE -o OUT [--trust PATH] [--tsa URL]
@@ -102,6 +109,7 @@ fn main() -> ExitCode {
         "sign" => sign(rest, json),
         "verify" => verify(rest, json),
         "add-field" => add_field(rest, json),
+        "insert" => insert(rest, json),
         "ltv" => ltv(rest, json),
         "tokens" => tokens(rest, json),
         "token-check" => token_check(rest, json),
@@ -182,6 +190,13 @@ impl<'a> Args<'a> {
                     | "--password-file"
                     | "--page"
                     | "--rect"
+                    | "--text"
+                    | "--at"
+                    | "--font"
+                    | "--size"
+                    | "--image"
+                    | "--shape"
+                    | "--colour"
                     | "--reason"
                     | "--location"
                     | "--contact"
@@ -206,7 +221,11 @@ impl<'a> Args<'a> {
                     return Err(Failure::Usage(format!("{a} needs a value")));
                 };
                 options.push((a.as_str(), value.as_str()));
-            } else if ["--uncrop", "--online", "--ltv", "--lta", "--blocks"].contains(&a.as_str()) {
+            } else if [
+                "--uncrop", "--online", "--ltv", "--lta", "--blocks", "--fill",
+            ]
+            .contains(&a.as_str())
+            {
                 flags.push(a.as_str());
             } else if a.starts_with("--") {
                 return Err(Failure::Usage(format!("unknown option {a}")));
@@ -928,6 +947,105 @@ fn parse_rect(rect: &str) -> Result<[f32; 4], Failure> {
             "--rect {rect}: left,bottom,right,top"
         ))),
     }
+}
+
+/// Draws text, a picture or a shape into a page.
+fn insert(args: &[String], json: bool) -> Done {
+    let args = Args::parse(args)?;
+    let [file] = args.words()?;
+    let out = args.output()?;
+    let doc = open(file)?;
+    let page = page_number(&doc, args.option("--page"))?;
+    let colour = match args.option("--colour") {
+        None => [0.0, 0.0, 0.0],
+        Some(c) => {
+            let hex = c.trim_start_matches('#');
+            let v = (hex.len() == 6)
+                .then(|| u32::from_str_radix(hex, 16).ok())
+                .flatten()
+                .ok_or_else(|| Failure::Usage(format!("--colour {c}: #RRGGBB")))?;
+            [(v >> 16) & 255, (v >> 8) & 255, v & 255].map(|n| n as f32 / 255.0)
+        }
+    };
+    let numbers = |name: &str, value: &str, n: usize| -> Result<Vec<f32>, Failure> {
+        value
+            .split(',')
+            .map(|v| v.trim().parse::<f32>().ok().filter(|v| v.is_finite()))
+            .collect::<Option<Vec<_>>>()
+            .filter(|v| v.len() == n)
+            .ok_or_else(|| Failure::Usage(format!("{name} {value}: {n} numbers, comma-separated")))
+    };
+    let item = match (
+        args.option("--text"),
+        args.option("--image"),
+        args.option("--shape"),
+    ) {
+        (Some(text), None, None) => {
+            let at = args
+                .option("--at")
+                .ok_or_else(|| Failure::Usage("say where with --at X,Y".into()))?;
+            let at = numbers("--at", at, 2)?;
+            let size = match args.option("--size") {
+                Some(s) => s
+                    .parse::<f32>()
+                    .ok()
+                    .filter(|s| *s > 0.0 && s.is_finite())
+                    .ok_or_else(|| Failure::Usage(format!("--size {s}: a size in points")))?,
+                None => 12.0,
+            };
+            katna_pdf_cos::Insert::Text {
+                at: [at[0], at[1]],
+                text: text.replace("\\n", "\n"),
+                font: args.option("--font").unwrap_or("Helvetica").to_owned(),
+                size,
+                colour,
+            }
+        }
+        (None, Some(picture), None) => {
+            let rect = parse_rect(
+                args.option("--rect")
+                    .ok_or_else(|| Failure::Usage("say where with --rect".into()))?,
+            )?;
+            let bytes = std::fs::read(picture).map_err(|e| failed(format!("{picture}: {e}")))?;
+            let image = katna_pdf_sign::page_image(&bytes)
+                .map_err(|e| failed(format!("{picture}: {e}")))?;
+            katna_pdf_cos::Insert::Image { rect, image }
+        }
+        (None, None, Some(shape)) => {
+            let kind = match shape {
+                "rectangle" => katna_pdf_cos::ShapeKind::Rectangle,
+                "ellipse" => katna_pdf_cos::ShapeKind::Ellipse,
+                "line" => katna_pdf_cos::ShapeKind::Line,
+                _ => {
+                    return Err(Failure::Usage(format!(
+                        "--shape {shape}: rectangle, ellipse or line"
+                    )));
+                }
+            };
+            let rect = args
+                .option("--rect")
+                .ok_or_else(|| Failure::Usage("say where with --rect".into()))?;
+            let rect = numbers("--rect", rect, 4)?;
+            let fill = args.flag("--fill");
+            katna_pdf_cos::Insert::Shape {
+                kind,
+                rect: [rect[0], rect[1], rect[2], rect[3]],
+                stroke: (!fill).then_some(colour),
+                fill: fill.then_some(colour),
+                width: 2.0,
+            }
+        }
+        _ => {
+            return Err(Failure::Usage(
+                "insert takes one of --text, --image and --shape".into(),
+            ));
+        }
+    };
+    let bytes = doc
+        .insert(page, &[item])
+        .map_err(|e| failed(format!("{file}: {e}")))?;
+    write(&out, &bytes)?;
+    Ok(wrote(&[(out, doc.pages().len())], json))
 }
 
 /// Adds an empty signature field, for someone to sign later.
