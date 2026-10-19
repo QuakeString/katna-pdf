@@ -22,6 +22,7 @@ mod organize;
 mod print;
 mod search;
 mod select;
+mod speech;
 mod spread;
 mod tabs;
 mod text;

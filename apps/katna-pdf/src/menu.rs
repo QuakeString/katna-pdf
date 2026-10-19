@@ -14,7 +14,8 @@ use crate::text::t;
 use crate::viewer::{
     ActualSize, AddBookmark, Annotate, CloseTab, Compare, CopyText, Find, FindNext, FindPrevious,
     FitPage, FitWidth, NextPage, NextSpread, NextTab, Open, Organize, PreviousPage, PreviousTab,
-    Print, Properties, Quit, Save, ShowLibrary, Sign, ToggleContents, ToggleNight, ZoomIn, ZoomOut,
+    Print, Properties, Quit, ReadAloud, Save, ShowLibrary, Sign, ToggleContents, ToggleNight,
+    ZoomIn, ZoomOut,
 };
 
 /// The menus, their items, and each item's keys.
@@ -65,6 +66,7 @@ fn items() -> Vec<MenuItem> {
                 MenuItem::Separator,
                 item("menu-side-pane", &["F7"]),
                 item("menu-night", &["Control", "Shift", "N"]),
+                item("menu-read-aloud", &["Control", "Shift", "Y"]),
             ],
         ),
         MenuItem::submenu(
@@ -107,6 +109,7 @@ fn action(id: &str) -> Option<Box<dyn Action>> {
         "menu-layout" => Box::new(NextSpread),
         "menu-side-pane" => Box::new(ToggleContents),
         "menu-night" => Box::new(ToggleNight),
+        "menu-read-aloud" => Box::new(ReadAloud),
         "menu-next-page" => Box::new(NextPage),
         "menu-previous-page" => Box::new(PreviousPage),
         "menu-add-bookmark" => Box::new(AddBookmark),

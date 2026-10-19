@@ -748,7 +748,7 @@ a11y.set-language	P1	Set document language	partial	P1	§4.3	Metadata editor; /La
 a11y.set-title-display	P1	Show the document title in the window	partial	P1	§4.3	Initial view settings (DisplayDocTitle)
 a11y.make-accessible-action	P1	Make Accessible guided action	missing	P2	-	
 a11y.setup-assistant	P2	Accessibility setup assistant	skip	-	-	
-a11y.read-aloud	P2	Read out loud (platform TTS)	covered	P1	§4.1	tts crate
+a11y.read-aloud	P2	Read out loud (platform TTS)	covered	P1	§4.1	speech.rs: Speech Dispatcher, espeak-ng, Windows voice
 a11y.read-aloud-options	P2	Read-aloud voice, pitch and speed	partial	P1	§4.1	Voice/speed controls unstated
 a11y.replace-page-colors	P2	Replace page colours (high contrast)	covered	P0	§4.5	Night filters ship in Phase 1
 a11y.reflow-tagged	P2	Reflow tagged content	missing	P2	-	Reader parity; small screens
