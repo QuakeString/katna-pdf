@@ -31,6 +31,7 @@ use katna_ui::widgets::{self, Tip};
 use katna_ui::{px, unpx};
 
 mod drive;
+mod mail;
 
 use crate::drives::Drive;
 use crate::text::t;
@@ -76,6 +77,15 @@ enum Place {
     Missing,
     /// The drive of this account of Katna Mail's.
     Drive(i64),
+    /// The PDFs attached to mail in Katna Mail.
+    Mail,
+}
+
+impl Place {
+    /// Outside the catalog: a drive, or mail.
+    fn elsewhere(&self) -> bool {
+        matches!(self, Place::Drive(_) | Place::Mail)
+    }
 }
 
 /// What a place's remove button does.
@@ -133,6 +143,9 @@ pub struct LibraryView {
     /// The drives of Katna Mail's accounts, and the one shown.
     drives: Vec<Drive>,
     drive: Option<drive::DriveView>,
+    /// The PDFs attached to mail, and what of them is shown.
+    mail_pdfs: Vec<crate::mail::MailPdf>,
+    mail: Option<mail::MailView>,
     /// Watches the folders; dropped and made again when they change.
     watcher: Option<notify::RecommendedWatcher>,
     _inputs: [Subscription; 4],
@@ -195,6 +208,9 @@ impl LibraryView {
                     this.search_drive("", cx);
                 }
             }
+            InputEvent::Changed | InputEvent::Submit if this.place == Place::Mail => {
+                this.filter_mail(cx)
+            }
             InputEvent::Changed | InputEvent::Submit => this.reload(cx),
             InputEvent::Cancel => cx.emit(LibraryEvent::Close),
         });
@@ -235,12 +251,15 @@ impl LibraryView {
             width: Rc::new(Cell::new(800.0)),
             drives: Vec::new(),
             drive: None,
+            mail_pdfs: Vec::new(),
+            mail: None,
             watcher: None,
             _inputs: [searching, tagging, adding, naming],
         };
         this.reload(cx);
         this.watch(cx);
         this.load_drives(cx);
+        this.load_mail(cx);
         this
     }
 
@@ -254,6 +273,7 @@ impl LibraryView {
         self.reload(cx);
         self.scan(cx);
         self.load_drives(cx);
+        self.load_mail(cx);
     }
 
     /// Watches the folders, to read them again when a PDF in them is
@@ -408,9 +428,9 @@ impl LibraryView {
             }
             Place::Copies => copies = lib.duplicates().unwrap_or_default(),
             Place::Missing => filter.missing = Some(true),
-            Place::Drive(_) => {}
+            Place::Drive(_) | Place::Mail => {}
         }
-        let in_drive = matches!(self.place, Place::Drive(_));
+        let in_drive = self.place.elsewhere();
         self.docs = if in_drive {
             Vec::new()
         } else if self.place == Place::Copies {
@@ -492,19 +512,26 @@ impl LibraryView {
     }
 
     fn go(&mut self, place: Place, cx: &mut Context<Self>) {
-        let was_drive = matches!(self.place, Place::Drive(_));
+        let was_elsewhere = self.place.elsewhere();
         self.place = place;
         self.selected = None;
         self.chosen.clear();
         self.renaming = false;
         self.drive = None;
+        self.mail = None;
         if let Place::Drive(account) = self.place {
             self.search.update(cx, |s, cx| {
                 s.set_text("", cx);
                 s.set_placeholder(t("library-drive-search", &[]));
             });
             self.open_drive(account, cx);
-        } else if was_drive {
+        } else if self.place == Place::Mail {
+            self.search.update(cx, |s, cx| {
+                s.set_text("", cx);
+                s.set_placeholder(t("library-mail-search", &[]));
+            });
+            self.filter_mail(cx);
+        } else if was_elsewhere {
             self.search.update(cx, |s, cx| {
                 s.set_text("", cx);
                 s.set_placeholder(t("library-search", &[]));
@@ -938,6 +965,7 @@ impl LibraryView {
             Place::Collection(name) => name.clone(),
             Place::Copies => t("library-copies", &[]),
             Place::Missing => t("library-missing", &[]),
+            Place::Mail => t("library-mail-title", &[]),
             Place::Drive(_) => self.drive.as_ref().map_or_else(String::new, |v| {
                 t(
                     "library-drive-title",
@@ -1081,6 +1109,19 @@ impl LibraryView {
                     cx,
                 ));
             }
+        }
+        if !self.mail_pdfs.is_empty() {
+            side = side
+                .child(self.heading("library-mail", None))
+                .child(self.place_row(
+                    ("mail", 0),
+                    Place::Mail,
+                    "attachment",
+                    t("library-mail-files", &[]),
+                    Some(self.mail_pdfs.len()),
+                    None,
+                    cx,
+                ));
         }
         if !self.tags.is_empty() {
             side = side.child(self.heading("library-tags", None));
@@ -1241,7 +1282,9 @@ impl LibraryView {
     fn main(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let th = self.theme;
         let in_drive = self.drive.is_some();
-        let has_query = !self.search.read(cx).text().trim().is_empty() && !in_drive;
+        let in_mail = self.place == Place::Mail;
+        let elsewhere = in_drive || in_mail;
+        let has_query = !self.search.read(cx).text().trim().is_empty() && !elsewhere;
         let progress = self.scanning.map(|(done, total)| {
             let line = if total == 0 {
                 t("library-scanning", &[])
@@ -1289,6 +1332,8 @@ impl LibraryView {
                         t(
                             if in_drive {
                                 "library-drive-search-tip"
+                            } else if in_mail {
+                                "library-mail-search-tip"
                             } else {
                                 "library-search-tip"
                             },
@@ -1319,7 +1364,7 @@ impl LibraryView {
                         .on_click(cx.listener(|this, _, _, cx| this.keep_search(cx))),
                 )
             })
-            .when(!in_drive, |d| {
+            .when(!elsewhere, |d| {
                 d.child(
                     div()
                         .id("library-sort")
@@ -1344,6 +1389,8 @@ impl LibraryView {
             });
         let body: AnyElement = if in_drive {
             self.drive_body(cx)
+        } else if in_mail {
+            self.mail_body(cx)
         } else if let Err(e) = &self.lib {
             self.message(t("library-unavailable", &[("error", e)]), None)
         } else if self.folders.is_empty() {
@@ -1369,6 +1416,8 @@ impl LibraryView {
         let checks = (!self.checks.is_empty()).then(|| self.checks(cx).into_any_element());
         let details = if in_drive {
             self.drive_details(cx)
+        } else if in_mail {
+            self.mail_details(cx)
         } else if self.chosen.len() > 1 {
             Some(self.bulk(cx).into_any_element())
         } else {

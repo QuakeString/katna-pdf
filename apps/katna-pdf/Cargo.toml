@@ -16,6 +16,8 @@ notify.workspace = true
 katna-pdf-sign.workspace = true
 katna-core.workspace = true
 katna-dbus.workspace = true
+katna-store.workspace = true
+mail-parser.workspace = true
 futures-lite.workspace = true
 jiff = { version = "0.2.37", default-features = false, features = ["std", "tz-system", "tzdb-zoneinfo", "tzdb-bundle-always"] }
 katna-ui.workspace = true
