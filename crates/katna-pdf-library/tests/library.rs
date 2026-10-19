@@ -170,7 +170,10 @@ fn filters_tags_ratings_and_collections() {
     assert_eq!(ids("lease"), [lease]);
     assert_eq!(ids("100%_"), Vec::<i64>::new());
     let canon = std::fs::canonicalize(&dir).unwrap();
-    assert_eq!(ids(&format!("in:{}/y", canon.display())), [invoice]);
+    assert_eq!(
+        ids(&format!("in:\"{}\"", canon.join("y").display())),
+        [invoice]
+    );
     assert_eq!(ids("signed:no forms:no sort:opened"), [invoice, lease]);
     assert_eq!(lib.doc(lease).unwrap().unwrap().rating, 5);
     assert_eq!(lib.doc(lease).unwrap().unwrap().note, "Renew in May");
@@ -205,10 +208,13 @@ fn the_catalog_is_kept_in_a_file() {
         lib.add_folder(&dir.join("docs")).unwrap();
         lib.scan(&Hayro, &mut |_, _, _| {}).unwrap();
     }
-    let lib = Library::open(&db).unwrap();
-    assert_eq!(lib.folders().unwrap().len(), 1);
-    assert_eq!(lib.search("deposit", 5).unwrap().len(), 1);
-    let id = lib.doc_at(&dir.join("docs/lease.pdf")).unwrap().unwrap();
-    assert_eq!(lib.doc(id).unwrap().unwrap().name(), "Flat lease");
+    // Closed before its folder is taken away, which Windows needs.
+    {
+        let lib = Library::open(&db).unwrap();
+        assert_eq!(lib.folders().unwrap().len(), 1);
+        assert_eq!(lib.search("deposit", 5).unwrap().len(), 1);
+        let id = lib.doc_at(&dir.join("docs/lease.pdf")).unwrap().unwrap();
+        assert_eq!(lib.doc(id).unwrap().unwrap().name(), "Flat lease");
+    }
     std::fs::remove_dir_all(&dir).unwrap();
 }

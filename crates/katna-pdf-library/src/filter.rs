@@ -225,9 +225,12 @@ impl Filter {
             wheres.push(format!("rating >= {}", r.min(5)));
         }
         if let Some(folder) = &self.folder {
-            let folder = folder.trim_end_matches(['/', '\\']);
+            // Paths are kept as the system writes them.
+            let sep = std::path::MAIN_SEPARATOR;
+            let folder = folder.replace('/', &sep.to_string());
+            let folder = folder.trim_end_matches(sep);
             let exact = arg(Value::Text(folder.to_owned()), &mut args);
-            let below = arg(Value::Text(format!("{}/%", escape(folder))), &mut args);
+            let below = arg(Value::Text(format!("{}{sep}%", escape(folder))), &mut args);
             wheres.push(format!("(path = {exact} OR path LIKE {below} ESCAPE '\\')"));
         }
         let mut sql = String::from(
