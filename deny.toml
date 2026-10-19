@@ -44,10 +44,10 @@ multiple-versions = "warn"
 wildcards = "deny"
 allow-wildcard-paths = true
 deny = [
-    # GPUI stays in the app and Katna's UI crates; the renderer and tools
-    # never depend on it (docs/PLAN.md).
-    { crate = "gpui-pre", wrappers = ["katna-pdf", "katna-ui", "gpui-pre-platform", "gpui-pre-linux", "gpui-pre-wgpu", "gpui-pre-apple", "gpui-pre-macos", "gpui-pre-windows", "gpui-pre-web"], reason = "GPUI is only allowed in the app" },
-    { crate = "gpui-pre-platform", wrappers = ["katna-pdf", "katna-ui"], reason = "GPUI is only allowed in the app" },
+    # GPUI stays in the app, its Windows Setup and Katna's UI crates; the
+    # renderer and tools never depend on it (docs/PLAN.md).
+    { crate = "gpui-pre", wrappers = ["katna-pdf", "katna-pdf-setup", "katna-ui", "gpui-pre-platform", "gpui-pre-linux", "gpui-pre-wgpu", "gpui-pre-apple", "gpui-pre-macos", "gpui-pre-windows", "gpui-pre-web"], reason = "GPUI is only allowed in the app" },
+    { crate = "gpui-pre-platform", wrappers = ["katna-pdf", "katna-pdf-setup", "katna-ui"], reason = "GPUI is only allowed in the app" },
     # TLS is rustls only, as in Katna.
     { crate = "openssl-sys", reason = "use rustls" },
     { crate = "native-tls", reason = "use rustls" },

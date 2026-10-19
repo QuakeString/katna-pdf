@@ -508,7 +508,7 @@ Two things, both on the device, nothing uploaded:
 | Platform | Packages | Notes |
 |---|---|---|
 | **Linux** | Flatpak (Flathub), AppImage, `.deb`, `.rpm`, AUR | GPUI renders with Vulkan (Blade) on Wayland and X11. **Flatpak and USB tokens:** needs `--device=all` or pcscd socket access. Native-driver tokens then work inside the sandbox; vendor PKCS#11 tokens also need the host's driver library exposed. Document that native packages are the smoothest route for DSC users. |
-| **Windows 10 (1903+) / 11** | Katna's own GPUI-drawn Setup.exe (shared with Katna Mail, per-user or all-users), winget | GPUI's DirectX 11 backend. Code-sign the installer with an OV/EV certificate (SmartScreen). Register as a PDF handler and add a thumbnail provider (P2). |
+| **Windows 10 (1903+) / 11** | Katna PDF Setup (`apps/katna-pdf-setup`, built the way Katna Mail's GPUI-drawn Setup is; per-user or all-users; on `windows-latest`), a zip, later winget | GPUI's DirectX 11 backend. Code-sign the installer with an OV/EV certificate (SmartScreen). Register as a PDF handler and add a thumbnail provider (P2). |
 | **macOS 12+** | Notarized `.dmg`, Homebrew cask | Metal backend. Universal binary. |
 
 **CI:** GitHub Actions on a matrix of ubuntu, windows and macos. Run `cargo nextest`, golden-image render tests, `cargo deny` (licenses and advisories), `cargo fuzz` smoke runs, and nightly builds.
