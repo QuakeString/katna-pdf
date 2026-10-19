@@ -2170,7 +2170,7 @@ fn unlock(file: Option<PathBuf>, found: Option<Found>, secret: &str) -> Result<K
 }
 
 /// A box ticked or not.
-fn check_box(on: bool, th: super::Theme) -> gpui::Div {
+pub(super) fn check_box(on: bool, th: super::Theme) -> gpui::Div {
     div()
         .size(px(18.0))
         .flex_none()

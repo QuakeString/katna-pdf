@@ -670,3 +670,76 @@ fn objects_are_listed_moved_and_taken_out() {
     let (code, _) = run(&["object", s(&gone), "1:1", "-o", s(&moved), "--delete"]);
     assert_ne!(code, 0);
 }
+
+#[test]
+fn footers_watermarks_and_bates_numbers_go_on_pages() {
+    let d = dir("stamp");
+    let one = d.join("one.pdf");
+    std::fs::write(
+        &one,
+        katna_pdf_cos::text_pdf("Note", &["  Hello".to_string()]),
+    )
+    .unwrap();
+    let file = d.join("two.pdf");
+    let (code, out) = run(&["merge", s(&one), s(&one), "-o", s(&file)]);
+    assert_eq!(code, 0, "{out}");
+    let footed = d.join("footed.pdf");
+    let (code, out) = run(&[
+        "stamp",
+        s(&file),
+        "-o",
+        s(&footed),
+        "--text",
+        "Page {page} of {pages}",
+    ]);
+    assert_eq!(code, 0, "{out}");
+    let marked = d.join("marked.pdf");
+    let (code, out) = run(&[
+        "stamp",
+        s(&footed),
+        "-o",
+        s(&marked),
+        "--text",
+        "DRAFT",
+        "--place",
+        "across",
+    ]);
+    assert_eq!(code, 0, "{out}");
+    let numbered = d.join("numbered.pdf");
+    let (code, out) = run(&[
+        "stamp",
+        s(&marked),
+        "-o",
+        s(&numbered),
+        "--text",
+        "{bates}",
+        "--place",
+        "bottom-right",
+        "--pages",
+        "2",
+        "--bates-prefix",
+        "X-",
+        "--bates-start",
+        "41",
+        "--bates-digits",
+        "3",
+    ]);
+    assert_eq!(code, 0, "{out}");
+    let (_, out) = run(&["text", s(&numbered)]);
+    assert!(out.contains("Helvetica 10pt: Page 1 of 2"), "{out}");
+    assert!(out.contains("Helvetica 10pt: Page 2 of 2"), "{out}");
+    assert!(out.contains("DRAFT"), "{out}");
+    assert!(out.contains("Helvetica 10pt: X-041"), "{out}");
+    assert!(!out.contains("X-042"), "{out}");
+    let (code, _) = run(&[
+        "stamp",
+        s(&file),
+        "-o",
+        s(&numbered),
+        "--text",
+        "x",
+        "--place",
+        "sideways",
+    ]);
+    assert_ne!(code, 0);
+}

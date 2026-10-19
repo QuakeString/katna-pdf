@@ -15,7 +15,7 @@ use katna_pdf_cos::{
 };
 use katna_pdf_sign::{Digest, Revocation, Signer, Trust, common_name, p12, pkcs11};
 
-mod ranges;
+use katna_pdf_cos::ranges;
 
 const USAGE: &str = "\
 usage: katna-pdf-cli COMMAND [--json] ...
@@ -59,6 +59,15 @@ usage: katna-pdf-cli COMMAND [--json] ...
                                   text in a standard font (Helvetica, Times-Roman,
                                   Courier, -Bold and so on), its first baseline at X,Y;
                                   a line runs from L,B to R,T
+  stamp FILE -o OUT --text TEXT [--place top-left|top|top-right|bottom-left|bottom|
+        bottom-right|middle|across] [--pages LIST] [--font NAME] [--size PT]
+        [--colour #RRGGBB] [--opacity 0..1] [--margin PT] [--under]
+        [--bates-prefix P] [--bates-suffix S] [--bates-start N] [--bates-digits D]
+                                  a header, footer or watermark on every page (or
+                                  LIST); {page}, {pages} and {bates} in TEXT become
+                                  the page's number, the page count and its Bates
+                                  number; across is a large faint watermark corner
+                                  to corner; --under draws it beneath the page
   objects FILE [--pages LIST]     the pictures, forms and shapes drawn on pages, numbered
                                   PAGE:OBJECT, with where each is
   object FILE PAGE:OBJECT -o OUT (--rect L,B,R,T | --delete)
@@ -115,6 +124,7 @@ fn main() -> ExitCode {
         "verify" => verify(rest, json),
         "add-field" => add_field(rest, json),
         "insert" => insert(rest, json),
+        "stamp" => stamp(rest, json),
         "objects" => objects(rest, json),
         "object" => object(rest, json),
         "ltv" => ltv(rest, json),
@@ -223,6 +233,13 @@ impl<'a> Args<'a> {
                     | "--picture"
                     | "--name"
                     | "--report"
+                    | "--place"
+                    | "--opacity"
+                    | "--margin"
+                    | "--bates-prefix"
+                    | "--bates-suffix"
+                    | "--bates-start"
+                    | "--bates-digits"
             ) {
                 let Some(value) = it.next() else {
                     return Err(Failure::Usage(format!("{a} needs a value")));
@@ -230,6 +247,7 @@ impl<'a> Args<'a> {
                 options.push((a.as_str(), value.as_str()));
             } else if [
                 "--uncrop", "--online", "--ltv", "--lta", "--blocks", "--fill", "--delete",
+                "--under",
             ]
             .contains(&a.as_str())
             {
@@ -963,17 +981,7 @@ fn insert(args: &[String], json: bool) -> Done {
     let out = args.output()?;
     let doc = open(file)?;
     let page = page_number(&doc, args.option("--page"))?;
-    let colour = match args.option("--colour") {
-        None => [0.0, 0.0, 0.0],
-        Some(c) => {
-            let hex = c.trim_start_matches('#');
-            let v = (hex.len() == 6)
-                .then(|| u32::from_str_radix(hex, 16).ok())
-                .flatten()
-                .ok_or_else(|| Failure::Usage(format!("--colour {c}: #RRGGBB")))?;
-            [(v >> 16) & 255, (v >> 8) & 255, v & 255].map(|n| n as f32 / 255.0)
-        }
-    };
+    let colour = colour_option(&args, [0.0; 3])?;
     let numbers = |name: &str, value: &str, n: usize| -> Result<Vec<f32>, Failure> {
         value
             .split(',')
@@ -1053,6 +1061,113 @@ fn insert(args: &[String], json: bool) -> Done {
         .map_err(|e| failed(format!("{file}: {e}")))?;
     write(&out, &bytes)?;
     Ok(wrote(&[(out, doc.pages().len())], json))
+}
+
+/// The colour in `--colour`, or `default`.
+fn colour_option(args: &Args, default: [f32; 3]) -> Result<[f32; 3], Failure> {
+    Ok(match args.option("--colour") {
+        None => default,
+        Some(c) => {
+            let hex = c.trim_start_matches('#');
+            let v = (hex.len() == 6)
+                .then(|| u32::from_str_radix(hex, 16).ok())
+                .flatten()
+                .ok_or_else(|| Failure::Usage(format!("--colour {c}: #RRGGBB")))?;
+            [(v >> 16) & 255, (v >> 8) & 255, v & 255].map(|n| n as f32 / 255.0)
+        }
+    })
+}
+
+/// A number in option `name`, or `default`, that `ok` accepts.
+fn number_option(
+    args: &Args,
+    name: &str,
+    default: f32,
+    ok: impl Fn(f32) -> bool,
+) -> Result<f32, Failure> {
+    match args.option(name) {
+        None => Ok(default),
+        Some(v) => v
+            .parse::<f32>()
+            .ok()
+            .filter(|v| v.is_finite() && ok(*v))
+            .ok_or_else(|| Failure::Usage(format!("{name} {v}: not a number it takes"))),
+    }
+}
+
+/// Draws a header, footer, watermark or Bates number on many pages.
+fn stamp(args: &[String], json: bool) -> Done {
+    use katna_pdf_cos::StampPlace;
+    let args = Args::parse(args)?;
+    let [file] = args.words()?;
+    let out = args.output()?;
+    let doc = open(file)?;
+    let count = doc.pages().len();
+    let pages = match args.option("--pages") {
+        Some(spec) => ranges::parse(spec, count).map_err(failed)?,
+        None => (0..count).collect(),
+    };
+    let text = args
+        .option("--text")
+        .ok_or_else(|| Failure::Usage("say what with --text".into()))?;
+    let place = match args.option("--place").unwrap_or("bottom") {
+        "top-left" => StampPlace::TopLeft,
+        "top" => StampPlace::TopCentre,
+        "top-right" => StampPlace::TopRight,
+        "bottom-left" => StampPlace::BottomLeft,
+        "bottom" => StampPlace::BottomCentre,
+        "bottom-right" => StampPlace::BottomRight,
+        "middle" => StampPlace::Middle,
+        "across" => StampPlace::Across,
+        p => {
+            return Err(Failure::Usage(format!(
+                "--place {p}: top-left, top, top-right, bottom-left, bottom, \
+                 bottom-right, middle or across"
+            )));
+        }
+    };
+    let mark = matches!(place, StampPlace::Across | StampPlace::Middle);
+    let bates = [
+        "--bates-prefix",
+        "--bates-suffix",
+        "--bates-start",
+        "--bates-digits",
+    ]
+    .iter()
+    .any(|o| args.option(o).is_some())
+    .then(|| -> Result<_, Failure> {
+        let whole = |name: &str, default: u64| match args.option(name) {
+            None => Ok(default),
+            Some(v) => v
+                .parse::<u64>()
+                .map_err(|_| Failure::Usage(format!("{name} {v}: a whole number"))),
+        };
+        Ok(katna_pdf_cos::Bates {
+            prefix: args.option("--bates-prefix").unwrap_or("").to_owned(),
+            suffix: args.option("--bates-suffix").unwrap_or("").to_owned(),
+            start: whole("--bates-start", 1)?,
+            digits: whole("--bates-digits", 6)?.min(20) as usize,
+        })
+    })
+    .transpose()?;
+    let stamp = katna_pdf_cos::Stamp {
+        text: text.replace("\\n", "\n"),
+        place,
+        font: args.option("--font").unwrap_or("Helvetica").to_owned(),
+        size: number_option(&args, "--size", if mark { 60.0 } else { 10.0 }, |v| v > 0.0)?,
+        colour: colour_option(&args, if mark { [0.5, 0.5, 0.5] } else { [0.0; 3] })?,
+        opacity: number_option(&args, "--opacity", if mark { 0.3 } else { 1.0 }, |v| {
+            (0.0..=1.0).contains(&v)
+        })?,
+        margin: number_option(&args, "--margin", 36.0, |v| v >= 0.0)?,
+        under: args.flag("--under"),
+        bates,
+    };
+    let bytes = doc
+        .stamp(&pages, &stamp)
+        .map_err(|e| failed(format!("{file}: {e}")))?;
+    write(&out, &bytes)?;
+    Ok(wrote(&[(out, count)], json))
 }
 
 /// Lists the pictures, forms and shapes drawn on pages.
