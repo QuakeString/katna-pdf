@@ -105,6 +105,7 @@ strip = true
 # hayro with Katna PDF's fixes; vendor/hayro/KATNA.md lists them.
 hayro = { path = "vendor/hayro" }
 hayro-interpret = { path = "vendor/hayro-interpret" }
+hayro-syntax = { path = "vendor/hayro-syntax" }
 gpui-pre = { git = "https://github.com/QuakeString/katna", rev = "a201ec5c904a7da7f174f3da066a7dc9a9b78387" }
 gpui-pre-linux = { git = "https://github.com/QuakeString/katna", rev = "a201ec5c904a7da7f174f3da066a7dc9a9b78387" }
 gpui-pre-wgpu = { git = "https://github.com/QuakeString/katna", rev = "a201ec5c904a7da7f174f3da066a7dc9a9b78387" }
