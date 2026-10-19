@@ -10,7 +10,10 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use gpui::{AnyElement, Context, Entity, Subscription, div, prelude::*};
-use katna_pdf_cos::{Field, FieldEdit, FieldKind, FieldSpec, FormDesign, NewField, Object, Ref};
+use katna_pdf_cos::{
+    CalcOp, Calculation, Field, FieldEdit, FieldKind, FieldSpec, FormDesign, Format, NewField,
+    Object, Ref, Scripts,
+};
 use katna_ui::px;
 use katna_ui::scale::desktop_px;
 use katna_ui::text_input::{InputEvent, TextInput};
@@ -41,12 +44,55 @@ const KINDS: [(&str, &str, [f32; 2]); 8] = [
     ("form-kind-signature", "Signature", [180.0, 50.0]),
 ];
 
+/// The ways a text field's value can be shown: plain, a number, an
+/// amount in rupees, a percentage and a date.
+const SHOWN: [&str; 5] = [
+    "form-shown-plain",
+    "form-shown-number",
+    "form-shown-amount",
+    "form-shown-percent",
+    "form-shown-date",
+];
+
+fn shown_format(shown: usize) -> Option<Format> {
+    let number = |currency: &str| Format::Number {
+        decimals: 2,
+        separators: 0,
+        negative: 0,
+        currency: currency.into(),
+        currency_first: true,
+    };
+    match shown {
+        1 => Some(number("")),
+        2 => Some(number("Rs. ")),
+        3 => Some(Format::Percent {
+            decimals: 0,
+            separators: 0,
+        }),
+        4 => Some(Format::Date("dd/mm/yyyy".into())),
+        _ => None,
+    }
+}
+
+/// Which of [`SHOWN`] `format` is, if one.
+fn shown_index(format: Option<&Format>) -> Option<usize> {
+    match format {
+        None => Some(0),
+        Some(Format::Number { currency, .. }) if currency.is_empty() => Some(1),
+        Some(Format::Number { .. }) => Some(2),
+        Some(Format::Percent { .. }) => Some(3),
+        Some(Format::Date(_)) => Some(4),
+        Some(Format::Special(_)) => None,
+    }
+}
+
 /// The form tool, while in hand.
 pub(super) struct Designing {
     /// Every field of the file shown, and each page's widgets in the
     /// order Tab goes through them.
     fields: Vec<Field>,
     order: HashMap<usize, Vec<Ref>>,
+    scripts: HashMap<Ref, Scripts>,
     /// The kind of field (an index into [`KINDS`]) to drag out next.
     adding: Option<usize>,
     drawing: Option<Draft>,
@@ -58,6 +104,8 @@ pub(super) struct Designing {
     name: Entity<TextInput>,
     tip: Entity<TextInput>,
     options: Entity<TextInput>,
+    /// The fields a total adds up, by name.
+    total: Entity<TextInput>,
     _inputs: Vec<Subscription>,
 }
 
@@ -92,8 +140,16 @@ impl Drag {
     }
 }
 
-/// The fields of `doc`, and each page's widgets in their order.
-pub(super) fn read_form(doc: &katna_pdf_cos::Document) -> (Vec<Field>, HashMap<usize, Vec<Ref>>) {
+/// A file's fields as the form tool shows them.
+pub(super) struct FormRead {
+    fields: Vec<Field>,
+    order: HashMap<usize, Vec<Ref>>,
+    scripts: HashMap<Ref, Scripts>,
+}
+
+/// The fields of `doc`, each page's widgets in their order, and the
+/// totals and formats fields have.
+pub(super) fn read_form(doc: &katna_pdf_cos::Document) -> FormRead {
     let fields = doc.form();
     let widgets: std::collections::HashSet<Ref> = fields
         .iter()
@@ -118,7 +174,12 @@ pub(super) fn read_form(doc: &katna_pdf_cos::Document) -> (Vec<Field>, HashMap<u
             }
         }
     }
-    (fields, order)
+    let scripts = doc.form_scripts(&fields);
+    FormRead {
+        fields,
+        order,
+        scripts,
+    }
 }
 
 impl Viewer {
@@ -144,7 +205,8 @@ impl Viewer {
         let name = input("form-name", cx);
         let tip = input("form-tip", cx);
         let options = input("form-options", cx);
-        let inputs = [&name, &tip, &options]
+        let total = input("form-total-hint", cx);
+        let inputs = [&name, &tip, &options, &total]
             .into_iter()
             .map(|i| {
                 cx.subscribe(i, |this, _, event, cx| {
@@ -154,13 +216,18 @@ impl Viewer {
                 })
             })
             .collect();
-        let (fields, order) = match &self.form {
+        let read = match &self.form {
             Some(form) => read_form(&form.source),
-            None => (Vec::new(), HashMap::new()),
+            None => FormRead {
+                fields: Vec::new(),
+                order: HashMap::new(),
+                scripts: HashMap::new(),
+            },
         };
         self.designing = Some(Designing {
-            fields,
-            order,
+            fields: read.fields,
+            order: read.order,
+            scripts: read.scripts,
             adding: None,
             drawing: None,
             chosen: None,
@@ -169,6 +236,7 @@ impl Viewer {
             name,
             tip,
             options,
+            total,
             _inputs: inputs,
         });
         // Fields nobody can fill (buttons, signatures) are only read when
@@ -199,9 +267,10 @@ impl Viewer {
                 })
                 .await;
             this.update(cx, |this, cx| {
-                if let (Some(designing), Ok((fields, order))) = (this.designing.as_mut(), read) {
-                    designing.fields = fields;
-                    designing.order = order;
+                if let (Some(designing), Ok(read)) = (this.designing.as_mut(), read) {
+                    designing.fields = read.fields;
+                    designing.order = read.order;
+                    designing.scripts = read.scripts;
                     cx.notify();
                 }
             })
@@ -212,16 +281,13 @@ impl Viewer {
 
     /// The file shown changed: the form tool reads its fields again, and
     /// chooses the one just added.
-    pub(super) fn design_changed(
-        &mut self,
-        (fields, order): (Vec<Field>, HashMap<usize, Vec<Ref>>),
-        cx: &mut Context<Self>,
-    ) {
+    pub(super) fn design_changed(&mut self, read: FormRead, cx: &mut Context<Self>) {
         let Some(designing) = self.designing.as_mut() else {
             return;
         };
-        designing.fields = fields;
-        designing.order = order;
+        designing.fields = read.fields;
+        designing.order = read.order;
+        designing.scripts = read.scripts;
         if let Some(name) = designing.choose_next.take() {
             designing.chosen = designing
                 .fields
@@ -254,10 +320,18 @@ impl Viewer {
             Some(FieldKind::Choice { options, .. }) => options.join(", "),
             _ => String::new(),
         };
+        let total = match field
+            .and_then(|f| designing.scripts.get(&f.id))
+            .and_then(|s| s.calculate.as_ref())
+        {
+            Some(Calculation::Simple { fields, .. }) => fields.join(", "),
+            None => String::new(),
+        };
         for (input, value) in [
             (designing.name.clone(), name),
             (designing.tip.clone(), tip),
             (designing.options.clone(), options),
+            (designing.total.clone(), total),
         ] {
             input.update(cx, |i, cx| i.set_text(value, cx));
         }
@@ -485,6 +559,7 @@ impl Viewer {
                 required: false,
                 read_only: false,
                 value: None,
+                scripts: katna_pdf_cos::Scripts::default(),
             }],
             ..FormDesign::default()
         };
@@ -545,9 +620,59 @@ impl Viewer {
         {
             edit.options = Some(options);
         }
+        if matches!(field.kind, FieldKind::Text { .. }) {
+            let adds: Vec<String> = designing
+                .total
+                .read(cx)
+                .text()
+                .split(',')
+                .map(|o| o.trim().to_owned())
+                .filter(|o| !o.is_empty())
+                .collect();
+            let mut scripts = designing
+                .scripts
+                .get(&field.id)
+                .cloned()
+                .unwrap_or_default();
+            let was = scripts.calculate.clone();
+            scripts.calculate = (!adds.is_empty()).then_some(Calculation::Simple {
+                op: match &was {
+                    Some(Calculation::Simple { op, .. }) => *op,
+                    None => CalcOp::Sum,
+                },
+                fields: adds,
+            });
+            if scripts.calculate != was {
+                edit.scripts = Some(scripts);
+            }
+        }
         if edit == FieldEdit::new(field.id) {
             return;
         }
+        self.edit_field(&field, edit, cx);
+    }
+
+    /// Shows the field chosen as format `shown` (an index into
+    /// [`SHOWN`]).
+    fn set_shown(&mut self, shown: usize, cx: &mut Context<Self>) {
+        let Some(field) = self.chosen_field().cloned() else {
+            return;
+        };
+        let Some(designing) = self.designing.as_ref() else {
+            return;
+        };
+        let mut scripts = designing
+            .scripts
+            .get(&field.id)
+            .cloned()
+            .unwrap_or_default();
+        let format = shown_format(shown);
+        if scripts.format == format {
+            return;
+        }
+        scripts.format = format;
+        let mut edit = FieldEdit::new(field.id);
+        edit.scripts = Some(scripts);
         self.edit_field(&field, edit, cx);
     }
 
@@ -845,6 +970,20 @@ impl Viewer {
                 .child(toggle(1, field.read_only, "form-read-only"));
             if let FieldKind::Text { multiline, .. } = field.kind {
                 card = card.child(toggle(2, multiline, "form-multiline"));
+                let scripts = designing.scripts.get(&field.id);
+                let now = scripts.and_then(|s| s.format.as_ref());
+                let mut shown = div().flex().flex_wrap().gap(px(space::S1));
+                for (i, id) in SHOWN.iter().enumerate() {
+                    shown = shown.child(
+                        chip(("form-shown", i), shown_index(now) == Some(i), t(id, &[]))
+                            .on_click(cx.listener(move |this, _, _, cx| this.set_shown(i, cx))),
+                    );
+                }
+                card = card
+                    .child(label("form-shown"))
+                    .child(shown)
+                    .child(label("form-total"))
+                    .child(input(designing.total.clone()));
             }
             card = card.child(
                 div()

@@ -113,7 +113,9 @@ impl Document {
         let mut update = self.update()?;
         let fields = self.form();
         let form = self.acro_form().unwrap_or_default();
-        for (id, value) in changes {
+        let scripts = self.form_scripts(&fields);
+        let changes = self.recalculate(&fields, &scripts, changes);
+        for (id, value) in &changes {
             let Some(field) = fields.iter().find(|f| f.id == *id) else {
                 continue;
             };
@@ -123,8 +125,12 @@ impl Document {
             match value {
                 FieldValue::Text(text) => {
                     dict.set("V", text_object(text));
-                    let shown = match field.kind {
-                        FieldKind::Text { password: true, .. } => "*".repeat(text.chars().count()),
+                    let shown = match (&field.kind, scripts.get(id).and_then(|s| s.format.as_ref()))
+                    {
+                        (FieldKind::Text { password: true, .. }, _) => {
+                            "*".repeat(text.chars().count())
+                        }
+                        (_, Some(format)) => crate::calc::show(format, text),
                         _ => text.clone(),
                     };
                     let multiline = matches!(
@@ -185,6 +191,47 @@ impl Document {
             update.replace(field.id, Object::Dict(dict));
         }
         Ok(update.finish())
+    }
+
+    /// `changes` with the fields worked out from others (totals and the
+    /// like) worked out again, in the form's order.
+    fn recalculate(
+        &self,
+        fields: &[Field],
+        scripts: &HashMap<Ref, crate::calc::Scripts>,
+        changes: &[(Ref, FieldValue)],
+    ) -> Vec<(Ref, FieldValue)> {
+        let mut changes = changes.to_vec();
+        let order = self.calculation_order(scripts);
+        if order.is_empty() {
+            return changes;
+        }
+        let mut values: HashMap<String, String> = fields
+            .iter()
+            .map(|f| (f.name.clone(), f.value.clone().unwrap_or_default()))
+            .collect();
+        let name_of = |id: Ref| fields.iter().find(|f| f.id == id).map(|f| f.name.clone());
+        for (id, value) in &changes {
+            if let (Some(name), FieldValue::Text(text)) = (name_of(*id), value) {
+                values.insert(name, text.clone());
+            }
+        }
+        for id in order {
+            let (Some(name), Some(calc)) = (
+                name_of(id),
+                scripts.get(&id).and_then(|s| s.calculate.as_ref()),
+            ) else {
+                continue;
+            };
+            let result = crate::calc::calculate(calc, &values);
+            if values.get(&name) == Some(&result) {
+                continue;
+            }
+            values.insert(name, result.clone());
+            changes.retain(|(r, _)| *r != id);
+            changes.push((id, FieldValue::Text(result)));
+        }
+        changes
     }
 
     pub(crate) fn acro_form(&self) -> Option<Dict> {

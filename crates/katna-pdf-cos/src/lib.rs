@@ -10,6 +10,7 @@
 //! updates to them are locked with the same key.
 
 mod annots;
+mod calc;
 mod content;
 mod crypt;
 mod design;
@@ -40,6 +41,9 @@ mod xfdf;
 
 pub use annots::{
     AnnotChanges, AnnotKind, Annotation, MarkupStyle, NOTE_SIZE, pdf_date, stamp_label,
+};
+pub use calc::{
+    CalcOp, Calculation, Format, Scripts, calculate, number, parse_date, show, write_date,
 };
 pub use content::{Op, ops};
 pub use crypt::{Permissions, UnlockError};

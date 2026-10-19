@@ -9,6 +9,7 @@
 
 use std::collections::HashMap;
 
+use crate::calc::{Scripts, script_text};
 use crate::fonts::{stand_in, win_ansi_code, win_ansi_width};
 use crate::forms::{
     COMBO, EDIT, MULTILINE, PASSWORD, PUSH_BUTTON, RADIO, READ_ONLY, REQUIRED, literal, text_object,
@@ -68,6 +69,9 @@ pub struct FieldSpec {
     /// What it starts with: text, the chosen option, or for a check box
     /// or radio button anything to have it on.
     pub value: Option<String>,
+    /// A total worked out from other fields, and how the value is shown
+    /// (a number, an amount, a date).
+    pub scripts: Scripts,
 }
 
 /// Changes to a field; `None` leaves that part as it is.
@@ -84,6 +88,8 @@ pub struct FieldEdit {
     pub multiline: Option<bool>,
     /// A combo or list's choices.
     pub options: Option<Vec<String>>,
+    /// Its total and format, in place of those it has.
+    pub scripts: Option<Scripts>,
 }
 
 impl FieldEdit {
@@ -96,6 +102,7 @@ impl FieldEdit {
             read_only: None,
             multiline: None,
             options: None,
+            scripts: None,
         }
     }
 }
@@ -329,6 +336,11 @@ impl Document {
                         r
                     };
                     d.add_to_form(r);
+                    if spec.scripts != Scripts::default() {
+                        let mut fd = d.dict(r);
+                        d.set_scripts(r, &mut fd, &spec.scripts);
+                        d.up.replace(r, Object::Dict(fd));
+                    }
                     made.insert(name, (r, radio));
                 }
             }
@@ -450,6 +462,50 @@ impl Designer<'_> {
         let mut annots = self.annots(page).0;
         annots.retain(|a| a.as_ref() != Some(widget));
         self.set_annots(page, annots);
+    }
+
+    /// Gives field `id` (its dictionary `dict`) the actions that make it
+    /// calculate and show its value as `scripts` says, and puts it in the
+    /// form's calculation order, or takes it out.
+    fn set_scripts(&mut self, id: Ref, dict: &mut Dict, scripts: &Scripts) {
+        let mut aa = match self.resolve(dict.get("AA")) {
+            Object::Dict(aa) => aa,
+            _ => Dict::new(),
+        };
+        let texts = script_text(scripts.calculate.as_ref(), scripts.format.as_ref());
+        for (key, text) in ["C", "F", "K"].into_iter().zip(texts) {
+            match text {
+                Some((_, js)) => {
+                    let mut action = Dict::new();
+                    action.set("S", Object::name("JavaScript"));
+                    action.set("JS", text_object(&js));
+                    aa.set(key, Object::Dict(action));
+                }
+                None => {
+                    aa.remove(key);
+                }
+            }
+        }
+        if aa.is_empty() {
+            dict.remove("AA");
+        } else {
+            dict.set("AA", Object::Dict(aa));
+        }
+        let mut form = self.form();
+        let mut order = match self.resolve(form.get("CO")) {
+            Object::Array(a) => a,
+            _ => Vec::new(),
+        };
+        order.retain(|o| o.as_ref() != Some(id));
+        if scripts.calculate.is_some() {
+            order.push(Object::Ref(id));
+        }
+        if order.is_empty() {
+            form.remove("CO");
+        } else {
+            form.set("CO", Object::Array(order));
+        }
+        self.up.replace(self.form_ref, Object::Dict(form));
     }
 
     fn add_to_form(&mut self, field: Ref) {
@@ -613,6 +669,9 @@ impl Designer<'_> {
                 password: *password,
                 max_len: *max_len,
             };
+        }
+        if let Some(scripts) = &edit.scripts {
+            self.set_scripts(f.id, &mut dict, scripts);
         }
         self.up.replace(f.id, Object::Dict(dict));
         let changed = Field { kind, ..f.clone() };

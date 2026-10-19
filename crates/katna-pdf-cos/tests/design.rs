@@ -26,6 +26,7 @@ fn spec(page: usize, y: f32, name: &str, kind: NewField) -> FieldSpec {
         required: false,
         read_only: false,
         value: None,
+        scripts: katna_pdf_cos::Scripts::default(),
     }
 }
 
@@ -378,4 +379,81 @@ fn form_data_goes_out_and_comes_back() {
     assert!(doc.fill_data(&[("Answer".into(), "Maybe".into())]).is_err());
     assert!(doc.fill_data(&[("Cities".into(), "Agra".into())]).is_err());
     assert!(doc.fill_data(&[("Nobody".into(), "x".into())]).is_err());
+}
+
+/// The text a widget's appearance draws, decoded.
+fn appearance(doc: &Document, widget: katna_pdf_cos::Ref) -> String {
+    let Some(Object::Dict(d)) = doc.get(widget) else {
+        panic!()
+    };
+    let Object::Dict(ap) = doc.resolve(d.get("AP").unwrap()) else {
+        panic!()
+    };
+    let Object::Stream(s) = doc.resolve(ap.get("N").unwrap()) else {
+        panic!()
+    };
+    String::from_utf8_lossy(&katna_pdf_cos::decode(&s.dict, &s.data).unwrap()).into_owned()
+}
+
+#[test]
+fn totals_add_up_and_formats_show() {
+    use katna_pdf_cos::{CalcOp, Calculation, Format};
+    let text = NewField::Text {
+        multiline: false,
+        password: false,
+        max_len: None,
+    };
+    let amount = Format::Number {
+        decimals: 2,
+        separators: 0,
+        negative: 0,
+        currency: "Rs. ".into(),
+        currency_first: true,
+    };
+    let mut fee = spec(0, 700.0, "Fee", text.clone());
+    fee.scripts.format = Some(amount.clone());
+    let mut tax = spec(0, 660.0, "Tax", text.clone());
+    tax.scripts.format = Some(amount.clone());
+    let mut total = spec(0, 620.0, "Total", text.clone());
+    total.scripts.calculate = Some(Calculation::Simple {
+        op: CalcOp::Sum,
+        fields: vec!["Fee".into(), "Tax".into()],
+    });
+    total.scripts.format = Some(amount);
+    let mut date = spec(0, 580.0, "Date", text);
+    date.scripts.format = Some(Format::Date("dd/mm/yyyy".into()));
+    let doc = designed(
+        &blank(1),
+        &FormDesign {
+            add: vec![fee, tax, total, date],
+            ..FormDesign::default()
+        },
+    );
+    let form = doc.form();
+    let scripts = doc.form_scripts(&form);
+    assert_eq!(scripts.len(), 4);
+    assert!(scripts[&form[2].id].calculate.is_some());
+    let filled = Document::load(
+        doc.fill_data(&[
+            ("Fee".into(), "1200".into()),
+            ("Tax".into(), "34.5".into()),
+            ("Date".into(), "5/1/2026".into()),
+        ])
+        .unwrap(),
+    )
+    .unwrap();
+    let data = filled.form_data();
+    let value = |name: &str| data.iter().find(|(n, _)| n == name).unwrap().1.clone();
+    // The value stays a plain number; only what is shown is formatted.
+    assert_eq!(value("Fee"), "1200");
+    assert_eq!(value("Total"), "1234.5");
+    let after = filled.form();
+    let shown = |i: usize| appearance(&filled, after[i].widgets[0].id);
+    assert!(shown(0).contains("Rs. 1,200.00"), "{}", shown(0));
+    assert!(shown(2).contains("Rs. 1,234.50"), "{}", shown(2));
+    assert!(shown(3).contains("05/01/2026"), "{}", shown(3));
+    // Changing one part changes the total again.
+    let again = Document::load(filled.fill_data(&[("Tax".into(), "0".into())]).unwrap()).unwrap();
+    let total = again.form_data();
+    assert_eq!(total.iter().find(|(n, _)| n == "Total").unwrap().1, "1200");
 }

@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use gpui::{Entity, Subscription};
-use katna_pdf_cos::{Document, Field, FieldKind, FieldValue, Ref, Widget};
+use katna_pdf_cos::{Calculation, Document, Field, FieldKind, FieldValue, Ref, Widget};
 use katna_ui::text_input::TextInput;
 
 pub struct Form {
@@ -20,6 +20,8 @@ pub struct Form {
     /// For each page, its fillable widgets: indices into `fields` and
     /// their widgets.
     on_page: HashMap<usize, Vec<(usize, usize)>>,
+    /// Fields worked out from others (totals), with how.
+    calculated: Vec<(usize, Calculation)>,
     /// Values changed since the file was opened or saved.
     pub changes: Vec<(Ref, FieldValue)>,
     /// The file with the changes made, once written.
@@ -50,10 +52,17 @@ impl Form {
                 on_page.entry(widget.page).or_default().push((f, w));
             }
         }
+        let scripts = source.form_scripts(&fields);
+        let calculated = fields
+            .iter()
+            .enumerate()
+            .filter_map(|(f, field)| Some((f, scripts.get(&field.id)?.calculate.clone()?)))
+            .collect();
         (!on_page.is_empty()).then_some(Self {
             source,
             fields,
             on_page,
+            calculated,
             changes: Vec::new(),
             filled: None,
             editing: None,
@@ -90,7 +99,25 @@ impl Form {
         self.changes.retain(|(r, _)| *r != id);
         self.changes.push((id, value));
         self.generation += 1;
+        self.recalculate();
         true
+    }
+
+    /// Works totals out again from the values now, as filling the file
+    /// does, so what is shown and typed over agrees with the pages.
+    fn recalculate(&mut self) {
+        // Twice, so a total of totals catches up whatever their order.
+        for _ in 0..2 {
+            for (f, calc) in &self.calculated {
+                let values = self
+                    .fields
+                    .iter()
+                    .map(|f| (f.name.clone(), f.value.clone().unwrap_or_default()))
+                    .collect();
+                let result = katna_pdf_cos::calculate(calc, &values);
+                self.fields[*f].value = Some(result).filter(|r| !r.is_empty());
+            }
+        }
     }
 
     /// The value a click on widget `widget` of check box or radio group
@@ -108,8 +135,15 @@ impl Form {
     }
 
     /// The pages the changes since the last fill show on.
+    /// Totals change with the fields they add up, so their pages too.
     pub fn pages_of(&self, field: usize) -> Vec<usize> {
-        self.fields[field].widgets.iter().map(|w| w.page).collect()
+        let mut pages: Vec<usize> = std::iter::once(field)
+            .chain(self.calculated.iter().map(|(f, _)| *f))
+            .flat_map(|f| self.fields[f].widgets.iter().map(|w| w.page))
+            .collect();
+        pages.sort_unstable();
+        pages.dedup();
+        pages
     }
 
     /// The file was saved as `source`: it is the new starting point.
