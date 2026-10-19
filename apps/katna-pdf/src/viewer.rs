@@ -46,6 +46,7 @@ mod measure;
 mod numbering;
 mod objects;
 mod organizer;
+mod present;
 mod properties;
 mod redact;
 pub(crate) mod sign;
@@ -70,6 +71,15 @@ actions!(
         Open,
         Compare,
         ReadAloud,
+        Present,
+        PresentNext,
+        PresentPrevious,
+        PresentFirst,
+        PresentLast,
+        PresentEnter,
+        PresentBlack,
+        PresentWhite,
+        PresentStop,
         ZoomIn,
         ZoomOut,
         FitWidth,
@@ -132,6 +142,8 @@ const GAP: f32 = 12.0;
 
 /// The viewer, when no text field in it has the keys.
 const READING: &str = "Viewer && !TextInput && !TextArea";
+/// The viewer presenting.
+const PRESENTING: &str = "Presenting";
 
 pub fn bind_keys(cx: &mut App) {
     cx.bind_keys([
@@ -141,6 +153,26 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl-d", Properties, None),
         KeyBinding::new("ctrl-shift-d", Compare, None),
         KeyBinding::new("ctrl-shift-y", ReadAloud, None),
+        KeyBinding::new("f5", Present, None),
+        KeyBinding::new("right", PresentNext, Some(PRESENTING)),
+        KeyBinding::new("down", PresentNext, Some(PRESENTING)),
+        KeyBinding::new("space", PresentNext, Some(PRESENTING)),
+        KeyBinding::new("pagedown", PresentNext, Some(PRESENTING)),
+        KeyBinding::new("n", PresentNext, Some(PRESENTING)),
+        KeyBinding::new("left", PresentPrevious, Some(PRESENTING)),
+        KeyBinding::new("up", PresentPrevious, Some(PRESENTING)),
+        KeyBinding::new("backspace", PresentPrevious, Some(PRESENTING)),
+        KeyBinding::new("shift-space", PresentPrevious, Some(PRESENTING)),
+        KeyBinding::new("pageup", PresentPrevious, Some(PRESENTING)),
+        KeyBinding::new("p", PresentPrevious, Some(PRESENTING)),
+        KeyBinding::new("home", PresentFirst, Some(PRESENTING)),
+        KeyBinding::new("end", PresentLast, Some(PRESENTING)),
+        KeyBinding::new("enter", PresentEnter, Some(PRESENTING)),
+        KeyBinding::new("b", PresentBlack, Some(PRESENTING)),
+        KeyBinding::new(".", PresentBlack, Some(PRESENTING)),
+        KeyBinding::new("w", PresentWhite, Some(PRESENTING)),
+        KeyBinding::new(",", PresentWhite, Some(PRESENTING)),
+        KeyBinding::new("escape", PresentStop, Some(PRESENTING)),
         KeyBinding::new("ctrl-l", ShowLibrary, None),
         KeyBinding::new("ctrl-b", AddBookmark, None),
         KeyBinding::new("ctrl-=", ZoomIn, None),
@@ -318,6 +350,8 @@ pub struct Viewer {
     measures: measure::Measures,
     /// Puts the keys in the scale field on the next frame.
     focus_calibrating: bool,
+    /// Presenting, full screen.
+    presenting: Option<present::Presenting>,
     /// Reading aloud.
     reading: Option<speak::Reading>,
     /// Comparing with another version of the file.
@@ -485,6 +519,7 @@ impl Viewer {
             measures: Default::default(),
             focus_calibrating: false,
             reading: None,
+            presenting: None,
             comparing: None,
             compare_after: None,
             compare_count: 0,
@@ -1232,6 +1267,10 @@ impl Viewer {
     /// The pages' colours: as picked, otherwise night pages when the
     /// window is dark (docs/PLAN.md §4.5, auto mode).
     fn page_colors(&self) -> PageColors {
+        // A presentation shows pages as they are, unless asked.
+        if self.presenting.is_some() {
+            return self.colors.unwrap_or(PageColors::Normal);
+        }
         self.colors.unwrap_or(if self.dark {
             PageColors::Night
         } else {
@@ -3253,10 +3292,13 @@ impl Focusable for Viewer {
 
 impl Render for Viewer {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.top = self.current_page();
         for image in self.released.drain(..) {
             window.drop_image(image).ok();
         }
+        if self.presenting.is_some() {
+            return self.render_presenting(window, cx);
+        }
+        self.top = self.current_page();
         if std::mem::take(&mut self.focus_password)
             && let Some((input, _)) = &self.password
         {
@@ -3433,6 +3475,9 @@ impl Render for Viewer {
             .on_action(cx.listener(|this, _: &Properties, _, cx| this.toggle_properties(cx)))
             .on_action(cx.listener(|this, _: &Compare, _, cx| this.choose_compare(cx)))
             .on_action(cx.listener(|this, _: &ReadAloud, _, cx| this.toggle_reading(cx)))
+            .on_action(cx.listener(|this, _: &Present, window, cx| {
+                this.start_presenting(window, cx);
+            }))
             .on_action(cx.listener(|this, _: &AddBookmark, window, cx| {
                 this.add_bookmark(window, cx);
             }))
@@ -3508,6 +3553,7 @@ impl Render for Viewer {
                             .children(properties_card),
                     ),
             )
+            .into_any_element()
     }
 }
 

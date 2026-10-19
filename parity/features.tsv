@@ -90,7 +90,7 @@ view.hand-tool	P0	Hand tool for panning	partial	P0	§4.1	Panning implied, not na
 view.rotate-view	P0	Rotate the view without changing the file	covered	P0	§4.1	
 view.read-mode	P0	Read mode (hide tool chrome)	covered	P1	§4.1	
 view.full-screen	P0	Full screen mode	covered	P1	§4.1	
-view.full-screen-presentation	P2	Full-screen presentation options (auto-advance, loop, click to advance)	partial	P1	§4.1	Transitions only; auto-advance/loop unstated
+view.full-screen-presentation	P2	Full-screen presentation options (auto-advance, loop, click to advance)	partial	P1	§4.1	present.rs: /Trans, /Dur auto-advance, click to advance; no loop
 view.reflow	P2	Reflow text to the window width	missing	P2	-	Small screens; Acrobat Reader has Liquid/reflow
 view.page-navigation	P0	Page navigation (next, previous, first, last, go to page)	covered	P0	§4.1, Phase 1	
 view.goto-page-label	P1	Go to a page by its label (logical page numbers)	partial	P1	§4.3	Labels edited; viewer use unstated
@@ -262,7 +262,7 @@ organize.page-boxes	P1	Set page boxes (crop, trim, bleed, art)	covered	P0	§4.3
 organize.crop-tool	P1	Crop pages by dragging a rectangle	covered	P0	§4.3	
 organize.remove-white-margins	P2	Remove white margins	missing	P2	-	Better reading on small screens
 organize.change-page-size	P2	Change page size	missing	P2	-	
-organize.page-transitions	P2	Page transitions	partial	P2	§4.1	Shown in presentation; not editable
+organize.page-transitions	P2	Page transitions	partial	P2	§4.1	Shown in presentation (cos present.rs); not editable
 organize.page-tab-order	P1	Page tab order property	covered	P1	§4.3	
 organize.page-actions	P2	Page open/close actions	missing	P2	-	
 organize.page-templates	P3	Page templates	skip	-	-	Rare, JavaScript-driven

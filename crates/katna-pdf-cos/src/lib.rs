@@ -36,6 +36,7 @@ mod optimize;
 mod outline;
 mod pages;
 mod parse;
+mod present;
 pub mod ranges;
 mod redact;
 mod report;
@@ -75,6 +76,7 @@ pub use objects::{ObjectChange, ObjectKind, PageObject};
 pub use optimize::{ImageLimit, Optimize, OptimizeError, Optimized};
 pub use outline::{Destination, OutlineItem, text_string};
 pub use pages::{ComposeError, PageInfo, PageSource, compose};
+pub use present::{PageShow, Transition, TransitionStyle};
 pub use redact::{Pattern, RedactError, RedactOptions};
 pub use report::text_pdf;
 pub use sign::{

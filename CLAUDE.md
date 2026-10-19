@@ -55,7 +55,8 @@ cargo run --release -p katna-pdf-bench -- file.pdf
   fields a flat form asks for found from its blanks, boxes, grid cells
   and squares to tick (`detect.rs`), the outline, links and named
   destinations changed (`nav.rs`), page labels read and written
-  (`labels.rs`),
+  (`labels.rs`), how pages come on in a presentation (`present.rs`:
+  `/Trans`, `/Dur`),
   page lists as people write them (`ranges.rs`), and files made smaller
   (`optimize.rs`: unused objects dropped, streams packed tighter, copies
   kept once, object streams, pictures brought down to a resolution, the
@@ -90,6 +91,8 @@ cargo run --release -p katna-pdf-bench -- file.pdf
   opens a comparison (`viewer/compare.rs`). `speech.rs` reads aloud
   (Ctrl+Shift+Y, `viewer/speak.rs`) through Speech Dispatcher's socket,
   `espeak-ng`, or PowerShell's voice on Windows.
+  F5 presents (`viewer/present.rs`): full screen, the pages' own
+  transitions and timings from cos `present.rs`.
 - `apps/katna-pdf-cli` — the command line: info, merge, split, pages,
   rotate, crop, sign (and certify), add-field, ltv, tokens, token-check, verify (with `--report` as a PDF), text and edit-text (`--blocks` / `--block` for paragraphs), insert, stamp, background, redact, compress, compare (with `--overlay` as a PNG), form (with `--detect`), form-data and fill, meta, lock and unlock, objects and object, bookmarks, links, dests and labels, annotations and XFDF, and library; `--json` for scripts and agents.
 - `tools/katna-pdf-cos-check` — runs katna-pdf-cos over a folder of PDFs
