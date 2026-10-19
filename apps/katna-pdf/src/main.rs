@@ -8,6 +8,7 @@
 mod annotate;
 mod assets;
 mod contents;
+mod drives;
 mod engine;
 mod form;
 mod history;

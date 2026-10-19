@@ -6,7 +6,8 @@
 //! missing files), a search over titles and every page's text, and a
 //! strip for the selected document's stars and tags. Documents chosen
 //! with Ctrl or Shift are merged, signed, checked, renamed, copied or
-//! tagged together. The catalog is
+//! tagged together. The drives of Katna Mail's accounts are browsed
+//! too (`drive.rs`). The catalog is
 //! `katna_pdf_library`'s; folders are read again in the background, through
 //! the app's worker processes, each time the library is shown.
 
@@ -29,6 +30,9 @@ use katna_ui::tokens::{radius, space, text};
 use katna_ui::widgets::{self, Tip};
 use katna_ui::{px, unpx};
 
+mod drive;
+
+use crate::drives::Drive;
 use crate::text::t;
 use crate::theme::Theme;
 use crate::viewer::sign::{Verdict, verdict};
@@ -70,6 +74,8 @@ enum Place {
     Collection(String),
     Copies,
     Missing,
+    /// The drive of this account of Katna Mail's.
+    Drive(i64),
 }
 
 /// What a place's remove button does.
@@ -124,6 +130,9 @@ pub struct LibraryView {
     grid: UniformListScrollHandle,
     /// The grid's width last frame, for how many covers a row holds.
     width: Rc<Cell<f32>>,
+    /// The drives of Katna Mail's accounts, and the one shown.
+    drives: Vec<Drive>,
+    drive: Option<drive::DriveView>,
     /// Watches the folders; dropped and made again when they change.
     watcher: Option<notify::RecommendedWatcher>,
     _inputs: [Subscription; 4],
@@ -175,7 +184,17 @@ impl LibraryView {
             }
             InputEvent::Changed => cx.notify(),
         });
-        let searching = cx.subscribe(&search, |this, _, event, cx| match event {
+        let searching = cx.subscribe(&search, |this, input, event, cx| match event {
+            // A drive is searched on Enter: each search asks its server.
+            InputEvent::Submit if this.drive.is_some() => {
+                let words = input.read(cx).text().to_owned();
+                this.search_drive(&words, cx);
+            }
+            InputEvent::Changed if this.drive.is_some() => {
+                if input.read(cx).text().trim().is_empty() {
+                    this.search_drive("", cx);
+                }
+            }
             InputEvent::Changed | InputEvent::Submit => this.reload(cx),
             InputEvent::Cancel => cx.emit(LibraryEvent::Close),
         });
@@ -214,11 +233,14 @@ impl LibraryView {
             checks: Vec::new(),
             grid: UniformListScrollHandle::new(),
             width: Rc::new(Cell::new(800.0)),
+            drives: Vec::new(),
+            drive: None,
             watcher: None,
             _inputs: [searching, tagging, adding, naming],
         };
         this.reload(cx);
         this.watch(cx);
+        this.load_drives(cx);
         this
     }
 
@@ -231,6 +253,7 @@ impl LibraryView {
         window.focus(&self.search.focus_handle(cx), cx);
         self.reload(cx);
         self.scan(cx);
+        self.load_drives(cx);
     }
 
     /// Watches the folders, to read them again when a PDF in them is
@@ -385,8 +408,12 @@ impl LibraryView {
             }
             Place::Copies => copies = lib.duplicates().unwrap_or_default(),
             Place::Missing => filter.missing = Some(true),
+            Place::Drive(_) => {}
         }
-        self.docs = if self.place == Place::Copies {
+        let in_drive = matches!(self.place, Place::Drive(_));
+        self.docs = if in_drive {
+            Vec::new()
+        } else if self.place == Place::Copies {
             // Each group together, the groups by their first's name.
             copies.into_iter().flatten().collect()
         } else {
@@ -411,7 +438,7 @@ impl LibraryView {
             }
             docs
         };
-        self.hits = if filter.words.is_empty() {
+        self.hits = if filter.words.is_empty() || in_drive {
             Vec::new()
         } else {
             let names: HashMap<i64, String> = lib
@@ -465,10 +492,24 @@ impl LibraryView {
     }
 
     fn go(&mut self, place: Place, cx: &mut Context<Self>) {
+        let was_drive = matches!(self.place, Place::Drive(_));
         self.place = place;
         self.selected = None;
         self.chosen.clear();
         self.renaming = false;
+        self.drive = None;
+        if let Place::Drive(account) = self.place {
+            self.search.update(cx, |s, cx| {
+                s.set_text("", cx);
+                s.set_placeholder(t("library-drive-search", &[]));
+            });
+            self.open_drive(account, cx);
+        } else if was_drive {
+            self.search.update(cx, |s, cx| {
+                s.set_text("", cx);
+                s.set_placeholder(t("library-search", &[]));
+            });
+        }
         self.grid = UniformListScrollHandle::new();
         self.reload(cx);
     }
@@ -897,6 +938,15 @@ impl LibraryView {
             Place::Collection(name) => name.clone(),
             Place::Copies => t("library-copies", &[]),
             Place::Missing => t("library-missing", &[]),
+            Place::Drive(_) => self.drive.as_ref().map_or_else(String::new, |v| {
+                t(
+                    "library-drive-title",
+                    &[
+                        ("drive", &drive::provider_name(&v.drive.provider)),
+                        ("address", &v.drive.address),
+                    ],
+                )
+            }),
         }
     }
 }
@@ -1017,6 +1067,20 @@ impl LibraryView {
                 )),
                 cx,
             ));
+        }
+        if !self.drives.is_empty() {
+            side = side.child(self.heading("library-drives", None));
+            for (i, d) in self.drives.clone().into_iter().enumerate() {
+                side = side.child(self.place_row(
+                    ("drive", i),
+                    Place::Drive(d.account),
+                    "cloud",
+                    d.address,
+                    None,
+                    None,
+                    cx,
+                ));
+            }
         }
         if !self.tags.is_empty() {
             side = side.child(self.heading("library-tags", None));
@@ -1176,7 +1240,8 @@ impl LibraryView {
 
     fn main(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let th = self.theme;
-        let has_query = !self.search.read(cx).text().trim().is_empty();
+        let in_drive = self.drive.is_some();
+        let has_query = !self.search.read(cx).text().trim().is_empty() && !in_drive;
         let progress = self.scanning.map(|(done, total)| {
             let line = if total == 0 {
                 t("library-scanning", &[])
@@ -1220,7 +1285,17 @@ impl LibraryView {
                     .id("library-search-box")
                     .w(px(320.0))
                     .h(px(32.0))
-                    .tip(t("library-search-tip", &[]), &th.katna)
+                    .tip(
+                        t(
+                            if in_drive {
+                                "library-drive-search-tip"
+                            } else {
+                                "library-search-tip"
+                            },
+                            &[],
+                        ),
+                        &th.katna,
+                    )
                     .flex()
                     .items_center()
                     .gap(px(space::S2))
@@ -1244,28 +1319,32 @@ impl LibraryView {
                         .on_click(cx.listener(|this, _, _, cx| this.keep_search(cx))),
                 )
             })
-            .child(
-                div()
-                    .id("library-sort")
-                    .h(px(32.0))
-                    .flex()
-                    .items_center()
-                    .px(px(space::S3))
-                    .rounded(px(radius::FULL))
-                    .border_1()
-                    .border_color(th.line)
-                    .text_size(px(text::SMALL))
-                    .cursor_pointer()
-                    .hover(move |s| s.bg(th.hover))
-                    .tip(t("library-sort-tip", &[]), &th.katna)
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        let at = Sort::ALL.iter().position(|s| *s == this.sort).unwrap_or(0);
-                        this.sort = Sort::ALL[(at + 1) % Sort::ALL.len()];
-                        this.reload(cx);
-                    }))
-                    .child(t(&sort_name, &[])),
-            );
-        let body: AnyElement = if let Err(e) = &self.lib {
+            .when(!in_drive, |d| {
+                d.child(
+                    div()
+                        .id("library-sort")
+                        .h(px(32.0))
+                        .flex()
+                        .items_center()
+                        .px(px(space::S3))
+                        .rounded(px(radius::FULL))
+                        .border_1()
+                        .border_color(th.line)
+                        .text_size(px(text::SMALL))
+                        .cursor_pointer()
+                        .hover(move |s| s.bg(th.hover))
+                        .tip(t("library-sort-tip", &[]), &th.katna)
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            let at = Sort::ALL.iter().position(|s| *s == this.sort).unwrap_or(0);
+                            this.sort = Sort::ALL[(at + 1) % Sort::ALL.len()];
+                            this.reload(cx);
+                        }))
+                        .child(t(&sort_name, &[])),
+                )
+            });
+        let body: AnyElement = if in_drive {
+            self.drive_body(cx)
+        } else if let Err(e) = &self.lib {
             self.message(t("library-unavailable", &[("error", e)]), None)
         } else if self.folders.is_empty() {
             let add = widgets::filled_button(
@@ -1288,7 +1367,9 @@ impl LibraryView {
         };
         let hits = (!self.hits.is_empty()).then(|| self.hits(cx).into_any_element());
         let checks = (!self.checks.is_empty()).then(|| self.checks(cx).into_any_element());
-        let details = if self.chosen.len() > 1 {
+        let details = if in_drive {
+            self.drive_details(cx)
+        } else if self.chosen.len() > 1 {
             Some(self.bulk(cx).into_any_element())
         } else {
             self.details(cx).map(IntoElement::into_any_element)
@@ -1438,6 +1519,26 @@ impl LibraryView {
     fn grid(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let columns = self.columns();
         let rows = self.docs.len().div_ceil(columns);
+        self.grid_frame(
+            "library-grid",
+            rows,
+            cx.processor(move |this, range: Range<usize>, _, cx| {
+                let near = range.start * columns..(range.end * columns).min(this.docs.len());
+                range
+                    .map(|row| this.grid_row(row, columns, &near, cx))
+                    .collect::<Vec<_>>()
+            }),
+        )
+    }
+
+    /// A grid of `rows` rows, drawn by `rows_in` as they come into view,
+    /// that keeps its width for [`LibraryView::columns`].
+    fn grid_frame<R: IntoElement>(
+        &self,
+        id: &'static str,
+        rows: usize,
+        rows_in: impl 'static + Fn(Range<usize>, &mut Window, &mut gpui::App) -> Vec<R>,
+    ) -> impl IntoElement {
         let width = self.width.clone();
         div()
             .flex_1()
@@ -1454,21 +1555,11 @@ impl LibraryView {
                 .size_full(),
             )
             .child(
-                uniform_list(
-                    "library-grid",
-                    rows,
-                    cx.processor(move |this, range: Range<usize>, _, cx| {
-                        let near =
-                            range.start * columns..(range.end * columns).min(this.docs.len());
-                        range
-                            .map(|row| this.grid_row(row, columns, &near, cx))
-                            .collect::<Vec<_>>()
-                    }),
-                )
-                .track_scroll(&self.grid)
-                .size_full()
-                .px(px(space::S4))
-                .py(px(space::S3)),
+                uniform_list(id, rows, rows_in)
+                    .track_scroll(&self.grid)
+                    .size_full()
+                    .px(px(space::S4))
+                    .py(px(space::S3)),
             )
     }
 

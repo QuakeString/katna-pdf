@@ -72,7 +72,10 @@ cargo run --release -p katna-pdf-bench -- file.pdf
   as queries (`filter.rs`), copies by bytes or words, and many files
   merged, renamed from their properties, copied or tagged (`bulk.rs`). Text and
   covers come through an `Engine`. No GPUI.
-- `apps/katna-pdf` — the app window.
+- `apps/katna-pdf` — the app window; `drives.rs` asks `katna-daemon` over
+  D-Bus (`katna-dbus`) for the Google Drive and OneDrive of accounts signed
+  in to Katna Mail, which the library browses and opens from
+  (`library/drive.rs`).
 - `apps/katna-pdf-cli` — the command line: info, merge, split, pages,
   rotate, crop, sign (and certify), add-field, ltv, tokens, token-check, verify (with `--report` as a PDF), text and edit-text (`--blocks` / `--block` for paragraphs), insert, stamp, background, redact, form (with `--detect`), form-data and fill, meta, lock and unlock, objects and object, bookmarks, links, dests and labels, annotations and XFDF, and library; `--json` for scripts and agents.
 - `tools/katna-pdf-cos-check` — runs katna-pdf-cos over a folder of PDFs
@@ -91,7 +94,7 @@ cargo run --release -p katna-pdf-bench -- file.pdf
 
 - License: GPL-3.0-or-later. Every source file starts with
   `// SPDX-License-Identifier: GPL-3.0-or-later`.
-- GPUI, `katna-core`, `katna-ui` and `katna-platform` come from Katna's repository at one
+- GPUI, `katna-core`, `katna-ui`, `katna-platform` and `katna-dbus` come from Katna's repository at one
   pinned rev (root `Cargo.toml`); move all of them together.
 - GPUI only in `apps/katna-pdf` (enforced by `deny.toml`).
 - Pure Rust where possible; TLS is `rustls` only. No `unsafe` code.
