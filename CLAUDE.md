@@ -69,7 +69,8 @@ cargo run --release -p katna-pdf-bench -- file.pdf
   PDFs in watched folders (`scan.rs`: new, changed, moved and gone files;
   title, author, pages, signed, form, scanned, locked; a cover; each
   page's text in an FTS5 index), tags, stars, notes, smart collections
-  as queries (`filter.rs`), and copies by bytes or words. Text and
+  as queries (`filter.rs`), copies by bytes or words, and many files
+  merged, renamed from their properties, copied or tagged (`bulk.rs`). Text and
   covers come through an `Engine`. No GPUI.
 - `apps/katna-pdf` — the app window.
 - `apps/katna-pdf-cli` — the command line: info, merge, split, pages,

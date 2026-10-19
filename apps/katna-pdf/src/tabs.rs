@@ -132,6 +132,15 @@ impl Tabs {
                                     .update(cx, |viewer, cx| viewer.show_page(page, cx));
                             }
                         }
+                        LibraryEvent::Sign(paths) => {
+                            let Some((first, others)) = paths.split_first() else {
+                                return;
+                            };
+                            this.open_files(vec![first.clone()], window, cx);
+                            let others = others.to_vec();
+                            this.viewer_entity()
+                                .update(cx, |viewer, cx| viewer.sign_with(others, cx));
+                        }
                         LibraryEvent::Close => {
                             this.in_library = false;
                             this.focus_active(window, cx);

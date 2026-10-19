@@ -371,7 +371,69 @@ pub(super) struct Signing {
     _inputs: Vec<Subscription>,
 }
 
+/// What a file's signatures come to, as the library lists it.
+pub(crate) enum Verdict {
+    Unsigned,
+    /// This many signatures, intact and vouched for.
+    Good(usize),
+    /// Intact, but who signed is not vouched for: why.
+    Unverified(String),
+    /// A signature is broken, or the file changed after it: what.
+    Bad(String),
+    /// The file could not be read: why.
+    Unreadable(String),
+}
+
+/// The signatures of the file at `path`, checked offline.
+pub(crate) fn verdict(path: &Path) -> Verdict {
+    let doc = match std::fs::read(path)
+        .map_err(|e| e.to_string())
+        .and_then(|b| katna_pdf_cos::Document::load(b).map_err(|e| e.to_string()))
+    {
+        Ok(doc) => doc,
+        Err(e) => return Verdict::Unreadable(e),
+    };
+    let rows = check(&doc);
+    if rows.is_empty() {
+        return Verdict::Unsigned;
+    }
+    if let Some(bad) = rows.iter().find(|r| !r.intact || r.problem.is_some()) {
+        return Verdict::Bad(
+            bad.problem
+                .clone()
+                .unwrap_or_else(|| t("library-check-broken", &[("name", &bad.name)])),
+        );
+    }
+    match rows.iter().find_map(|r| match &r.vouched {
+        Some(Vouched::Not { why, .. }) => Some(why.clone()),
+        _ => None,
+    }) {
+        Some(why) => Verdict::Unverified(why),
+        None => Verdict::Good(rows.len()),
+    }
+}
+
 impl Viewer {
+    /// Starts signing this file, `others` to be signed with it, now or
+    /// once the file is open.
+    pub fn sign_with(&mut self, others: Vec<PathBuf>, cx: &mut Context<Self>) {
+        if !matches!(self.content, Content::Ready(_)) {
+            self.sign_after = Some(others);
+            return;
+        }
+        if self.signing.is_none() {
+            self.toggle_signing(cx);
+        }
+        let current = self.path.clone();
+        if let Some(signing) = self.signing.as_mut() {
+            signing.others = others
+                .into_iter()
+                .filter(|p| Some(p) != current.as_ref())
+                .collect();
+        }
+        cx.notify();
+    }
+
     /// Starts signing, or stops it.
     pub(super) fn toggle_signing(&mut self, cx: &mut Context<Self>) {
         if self.signing.take().is_some() {

@@ -11,6 +11,7 @@
 //! read through a renderer [`Engine`], so the app can read them in its
 //! worker processes, out of harm's way of broken files.
 
+mod bulk;
 mod filter;
 mod scan;
 
@@ -18,6 +19,7 @@ use std::path::{Path, PathBuf};
 
 use rusqlite::{Connection, OptionalExtension, params};
 
+pub use bulk::{BulkReport, PATTERN_KEYS, free_path, merge, name_from};
 pub use filter::{Filter, Sort};
 pub use katna_pdf_render::Engine;
 pub use scan::{Indexed, ScanReport};
