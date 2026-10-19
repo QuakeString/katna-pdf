@@ -57,6 +57,7 @@ impl Viewer {
         self.text_editing = !self.text_editing;
         self.adding = None;
         self.redacting = None;
+        self.linking = None;
         self.designing = None;
         self.placing = None;
         self.picked_object = None;
@@ -79,6 +80,7 @@ impl Viewer {
         self.text_editing = false;
         self.adding = None;
         self.redacting = None;
+        self.linking = None;
         self.designing = None;
         self.placing = None;
         self.picked_object = None;
@@ -353,12 +355,15 @@ impl Viewer {
         };
         // With a tool for adding in hand, the paragraphs are not boxes to
         // click.
-        let listed =
-            if self.adding.is_some() || self.redacting.is_some() || self.designing.is_some() {
-                &[][..]
-            } else {
-                &blocks[..]
-            };
+        let listed = if self.adding.is_some()
+            || self.redacting.is_some()
+            || self.linking.is_some()
+            || self.designing.is_some()
+        {
+            &[][..]
+        } else {
+            &blocks[..]
+        };
         let mut out: Vec<AnyElement> = listed
             .iter()
             .enumerate()
@@ -440,6 +445,7 @@ impl Viewer {
         out.extend(self.objects_overlay(page));
         out.extend(self.insert_preview(page));
         out.extend(self.redact_overlay(page));
+        out.extend(self.link_overlay(page));
         out.extend(self.design_overlay(page));
         out
     }

@@ -65,6 +65,7 @@ impl Viewer {
         self.pick_adding(None, cx);
         self.properties = None;
         self.redacting = None;
+        self.linking = None;
         self.designing = None;
         let accent = gpui::rgba(self.theme.katna.accent).into();
         let field = |placeholder: String, cx: &mut Context<Self>| {

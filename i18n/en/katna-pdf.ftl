@@ -78,6 +78,17 @@ marks-pages-label = Pages
 marks-pages-all = All, or like 1-3, 5
 marks-cancel = Cancel
 marks-apply = Put on
+link-tool = Links: make one over part of the page, or change one
+link-title = Links
+link-hint = Drag a box over what should be a link, or click a link to change it.
+link-to = Where it goes: a web address, an email address, or a page number
+link-target = example.com, name@example.com or 3
+link-make = Make link
+link-change = Change link
+link-delete = Delete
+link-bad = That isn't a web or email address, or a page from 1 to { $pages }.
+link-failed = Couldn't change the links: { $error }
+
 redact-tool = Redact: take text, pictures and shapes out of the file for good
 redact-title = Redact
 redact-hint = Drag over what must go. Click a box to unmark it. Redacting takes what lies under the boxes out of the file itself and blacks them out.
@@ -192,6 +203,18 @@ search-close = Close (Esc)
 ## The side pane beside the pages
 pane-pages = Pages
 pane-contents = Contents
+bookmark-none = No bookmarks yet. Press Ctrl+B to add one for the place shown.
+bookmark-new = Page { $page }
+bookmark-title = Bookmark title
+bookmark-add = Add a bookmark for the place shown (Ctrl+B)
+bookmark-rename = Rename (or double-click it)
+bookmark-place = Go here instead: the place shown
+bookmark-up = Move up
+bookmark-down = Move down
+bookmark-outdent = Move out a level
+bookmark-indent = Move in under the one above
+bookmark-delete = Delete the bookmark
+bookmark-failed = Couldn't change the bookmarks: { $error }
 pane-comments = Comments
 
 ## Tabs
@@ -415,5 +438,6 @@ menu-night = Page _Colours
 menu-go = _Go
 menu-next-page = _Next Page
 menu-previous-page = _Previous Page
+menu-add-bookmark = Add _Bookmark
 menu-next-tab = Next _Tab
 menu-previous-tab = Previous T_ab

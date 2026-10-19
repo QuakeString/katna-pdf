@@ -58,6 +58,7 @@ impl Viewer {
         self.marking = None;
         self.properties = None;
         self.designing = None;
+        self.linking = None;
         let accent = gpui::rgba(self.theme.katna.accent).into();
         let words = cx.new(|cx| {
             let mut input = TextInput::new(t("redact-words", &[]), cx);

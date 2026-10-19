@@ -12,9 +12,9 @@ use katna_platform::dbusmenu::{Menu, MenuItem};
 use crate::tabs::Tabs;
 use crate::text::t;
 use crate::viewer::{
-    ActualSize, Annotate, CloseTab, CopyText, Find, FindNext, FindPrevious, FitPage, FitWidth,
-    NextPage, NextSpread, NextTab, Open, Organize, PreviousPage, PreviousTab, Print, Properties,
-    Quit, Save, Sign, ToggleContents, ToggleNight, ZoomIn, ZoomOut,
+    ActualSize, AddBookmark, Annotate, CloseTab, CopyText, Find, FindNext, FindPrevious, FitPage,
+    FitWidth, NextPage, NextSpread, NextTab, Open, Organize, PreviousPage, PreviousTab, Print,
+    Properties, Quit, Save, Sign, ToggleContents, ToggleNight, ZoomIn, ZoomOut,
 };
 
 /// The menus, their items, and each item's keys.
@@ -70,6 +70,7 @@ fn items() -> Vec<MenuItem> {
             vec![
                 item("menu-next-page", &["Page Down"]),
                 item("menu-previous-page", &["Page Up"]),
+                item("menu-add-bookmark", &ctrl("B")),
                 MenuItem::Separator,
                 item("menu-next-tab", &ctrl("Tab")),
                 item("menu-previous-tab", &["Control", "Shift", "Tab"]),
@@ -104,6 +105,7 @@ fn action(id: &str) -> Option<Box<dyn Action>> {
         "menu-night" => Box::new(ToggleNight),
         "menu-next-page" => Box::new(NextPage),
         "menu-previous-page" => Box::new(PreviousPage),
+        "menu-add-bookmark" => Box::new(AddBookmark),
         "menu-next-tab" => Box::new(NextTab),
         "menu-previous-tab" => Box::new(PreviousTab),
         _ => return None,

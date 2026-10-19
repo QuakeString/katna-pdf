@@ -1094,3 +1094,96 @@ fn form_data_goes_out_as_xfdf_and_fdf() {
         assert_eq!(text.trim(), "Name,Agree\r\nAsha,Yes", "{ext}");
     }
 }
+
+#[test]
+fn bookmarks_links_and_names_are_listed_and_changed() {
+    let d = dir("nav");
+    let file = d.join("three.pdf");
+    std::fs::write(&file, pdf(3)).unwrap();
+    let list = d.join("outline.txt");
+    std::fs::write(&list, "One\t1\n  One A\t2@150\nHeading\t\n  Last\t3\n").unwrap();
+    let marked = d.join("marked.pdf");
+    let (code, out) = run(&[
+        "bookmarks",
+        s(&file),
+        "-o",
+        s(&marked),
+        "--from",
+        s(&list),
+        "--add",
+        "3@20:Extra: more",
+    ]);
+    assert_eq!(code, 0, "{out}");
+    let (_, out) = run(&["bookmarks", s(&marked)]);
+    assert_eq!(
+        out,
+        "One\t1\n  One A\t2@150\nHeading\t\n  Last\t3\nExtra: more\t3@20\n"
+    );
+    let (_, out) = run(&["bookmarks", s(&marked), "--json"]);
+    assert!(
+        out.starts_with(r#"{"bookmarks":[{"title":"One","to":{"page":1},"open":false,"children":[{"title":"One A","to":{"page":2,"top":150}"#),
+        "{out}"
+    );
+    let cleared = d.join("cleared.pdf");
+    let (code, _) = run(&["bookmarks", s(&marked), "-o", s(&cleared), "--clear"]);
+    assert_eq!(code, 0);
+    assert_eq!(run(&["bookmarks", s(&cleared)]).1, "");
+    // Bad pages are mistakes.
+    let (code, _) = run(&[
+        "bookmarks",
+        s(&file),
+        "-o",
+        s(&cleared),
+        "--add",
+        "9:Nowhere",
+    ]);
+    assert_eq!(code, 2);
+
+    let linked = d.join("linked.pdf");
+    let (code, out) = run(&[
+        "links",
+        s(&file),
+        "-o",
+        s(&linked),
+        "--add",
+        "1:10,10,60,30:https://example.com",
+        "--add",
+        "1:10,40,60,60:3@100",
+        "--add",
+        "2:5,5,20,20:1",
+    ]);
+    assert_eq!(code, 0, "{out}");
+    let (_, out) = run(&["links", s(&linked)]);
+    assert_eq!(
+        out,
+        "1:1      10,10,60,30              https://example.com\n\
+         1:2      10,40,60,60              page 3@100\n\
+         2:1      5,5,20,20                page 1\n"
+    );
+    let fewer = d.join("fewer.pdf");
+    let (code, _) = run(&["links", s(&linked), "-o", s(&fewer), "--remove", "1:1"]);
+    assert_eq!(code, 0);
+    let (_, out) = run(&["links", s(&fewer), "--json", "--pages", "1"]);
+    assert_eq!(
+        out,
+        "{\"links\":[{\"link\":\"1:1\",\"rect\":[10,40,60,60],\"to\":{\"page\":3,\"top\":100}}]}\n"
+    );
+
+    let named = d.join("named.pdf");
+    let (code, _) = run(&[
+        "dests",
+        s(&file),
+        "-o",
+        s(&named),
+        "--set",
+        "intro=1",
+        "--set",
+        "end=3@50",
+    ]);
+    assert_eq!(code, 0);
+    assert_eq!(run(&["dests", s(&named)]).1, "end\t3@50\nintro\t1\n");
+    let one = d.join("one.pdf");
+    let (code, _) = run(&["dests", s(&named), "-o", s(&one), "--remove", "end"]);
+    assert_eq!(code, 0);
+    assert_eq!(run(&["dests", s(&one)]).1, "intro\t1\n");
+}

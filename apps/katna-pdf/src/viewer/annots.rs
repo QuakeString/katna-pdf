@@ -539,6 +539,8 @@ impl Viewer {
             self.open_comment = true;
         }
         self.annots = Some(Arc::new(annots));
+        let links = cos.links();
+        self.links = links.iter().any(|l| !l.is_empty()).then(|| Arc::new(links));
         // The form's changes are in the file now.
         let fields = cos.form();
         self.form = crate::form::Form::new(Arc::new(cos), fields);

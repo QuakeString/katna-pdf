@@ -60,7 +60,7 @@ impl Document {
             .collect()
     }
 
-    fn link(&self, annot: &Dict, reader: &mut OutlineReader) -> Option<Link> {
+    pub(crate) fn link(&self, annot: &Dict, reader: &mut OutlineReader) -> Option<Link> {
         if annot.name("Subtype") != Some(b"Link") {
             return None;
         }
