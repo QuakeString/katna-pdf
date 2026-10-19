@@ -1266,3 +1266,51 @@ fn a_background_goes_under_the_pages() {
     // Nothing to put under is a mistake.
     assert_eq!(run(&["background", s(&file), "-o", s(&out)]).0, 2);
 }
+
+#[test]
+fn library_scans_lists_searches_and_tags() {
+    let d = dir("library");
+    let docs = d.join("docs");
+    std::fs::create_dir_all(&docs).unwrap();
+    let lines: Vec<String> = [
+        "  The monthly rent is due on the first day of every month.",
+        "  The deposit is returned when the tenant leaves the flat.",
+    ]
+    .map(String::from)
+    .to_vec();
+    std::fs::write(
+        docs.join("lease.pdf"),
+        katna_pdf_cos::text_pdf("Flat lease", &lines),
+    )
+    .unwrap();
+    std::fs::write(docs.join("blank.pdf"), pdf(2)).unwrap();
+    let db = d.join("library.sqlite");
+    let lib = |args: &[&str]| {
+        let mut all = vec!["library", "--db", s(&db)];
+        all.extend_from_slice(args);
+        run(&all)
+    };
+    assert_eq!(lib(&["add-folder", s(&docs)]).0, 0);
+    let (code, said) = lib(&["scan"]);
+    assert_eq!(code, 0, "{said}");
+    assert!(said.starts_with("2 added"), "{said}");
+    let (_, said) = lib(&["list", "--json"]);
+    assert!(said.contains("\"name\":\"Flat lease\""), "{said}");
+    let (_, said) = lib(&["search", "deposit"]);
+    assert!(
+        said.contains("Flat lease, page 1:") && said.contains("[deposit]"),
+        "{said}"
+    );
+    let id = said.split_whitespace().next().unwrap().to_owned();
+    let (code, said) = lib(&["tags", &id, "home, rent"]);
+    assert_eq!(code, 0, "{said}");
+    assert!(said.contains("#home #rent"), "{said}");
+    assert_eq!(lib(&["rate", &id, "4"]).0, 0);
+    let (_, said) = lib(&["list", "tag:rent", "rating:4"]);
+    assert_eq!(said.lines().count(), 1, "{said}");
+    let (_, said) = lib(&["collection", "Home", "tag:home"]);
+    assert!(said.contains("Flat lease"), "{said}");
+    assert_eq!(lib(&["collections"]).1, "Home\ttag:home\n");
+    assert_eq!(lib(&["rate", &id, "9"]).0, 2);
+    assert_eq!(lib(&["nothing"]).0, 2);
+}

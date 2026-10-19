@@ -38,7 +38,7 @@ Platform priority: **Linux and Windows first**, with macOS supported from the sa
 │  Tile cache (GPU textures) ◄── render client ──IPC──► katna-pdf-render-worker (xN)   │
 │                                                        PDFium, sandboxed,        │
 │  Signing service (pure Rust; token via APDU or vendor PKCS#11) restartable       │
-│  Library service (SQLite + Tantivy + file watcher)                               │
+│  Library service (SQLite + FTS5 + file watcher)                                  │
 └──────────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -69,7 +69,7 @@ katna-pdf/                           (QuakeString/katna-pdf)
 │  ├─ katna-pdf-validate/            # validation: chain, OCSP/CRL, LTV/DSS, trust lists
 │  ├─ katna-pdf-ocr/                 # OCR and Live Text: ocrs/rten models, Tesseract optional
 │  ├─ katna-pdf-convert/             # images ⇄ PDF, PDF → text/HTML/Markdown
-│  └─ katna-pdf-library/             # catalog (SQLite), full-text index (Tantivy), watcher, thumbnails
+│  └─ katna-pdf-library/             # catalog (SQLite), full-text index (FTS5), watcher, thumbnails
 ├─ tools/
 │  ├─ katna-pdf-render-worker/       # render worker process
 │  └─ katna-pdf-cli/                 # headless merge/split/sign/verify/ocr/optimize
@@ -251,7 +251,7 @@ The fastest engine that renders the test corpus correctly wins. One may be used 
 | Optional OS stores | `windows` crate (CNG), `security-framework` (macOS); off by default |
 | HTTP (TSA/OCSP/CRL) | `reqwest` with rustls (pure Rust TLS); katna's own root store, no system crypto library |
 | OCR | Pure Rust first: `ocrs` (detection and recognition on the `rten` runtime) for Latin script, plus PaddleOCR (PP-OCR) recognition models run on `rten` for Indic scripts. Tesseract 5 through `leptess` is an optional, off-by-default backend for scripts no Rust-run model covers well. Phase 0 measures accuracy per script on our own scans and picks per script (§4.9) |
-| Catalog | `rusqlite` (bundled), `tantivy` (full-text search), `notify` (folder watcher), `blake3` (deduplication) |
+| Catalog | `rusqlite` (bundled), its FTS5 for full-text search (one file, no second index to keep in step; Tantivy was planned), `notify` (folder watcher), SHA-256 of the bytes and of the words for copies (`sha2`, already used for signing) |
 | Text-to-speech | `tts` crate (SAPI / Speech Dispatcher / AVSpeech) |
 | Settings | `serde` + TOML in XDG / AppData / Application Support |
 | Logging and crash reports | `tracing`; minidumps via `crash-handler` + `minidumper` (opt-in) |
@@ -424,7 +424,7 @@ On top of the filters:
   - **Saving back to a drive:** the daemon can upload new files today. Overwriting an existing file as a new version needs one new daemon call (`CloudReplace`).
   - **Requirements:** the Katna daemon must be installed and running, with at least one Google or Microsoft account. Without them, katna-pdf works fully on local files and simply hides the Drives group. Dropbox and others follow when Katna adds them.
 - **P1:** Tags, collections and **smart collections** (saved queries). Star ratings. Notes per document.
-- **P1:** Full-text search across the whole library (Tantivy, with OCR text included) and jump to the hit.
+- **P1:** Full-text search across the whole library (SQLite FTS5, with OCR text included) and jump to the hit.
 - **P1:** Duplicate detection (content hash plus a fuzzy text hash). Missing-file relinking when files move.
 - **P1:** Bulk operations from the library: merge, compress, OCR, sign, verify, rename by metadata pattern, export.
 - **P2:** Import citation metadata (DOI lookup), BibTeX export, simple reading statistics. Optional sync of the catalog file through any cloud folder; no account system.

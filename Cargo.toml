@@ -17,6 +17,7 @@ publish = false
 katna-pdf-render = { path = "crates/katna-pdf-render" }
 katna-pdf-cos = { path = "crates/katna-pdf-cos" }
 katna-pdf-sign = { path = "crates/katna-pdf-sign" }
+katna-pdf-library = { path = "crates/katna-pdf-library" }
 
 # Katna's shared UI crates, at a pinned commit of the Katna repository
 # (docs/PLAN.md §2.2). Move the pin deliberately, together with the
@@ -78,6 +79,9 @@ aes = "0.8"
 md-5 = "0.10"
 regex = { version = "1", default-features = false, features = ["std", "unicode-perl", "unicode-case"] }
 zune-core = "0.5"
+# The library's catalog and full-text index (docs/PLAN.md §4.6): SQLite
+# with FTS5, at the version Katna uses.
+rusqlite = { version = "0.40", features = ["bundled"] }
 zune-jpeg = "0.5"
 hayro-ccitt = { version = "0.4", default-features = false }
 hayro-jbig2 = { version = "0.3", default-features = false, features = ["std", "simd"] }
