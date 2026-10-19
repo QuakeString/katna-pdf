@@ -62,6 +62,8 @@ pub enum LibraryEvent {
     Close,
     /// Sign these files together, starting from the first.
     Sign(Vec<PathBuf>),
+    /// Open the newer file and compare it with the older.
+    Compare { older: PathBuf, newer: PathBuf },
 }
 
 /// A place down the side.
@@ -784,6 +786,20 @@ impl LibraryView {
             .ok();
         })
         .detach();
+    }
+
+    /// Two files chosen: the one changed last compared with the other.
+    fn compare_chosen(&mut self, cx: &mut Context<Self>) {
+        let mut docs = self.chosen_docs();
+        if docs.len() != 2 {
+            return;
+        }
+        docs.sort_by_key(|d| d.modified);
+        let newer = docs.pop().map(|d| d.path);
+        let older = docs.pop().map(|d| d.path);
+        if let (Some(older), Some(newer)) = (older, newer) {
+            cx.emit(LibraryEvent::Compare { older, newer });
+        }
     }
 
     fn sign_chosen(&mut self, cx: &mut Context<Self>) {
@@ -1910,6 +1926,12 @@ impl LibraryView {
                 action("library-merge", "copies")
                     .on_click(cx.listener(|this, _, window, cx| this.merge_chosen(window, cx))),
             )
+            .when(count == 2, |strip| {
+                strip.child(
+                    action("library-compare", "compare")
+                        .on_click(cx.listener(|this, _, _, cx| this.compare_chosen(cx))),
+                )
+            })
             .child(
                 action("library-sign", "signature")
                     .on_click(cx.listener(|this, _, _, cx| this.sign_chosen(cx))),

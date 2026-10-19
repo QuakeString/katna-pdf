@@ -35,6 +35,7 @@ use katna_ui::{ScrollBar, px, unpx};
 
 mod annots;
 mod bookmarks;
+mod compare;
 mod crop;
 mod datepick;
 mod design;
@@ -65,6 +66,7 @@ actions!(
     katna_pdf,
     [
         Open,
+        Compare,
         ZoomIn,
         ZoomOut,
         FitWidth,
@@ -134,6 +136,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl-p", Print, None),
         KeyBinding::new("ctrl-s", Save, None),
         KeyBinding::new("ctrl-d", Properties, None),
+        KeyBinding::new("ctrl-shift-d", Compare, None),
         KeyBinding::new("ctrl-l", ShowLibrary, None),
         KeyBinding::new("ctrl-b", AddBookmark, None),
         KeyBinding::new("ctrl-=", ZoomIn, None),
@@ -198,6 +201,8 @@ enum PaneTab {
     Contents,
     Comments,
     Signatures,
+    /// What changed from another version, while comparing.
+    Changes,
 }
 
 /// What a viewer asks of the tabs around it.
@@ -257,6 +262,8 @@ struct Opened {
 struct Drawn {
     scale: f32,
     colors: PageColors,
+    /// Drawn over the older version's page, while comparing.
+    overlay: bool,
     image: Arc<RenderImage>,
 }
 
@@ -301,6 +308,12 @@ pub struct Viewer {
     start_page: Option<usize>,
     /// Files to sign with this one, once it is open.
     sign_after: Option<Vec<PathBuf>>,
+    /// Comparing with another version of the file.
+    comparing: Option<compare::Comparing>,
+    /// The file to compare with once this one opens.
+    compare_after: Option<PathBuf>,
+    /// Comparisons started, to tell their results apart.
+    compare_count: u64,
     /// The page numbers card, while open.
     numbering: Option<numbering::Numbering>,
     /// The form, once read, if the file has fields to fill in.
@@ -456,6 +469,9 @@ impl Viewer {
             label_ranges: Vec::new(),
             start_page: None,
             sign_after: None,
+            comparing: None,
+            compare_after: None,
+            compare_count: 0,
             numbering: None,
             form: None,
             links: None,
@@ -620,6 +636,7 @@ impl Viewer {
         self.comment = None;
         self.annotating = false;
         self.annots_waiting = Default::default();
+        self.stop_comparing(cx);
         if let Some(bar) = self.search.as_mut() {
             bar.generation.fetch_add(1, Ordering::Relaxed);
             bar.found = Found::default();
@@ -686,6 +703,9 @@ impl Viewer {
                         this.visible = 0..1;
                         this.content = Content::Ready(opened);
                         this.password = None;
+                        if let Some(older) = this.compare_after.take() {
+                            this.compare_with(older, cx);
+                        }
                         if let Some(others) = this.sign_after.take() {
                             this.sign_with(others, cx);
                         }
@@ -1508,11 +1528,13 @@ impl Viewer {
             PaneTab::Signatures if self.signatures.as_ref().is_none_or(|s| s.is_empty()) => {
                 PaneTab::Pages
             }
+            PaneTab::Changes if self.comparing.is_none() => PaneTab::Pages,
             tab => tab,
         };
         let body = match (tab, self.contents.as_ref()) {
             (PaneTab::Comments, _) => self.comments(window, cx),
             (PaneTab::Signatures, _) => self.signatures_list(cx),
+            (PaneTab::Changes, _) => self.changes_list(window, cx),
             (PaneTab::Contents, Some(contents)) if contents.items.is_empty() => div()
                 .p(px(space::S5))
                 .text_size(px(text::SMALL))
@@ -1582,12 +1604,19 @@ impl Viewer {
                     .into_any_element()
             }
         };
+        // Four tabs only fit closer together.
+        let tabs = 2
+            + usize::from(self.contents.is_some())
+            + usize::from(self.signatures.as_ref().is_some_and(|s| !s.is_empty()))
+            + usize::from(self.comparing.is_some());
+        let pad = if tabs > 3 { space::S2 } else { space::S4 };
         let tab_button = |id: &'static str, which: PaneTab, label: String| {
             let selected = tab == which;
             div()
                 .id(id)
                 .h(px(32.0))
-                .px(px(space::S4))
+                .flex_none()
+                .px(px(pad))
                 .flex()
                 .items_center()
                 .rounded(px(radius::FULL))
@@ -1610,6 +1639,7 @@ impl Viewer {
         let mut header = div()
             .h(px(48.0))
             .flex_shrink_0()
+            .overflow_hidden()
             .flex()
             .items_center()
             .gap(px(space::S1))
@@ -1640,10 +1670,18 @@ impl Viewer {
                 t("pane-signatures", &[]),
             ));
         }
+        if self.comparing.is_some() {
+            header = header.child(tab_button(
+                "tab-changes",
+                PaneTab::Changes,
+                t("pane-changes", &[]),
+            ));
+        }
         let actions = match tab {
             PaneTab::Pages => Some(self.page_actions(cx)),
             PaneTab::Comments if self.annots.is_some() => Some(self.comment_actions(cx)),
             PaneTab::Contents if self.contents.is_some() => Some(self.outline_actions(cx)),
+            PaneTab::Changes => self.compare_actions(cx),
             _ => None,
         };
         Some(
@@ -1681,7 +1719,8 @@ impl Viewer {
     /// Points to logical pixels for the current zoom, in a card
     /// `width` logical pixels wide whose pages' view is `height` high.
     fn points_to_pixels(&self, width: f32, height: f32) -> f32 {
-        let columns = self.spread.columns() as f32;
+        // Comparing side by side, each page has the older one beside it.
+        let columns = (self.spread.columns() * if self.side_by_side() { 2 } else { 1 }) as f32;
         let fit_width = |opened: &Opened| {
             (width - 2.0 * MARGIN - GAP * (columns - 1.0)) / (opened.widest * columns)
         };
@@ -2421,11 +2460,9 @@ impl Viewer {
     fn want(&mut self, page: usize, scale: f32, cx: &mut Context<Self>) {
         let close = |s: f32| (s / scale - 1.0).abs() < 0.01;
         let colors = self.page_colors();
-        if self
-            .pages
-            .get(&page)
-            .is_some_and(|d| close(d.scale) && d.colors == colors)
-            || self.drawing.get(&page).is_some_and(|s| close(*s))
+        if self.pages.get(&page).is_some_and(|d| {
+            close(d.scale) && d.colors == colors && d.overlay == self.overlaid(page).is_some()
+        }) || self.drawing.get(&page).is_some_and(|s| close(*s))
         {
             return;
         }
@@ -2452,11 +2489,22 @@ impl Viewer {
             }
             self.drawing.insert(page, scale);
             let doc = opened.doc.clone();
+            let older = self.overlaid(page);
+            let overlay = older.is_some();
             let (generation, revision) = (self.generation, self.revision);
             cx.spawn(async move |this, cx| {
                 let image = cx
                     .background_executor()
-                    .spawn(async move { draw(doc.as_ref(), page, scale, colors) })
+                    .spawn(async move {
+                        match older {
+                            Some((older, old)) => {
+                                let a = older.render(old, scale)?;
+                                let b = doc.render(page, scale)?;
+                                render_image(katna_pdf_render::compare::overlay(&a, &b))
+                            }
+                            None => draw(doc.as_ref(), page, scale, colors),
+                        }
+                    })
                     .await;
                 this.update(cx, |this, cx| {
                     if this.generation != generation || this.revision != revision {
@@ -2478,6 +2526,7 @@ impl Viewer {
                             let drawn = Drawn {
                                 scale,
                                 colors,
+                                overlay,
                                 image,
                             };
                             if let Some(old) = this.pages.insert(page, drawn) {
@@ -2654,6 +2703,7 @@ impl Viewer {
             })
             .children(image.map(|image| img(ImageSource::Render(image)).size_full()))
             .children(marks)
+            .children(self.compare_marks(page))
             .children(overlays)
             .children(links)
             .children(fields)
@@ -2687,7 +2737,15 @@ impl Viewer {
         let pages: Vec<AnyElement> = self
             .spread
             .pages_in(row, count)
-            .map(|page| self.render_page(page, window, cx))
+            .flat_map(|page| {
+                let older = self
+                    .side_by_side()
+                    .then(|| self.render_older(page, window, cx));
+                older
+                    .into_iter()
+                    .chain([self.render_page(page, window, cx)])
+                    .collect::<Vec<_>>()
+            })
             .collect();
         div()
             .w_full()
@@ -3345,6 +3403,7 @@ impl Render for Viewer {
             .on_action(cx.listener(|this, _: &Organize, _, cx| this.toggle_organizer(cx)))
             .on_action(cx.listener(|this, _: &Sign, _, cx| this.toggle_signing(cx)))
             .on_action(cx.listener(|this, _: &Properties, _, cx| this.toggle_properties(cx)))
+            .on_action(cx.listener(|this, _: &Compare, _, cx| this.choose_compare(cx)))
             .on_action(cx.listener(|this, _: &AddBookmark, window, cx| {
                 this.add_bookmark(window, cx);
             }))

@@ -51,11 +51,22 @@ fn main() -> ExitCode {
         };
     }
     let mut files: Vec<PathBuf> = Vec::new();
-    for arg in std::env::args_os().skip(1) {
+    // `--compare OLDER NEWER`: NEWER opened and compared with OLDER.
+    let mut compare: Option<PathBuf> = None;
+    let mut args = std::env::args_os().skip(1);
+    while let Some(arg) = args.next() {
         match arg.to_str() {
             Some("-h" | "--help") => {
-                println!("{}", t("usage", &[]));
+                println!("{}\n{}", t("usage", &[]), t("usage-compare", &[]));
                 return ExitCode::SUCCESS;
+            }
+            Some("--compare") => {
+                let (Some(older), Some(newer)) = (args.next(), args.next()) else {
+                    eprintln!("{}\n{}", t("usage", &[]), t("usage-compare", &[]));
+                    return ExitCode::FAILURE;
+                };
+                compare = Some(std::path::absolute(&older).unwrap_or_else(|_| older.into()));
+                files.push(std::path::absolute(&newer).unwrap_or_else(|_| newer.into()));
             }
             // The running app has another working folder.
             _ => files.push(std::path::absolute(&arg).unwrap_or_else(|_| arg.into())),
@@ -68,9 +79,13 @@ fn main() -> ExitCode {
         );
         return ExitCode::FAILURE;
     }
-    let requests = match instance::start(&files) {
-        instance::Started::HandedOff => return ExitCode::SUCCESS,
-        instance::Started::Running(requests) => requests,
+    // A comparison is not handed to a running app: it opens its own.
+    let requests = match compare {
+        Some(_) => None,
+        None => match instance::start(&files) {
+            instance::Started::HandedOff => return ExitCode::SUCCESS,
+            instance::Started::Running(requests) => requests,
+        },
     };
     gpui_platform::application()
         .with_assets(assets::Assets)
@@ -86,6 +101,11 @@ fn main() -> ExitCode {
                 cx.quit();
                 return;
             };
+            if let Some(older) = compare.take() {
+                window
+                    .update(cx, |tabs, _, cx| tabs.compare_with(older, cx))
+                    .ok();
+            }
             #[cfg(target_os = "linux")]
             if let Some(clicks) = clicks {
                 cx.spawn(async move |cx| menu::run(window, clicks, cx).await)

@@ -83,6 +83,12 @@ impl Tabs {
         cx.notify();
     }
 
+    /// Compares the file shown with `older`.
+    pub fn compare_with(&mut self, older: PathBuf, cx: &mut Context<Self>) {
+        self.viewer_entity()
+            .update(cx, |viewer, cx| viewer.compare_with(older, cx));
+    }
+
     fn push(&mut self, file: Option<PathBuf>, window: &mut Window, cx: &mut Context<Self>) {
         let viewer = cx.new(|cx| Viewer::new(file, window, cx));
         let events = cx.subscribe_in(&viewer, window, |this, _, event, window, cx| match event {
@@ -140,6 +146,10 @@ impl Tabs {
                             let others = others.to_vec();
                             this.viewer_entity()
                                 .update(cx, |viewer, cx| viewer.sign_with(others, cx));
+                        }
+                        LibraryEvent::Compare { older, newer } => {
+                            this.open_files(vec![newer.clone()], window, cx);
+                            this.compare_with(older.clone(), cx);
                         }
                         LibraryEvent::Close => {
                             this.in_library = false;

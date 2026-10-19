@@ -4,6 +4,7 @@
 
 app-name = Katna PDF
 usage = Usage: katna-pdf [FILE.pdf…]
+usage-compare =        katna-pdf --compare OLDER.pdf NEWER.pdf
 
 ## The empty window
 empty-title = Open a PDF
@@ -87,6 +88,7 @@ library-rename-keys = Use { $keys }
 library-rename-go = Rename { $count }
 library-renamed = Renamed { $count }.
 library-cancel = Cancel
+library-compare = Compare the two: what changed in the newer one
 library-compress = Make smaller, pages kept as they are
 library-compressed = Made { $count } smaller.
 library-compress-saved = { $size } saved.
@@ -510,6 +512,28 @@ sign-wrong-password = The password is wrong.
 sign-no-dialog = No save dialog could be shown. { $error }
 sign-file-name = { $name } (signed).pdf
 pane-signatures = Signatures
+pane-changes = Changes
+
+## Comparing with another version
+
+compare-with = Compared with { $name }
+compare-working = Comparing…
+compare-unreadable = { $name } could not be opened.
+compare-count = Changes: { $count }
+compare-none = No changes found.
+compare-looking = Looking at pictures and drawings: { $done } of { $total }
+compare-legend = Red is only in the older file, blue only in this one.
+compare-side = Side by side
+compare-overlay = Overlay
+compare-previous = Previous change
+compare-next = Next change
+compare-close = Stop comparing
+compare-page = Page { $page }
+compare-added = Added “{ $text }”
+compare-removed = Removed “{ $text }”
+compare-changed = “{ $was }” is now “{ $now }”
+compare-drawing = Drawn differently
+compare-no-page = No page in the older file lines up with this one.
 signatures-show = Signatures
 signed-by = Signed by { $name }. The signature is intact.
 signed-by-unverified = Signed by { $name }. The signature is intact, but who signed is not verified.
@@ -574,6 +598,7 @@ menu-open = _Open…
 menu-save = _Save
 menu-print = _Print…
 menu-properties = P_roperties…
+menu-compare = Co_mpare with…
 menu-library = _Library
 menu-sign = Si_gn…
 menu-close-tab = _Close Tab

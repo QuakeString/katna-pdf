@@ -7,6 +7,7 @@
 //! beside [`hayro`](crate::Hayro) without the app noticing. No GPUI types
 //! here: the app turns a [`Bitmap`] into a GPUI image itself.
 
+pub mod compare;
 mod grid;
 mod hayro_engine;
 pub mod recolor;
@@ -55,6 +56,41 @@ pub struct Bitmap {
     pub width: u32,
     pub height: u32,
     pub rgba: Vec<u8>,
+}
+
+impl Bitmap {
+    /// The bitmap as a PNG file (RGB, no transparency: pages are opaque).
+    pub fn png(&self) -> Vec<u8> {
+        use std::io::Write as _;
+        let mut raw = Vec::with_capacity((self.width * 3 + 1) as usize * self.height as usize);
+        for row in self.rgba.chunks_exact((self.width * 4).max(1) as usize) {
+            raw.push(0);
+            for p in row.as_chunks::<4>().0 {
+                raw.extend_from_slice(&p[..3]);
+            }
+        }
+        let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+        let _ = z.write_all(&raw);
+        let data = z.finish().unwrap_or_default();
+        let mut out = b"\x89PNG\r\n\x1a\n".to_vec();
+        let mut chunk = |kind: &[u8; 4], body: &[u8]| {
+            out.extend_from_slice(&(body.len() as u32).to_be_bytes());
+            let mut crc = flate2::Crc::new();
+            crc.update(kind);
+            crc.update(body);
+            out.extend_from_slice(kind);
+            out.extend_from_slice(body);
+            out.extend_from_slice(&crc.sum().to_be_bytes());
+        };
+        let mut header = self.width.to_be_bytes().to_vec();
+        header.extend_from_slice(&self.height.to_be_bytes());
+        // 8 bits, RGB, deflate, no filtering choices, not interlaced.
+        header.extend_from_slice(&[8, 2, 0, 0, 0]);
+        chunk(b"IHDR", &header);
+        chunk(b"IDAT", &data);
+        chunk(b"IEND", &[]);
+        out
+    }
 }
 
 impl std::fmt::Debug for Bitmap {

@@ -51,6 +51,7 @@ ashpd = { version = "0.13", default-features = false, features = ["async-io", "p
 hayro-cmap = { version = "0.1.0", default-features = false }
 phf = { version = "0.13.1", default-features = false, features = ["macros"] }
 jpeg-encoder = { version = "0.7", default-features = false, features = ["std"] }
+similar = { version = "2", default-features = false }
 flate2 = { version = "1.1", default-features = false, features = ["rust_backend"] }
 # Signing (docs/PLAN.md §3.3, §4.4): RustCrypto, all pure Rust, kept on
 # one generation (der 0.7) so the crates share their types.
