@@ -141,6 +141,8 @@ mod tests {
             kind,
             value: value.map(Into::into),
             read_only: false,
+            required: false,
+            tooltip: None,
             widgets: on
                 .iter()
                 .map(|on| Widget {

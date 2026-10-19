@@ -12,6 +12,7 @@
 mod annots;
 mod content;
 mod crypt;
+mod design;
 mod document;
 mod dss;
 mod edit;
@@ -41,6 +42,7 @@ pub use annots::{
 };
 pub use content::{Op, ops};
 pub use crypt::{Permissions, UnlockError};
+pub use design::{FieldEdit, FieldSpec, FormDesign, FormError, NewField};
 pub use document::{Document, Entry, LoadError, XrefKind};
 pub use dss::Dss;
 pub use edit::{EditError, TextBlock, TextRun};

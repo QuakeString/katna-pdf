@@ -848,3 +848,67 @@ fn numbers_and_boxes_are_redacted() {
     let (code, _) = run(&["redact", s(&file), "-o", s(&out), "--area", "9:0,0,1,1"]);
     assert_eq!(code, 2);
 }
+
+#[test]
+fn forms_are_designed() {
+    let d = dir("form-design");
+    let file = d.join("blank.pdf");
+    std::fs::write(&file, katna_pdf_cos::text_pdf("Form", &[])).unwrap();
+    let out = d.join("out.pdf");
+    let (code, text) = run(&[
+        "form",
+        s(&file),
+        "-o",
+        s(&out),
+        "--add",
+        "text:1:100,700,300,720:Name",
+        "--add",
+        "radio=Yes:1:100,660,114,674:Answer",
+        "--add",
+        "radio=No:1:140,660,154,674:Answer",
+        "--add",
+        "combo=Delhi;Pune:1:100,620,300,640:City",
+        "--required",
+        "Name",
+        "--tip",
+        "City=Where you live",
+    ]);
+    assert_eq!(code, 0, "{text}");
+    let doc = katna_pdf_cos::Document::load(std::fs::read(&out).unwrap()).unwrap();
+    let form = doc.form();
+    let names: Vec<&str> = form.iter().map(|f| f.name.as_str()).collect();
+    assert_eq!(names, ["Name", "Answer", "City"]);
+    assert!(form[0].required);
+    assert_eq!(form[1].widgets.len(), 2);
+    assert_eq!(form[2].tooltip.as_deref(), Some("Where you live"));
+    let again = d.join("again.pdf");
+    let (code, text) = run(&[
+        "form",
+        s(&out),
+        "-o",
+        s(&again),
+        "--remove",
+        "Answer",
+        "--rename",
+        "City=Town",
+        "--move",
+        "Name:100,500,300,520",
+    ]);
+    assert_eq!(code, 0, "{text}");
+    let doc = katna_pdf_cos::Document::load(std::fs::read(&again).unwrap()).unwrap();
+    let form = doc.form();
+    let names: Vec<&str> = form.iter().map(|f| f.name.as_str()).collect();
+    assert_eq!(names, ["Name", "Town"]);
+    assert_eq!(form[0].widgets[0].rect, [100.0, 500.0, 300.0, 520.0]);
+    let (code, _) = run(&[
+        "form",
+        s(&out),
+        "-o",
+        s(&again),
+        "--add",
+        "wheel:1:0,0,1,1:X",
+    ]);
+    assert_eq!(code, 2);
+    let (code, _) = run(&["form", s(&out), "-o", s(&again), "--remove", "Nobody"]);
+    assert_eq!(code, 1);
+}

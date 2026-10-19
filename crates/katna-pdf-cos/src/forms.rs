@@ -14,12 +14,14 @@ const MAX_DEPTH: usize = 32;
 const MAX_FIELDS: usize = 20_000;
 
 /// Field flags (§12.7.4.1, §12.7.5).
-const READ_ONLY: i64 = 1;
-const MULTILINE: i64 = 1 << 12;
-const PASSWORD: i64 = 1 << 13;
-const RADIO: i64 = 1 << 15;
-const PUSH_BUTTON: i64 = 1 << 16;
-const COMBO: i64 = 1 << 17;
+pub(crate) const READ_ONLY: i64 = 1;
+pub(crate) const REQUIRED: i64 = 1 << 1;
+pub(crate) const MULTILINE: i64 = 1 << 12;
+pub(crate) const PASSWORD: i64 = 1 << 13;
+pub(crate) const RADIO: i64 = 1 << 15;
+pub(crate) const PUSH_BUTTON: i64 = 1 << 16;
+pub(crate) const COMBO: i64 = 1 << 17;
+pub(crate) const EDIT: i64 = 1 << 18;
 
 /// One field of the form.
 #[derive(Debug, Clone, PartialEq)]
@@ -33,6 +35,10 @@ pub struct Field {
     /// radio group that is on, a choice's chosen text.
     pub value: Option<String>,
     pub read_only: bool,
+    /// It must be filled in before the form is sent.
+    pub required: bool,
+    /// The tip shown over it (`/TU`).
+    pub tooltip: Option<String>,
     /// Where it is shown: one widget for most fields, one a button for
     /// radio groups.
     pub widgets: Vec<Widget>,
@@ -184,7 +190,7 @@ impl Document {
     }
 
     /// Each annotation's page.
-    fn annotation_pages(&self) -> HashMap<Ref, usize> {
+    pub(crate) fn annotation_pages(&self) -> HashMap<Ref, usize> {
         let mut out = HashMap::new();
         for (i, page) in self.pages().into_iter().enumerate() {
             let Some(Object::Dict(page)) = self.get(page) else {
@@ -202,7 +208,7 @@ impl Document {
     /// A plain appearance for a text field's widget showing `text`, in
     /// the font and size the widget, the field or the form asks for
     /// (`/DA`), or Helvetica sized to fit.
-    fn text_appearance(
+    pub(crate) fn text_appearance(
         &self,
         [widget_dict, field_dict, form]: [&Dict; 3],
         widget: &Widget,
@@ -314,7 +320,7 @@ impl Document {
 impl Document {
     /// A colour array in `dict` (1, 3 or 4 numbers) as the operator
     /// that sets it, for filling or `stroke`.
-    fn colour(&self, dict: &Dict, key: &str, stroke: bool) -> Option<String> {
+    pub(crate) fn colour(&self, dict: &Dict, key: &str, stroke: bool) -> Option<String> {
         let Object::Array(parts) = self.resolve_key(dict, key) else {
             return None;
         };
@@ -432,6 +438,11 @@ impl FieldReader<'_> {
             kind,
             value,
             read_only: here.flags & READ_ONLY != 0,
+            required: here.flags & REQUIRED != 0,
+            tooltip: match self.doc.resolve_key(&dict, "TU") {
+                Object::String { bytes, .. } => Some(text_string(&bytes)),
+                _ => None,
+            },
             widgets,
         });
     }

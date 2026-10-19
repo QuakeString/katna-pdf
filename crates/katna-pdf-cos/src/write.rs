@@ -189,6 +189,14 @@ impl Update<'_> {
         self.objects.insert(r.num, (r.generation, obj));
     }
 
+    /// Object `r` as the update leaves it.
+    pub fn get(&self, r: Ref) -> Option<Object> {
+        match self.objects.get(&r.num) {
+            Some((_, obj)) => Some(obj.clone()),
+            None => self.doc.get(r),
+        }
+    }
+
     /// The trailer the update will write; `/Size`, `/Prev` and `/ID` are
     /// set by [`Update::finish`].
     pub fn trailer_mut(&mut self) -> &mut Dict {

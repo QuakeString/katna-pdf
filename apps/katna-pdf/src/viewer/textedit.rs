@@ -57,6 +57,7 @@ impl Viewer {
         self.text_editing = !self.text_editing;
         self.adding = None;
         self.redacting = None;
+        self.designing = None;
         self.placing = None;
         self.picked_object = None;
         self.moving = None;
@@ -78,6 +79,7 @@ impl Viewer {
         self.text_editing = false;
         self.adding = None;
         self.redacting = None;
+        self.designing = None;
         self.placing = None;
         self.picked_object = None;
         self.moving = None;
@@ -305,7 +307,14 @@ impl Viewer {
                     Ok((bytes, doc, cos)) => {
                         this.key = kept;
                         this.forget_runs();
+                        let design = this
+                            .designing
+                            .is_some()
+                            .then(|| super::design::read_form(&cos));
                         this.show_annotated(bytes, doc, cos, &pages, None);
+                        if let Some(read) = design {
+                            this.design_changed(read, cx);
+                        }
                     }
                     Err(error) => {
                         this.notice = Some(t(failed, &[("error", &error)]));
@@ -344,11 +353,12 @@ impl Viewer {
         };
         // With a tool for adding in hand, the paragraphs are not boxes to
         // click.
-        let listed = if self.adding.is_some() || self.redacting.is_some() {
-            &[][..]
-        } else {
-            &blocks[..]
-        };
+        let listed =
+            if self.adding.is_some() || self.redacting.is_some() || self.designing.is_some() {
+                &[][..]
+            } else {
+                &blocks[..]
+            };
         let mut out: Vec<AnyElement> = listed
             .iter()
             .enumerate()
@@ -430,6 +440,7 @@ impl Viewer {
         out.extend(self.objects_overlay(page));
         out.extend(self.insert_preview(page));
         out.extend(self.redact_overlay(page));
+        out.extend(self.design_overlay(page));
         out
     }
 
