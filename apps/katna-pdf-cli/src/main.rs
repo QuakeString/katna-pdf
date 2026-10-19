@@ -11,7 +11,8 @@ use std::process::ExitCode;
 
 use katna_pdf_cos::{
     Allowed, AnnotKind, Change, Coverage, Document, FieldEdit, FieldSpec, FormDesign, Lock,
-    NewField, Object, PageSource, Placement, SignRequest, SigningInfo, compose, text_string,
+    NewField, Object, ObjectChange, PageSource, Placement, SignRequest, SigningInfo, compose,
+    text_string,
 };
 use katna_pdf_sign::{Digest, Revocation, Signer, Trust, common_name, p12, pkcs11};
 
@@ -90,9 +91,12 @@ usage: katna-pdf-cli COMMAND [--json] ...
                                   to corner; --under draws it beneath the page
   objects FILE [--pages LIST]     the pictures, forms and shapes drawn on pages, numbered
                                   PAGE:OBJECT, with where each is
-  object FILE PAGE:OBJECT -o OUT (--rect L,B,R,T | --delete)
+  object FILE PAGE:OBJECT -o OUT (--rect L,B,R,T | --delete | --turn | --front |
+         --back | --opacity 0..1 | --colour #RRGGBB | --image PICTURE)
                                   a picture or shape moved and resized to fill the box,
-                                  or taken out of the page
+                                  taken out of the page, turned a quarter right, drawn
+                                  over or under everything else, made see-through,
+                                  coloured (a shape), or shown as another picture
   form FILE -o OUT [--add KIND:PAGE:L,B,R,T:NAME]... [--tip NAME=TEXT]...
        [--required NAME]... [--optional NAME]... [--read-only NAME]...
        [--rename NAME=NEW]... [--move NAME:L,B,R,T]... [--copy NAME:PAGES]...
@@ -337,6 +341,9 @@ impl<'a> Args<'a> {
                 "--blocks",
                 "--fill",
                 "--delete",
+                "--turn",
+                "--front",
+                "--back",
                 "--under",
                 "--scrub",
                 "--no-fill",
@@ -1546,20 +1553,51 @@ fn object(args: &[String], json: bool) -> Done {
         .into_iter()
         .nth(index)
         .ok_or_else(|| failed(format!("{id}: no such object")))?;
-    let bytes = match (args.option("--rect"), args.flag("--delete")) {
-        (Some(rect), false) => {
-            let [l, b, r, t] = object.rect;
-            let [nl, nb, nr, nt] = parse_rect(rect)?;
-            let sx = if r > l { (nr - nl) / (r - l) } else { 1.0 };
-            let sy = if t > b { (nt - nb) / (t - b) } else { 1.0 };
-            doc.transform_object(page, index, [sx, 0.0, 0.0, sy, nl - l * sx, nb - b * sy])
-        }
-        (None, true) => doc.delete_object(page, index),
-        _ => {
-            return Err(Failure::Usage(
-                "object takes one of --rect and --delete".into(),
-            ));
-        }
+    let picked = [
+        args.option("--rect").is_some(),
+        args.flag("--delete"),
+        args.flag("--turn"),
+        args.flag("--front"),
+        args.flag("--back"),
+        args.option("--opacity").is_some(),
+        args.option("--colour").is_some(),
+        args.option("--image").is_some(),
+    ];
+    if picked.iter().filter(|p| **p).count() != 1 {
+        return Err(Failure::Usage(
+            "object takes one of --rect, --delete, --turn, --front, --back, --opacity, --colour and --image".into(),
+        ));
+    }
+    let [l, b, r, t] = object.rect;
+    let change = |change: ObjectChange| doc.change_object(page, index, &change);
+    let bytes = if let Some(rect) = args.option("--rect") {
+        let [nl, nb, nr, nt] = parse_rect(rect)?;
+        let sx = if r > l { (nr - nl) / (r - l) } else { 1.0 };
+        let sy = if t > b { (nt - nb) / (t - b) } else { 1.0 };
+        doc.transform_object(page, index, [sx, 0.0, 0.0, sy, nl - l * sx, nb - b * sy])
+    } else if args.flag("--delete") {
+        doc.delete_object(page, index)
+    } else if args.flag("--turn") {
+        let (mx, my) = ((l + r) / 2.0, (b + t) / 2.0);
+        doc.transform_object(page, index, [0.0, -1.0, 1.0, 0.0, mx - my, mx + my])
+    } else if args.flag("--front") {
+        change(ObjectChange::Front)
+    } else if args.flag("--back") {
+        change(ObjectChange::Back)
+    } else if args.option("--opacity").is_some() {
+        let opacity = number_option(&args, "--opacity", 1.0, |v| (0.0..=1.0).contains(&v))?;
+        change(ObjectChange::Opacity(opacity))
+    } else if let Some(path) = args.option("--image") {
+        let bytes = std::fs::read(path).map_err(|e| failed(format!("{path}: {e}")))?;
+        let image =
+            katna_pdf_sign::page_image(&bytes).map_err(|e| failed(format!("{path}: {e}")))?;
+        change(ObjectChange::Picture(image))
+    } else {
+        let ink = colour_option(&args, [0.0; 3])?;
+        change(ObjectChange::Colours {
+            fill: Some(ink),
+            stroke: Some(ink),
+        })
     }
     .map_err(|e| failed(format!("{file}: {e}")))?;
     write(&out, &bytes)?;

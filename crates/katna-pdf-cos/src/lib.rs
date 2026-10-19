@@ -64,7 +64,7 @@ pub use lock::LockError;
 pub use mdp::{Allowed, Change, Lock};
 pub use meta::Metadata;
 pub use object::{Dict, Name, Object, Ref, Stream};
-pub use objects::{ObjectKind, PageObject};
+pub use objects::{ObjectChange, ObjectKind, PageObject};
 pub use outline::{Destination, OutlineItem, text_string};
 pub use pages::{ComposeError, PageInfo, PageSource, compose};
 pub use redact::{Pattern, RedactError, RedactOptions};

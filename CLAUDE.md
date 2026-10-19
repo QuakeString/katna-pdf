@@ -29,8 +29,9 @@ cargo run --release -p katna-pdf-bench -- file.pdf
   as it was (`edit.rs`, over `content.rs`'s content-stream operators and
   `fonts/`'s encodings and widths; letters a font lacks come from a
   standard font), and putting new text, pictures and shapes into a
-  page's own content (`insert.rs`), and moving, resizing and deleting
-  the pictures and shapes already there (`objects.rs`), headers,
+  page's own content (`insert.rs`), and moving, resizing, turning, restacking,
+  fading, recolouring, swapping and deleting the pictures and shapes
+  already there (`objects.rs`), headers,
   footers, watermarks and Bates numbers on many pages (`stamp.rs`), the
   document's properties in `/Info` and XMP (`meta.rs`), opening
   password-locked files (`crypt.rs`: RC4, AES-128 and AES-256, an empty

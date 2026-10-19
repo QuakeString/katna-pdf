@@ -660,6 +660,35 @@ fn objects_are_listed_moved_and_taken_out() {
     assert_eq!(code, 0, "{out}");
     let (_, out) = run(&["objects", s(&moved)]);
     assert!(out.contains("1:1      shape    300,400,500,500"), "{out}");
+    // Turned a quarter: as tall as it was wide, about the same middle.
+    let turned = d.join("turned.pdf");
+    let (code, out) = run(&["object", s(&moved), "1:1", "-o", s(&turned), "--turn"]);
+    assert_eq!(code, 0, "{out}");
+    let (_, out) = run(&["objects", s(&turned)]);
+    assert!(out.contains("1:1      shape    350,350,450,550"), "{out}");
+    for how in [
+        &["--opacity", "0.5"][..],
+        &["--colour", "#ff0000"],
+        &["--back"],
+        &["--front"],
+    ] {
+        let mut a = vec!["object", s(&turned), "1:1", "-o", s(&turned)];
+        a.extend_from_slice(how);
+        let (code, out) = run(&a);
+        assert_eq!(code, 0, "{how:?} {out}");
+    }
+    let (_, out) = run(&["objects", s(&turned)]);
+    assert!(out.contains("1:1      shape    350,350,450,550"), "{out}");
+    let (code, _) = run(&[
+        "object",
+        s(&turned),
+        "1:1",
+        "-o",
+        s(&turned),
+        "--front",
+        "--back",
+    ]);
+    assert_eq!(code, 2);
     let gone = d.join("gone.pdf");
     let (code, out) = run(&["object", s(&moved), "1:1", "-o", s(&gone), "--delete"]);
     assert_eq!(code, 0, "{out}");
