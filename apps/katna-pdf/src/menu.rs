@@ -13,8 +13,8 @@ use crate::tabs::Tabs;
 use crate::text::t;
 use crate::viewer::{
     ActualSize, Annotate, CloseTab, CopyText, Find, FindNext, FindPrevious, FitPage, FitWidth,
-    NextPage, NextSpread, NextTab, Open, Organize, PreviousPage, PreviousTab, Print, Quit, Save,
-    Sign, ToggleContents, ToggleNight, ZoomIn, ZoomOut,
+    NextPage, NextSpread, NextTab, Open, Organize, PreviousPage, PreviousTab, Print, Properties,
+    Quit, Save, Sign, ToggleContents, ToggleNight, ZoomIn, ZoomOut,
 };
 
 /// The menus, their items, and each item's keys.
@@ -30,6 +30,7 @@ fn items() -> Vec<MenuItem> {
                 item("menu-open", &ctrl("O")),
                 item("menu-save", &ctrl("S")),
                 item("menu-print", &ctrl("P")),
+                item("menu-properties", &ctrl("D")),
                 MenuItem::Separator,
                 item("menu-sign", &[]),
                 MenuItem::Separator,
@@ -83,6 +84,7 @@ fn action(id: &str) -> Option<Box<dyn Action>> {
         "menu-open" => Box::new(Open),
         "menu-save" => Box::new(Save),
         "menu-print" => Box::new(Print),
+        "menu-properties" => Box::new(Properties),
         "menu-sign" => Box::new(Sign),
         "menu-close-tab" => Box::new(CloseTab),
         "menu-quit" => Box::new(Quit),

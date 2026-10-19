@@ -59,6 +59,10 @@ usage: katna-pdf-cli COMMAND [--json] ...
                                   text in a standard font (Helvetica, Times-Roman,
                                   Courier, -Bold and so on), its first baseline at X,Y;
                                   a line runs from L,B to R,T
+  meta FILE -o OUT [--title T] [--author A] [--subject S] [--keywords K]
+       [--creator C] [--producer P]
+                                  the document's properties changed (`info` shows
+                                  them); an empty value takes one out
   stamp FILE -o OUT --text TEXT [--place top-left|top|top-right|bottom-left|bottom|
         bottom-right|middle|across] [--pages LIST] [--font NAME] [--size PT]
         [--colour #RRGGBB] [--opacity 0..1] [--margin PT] [--under]
@@ -125,6 +129,7 @@ fn main() -> ExitCode {
         "add-field" => add_field(rest, json),
         "insert" => insert(rest, json),
         "stamp" => stamp(rest, json),
+        "meta" => meta(rest, json),
         "objects" => objects(rest, json),
         "object" => object(rest, json),
         "ltv" => ltv(rest, json),
@@ -234,6 +239,12 @@ impl<'a> Args<'a> {
                     | "--name"
                     | "--report"
                     | "--place"
+                    | "--title"
+                    | "--author"
+                    | "--subject"
+                    | "--keywords"
+                    | "--creator"
+                    | "--producer"
                     | "--opacity"
                     | "--margin"
                     | "--bates-prefix"
@@ -1093,6 +1104,32 @@ fn number_option(
             .filter(|v| v.is_finite() && ok(*v))
             .ok_or_else(|| Failure::Usage(format!("{name} {v}: not a number it takes"))),
     }
+}
+
+/// Changes the document's properties.
+fn meta(args: &[String], json: bool) -> Done {
+    let args = Args::parse(args)?;
+    let [file] = args.words()?;
+    let out = args.output()?;
+    let doc = open(file)?;
+    let mut meta = doc.metadata();
+    for (name, field) in [
+        ("--title", &mut meta.title),
+        ("--author", &mut meta.author),
+        ("--subject", &mut meta.subject),
+        ("--keywords", &mut meta.keywords),
+        ("--creator", &mut meta.creator),
+        ("--producer", &mut meta.producer),
+    ] {
+        if let Some(value) = args.option(name) {
+            *field = Some(value.to_owned());
+        }
+    }
+    let bytes = doc
+        .set_metadata(&meta)
+        .map_err(|e| failed(format!("{file}: {e}")))?;
+    write(&out, &bytes)?;
+    Ok(wrote(&[(out, doc.pages().len())], json))
 }
 
 /// Draws a header, footer, watermark or Bates number on many pages.
