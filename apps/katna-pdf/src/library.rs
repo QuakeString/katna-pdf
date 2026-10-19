@@ -4,7 +4,9 @@
 //! watches, as covers in a grid, with places down the side (all, opened
 //! lately, starred, each folder, tag and smart collection, copies and
 //! missing files), a search over titles and every page's text, and a
-//! strip for the selected document's stars and tags. The catalog is
+//! strip for the selected document's stars and tags. Documents chosen
+//! with Ctrl or Shift are merged, signed, checked, renamed, copied or
+//! tagged together. The catalog is
 //! `katna_pdf_library`'s; folders are read again in the background, through
 //! the app's worker processes, each time the library is shown.
 
@@ -29,6 +31,7 @@ use katna_ui::{px, unpx};
 
 use crate::text::t;
 use crate::theme::Theme;
+use crate::viewer::sign::{Verdict, verdict};
 
 /// A cover's width, and its box's height, in logical pixels.
 const COVER: f32 = 140.0;
@@ -52,6 +55,8 @@ pub enum LibraryEvent {
     Open(PathBuf, Option<usize>),
     /// Back to the documents.
     Close,
+    /// Sign these files together, starting from the first.
+    Sign(Vec<PathBuf>),
 }
 
 /// A place down the side.
@@ -99,14 +104,29 @@ pub struct LibraryView {
     scan_again: bool,
     /// What the last scan could not read, to say so.
     failed: usize,
+    /// The document last clicked, where a Shift-click range starts.
     selected: Option<i64>,
+    /// Every document chosen: the one clicked, or many with Ctrl and
+    /// Shift.
+    chosen: Vec<i64>,
     tags_field: Entity<TextInput>,
+    /// The tag given to every chosen document.
+    add_tag: Entity<TextInput>,
+    /// The new names of the chosen documents, while renaming them.
+    pattern: Entity<TextInput>,
+    renaming: bool,
+    /// A bulk action under way.
+    busy: bool,
+    /// What the last bulk action did.
+    notice: Option<String>,
+    /// The chosen files' signatures, once checked.
+    checks: Vec<(i64, String, Verdict)>,
     grid: UniformListScrollHandle,
     /// The grid's width last frame, for how many covers a row holds.
     width: Rc<Cell<f32>>,
     /// Watches the folders; dropped and made again when they change.
     watcher: Option<notify::RecommendedWatcher>,
-    _inputs: [Subscription; 2],
+    _inputs: [Subscription; 4],
 }
 
 #[derive(Default)]
@@ -130,6 +150,30 @@ impl LibraryView {
             let mut input = TextInput::new(t("library-tags-placeholder", &[]), cx);
             input.set_accent(accent);
             input
+        });
+        let add_tag = cx.new(|cx| {
+            let mut input = TextInput::new(t("library-add-tag", &[]), cx);
+            input.set_accent(accent);
+            input
+        });
+        let pattern = cx.new(|cx| {
+            let mut input = TextInput::new(t("library-rename-pattern", &[]), cx);
+            input.set_accent(accent);
+            input.set_text("{author} - {title}", cx);
+            input
+        });
+        let adding = cx.subscribe(&add_tag, |this, _, event, cx| match event {
+            InputEvent::Submit => this.tag_chosen(cx),
+            InputEvent::Cancel => this.clear_chosen(cx),
+            InputEvent::Changed => {}
+        });
+        let naming = cx.subscribe(&pattern, |this, _, event, cx| match event {
+            InputEvent::Submit => this.rename_chosen(cx),
+            InputEvent::Cancel => {
+                this.renaming = false;
+                cx.notify();
+            }
+            InputEvent::Changed => cx.notify(),
         });
         let searching = cx.subscribe(&search, |this, _, event, cx| match event {
             InputEvent::Changed | InputEvent::Submit => this.reload(cx),
@@ -160,11 +204,18 @@ impl LibraryView {
             scan_again: false,
             failed: 0,
             selected: None,
+            chosen: Vec::new(),
             tags_field,
+            add_tag,
+            pattern,
+            renaming: false,
+            busy: false,
+            notice: None,
+            checks: Vec::new(),
             grid: UniformListScrollHandle::new(),
             width: Rc::new(Cell::new(800.0)),
             watcher: None,
-            _inputs: [searching, tagging],
+            _inputs: [searching, tagging, adding, naming],
         };
         this.reload(cx);
         this.watch(cx);
@@ -408,12 +459,16 @@ impl LibraryView {
         {
             self.selected = None;
         }
+        let docs = &self.docs;
+        self.chosen.retain(|id| docs.iter().any(|d| d.id == *id));
         cx.notify();
     }
 
     fn go(&mut self, place: Place, cx: &mut Context<Self>) {
         self.place = place;
         self.selected = None;
+        self.chosen.clear();
+        self.renaming = false;
         self.grid = UniformListScrollHandle::new();
         self.reload(cx);
     }
@@ -485,6 +540,8 @@ impl LibraryView {
 
     fn select(&mut self, id: i64, cx: &mut Context<Self>) {
         self.selected = Some(id);
+        self.chosen = vec![id];
+        self.renaming = false;
         let tags = self
             .docs
             .iter()
@@ -518,7 +575,7 @@ impl LibraryView {
     }
 
     fn save_tags(&mut self, cx: &mut Context<Self>) {
-        let Some(id) = self.selected else {
+        let Some(id) = self.single() else {
             return;
         };
         let tags: Vec<String> = self
@@ -539,6 +596,237 @@ impl LibraryView {
             let _ = lib.forget(id);
         }
         self.selected = None;
+        self.chosen.clear();
+        self.reload(cx);
+    }
+
+    /// The one document chosen, when only one is.
+    fn single(&self) -> Option<i64> {
+        match self.chosen[..] {
+            [id] => Some(id),
+            _ => None,
+        }
+    }
+
+    /// The chosen documents still where they were, in the grid's order.
+    fn chosen_docs(&self) -> Vec<Doc> {
+        self.docs
+            .iter()
+            .filter(|d| self.chosen.contains(&d.id) && !d.missing)
+            .cloned()
+            .collect()
+    }
+
+    /// Ctrl-click: `id` chosen too, or no longer.
+    fn toggle_chosen(&mut self, id: i64, cx: &mut Context<Self>) {
+        match self.chosen.iter().position(|c| *c == id) {
+            Some(at) => {
+                self.chosen.remove(at);
+            }
+            None => self.chosen.push(id),
+        }
+        self.selected = Some(id);
+        self.renaming = false;
+        if let Some(one) = self.single() {
+            self.select(one, cx);
+        }
+        cx.notify();
+    }
+
+    /// Shift-click: every document from the one last clicked to `id`.
+    fn choose_to(&mut self, id: i64, cx: &mut Context<Self>) {
+        let at = |id: Option<i64>| self.docs.iter().position(|d| Some(d.id) == id);
+        let (Some(from), Some(to)) = (at(self.selected).or(Some(0)), at(Some(id))) else {
+            return;
+        };
+        let (a, b) = (from.min(to), from.max(to));
+        self.chosen = self.docs[a..=b].iter().map(|d| d.id).collect();
+        self.renaming = false;
+        if let Some(one) = self.single() {
+            self.select(one, cx);
+        }
+        cx.notify();
+    }
+
+    fn choose_all(&mut self, cx: &mut Context<Self>) {
+        self.chosen = self.docs.iter().map(|d| d.id).collect();
+        self.renaming = false;
+        cx.notify();
+    }
+
+    fn clear_chosen(&mut self, cx: &mut Context<Self>) {
+        self.chosen.clear();
+        self.selected = None;
+        self.renaming = false;
+        self.checks.clear();
+        cx.notify();
+    }
+
+    /// The chosen documents' pages as one new file, saved where the
+    /// person says and opened.
+    fn merge_chosen(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let docs = self.chosen_docs();
+        if docs.len() < 2 || self.busy {
+            return;
+        }
+        let folder = docs[0].path.parent().map(PathBuf::from).unwrap_or_default();
+        let name = t("library-merged-name", &[]);
+        let target = cx.prompt_for_new_path(&folder, Some(&name));
+        let paths: Vec<PathBuf> = docs.into_iter().map(|d| d.path).collect();
+        self.busy = true;
+        self.notice = None;
+        cx.notify();
+        cx.spawn_in(window, async move |this, cx| {
+            let target = match target.await {
+                Ok(Ok(Some(path))) if path.extension().is_some() => path,
+                Ok(Ok(Some(path))) => path.with_extension("pdf"),
+                _ => {
+                    this.update(cx, |this, cx| {
+                        this.busy = false;
+                        cx.notify();
+                    })
+                    .ok();
+                    return;
+                }
+            };
+            let out = target.clone();
+            let merged = cx
+                .background_executor()
+                .spawn(async move { katna_pdf_library::merge(&paths, &out) })
+                .await;
+            this.update(cx, |this, cx| {
+                this.busy = false;
+                match merged {
+                    Ok(pages) => {
+                        this.notice = Some(t(
+                            "library-merged",
+                            &[
+                                ("name", &folder_name(&target)),
+                                ("pages", &pages.to_string()),
+                            ],
+                        ));
+                        cx.emit(LibraryEvent::Open(target, None));
+                    }
+                    Err(e) => {
+                        this.notice = Some(t("library-merge-failed", &[("error", &e)]));
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn sign_chosen(&mut self, cx: &mut Context<Self>) {
+        let paths: Vec<PathBuf> = self
+            .chosen_docs()
+            .into_iter()
+            .filter(|d| !d.locked)
+            .map(|d| d.path)
+            .collect();
+        if !paths.is_empty() {
+            cx.emit(LibraryEvent::Sign(paths));
+        }
+    }
+
+    /// Checks the chosen files' signatures, offline, in the background.
+    fn check_chosen(&mut self, cx: &mut Context<Self>) {
+        let docs = self.chosen_docs();
+        if docs.is_empty() || self.busy {
+            return;
+        }
+        self.busy = true;
+        self.checks.clear();
+        self.notice = None;
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let checks = cx
+                .background_executor()
+                .spawn(async move {
+                    docs.into_iter()
+                        .map(|d| (d.id, d.name(), verdict(&d.path)))
+                        .collect::<Vec<_>>()
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                this.busy = false;
+                this.checks = checks;
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn start_renaming(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.renaming = true;
+        self.notice = None;
+        let focus = self.pattern.read(cx).focus_handle(cx);
+        window.focus(&focus, cx);
+        cx.notify();
+    }
+
+    /// Renames the chosen documents by the pattern typed.
+    fn rename_chosen(&mut self, cx: &mut Context<Self>) {
+        let ids: Vec<i64> = self.chosen_docs().iter().map(|d| d.id).collect();
+        let pattern = self.pattern.read(cx).text().trim().to_owned();
+        let Ok(lib) = &self.lib else {
+            return;
+        };
+        if ids.is_empty() || pattern.is_empty() {
+            return;
+        }
+        self.notice = Some(match lib.rename(&ids, &pattern) {
+            Ok(report) => report_line("library-renamed", &report),
+            Err(e) => e.to_string(),
+        });
+        self.renaming = false;
+        self.reload(cx);
+    }
+
+    /// Copies the chosen files into a folder the person picks.
+    fn copy_chosen(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let ids: Vec<i64> = self.chosen_docs().iter().map(|d| d.id).collect();
+        if ids.is_empty() {
+            return;
+        }
+        let chosen = cx.prompt_for_paths(PathPromptOptions {
+            files: false,
+            directories: true,
+            multiple: false,
+            prompt: Some(t("library-copy-to", &[]).into()),
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            let Ok(Ok(Some(folder))) = chosen.await else {
+                return;
+            };
+            let Some(folder) = folder.into_iter().next() else {
+                return;
+            };
+            this.update(cx, |this, cx| {
+                if let Ok(lib) = &this.lib {
+                    this.notice = Some(match lib.copy_to(&ids, &folder) {
+                        Ok(report) => report_line("library-copied", &report),
+                        Err(e) => e.to_string(),
+                    });
+                }
+                this.reload(cx);
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn tag_chosen(&mut self, cx: &mut Context<Self>) {
+        let tag = self.add_tag.read(cx).text().trim().to_owned();
+        let ids: Vec<i64> = self.chosen.clone();
+        if let Ok(lib) = &self.lib
+            && !tag.is_empty()
+        {
+            let _ = lib.add_tag(&ids, &tag);
+        }
+        self.add_tag.update(cx, |f, cx| f.set_text("", cx));
         self.reload(cx);
     }
 
@@ -631,9 +919,22 @@ impl Render for LibraryView {
             .id("library")
             .key_context("Library")
             .track_focus(&self.focus)
-            .on_key_down(cx.listener(|_, event: &gpui::KeyDownEvent, _, cx| {
-                if event.keystroke.key == "escape" {
-                    cx.emit(LibraryEvent::Close);
+            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
+                let key = &event.keystroke;
+                if key.key == "escape" {
+                    if this.renaming {
+                        this.renaming = false;
+                        cx.notify();
+                    } else if this.chosen.len() > 1 || !this.checks.is_empty() {
+                        this.clear_chosen(cx);
+                    } else {
+                        cx.emit(LibraryEvent::Close);
+                    }
+                } else if key.key == "a"
+                    && key.modifiers.secondary()
+                    && this.focus.is_focused(window)
+                {
+                    this.choose_all(cx);
                 }
             }))
             .flex_1()
@@ -986,7 +1287,30 @@ impl LibraryView {
             self.grid(cx).into_any_element()
         };
         let hits = (!self.hits.is_empty()).then(|| self.hits(cx).into_any_element());
-        let details = self.details(cx);
+        let checks = (!self.checks.is_empty()).then(|| self.checks(cx).into_any_element());
+        let details = if self.chosen.len() > 1 {
+            Some(self.bulk(cx).into_any_element())
+        } else {
+            self.details(cx).map(IntoElement::into_any_element)
+        };
+        let notice = self.notice.clone().map(|notice| {
+            div()
+                .flex()
+                .items_center()
+                .gap(px(space::S2))
+                .px(px(space::S4))
+                .py(px(space::S1))
+                .text_size(px(text::SMALL))
+                .text_color(th.dim)
+                .child(div().flex_1().min_w_0().child(notice))
+                .child(
+                    widgets::icon_button("library-notice-close", "close", 14.0, &th.katna)
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.notice = None;
+                            cx.notify();
+                        })),
+                )
+        });
         let failed = (self.failed > 0 && self.scanning.is_none()).then(|| {
             div()
                 .px(px(space::S4))
@@ -1009,8 +1333,10 @@ impl LibraryView {
             .overflow_hidden()
             .child(header)
             .children(hits)
+            .children(checks)
             .child(div().flex_1().min_h_0().flex().flex_col().child(body))
             .children(failed)
+            .children(notice)
             .children(details)
     }
 
@@ -1169,7 +1495,7 @@ impl LibraryView {
         let th = self.theme;
         let doc = self.docs[i].clone();
         let cover = self.cover(doc.id, near);
-        let selected = self.selected == Some(doc.id);
+        let selected = self.chosen.contains(&doc.id);
         let id = doc.id;
         let mut marks: Vec<(&str, String)> = Vec::new();
         if doc.missing {
@@ -1201,13 +1527,22 @@ impl LibraryView {
             .cursor_pointer()
             .when(selected, |d| d.bg(gpui::rgba(th.katna.row_selected)))
             .when(!selected, |d| d.hover(move |s| s.bg(th.hover)))
-            .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| {
-                if event.click_count() >= 2 {
-                    this.open(id, None, cx);
-                } else {
-                    this.select(id, cx);
-                }
-            }))
+            .on_click(
+                cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
+                    // Away from the search, so Ctrl+A chooses every document.
+                    window.focus(&this.focus, cx);
+                    let keys = event.modifiers();
+                    if keys.shift {
+                        this.choose_to(id, cx);
+                    } else if keys.secondary() {
+                        this.toggle_chosen(id, cx);
+                    } else if event.click_count() >= 2 {
+                        this.open(id, None, cx);
+                    } else {
+                        this.select(id, cx);
+                    }
+                }),
+            )
             .child(
                 div()
                     .h(px(COVER_BOX))
@@ -1279,9 +1614,249 @@ impl LibraryView {
             )
     }
 
+    /// The strip for many chosen documents: what can be done to them all.
+    fn bulk(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let th = self.theme;
+        let count = self.chosen.len();
+        let strip = div()
+            .flex_none()
+            .flex()
+            .items_center()
+            .gap(px(space::S2))
+            .px(px(space::S4))
+            .py(px(space::S2))
+            .border_t_1()
+            .border_color(th.line);
+        let field = |input: &Entity<TextInput>, icon: &'static str, width: f32| {
+            div()
+                .w(px(width))
+                .h(px(32.0))
+                .flex()
+                .items_center()
+                .gap(px(space::S2))
+                .px(px(space::S3))
+                .rounded(px(radius::SM))
+                .bg(th.field)
+                .text_size(px(text::SMALL))
+                .child(
+                    svg()
+                        .path(icon)
+                        .size(px(14.0))
+                        .flex_none()
+                        .text_color(th.dim),
+                )
+                .child(div().flex_1().min_w_0().child(input.clone()))
+        };
+        if self.renaming {
+            let pattern = self.pattern.read(cx).text().trim().to_owned();
+            let docs = self.chosen_docs();
+            let example = docs
+                .first()
+                .map(|d| format!("{}.pdf", katna_pdf_library::name_from(d, &pattern, 1)))
+                .unwrap_or_default();
+            let keys = katna_pdf_library::PATTERN_KEYS
+                .iter()
+                .map(|k| format!("{{{k}}}"))
+                .collect::<Vec<_>>()
+                .join(" ");
+            return strip
+                .child(field(&self.pattern, "icons/rename.svg", 280.0))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .flex()
+                        .flex_col()
+                        .child(
+                            div()
+                                .truncate()
+                                .text_size(px(text::SMALL))
+                                .child(t("library-rename-example", &[("name", &example)])),
+                        )
+                        .child(
+                            div()
+                                .truncate()
+                                .text_size(px(text::SMALL))
+                                .text_color(th.dim)
+                                .child(t("library-rename-keys", &[("keys", &keys)])),
+                        ),
+                )
+                .child(
+                    widgets::outlined_button(
+                        "library-rename-cancel",
+                        t("library-cancel", &[]),
+                        &th.katna,
+                    )
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.renaming = false;
+                        cx.notify();
+                    })),
+                )
+                .child(
+                    widgets::filled_button(
+                        "library-rename-go",
+                        t("library-rename-go", &[("count", &docs.len().to_string())]),
+                        &th.katna,
+                    )
+                    .on_click(cx.listener(|this, _, _, cx| this.rename_chosen(cx))),
+                )
+                .into_any_element();
+        }
+        let action = |id: &'static str, icon: &'static str| {
+            widgets::icon_button(id, icon, 18.0, &th.katna)
+                .size(px(32.0))
+                .tip(t(id, &[]), &th.katna)
+        };
+        strip
+            .child(
+                widgets::icon_button("library-unchoose", "close", 16.0, &th.katna)
+                    .tip(t("library-unchoose", &[]), &th.katna)
+                    .on_click(cx.listener(|this, _, _, cx| this.clear_chosen(cx))),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .text_size(px(text::BODY))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(if self.busy {
+                        t("library-working", &[])
+                    } else {
+                        t("library-chosen", &[("count", &count.to_string())])
+                    }),
+            )
+            .child(field(&self.add_tag, "icons/tag.svg", 180.0))
+            .child(
+                action("library-merge", "copies")
+                    .on_click(cx.listener(|this, _, window, cx| this.merge_chosen(window, cx))),
+            )
+            .child(
+                action("library-sign", "signature")
+                    .on_click(cx.listener(|this, _, _, cx| this.sign_chosen(cx))),
+            )
+            .child(
+                action("library-check", "shield-check")
+                    .on_click(cx.listener(|this, _, _, cx| this.check_chosen(cx))),
+            )
+            .child(
+                action("library-rename", "rename")
+                    .on_click(cx.listener(|this, _, window, cx| this.start_renaming(window, cx))),
+            )
+            .child(
+                action("library-copy", "download")
+                    .on_click(cx.listener(|this, _, window, cx| this.copy_chosen(window, cx))),
+            )
+            .into_any_element()
+    }
+
+    /// The chosen files' signatures, as checked.
+    fn checks(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let th = self.theme;
+        let rows = self
+            .checks
+            .iter()
+            .enumerate()
+            .map(|(i, (id, name, verdict))| {
+                let id = *id;
+                let (icon, colour, line): (&str, gpui::Hsla, String) = match verdict {
+                    Verdict::Unsigned => ("document", th.dim, t("library-check-unsigned", &[])),
+                    Verdict::Good(n) => (
+                        "shield-check",
+                        gpui::rgba(th.valid).into(),
+                        if *n == 1 {
+                            t("library-check-good-one", &[])
+                        } else {
+                            t("library-check-good", &[("count", &n.to_string())])
+                        },
+                    ),
+                    Verdict::Unverified(why) => (
+                        "shield-check",
+                        gpui::rgba(th.katna.warning).into(),
+                        t("library-check-unverified", &[("why", why)]),
+                    ),
+                    Verdict::Bad(why) => ("shield-alert", th.error, sentence(why)),
+                    Verdict::Unreadable(why) => (
+                        "shield-alert",
+                        th.error,
+                        t("library-check-unreadable", &[("error", why)]),
+                    ),
+                };
+                div()
+                    .id(("check", i))
+                    .flex()
+                    .items_center()
+                    .gap(px(space::S3))
+                    .px(px(space::S3))
+                    .py(px(space::S1))
+                    .rounded(px(radius::SM))
+                    .cursor_pointer()
+                    .hover(move |s| s.bg(th.hover))
+                    .on_click(cx.listener(move |this, _, _, cx| this.open(id, None, cx)))
+                    .child(
+                        svg()
+                            .path(format!("icons/{icon}.svg"))
+                            .size(px(16.0))
+                            .flex_none()
+                            .text_color(colour),
+                    )
+                    .child(
+                        div()
+                            .w(px(220.0))
+                            .flex_none()
+                            .truncate()
+                            .text_size(px(text::SMALL))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(name.clone()),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .text_size(px(text::SMALL))
+                            .text_color(th.dim)
+                            .child(line),
+                    )
+            });
+        div()
+            .id("library-checks")
+            .flex_none()
+            .max_h(px(240.0))
+            .overflow_y_scroll()
+            .flex()
+            .flex_col()
+            .px(px(space::S3))
+            .py(px(space::S2))
+            .border_b_1()
+            .border_color(th.line)
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .px(px(space::S3))
+                    .pb(px(space::S1))
+                    .child(
+                        div()
+                            .flex_1()
+                            .text_size(px(text::SMALL))
+                            .text_color(th.dim)
+                            .child(t("library-checked", &[])),
+                    )
+                    .child(
+                        widgets::icon_button("library-checks-close", "close", 14.0, &th.katna)
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.checks.clear();
+                                cx.notify();
+                            })),
+                    ),
+            )
+            .children(rows)
+    }
+
     /// The selected document's strip: where it is, its stars and tags.
     fn details(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
-        let id = self.selected?;
+        let id = self.single()?;
         let doc = self.docs.iter().find(|d| d.id == id)?.clone();
         let th = self.theme;
         let stars = (1..=5u8).map(|n| {
@@ -1381,6 +1956,33 @@ impl LibraryView {
                 }),
         )
     }
+}
+
+/// `text` starting with a capital, as a sentence on its own.
+fn sentence(text: &str) -> String {
+    let mut chars = text.chars();
+    chars
+        .next()
+        .map(|c| c.to_uppercase().chain(chars).collect())
+        .unwrap_or_default()
+}
+
+/// What a bulk change did: how many were done, and the first that
+/// could not be.
+fn report_line(id: &str, report: &katna_pdf_library::BulkReport) -> String {
+    let mut line = t(id, &[("count", &report.done.len().to_string())]);
+    if let Some((path, why)) = report.failed.first() {
+        line.push(' ');
+        line.push_str(&t(
+            "library-bulk-failed",
+            &[
+                ("count", &report.failed.len().to_string()),
+                ("name", &folder_name(path)),
+                ("error", why),
+            ],
+        ));
+    }
+    line
 }
 
 /// A cover's size in its box, keeping its shape.

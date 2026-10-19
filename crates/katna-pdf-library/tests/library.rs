@@ -219,3 +219,63 @@ fn the_catalog_is_kept_in_a_file() {
     }
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+#[test]
+fn many_documents_are_renamed_copied_tagged_and_merged() {
+    let dir = temp("bulk");
+    write(&dir.join("a.pdf"), &pdf("Flat lease", LEASE));
+    write(&dir.join("b.pdf"), &pdf("Invoice", INVOICE));
+    // Already taken: the lease's new name gets a number.
+    write(&dir.join("Flat lease.pdf"), b"in the way");
+    let lib = Library::in_memory().unwrap();
+    lib.add_folder(&dir).unwrap();
+    lib.scan(&Hayro, &mut |_, _, _| {}).unwrap();
+    let id = |name: &str| {
+        lib.doc_at(&std::fs::canonicalize(dir.join(name)).unwrap())
+            .unwrap()
+            .unwrap()
+    };
+    let (lease, invoice) = (id("a.pdf"), id("b.pdf"));
+
+    let report = lib.rename(&[lease, invoice], "{title}").unwrap();
+    assert!(report.failed.is_empty(), "{report:?}");
+    let names: Vec<String> = report
+        .done
+        .iter()
+        .map(|(_, p)| p.file_name().unwrap().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(names, ["Flat lease (2).pdf", "Invoice.pdf"]);
+    assert!(!dir.join("a.pdf").exists() && dir.join("Invoice.pdf").exists());
+    assert_eq!(lib.doc(invoice).unwrap().unwrap().path, report.done[1].1);
+    // Renamed again to what it is: left alone.
+    assert_eq!(
+        lib.rename(&[invoice], "{title}").unwrap().done[0].1,
+        report.done[1].1
+    );
+
+    lib.add_tag(&[lease, invoice], "2026").unwrap();
+    lib.add_tag(&[lease], "2026").unwrap();
+    assert_eq!(lib.doc(lease).unwrap().unwrap().tags, ["2026"]);
+
+    let out = temp("bulk-out");
+    let copied = lib.copy_to(&[lease, invoice, lease], &out).unwrap();
+    assert_eq!(copied.done.len(), 3);
+    assert!(out.join("Flat lease (2) (2).pdf").exists());
+
+    let merged = out.join("both.pdf");
+    let paths: Vec<_> = copied.done.iter().take(2).map(|(_, p)| p.clone()).collect();
+    assert_eq!(katna_pdf_library::merge(&paths, &merged).unwrap(), 2);
+    let doc = katna_pdf_cos::Document::load(std::fs::read(&merged).unwrap()).unwrap();
+    assert_eq!(doc.pages().len(), 2);
+    assert!(katna_pdf_library::merge(&[dir.join("Flat lease.pdf")], &merged).is_err());
+    // A failed merge leaves the earlier file as it was.
+    assert_eq!(
+        katna_pdf_cos::Document::load(std::fs::read(&merged).unwrap())
+            .unwrap()
+            .pages()
+            .len(),
+        2
+    );
+    std::fs::remove_dir_all(&dir).ok();
+    std::fs::remove_dir_all(&out).ok();
+}

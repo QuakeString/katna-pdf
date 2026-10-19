@@ -46,7 +46,7 @@ mod objects;
 mod organizer;
 mod properties;
 mod redact;
-mod sign;
+pub(crate) mod sign;
 mod textedit;
 
 use crate::annotate::Tool;
@@ -299,6 +299,8 @@ pub struct Viewer {
     /// The page to show once the file opens, instead of where it was
     /// left (a page the library found words on).
     start_page: Option<usize>,
+    /// Files to sign with this one, once it is open.
+    sign_after: Option<Vec<PathBuf>>,
     /// The page numbers card, while open.
     numbering: Option<numbering::Numbering>,
     /// The form, once read, if the file has fields to fill in.
@@ -453,6 +455,7 @@ impl Viewer {
             renaming: None,
             label_ranges: Vec::new(),
             start_page: None,
+            sign_after: None,
             numbering: None,
             form: None,
             links: None,
@@ -683,6 +686,9 @@ impl Viewer {
                         this.visible = 0..1;
                         this.content = Content::Ready(opened);
                         this.password = None;
+                        if let Some(others) = this.sign_after.take() {
+                            this.sign_with(others, cx);
+                        }
                     }
                     Err(Some(message)) => this.content = Content::Failed(message),
                     Err(None) => {
