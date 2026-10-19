@@ -49,6 +49,7 @@ mod organizer;
 mod properties;
 mod redact;
 pub(crate) mod sign;
+mod speak;
 mod textedit;
 
 use crate::annotate::Tool;
@@ -68,6 +69,7 @@ actions!(
     [
         Open,
         Compare,
+        ReadAloud,
         ZoomIn,
         ZoomOut,
         FitWidth,
@@ -138,6 +140,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl-s", Save, None),
         KeyBinding::new("ctrl-d", Properties, None),
         KeyBinding::new("ctrl-shift-d", Compare, None),
+        KeyBinding::new("ctrl-shift-y", ReadAloud, None),
         KeyBinding::new("ctrl-l", ShowLibrary, None),
         KeyBinding::new("ctrl-b", AddBookmark, None),
         KeyBinding::new("ctrl-=", ZoomIn, None),
@@ -315,6 +318,8 @@ pub struct Viewer {
     measures: measure::Measures,
     /// Puts the keys in the scale field on the next frame.
     focus_calibrating: bool,
+    /// Reading aloud.
+    reading: Option<speak::Reading>,
     /// Comparing with another version of the file.
     comparing: Option<compare::Comparing>,
     /// The file to compare with once this one opens.
@@ -479,6 +484,7 @@ impl Viewer {
             measuring: None,
             measures: Default::default(),
             focus_calibrating: false,
+            reading: None,
             comparing: None,
             compare_after: None,
             compare_count: 0,
@@ -609,6 +615,7 @@ impl Viewer {
         let tried = !password.is_empty();
         self.key = tried.then(|| Arc::from(password.as_str()));
         self.path = Some(path.clone());
+        self.end_reading();
         self.generation += 1;
         let generation = self.generation;
         self.content = Content::Opening(name.clone());
@@ -1716,6 +1723,7 @@ impl Viewer {
 
     /// Frees every drawn page now: the tab is closing.
     pub fn release(&mut self, window: &mut Window) {
+        self.end_reading();
         self.generation += 1;
         self.forget_pages();
         for image in self.released.drain(..) {
@@ -2692,6 +2700,7 @@ impl Viewer {
         {
             marks.extend(text.line_boxes(range).iter().map(|b| mark(b, 0x55)));
         }
+        marks.extend(self.reading_marks(page).iter().map(|b| mark(b, 0x44)));
         if let Some(bar) = &self.search {
             for (i, hit) in bar.found.hits.iter().enumerate() {
                 if hit.page != page {
@@ -3287,6 +3296,7 @@ impl Render for Viewer {
         let pane = self.pane(window, cx);
         let tools = self.tools_row(cx).or_else(|| self.edit_row(cx));
         let measure_bar = self.measure_bar(cx);
+        let reading_bar = self.reading_bar(cx);
         let signatures_line = self.signatures_line(cx);
         let signing_card = self.signing_card(cx);
         let marks_card = self.marks_card(cx);
@@ -3422,6 +3432,7 @@ impl Render for Viewer {
             .on_action(cx.listener(|this, _: &Sign, _, cx| this.toggle_signing(cx)))
             .on_action(cx.listener(|this, _: &Properties, _, cx| this.toggle_properties(cx)))
             .on_action(cx.listener(|this, _: &Compare, _, cx| this.choose_compare(cx)))
+            .on_action(cx.listener(|this, _: &ReadAloud, _, cx| this.toggle_reading(cx)))
             .on_action(cx.listener(|this, _: &AddBookmark, window, cx| {
                 this.add_bookmark(window, cx);
             }))
@@ -3476,6 +3487,7 @@ impl Render for Viewer {
                     .child(self.toolbar(cx))
                     .children(tools)
                     .children(measure_bar)
+                    .children(reading_bar)
                     .children(find_bar)
                     .children(signatures_line)
                     .children(notice)

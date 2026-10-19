@@ -38,6 +38,8 @@ optdepends=(
   "xdg-desktop-portal-gnome: GNOME's file dialogs on GNOME"
   'opensc: signing with USB tokens such as the ePass2003'
   'pcsclite: the smart card service USB tokens need (enable pcscd.socket)'
+  'speech-dispatcher: reading aloud (Ctrl+Shift+Y)'
+  'espeak-ng: reading aloud without Speech Dispatcher'
 )
 provides=('katna-pdf')
 conflicts=('katna-pdf')

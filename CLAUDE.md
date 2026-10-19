@@ -87,7 +87,9 @@ cargo run --release -p katna-pdf-bench -- file.pdf
   in to Katna Mail, and `mail.rs` reads Katna Mail's store (`katna-store`,
   read-only) for PDFs attached to mail; the library browses and opens both
   (`library/drive.rs`, `library/mail.rs`). `katna-pdf --compare OLDER NEWER`
-  opens a comparison (`viewer/compare.rs`).
+  opens a comparison (`viewer/compare.rs`). `speech.rs` reads aloud
+  (Ctrl+Shift+Y, `viewer/speak.rs`) through Speech Dispatcher's socket,
+  `espeak-ng`, or PowerShell's voice on Windows.
 - `apps/katna-pdf-cli` — the command line: info, merge, split, pages,
   rotate, crop, sign (and certify), add-field, ltv, tokens, token-check, verify (with `--report` as a PDF), text and edit-text (`--blocks` / `--block` for paragraphs), insert, stamp, background, redact, compress, compare (with `--overlay` as a PNG), form (with `--detect`), form-data and fill, meta, lock and unlock, objects and object, bookmarks, links, dests and labels, annotations and XFDF, and library; `--json` for scripts and agents.
 - `tools/katna-pdf-cos-check` — runs katna-pdf-cos over a folder of PDFs

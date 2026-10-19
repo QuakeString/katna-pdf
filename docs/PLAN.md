@@ -252,7 +252,7 @@ The fastest engine that renders the test corpus correctly wins. One may be used 
 | HTTP (TSA/OCSP/CRL) | `reqwest` with rustls (pure Rust TLS); katna's own root store, no system crypto library |
 | OCR | Pure Rust first: `ocrs` (detection and recognition on the `rten` runtime) for Latin script, plus PaddleOCR (PP-OCR) recognition models run on `rten` for Indic scripts. Tesseract 5 through `leptess` is an optional, off-by-default backend for scripts no Rust-run model covers well. Phase 0 measures accuracy per script on our own scans and picks per script (§4.9) |
 | Catalog | `rusqlite` (bundled), its FTS5 for full-text search (one file, no second index to keep in step; Tantivy was planned), `notify` (folder watcher), SHA-256 of the bytes and of the words for copies (`sha2`, already used for signing) |
-| Text-to-speech | `tts` crate (SAPI / Speech Dispatcher / AVSpeech) |
+| Text-to-speech | Speech Dispatcher over its socket (SSIP), `espeak-ng` when it is not running, the system voice through PowerShell on Windows (`apps/katna-pdf/src/speech.rs`; no C bindings, so not the `tts` crate) |
 | Settings | `serde` + TOML in XDG / AppData / Application Support |
 | Logging and crash reports | `tracing`; minidumps via `crash-handler` + `minidumper` (opt-in) |
 
