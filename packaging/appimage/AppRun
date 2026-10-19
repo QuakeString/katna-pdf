@@ -1,0 +1,17 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Starts Katna PDF from its AppImage.
+#
+#   Katna-PDF-x86_64.AppImage [FILE.pdf...]       the app
+#   Katna-PDF-x86_64.AppImage katna-pdf-cli ...   the command-line tool
+set -eu
+
+here=$(dirname "$(readlink -f "$0")")
+export PATH="$here/usr/bin:$PATH"
+export XDG_DATA_DIRS="$here/usr/share:${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
+
+program=katna-pdf
+case ${1:-} in
+  katna-pdf | katna-pdf-cli) program=$1; shift ;;
+esac
+exec "$here/usr/bin/$program" "$@"

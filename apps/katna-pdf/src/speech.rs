@@ -50,6 +50,10 @@ const POWERSHELL: &str = "[Console]::InputEncoding = [Text.Encoding]::UTF8; Add-
     while (($l = [Console]::In.ReadLine()) -ne $null) { $s.Speak($l); \
     [Console]::Out.WriteLine('done'); [Console]::Out.Flush() }";
 
+/// Windows' flag for a program started without a console window.
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
 /// The app's one voice, opened the first time it is asked for: slow (it
 /// may start Speech Dispatcher), so asked for off the UI thread.
 pub fn voice() -> Option<&'static Voice> {
@@ -156,7 +160,14 @@ impl Voice {
                 {
                     let mut child = child.lock().map_err(|_| ())?;
                     if child.is_none() {
-                        let mut started = Command::new("powershell")
+                        let mut command = Command::new("powershell");
+                        // No console window over the app's.
+                        #[cfg(windows)]
+                        std::os::windows::process::CommandExt::creation_flags(
+                            &mut command,
+                            CREATE_NO_WINDOW,
+                        );
+                        let mut started = command
                             .args(["-NoProfile", "-NonInteractive", "-Command", POWERSHELL])
                             .stdin(Stdio::piped())
                             .stdout(Stdio::piped())

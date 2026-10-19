@@ -1,0 +1,121 @@
+name: Windows package
+
+# Builds Katna PDF for Windows as a zip: the app, katna-pdf-cli and a
+# README. On main, once CI passed, it replaces the one on the
+# `windows-latest` pre-release, so Windows users can try Katna PDF
+# without building it.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "**"
+      - "!docs/**"
+      - "!bakeoff/**"
+      - "!parity/**"
+  pull_request:
+    paths:
+      - "packaging/windows/**"
+      - ".github/workflows/windows-package.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: windows-package-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          key: windows-package
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Build
+        run: cargo build --locked --release --package katna-pdf --package katna-pdf-cli
+      - name: Make the zip
+        shell: bash
+        run: |
+          version=$(packaging/linux/version.sh)
+          dir=KatnaPDF-windows-x86_64
+          mkdir -p "out/$dir"
+          cp target/release/katna-pdf.exe target/release/katna-pdf-cli.exe "out/$dir/"
+          cp LICENSE "out/$dir/LICENSE.txt"
+          sed "s/@VERSION@/$version/" packaging/windows/README.txt > "out/$dir/README.txt"
+          (cd out && 7z a -tzip "$dir.zip" "$dir" > /dev/null)
+          ls -l out
+      - name: Try it
+        shell: bash
+        run: |
+          dir=out/KatnaPDF-windows-x86_64
+          "$dir/katna-pdf-cli.exe" info ci/package-test.pdf
+          # The app starts and stays up with the file open.
+          "$dir/katna-pdf.exe" ci/package-test.pdf &
+          sleep 15
+          tasklist //FI "IMAGENAME eq katna-pdf.exe" | grep -i katna-pdf.exe
+          taskkill //F //IM katna-pdf.exe
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: windows-zip
+          path: out/KatnaPDF-windows-x86_64.zip
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+    concurrency:
+      group: windows-package-release
+      cancel-in-progress: false
+    steps:
+      # Only a commit whose CI passed is published.
+      - name: Wait for CI on this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          for attempt in $(seq 120); do
+            result=$(gh api "repos/$GH_REPO/actions/workflows/ci.yml/runs?head_sha=$GITHUB_SHA&event=push" \
+              --jq '[.workflow_runs[] | "\(.status) \(.conclusion)"] | first // "none"')
+            echo "CI on $GITHUB_SHA: $result"
+            case "$result" in
+              "completed success") exit 0 ;;
+              "completed cancelled" | "completed skipped") exit 0 ;;
+              completed*) echo "CI did not pass; not publishing"; exit 1 ;;
+            esac
+            sleep 60
+          done
+          echo "CI did not finish in two hours; not publishing"
+          exit 1
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: windows-zip
+          path: out
+      - name: Publish to the windows-latest pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          notes="The newest build of main for Windows 10 and 11. Download
+          KatnaPDF-windows-x86_64.zip, unpack it anywhere and run
+          katna-pdf.exe. It is not signed yet, so Windows may ask before
+          running it the first time (More info, then Run anyway)."
+          if gh release view windows-latest > /dev/null 2>&1; then
+            gh api -X PATCH "repos/$GH_REPO/git/refs/tags/windows-latest" \
+              -f sha="$GITHUB_SHA" -F force=true > /dev/null
+            gh release edit windows-latest --notes "$notes"
+          else
+            gh release create windows-latest --prerelease --target "$GITHUB_SHA" \
+              --title "Katna PDF for Windows (latest)" --notes "$notes"
+          fi
+          gh release upload windows-latest out/* --clobber
