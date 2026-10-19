@@ -66,6 +66,7 @@ fn folders_are_scanned_and_searched() {
     assert!(hits[0].snippet.contains("[rent]"), "{}", hits[0].snippet);
     assert_eq!(lib.search("consult*", 10).unwrap()[0].doc, docs[2].id);
     assert!(lib.search("rent's (", 10).is_ok());
+    assert_eq!(lib.search_docs("deposit").unwrap(), [docs[1].id]);
 
     // Nothing changed: nothing read again.
     let again = lib.scan(&Hayro, &mut |_, _, _| {}).unwrap();

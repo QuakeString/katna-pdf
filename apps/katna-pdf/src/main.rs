@@ -13,6 +13,7 @@ mod form;
 mod history;
 mod ids;
 mod instance;
+mod library;
 #[cfg(target_os = "linux")]
 mod menu;
 mod organize;

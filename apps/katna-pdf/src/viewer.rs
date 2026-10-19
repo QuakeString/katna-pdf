@@ -94,6 +94,7 @@ actions!(
         PastePicture,
         Properties,
         AddBookmark,
+        ShowLibrary,
         Quit
     ]
 );
@@ -133,6 +134,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl-p", Print, None),
         KeyBinding::new("ctrl-s", Save, None),
         KeyBinding::new("ctrl-d", Properties, None),
+        KeyBinding::new("ctrl-l", ShowLibrary, None),
         KeyBinding::new("ctrl-b", AddBookmark, None),
         KeyBinding::new("ctrl-=", ZoomIn, None),
         KeyBinding::new("ctrl-+", ZoomIn, None),
@@ -204,6 +206,8 @@ pub enum ViewerEvent {
     ChooseFiles,
     /// Files were dropped on the viewer.
     Dropped(Vec<PathBuf>),
+    /// The library button was pressed.
+    ShowLibrary,
 }
 
 /// A change to the pages, as [`Viewer::change_pages`] writes it.
@@ -292,6 +296,9 @@ pub struct Viewer {
     renaming: Option<bookmarks::Renaming>,
     /// How the file numbers its pages, when not plainly.
     label_ranges: Vec<katna_pdf_cos::LabelRange>,
+    /// The page to show once the file opens, instead of where it was
+    /// left (a page the library found words on).
+    start_page: Option<usize>,
     /// The page numbers card, while open.
     numbering: Option<numbering::Numbering>,
     /// The form, once read, if the file has fields to fill in.
@@ -445,6 +452,7 @@ impl Viewer {
             contents: None,
             renaming: None,
             label_ranges: Vec::new(),
+            start_page: None,
             numbering: None,
             form: None,
             links: None,
@@ -526,6 +534,15 @@ impl Viewer {
     /// meanwhile.
     pub fn open(&mut self, path: PathBuf, cx: &mut Context<Self>) {
         self.open_with(path, String::new(), cx);
+    }
+
+    /// Shows page `page` (from 0), now or once the file is open.
+    pub fn show_page(&mut self, page: usize, cx: &mut Context<Self>) {
+        if matches!(self.content, Content::Ready(_)) {
+            self.go_to_page(page, cx);
+        } else {
+            self.start_page = Some(page);
+        }
     }
 
     /// Opens the file asking for a password with the one typed.
@@ -648,11 +665,12 @@ impl Viewer {
                 match opened {
                     Ok(opened) => {
                         this.list.reset(this.spread.rows(opened.doc.page_count()));
-                        // Where it was left last time.
-                        let page = this
-                            .path
-                            .as_deref()
-                            .and_then(|p| cx.global::<History>().page(p));
+                        // The page asked for, or where it was left last time.
+                        let page = this.start_page.take().or_else(|| {
+                            this.path
+                                .as_deref()
+                                .and_then(|p| cx.global::<History>().page(p))
+                        });
                         if let Some(page) = page.filter(|p| *p < opened.doc.page_count()) {
                             this.list.scroll_to(ListOffset {
                                 item_ix: this.spread.row_of(page),
@@ -2775,6 +2793,13 @@ impl Viewer {
         }
         bar = bar
             .child(icon_button(
+                "library",
+                "library",
+                t("library-tip", &[]),
+                th,
+                cx.listener(|_, _, _, cx| cx.emit(ViewerEvent::ShowLibrary)),
+            ))
+            .child(icon_button(
                 "open",
                 "folder",
                 t("open-file", &[]),
@@ -3023,8 +3048,23 @@ impl Viewer {
                         .child(t("empty-detail", &[])),
                 )
                 .child(
-                    widgets::filled_button("empty-open", t("empty-open", &[]), &th.katna)
-                        .on_click(cx.listener(|_, _, _, cx| cx.emit(ViewerEvent::ChooseFiles))),
+                    div()
+                        .flex()
+                        .gap(px(space::S2))
+                        .child(
+                            widgets::filled_button("empty-open", t("empty-open", &[]), &th.katna)
+                                .on_click(
+                                    cx.listener(|_, _, _, cx| cx.emit(ViewerEvent::ChooseFiles)),
+                                ),
+                        )
+                        .child(
+                            widgets::outlined_button(
+                                "empty-library",
+                                t("empty-library", &[]),
+                                &th.katna,
+                            )
+                            .on_click(cx.listener(|_, _, _, cx| cx.emit(ViewerEvent::ShowLibrary))),
+                        ),
                 )
                 .children(self.recent(cx)),
         };

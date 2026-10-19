@@ -282,6 +282,10 @@ impl Library {
         let mut st = self.conn.prepare(&sql)?;
         let rows = st.query_map(rusqlite::params_from_iter(args.iter()), doc_row)?;
         let mut out = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+        // By the name shown: SQLite has no file name of a path to sort by.
+        if filter.sort == Sort::Title {
+            out.sort_by_cached_key(|d| d.name().to_lowercase());
+        }
         let mut tags = self
             .conn
             .prepare("SELECT tag FROM tags WHERE doc = ?1 ORDER BY tag")?;
@@ -434,6 +438,20 @@ impl Library {
                 snippet: r.get(2)?,
             })
         })?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    /// The documents whose text holds `query`, as [`Library::search`]
+    /// reads it.
+    pub fn search_docs(&self, query: &str) -> Result<Vec<i64>> {
+        let query = fts_query(query);
+        if query.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut st = self
+            .conn
+            .prepare("SELECT DISTINCT doc FROM pages WHERE pages MATCH ?1")?;
+        let rows = st.query_map([query], |r| r.get(0))?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 

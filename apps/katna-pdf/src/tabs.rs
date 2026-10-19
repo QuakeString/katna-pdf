@@ -15,9 +15,10 @@ use gpui::{
 use katna_ui::px;
 use katna_ui::tokens::{radius, space, text};
 
+use crate::library::{LibraryEvent, LibraryView};
 use crate::text::t;
 use crate::theme::Theme;
-use crate::viewer::{CloseTab, NextTab, Open, PreviousTab, Viewer, ViewerEvent};
+use crate::viewer::{CloseTab, NextTab, Open, PreviousTab, ShowLibrary, Viewer, ViewerEvent};
 
 /// A tab is never wider than this, so many still fit on one line.
 const TAB_WIDTH: f32 = 220.0;
@@ -33,6 +34,10 @@ pub struct Tabs {
     /// The window title last set, so it is set only when it changes.
     title: String,
     theme: Theme,
+    /// The library, made the first time it is shown.
+    library: Option<(Entity<LibraryView>, Subscription)>,
+    /// The library is shown instead of the documents.
+    in_library: bool,
     _appearance: Subscription,
 }
 
@@ -40,6 +45,10 @@ impl Tabs {
     pub fn new(files: Vec<PathBuf>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let appearance = cx.observe_window_appearance(window, |this, window, cx| {
             this.theme = Theme::for_appearance(window.appearance());
+            if let Some((library, _)) = &this.library {
+                let theme = this.theme;
+                library.update(cx, |library, _| library.set_theme(theme));
+            }
             cx.notify();
         });
         let mut this = Self {
@@ -47,6 +56,8 @@ impl Tabs {
             active: 0,
             title: String::new(),
             theme: Theme::for_appearance(window.appearance()),
+            library: None,
+            in_library: false,
             _appearance: appearance,
         };
         this.push(None, window, cx);
@@ -56,6 +67,7 @@ impl Tabs {
 
     /// Opens each of `files`, and shows the last.
     pub fn open_files(&mut self, files: Vec<PathBuf>, window: &mut Window, cx: &mut Context<Self>) {
+        self.in_library = false;
         for file in files {
             if let Some(i) = self.find(&file, cx) {
                 self.active = i;
@@ -76,6 +88,7 @@ impl Tabs {
         let events = cx.subscribe_in(&viewer, window, |this, _, event, window, cx| match event {
             ViewerEvent::ChooseFiles => this.choose_files(window, cx),
             ViewerEvent::Dropped(paths) => this.open_files(paths.clone(), window, cx),
+            ViewerEvent::ShowLibrary => this.toggle_library(window, cx),
         });
         let changes = cx.observe(&viewer, |_, _, cx| cx.notify());
         self.tabs.push(Tab {
@@ -95,6 +108,43 @@ impl Tabs {
         self.tabs
             .iter()
             .position(|tab| tab.viewer.read(cx).path().is_some_and(same))
+    }
+
+    /// Shows the library, or the documents again.
+    fn toggle_library(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.in_library {
+            self.in_library = false;
+            self.focus_active(window, cx);
+            cx.notify();
+            return;
+        }
+        let library = match &self.library {
+            Some((library, _)) => library.clone(),
+            None => {
+                let theme = self.theme;
+                let library = cx.new(|cx| LibraryView::new(theme, cx));
+                let events =
+                    cx.subscribe_in(&library, window, |this, _, event, window, cx| match event {
+                        LibraryEvent::Open(path, page) => {
+                            this.open_files(vec![path.clone()], window, cx);
+                            if let Some(page) = *page {
+                                this.viewer_entity()
+                                    .update(cx, |viewer, cx| viewer.show_page(page, cx));
+                            }
+                        }
+                        LibraryEvent::Close => {
+                            this.in_library = false;
+                            this.focus_active(window, cx);
+                            cx.notify();
+                        }
+                    });
+                self.library = Some((library.clone(), events));
+                library
+            }
+        };
+        self.in_library = true;
+        library.update(cx, |library, cx| library.shown(window, cx));
+        cx.notify();
     }
 
     fn viewer_entity(&self) -> &Entity<Viewer> {
@@ -277,13 +327,20 @@ impl Render for Tabs {
             }))
             .on_action(cx.listener(|this, _: &NextTab, window, cx| this.cycle(1, window, cx)))
             .on_action(cx.listener(|this, _: &PreviousTab, window, cx| this.cycle(-1, window, cx)))
+            .on_action(
+                cx.listener(|this, _: &ShowLibrary, window, cx| this.toggle_library(window, cx)),
+            )
             .size_full()
             .flex()
             .flex_col()
             .bg(th.page)
             .p(px(space::S3))
             .font_family(".SystemUIFont")
-            .when(self.tabs.len() > 1, |d| d.child(self.tab_bar(cx)))
-            .child(self.viewer_entity().clone())
+            .map(|d| match &self.library {
+                Some((library, _)) if self.in_library => d.child(library.clone()),
+                _ => d
+                    .when(self.tabs.len() > 1, |d| d.child(self.tab_bar(cx)))
+                    .child(self.viewer_entity().clone()),
+            })
     }
 }
