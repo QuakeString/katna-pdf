@@ -51,9 +51,12 @@ pre-release. They are x86_64 only and need glibc 2.35 or later.
 ## Install on Windows
 
 [`windows-latest`](https://github.com/QuakeString/katna-pdf/releases/tag/windows-latest)
-holds `KatnaPDF-windows-x86_64.zip`, built from `main`: unpack it anywhere
-and run `katna-pdf.exe`. It is not signed yet, so SmartScreen asks the
-first time (More info, then Run anyway).
+holds Katna PDF Setup, built from `main`. Run `KatnaPDFSetup-x86_64.exe`:
+it installs Katna PDF for you without an administrator (or for everyone,
+if you choose), adds it to Start and to Open with for PDF files, and
+Settings > Apps removes it. `KatnaPDF-windows-x86_64.zip` holds the same
+programs to run from any folder. Neither is signed yet, so SmartScreen
+asks the first time (More info, then Run anyway).
 
 ## Build
 

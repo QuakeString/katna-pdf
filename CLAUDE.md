@@ -108,7 +108,12 @@ cargo run --release -p katna-pdf-bench -- file.pdf
   file; `linux/stage.sh` lays the files out for the .deb, .rpm, AppImage
   and tarball. CI publishes the Arch package on `arch-latest`, the others
   on `linux-latest` (each installed and opened by
-  `ci/linux-package-test.sh` first) and a Windows zip on `windows-latest`.
+  `ci/linux-package-test.sh` first) and, on `windows-latest`, Katna PDF
+  Setup and a zip (`windows/katna-pdf.ico` from `windows/make-ico.py`).
+- `apps/katna-pdf-setup` — Katna PDF Setup for Windows, in Katna Mail
+  Setup's way: one GPUI window, per-user or for everyone, Open with and
+  Default apps for PDFs, removal from Settings > Apps; `--quiet` for
+  scripts. Its build.rs packs `$KATNA_PDF_SETUP_PAYLOAD` into it.
 
 ## Rules
 
@@ -116,7 +121,8 @@ cargo run --release -p katna-pdf-bench -- file.pdf
   `// SPDX-License-Identifier: GPL-3.0-or-later`.
 - GPUI, `katna-core`, `katna-ui`, `katna-platform`, `katna-dbus` and `katna-store` come from Katna's repository at one
   pinned rev (root `Cargo.toml`); move all of them together.
-- GPUI only in `apps/katna-pdf` (enforced by `deny.toml`).
+- GPUI only in `apps/katna-pdf` and `apps/katna-pdf-setup` (enforced by
+  `deny.toml`).
 - Pure Rust where possible; TLS is `rustls` only. No `unsafe` code.
 - Do not copy code from PdfCraft; its feature list is a reference only.
 - Lengths use `katna_ui::px`/`unpx`, not `gpui::px`; radii, spacing and

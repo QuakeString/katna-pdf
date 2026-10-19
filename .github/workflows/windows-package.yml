@@ -1,9 +1,10 @@
 name: Windows package
 
-# Builds Katna PDF for Windows as a zip: the app, katna-pdf-cli and a
-# README. On main, once CI passed, it replaces the one on the
-# `windows-latest` pre-release, so Windows users can try Katna PDF
-# without building it.
+# Builds Katna PDF for Windows: Katna PDF Setup (apps/katna-pdf-setup,
+# which carries the app, katna-pdf-cli and the icon) and a zip of the same
+# files for those who'd rather not install. On main, once CI passed, they
+# replace the ones on the `windows-latest` pre-release, so Windows users
+# can try Katna PDF without building it.
 on:
   push:
     branches: [main]
@@ -15,6 +16,7 @@ on:
   pull_request:
     paths:
       - "packaging/windows/**"
+      - "apps/katna-pdf-setup/**"
       - ".github/workflows/windows-package.yml"
   workflow_dispatch:
 
@@ -49,7 +51,16 @@ jobs:
           cp target/release/katna-pdf.exe target/release/katna-pdf-cli.exe "out/$dir/"
           cp LICENSE "out/$dir/LICENSE.txt"
           sed "s/@VERSION@/$version/" packaging/windows/README.txt > "out/$dir/README.txt"
+          cp packaging/windows/katna-pdf.ico "out/$dir/"
           (cd out && 7z a -tzip "$dir.zip" "$dir" > /dev/null)
+      - name: Build Setup
+        shell: bash
+        run: |
+          # Setup carries the zip's files, packed into it by its build.rs.
+          export KATNA_PDF_SETUP_PAYLOAD="$PWD/out/KatnaPDF-windows-x86_64"
+          export KATNA_PDF_VERSION=$(packaging/linux/version.sh)
+          cargo build --locked --release --package katna-pdf-setup
+          cp target/release/katna-pdf-setup.exe out/KatnaPDFSetup-x86_64.exe
           ls -l out
       - name: Try it
         shell: bash
@@ -61,10 +72,48 @@ jobs:
           sleep 15
           tasklist //FI "IMAGENAME eq katna-pdf.exe" | grep -i katna-pdf.exe
           taskkill //F //IM katna-pdf.exe
+      - name: Install with Setup, open, and remove
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $setup = (Resolve-Path out/KatnaPDFSetup-x86_64.exe).Path
+          $p = Start-Process $setup -ArgumentList '--quiet','--desktop' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "Setup failed: $($p.ExitCode)" }
+          $dir = Join-Path $env:LOCALAPPDATA 'Programs\Katna PDF'
+          foreach ($f in 'katna-pdf.exe','katna-pdf-cli.exe','katna-pdf.ico','katna-pdf-setup.exe') {
+            if (-not (Test-Path (Join-Path $dir $f))) { throw "missing $f" }
+          }
+          $uninstall = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\KatnaPDF'
+          Get-ItemProperty $uninstall | Format-List DisplayName, DisplayVersion, UninstallString
+          Get-ItemProperty 'HKCU:\Software\Classes\.pdf\OpenWithProgids' -Name 'KatnaPDF.Document' | Out-Null
+          Get-ItemProperty 'HKCU:\Software\RegisteredApplications' -Name 'Katna PDF' | Out-Null
+          $start = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Katna PDF.lnk'
+          if (-not (Test-Path $start)) { throw 'no Start menu shortcut' }
+          if (-not (Test-Path (Join-Path ([Environment]::GetFolderPath('Desktop')) 'Katna PDF.lnk'))) { throw 'no desktop shortcut' }
+          # The installed app opens a PDF and stays up.
+          $pdf = (Resolve-Path ci/package-test.pdf).Path
+          $app = Start-Process (Join-Path $dir 'katna-pdf.exe') -ArgumentList "`"$pdf`"" -PassThru
+          Start-Sleep -Seconds 15
+          if ($app.HasExited) { throw "Katna PDF exited: $($app.ExitCode)" }
+          # Running it again updates in place, and closes the open app first.
+          $p = Start-Process $setup -ArgumentList '--quiet','--update' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "Update failed: $($p.ExitCode)" }
+          if (-not (Test-Path (Join-Path ([Environment]::GetFolderPath('Desktop')) 'Katna PDF.lnk'))) { throw 'update lost the desktop shortcut' }
+          # Removing it, as Settings > Apps would.
+          $p = Start-Process (Join-Path $dir 'katna-pdf-setup.exe') -ArgumentList '--uninstall','--quiet' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "Uninstall failed: $($p.ExitCode)" }
+          foreach ($try in 1..30) { if (-not (Test-Path $dir)) { break }; Start-Sleep -Seconds 1 }
+          if (Test-Path $dir) { throw "$dir is still there" }
+          if (Test-Path $uninstall) { throw 'the uninstall entry is still there' }
+          if (Test-Path $start) { throw 'the Start menu shortcut is still there' }
+          if (Test-Path 'HKCU:\Software\Classes\KatnaPDF.Document') { throw 'PDF registration is still there' }
+          Write-Output 'Setup installed, opened, updated and removed Katna PDF.'
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: windows-zip
-          path: out/KatnaPDF-windows-x86_64.zip
+          path: |
+            out/KatnaPDF-windows-x86_64.zip
+            out/KatnaPDFSetup-x86_64.exe
           if-no-files-found: error
 
   publish:
@@ -107,9 +156,11 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           notes="The newest build of main for Windows 10 and 11. Download
-          KatnaPDF-windows-x86_64.zip, unpack it anywhere and run
-          katna-pdf.exe. It is not signed yet, so Windows may ask before
-          running it the first time (More info, then Run anyway)."
+          KatnaPDFSetup-x86_64.exe and run it; it installs without an
+          administrator, and Settings > Apps removes it. Or unpack
+          KatnaPDF-windows-x86_64.zip anywhere and run katna-pdf.exe. Neither
+          is signed yet, so Windows may ask before running it the first time
+          (More info, then Run anyway)."
           if gh release view windows-latest > /dev/null 2>&1; then
             gh api -X PATCH "repos/$GH_REPO/git/refs/tags/windows-latest" \
               -f sha="$GITHUB_SHA" -F force=true > /dev/null
