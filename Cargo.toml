@@ -76,6 +76,12 @@ rc2 = "0.8"
 cbc = { version = "0.1", features = ["alloc"] }
 aes = "0.8"
 md-5 = "0.10"
+regex = { version = "1", default-features = false, features = ["std", "unicode-perl", "unicode-case"] }
+zune-core = "0.5"
+zune-jpeg = "0.5"
+hayro-ccitt = { version = "0.4", default-features = false }
+hayro-jbig2 = { version = "0.3", default-features = false, features = ["std", "simd"] }
+hayro-jpeg2000 = { version = "0.4", default-features = false, features = ["std", "simd"] }
 unicode-normalization = "0.1"
 rand_core = { version = "0.6", features = ["getrandom"] }
 

@@ -40,6 +40,7 @@ mod marks;
 mod objects;
 mod organizer;
 mod properties;
+mod redact;
 mod sign;
 mod textedit;
 
@@ -333,6 +334,8 @@ pub struct Viewer {
     /// The picture or shape picked with Edit text on, and its drag.
     picked_object: Option<objects::Picked>,
     marking: Option<marks::Marking>,
+    /// The redact tool, while in hand, and the areas it marked.
+    redacting: Option<redact::Redacting>,
     properties: Option<properties::Properties>,
     moving: Option<objects::Moving>,
     tool: Option<Tool>,
@@ -450,6 +453,7 @@ impl Viewer {
             ink: 0,
             picked_object: None,
             marking: None,
+            redacting: None,
             properties: None,
             moving: None,
             tool: None,
@@ -552,6 +556,7 @@ impl Viewer {
         self.text_editing = false;
         self.typing = None;
         self.adding = None;
+        self.redacting = None;
         self.placing = None;
         self.picked_object = None;
         self.moving = None;
@@ -1045,6 +1050,7 @@ impl Viewer {
         self.finish_typing(true, cx);
         window.focus(&self.focus, cx);
         if self.sign_press(event.position, cx)
+            || self.redact_press(event.position, cx)
             || self.insert_press(event.position, window, cx)
             || self.object_press(event.position, cx)
             || self.text_edit_press(cx)
@@ -1062,7 +1068,8 @@ impl Viewer {
     }
 
     fn drag(&mut self, event: &gpui::MouseMoveEvent, cx: &mut Context<Self>) {
-        if self.insert_drag(event.position, cx)
+        if self.redact_drag(event.position, cx)
+            || self.insert_drag(event.position, cx)
             || self.object_drag(event.position, cx)
             || self.annot_drag(event.position, cx)
         {
@@ -1085,6 +1092,7 @@ impl Viewer {
         self.selecting = false;
         if self.sign_release(cx)
             || self.crop_release(cx)
+            || self.redact_release(cx)
             || self.insert_release(cx)
             || self.object_release(cx)
             || self.annot_release(cx)
@@ -3075,6 +3083,7 @@ impl Render for Viewer {
         let signatures_line = self.signatures_line(cx);
         let signing_card = self.signing_card(cx);
         let marks_card = self.marks_card(cx);
+        let redact_card = self.redact_card(cx);
         let properties_card = self.properties_card(cx);
         let find_bar = self.find_bar(cx);
         let notice = self.notice.clone().map(|notice| {
@@ -3265,6 +3274,7 @@ impl Render for Viewer {
                             .child(pages)
                             .children(signing_card)
                             .children(marks_card)
+                            .children(redact_card)
                             .children(properties_card),
                     ),
             )

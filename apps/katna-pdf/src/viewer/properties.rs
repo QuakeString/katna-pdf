@@ -50,6 +50,7 @@ impl Viewer {
             return;
         };
         self.marking = None;
+        self.redacting = None;
         let accent = gpui::rgba(self.theme.katna.accent).into();
         let fields = LABELS.map(|_| {
             cx.new(|cx| {

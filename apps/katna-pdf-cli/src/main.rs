@@ -67,6 +67,14 @@ usage: katna-pdf-cli COMMAND [--json] ...
   unlock FILE -o OUT --owner PW   the password taken off, given the owner's
                                   (any command opens a locked file with the password
                                   in KATNA_PDF_OPEN_PASSWORD)
+  redact FILE -o OUT [--area PAGE:L,B,R,T]... [--find pan,aadhaar,phone,email]
+         [--words TEXT]... [--pages PAGES] [--scrub] [--no-fill]
+                                  what lies under each box taken out of the file, not
+                                  only covered: text (invisible text too), the pixels
+                                  of pictures, shapes, annotations; boxes found from
+                                  numbers or words on PAGES (all without it); a black
+                                  box drawn over each unless --no-fill; with --scrub,
+                                  the properties, scripts and attached files go too
   meta FILE -o OUT [--title T] [--author A] [--subject S] [--keywords K]
        [--creator C] [--producer P]
                                   the document's properties changed (`info` shows
@@ -139,6 +147,7 @@ fn main() -> ExitCode {
         "stamp" => stamp(rest, json),
         "meta" => meta(rest, json),
         "lock" => lock(rest, json),
+        "redact" => redact(rest, json),
         "unlock" => unlock(rest, json),
         "objects" => objects(rest, json),
         "object" => object(rest, json),
@@ -264,14 +273,25 @@ impl<'a> Args<'a> {
                     | "--bates-suffix"
                     | "--bates-start"
                     | "--bates-digits"
+                    | "--area"
+                    | "--find"
+                    | "--words"
             ) {
                 let Some(value) = it.next() else {
                     return Err(Failure::Usage(format!("{a} needs a value")));
                 };
                 options.push((a.as_str(), value.as_str()));
             } else if [
-                "--uncrop", "--online", "--ltv", "--lta", "--blocks", "--fill", "--delete",
+                "--uncrop",
+                "--online",
+                "--ltv",
+                "--lta",
+                "--blocks",
+                "--fill",
+                "--delete",
                 "--under",
+                "--scrub",
+                "--no-fill",
             ]
             .contains(&a.as_str())
             {
@@ -294,6 +314,15 @@ impl<'a> Args<'a> {
             .iter()
             .find(|(k, _)| *k == name)
             .map(|(_, v)| *v)
+    }
+
+    /// Every value given to option `name`, in order.
+    fn all(&self, name: &str) -> Vec<&'a str> {
+        self.options
+            .iter()
+            .filter(|(k, _)| *k == name)
+            .map(|(_, v)| *v)
+            .collect()
     }
 
     fn flag(&self, name: &str) -> bool {
@@ -1201,6 +1230,103 @@ fn unlock(args: &[String], json: bool) -> Done {
         .map_err(|e| failed(format!("{file}: {e}")))?;
     write(&out, &bytes)?;
     Ok(wrote(&[(out, doc.pages().len())], json))
+}
+
+/// Takes what lies under boxes out of a file.
+fn redact(args: &[String], json: bool) -> Done {
+    use katna_pdf_cos::{Pattern, RedactOptions};
+    let args = Args::parse(args)?;
+    let [file] = args.words()?;
+    let out = args.output()?;
+    let doc = open(file)?;
+    let count = doc.pages().len();
+    let mut areas = Vec::new();
+    for area in args.all("--area") {
+        let (page, rect) = area
+            .split_once(':')
+            .ok_or_else(|| Failure::Usage(format!("--area {area}: PAGE:L,B,R,T")))?;
+        let page: usize = page
+            .parse()
+            .ok()
+            .filter(|p| (1..=count).contains(p))
+            .ok_or_else(|| Failure::Usage(format!("--area {area}: no page {page}")))?;
+        areas.push((page - 1, parse_rect(rect)?));
+    }
+    let mut patterns: Vec<Pattern> = args
+        .all("--words")
+        .into_iter()
+        .map(|w| Pattern::Words(w.to_owned()))
+        .collect();
+    for list in args.all("--find") {
+        for what in list.split(',').map(str::trim).filter(|w| !w.is_empty()) {
+            patterns.push(match what {
+                "pan" => Pattern::Pan,
+                "aadhaar" => Pattern::Aadhaar,
+                "phone" => Pattern::Phone,
+                "email" => Pattern::Email,
+                _ => {
+                    return Err(Failure::Usage(format!(
+                        "--find {what}: pan, aadhaar, phone or email"
+                    )));
+                }
+            });
+        }
+    }
+    if !patterns.is_empty() {
+        let pages = match args.option("--pages") {
+            Some(spec) => ranges::parse(spec, count).map_err(failed)?,
+            None => (0..count).collect(),
+        };
+        for page in pages {
+            for rect in doc.find_redactions(page, &patterns) {
+                areas.push((page, rect));
+            }
+        }
+    }
+    if areas.is_empty() && !args.flag("--scrub") {
+        return Err(failed(format!("{file}: nothing to redact")));
+    }
+    let options = RedactOptions {
+        fill: (!args.flag("--no-fill")).then_some([0.0; 3]),
+        scrub: args.flag("--scrub"),
+    };
+    let bytes = doc
+        .redact(&areas, &options)
+        .map_err(|e| failed(format!("{file}: {e}")))?;
+    write(&out, &bytes)?;
+    if json {
+        let list: Vec<String> = areas
+            .iter()
+            .map(|(p, r)| {
+                format!(
+                    "{{\"page\":{},\"rect\":[{},{},{},{}]}}",
+                    p + 1,
+                    r[0],
+                    r[1],
+                    r[2],
+                    r[3]
+                )
+            })
+            .collect();
+        return Ok(format!(
+            "{{\"written\":[{{\"file\":{},\"pages\":{count}}}],\"areas\":[{}]}}\n",
+            string(&out.display().to_string()),
+            list.join(",")
+        ));
+    }
+    let mut text = String::new();
+    for (p, r) in &areas {
+        text.push_str(&format!(
+            "redacted {}: {:.1},{:.1},{:.1},{:.1}\n",
+            p + 1,
+            r[0],
+            r[1],
+            r[2],
+            r[3]
+        ));
+    }
+    text.push_str(&wrote(&[(out, count)], false));
+    Ok(text)
 }
 
 /// Changes the document's properties.

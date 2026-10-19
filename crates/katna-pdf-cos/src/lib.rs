@@ -29,6 +29,7 @@ mod outline;
 mod pages;
 mod parse;
 pub mod ranges;
+mod redact;
 mod report;
 mod sign;
 mod stamp;
@@ -54,6 +55,7 @@ pub use object::{Dict, Name, Object, Ref, Stream};
 pub use objects::{ObjectKind, PageObject};
 pub use outline::{Destination, OutlineItem, text_string};
 pub use pages::{ComposeError, PageInfo, PageSource, compose};
+pub use redact::{Pattern, RedactError, RedactOptions};
 pub use report::text_pdf;
 pub use sign::{
     CONTENTS_LEN, Coverage, Picture, Placement, Prepared, SignError, SignRequest, Signature,

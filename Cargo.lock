@@ -3644,12 +3644,18 @@ dependencies = [
  "aes",
  "cbc",
  "flate2",
+ "hayro-ccitt",
  "hayro-cmap",
+ "hayro-jbig2",
+ "hayro-jpeg2000",
  "md-5",
  "phf",
  "rand_core 0.6.4",
+ "regex",
  "sha2",
  "unicode-normalization",
+ "zune-core",
+ "zune-jpeg",
 ]
 
 [[package]]

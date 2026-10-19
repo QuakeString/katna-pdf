@@ -148,6 +148,15 @@ impl Viewer {
             )
             .on_click(cx.listener(|this, _, _, cx| this.toggle_marking(cx))),
         );
+        row = row.child(
+            button(
+                Adding::ALL.len() + 2,
+                "redact",
+                "redact-tool",
+                self.redacting.is_some(),
+            )
+            .on_click(cx.listener(|this, _, _, cx| this.toggle_redacting(cx))),
+        );
         row = row.child(separator(th));
         for (i, ink) in INKS.into_iter().enumerate() {
             let on = self.ink == i;
@@ -189,6 +198,9 @@ impl Viewer {
     pub(super) fn pick_adding(&mut self, adding: Option<Adding>, cx: &mut Context<Self>) {
         self.finish_text_edit(true, cx);
         self.adding = adding;
+        if adding.is_some() {
+            self.redacting = None;
+        }
         self.placing = None;
         self.picked_object = None;
         self.moving = None;

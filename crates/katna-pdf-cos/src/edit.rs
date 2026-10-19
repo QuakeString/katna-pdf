@@ -91,7 +91,7 @@ impl From<UpdateError> for EditError {
     }
 }
 
-type Matrix = [f64; 6];
+pub(crate) type Matrix = [f64; 6];
 const IDENTITY: Matrix = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0];
 
 /// `a` then `b`.
@@ -196,6 +196,8 @@ struct Page {
     pieces: Vec<Piece>,
     /// Each font's codes the page shows.
     used: HashMap<Vec<u8>, HashSet<u32>>,
+    /// Text no one sees (clipping only, or invisible) is read too.
+    invisible: bool,
 }
 
 impl Document {
@@ -701,7 +703,19 @@ impl Document {
             Some(Object::Dict(d)) => d,
             _ => Dict::new(),
         };
-        let font_dict = match self.resolve_key(&resources, "Font") {
+        Some(self.read_content(content, &resources, IDENTITY, false))
+    }
+
+    /// `content` drawn with `resources`, from matrix `ctm`, read; with
+    /// the text no one sees too when `invisible`.
+    fn read_content(
+        &self,
+        content: Vec<u8>,
+        resources: &Dict,
+        ctm: Matrix,
+        invisible: bool,
+    ) -> Page {
+        let font_dict = match self.resolve_key(resources, "Font") {
             Object::Dict(d) => d,
             _ => Dict::new(),
         };
@@ -718,17 +732,18 @@ impl Document {
             fonts,
             pieces: Vec::new(),
             used: HashMap::new(),
+            invisible,
         };
-        page.read_text();
+        page.read_text(ctm);
         page.content = content;
-        Some(page)
+        page
     }
 }
 
 impl Page {
-    fn read_text(&mut self) {
+    fn read_text(&mut self, ctm: Matrix) {
         let mut state = State {
-            ctm: IDENTITY,
+            ctm,
             char_spacing: 0.0,
             word_spacing: 0.0,
             scale: 1.0,
@@ -896,7 +911,7 @@ impl Page {
             }
         }
         // Clipping-only and invisible text is no text to edit.
-        if !matches!(state.render, 3 | 7) && !text.is_empty() {
+        if (self.invisible || !matches!(state.render, 3 | 7)) && !text.is_empty() {
             self.pieces.push(Piece {
                 ink: if ink.0.is_finite() { ink } else { (0.0, 0.0) },
                 atoms,
@@ -1585,4 +1600,165 @@ fn number(v: f64) -> Object {
     } else {
         Object::Real(v)
     }
+}
+
+/// A glyph under a redaction: this share of its box covered, or its
+/// middle.
+const COVERED: f64 = 0.3;
+
+/// A box in the page's space: left, bottom, right, top.
+pub(crate) type Area = [f64; 4];
+
+impl Document {
+    /// The text-showing operators of `content` (drawn with `resources`
+    /// from matrix `ctm`) that show a glyph under one of `areas`,
+    /// rewritten without those glyphs: each one's place is kept by a move,
+    /// so the text after it stays where it was. Invisible text is cut
+    /// too. Returns each changed operator's index and new bytes.
+    pub(crate) fn cut_text(
+        &self,
+        content: Vec<u8>,
+        resources: &Dict,
+        ctm: Matrix,
+        areas: &[Area],
+    ) -> Vec<(usize, Vec<u8>)> {
+        let page = self.read_content(content, resources, ctm, true);
+        let mut out = Vec::new();
+        for piece in &page.pieces {
+            let Some(font) = page.fonts.get(&piece.font) else {
+                continue;
+            };
+            let unit = piece.size * piece.stretch;
+            let mut cut = false;
+            let mut items: Vec<Object> = Vec::new();
+            let mut pos = 0.0;
+            for atom in &piece.atoms {
+                let gone = matches!(atom.kind, AtomKind::Code(_))
+                    && under(&glyph_box(piece, pos, atom.advance), areas);
+                pos += atom.advance;
+                if !gone {
+                    match &atom.kind {
+                        AtomKind::Code(bytes) => {
+                            if let Some(Object::String { bytes: last, .. }) = items.last_mut() {
+                                last.extend_from_slice(bytes);
+                            } else {
+                                items.push(Object::String {
+                                    bytes: bytes.clone(),
+                                    hex: !font.single_byte(),
+                                });
+                            }
+                        }
+                        AtomKind::Move(n) => items.push(n.clone()),
+                    }
+                    continue;
+                }
+                cut = true;
+                if unit.abs() < 1e-9 {
+                    continue;
+                }
+                let n = -atom.advance / unit * 1000.0;
+                let n = (n * 100.0).round() / 100.0;
+                match items.last_mut() {
+                    Some(last @ (Object::Int(_) | Object::Real(_))) => {
+                        *last = number(last.as_number().unwrap_or(0.0) + n);
+                    }
+                    _ => items.push(number(n)),
+                }
+            }
+            if !cut {
+                continue;
+            }
+            let op = &page.ops[piece.op];
+            let mut bytes = lead_in(op);
+            write_op(&mut bytes, &Op::new("TJ", vec![Object::Array(items)]));
+            out.push((piece.op, bytes));
+        }
+        out
+    }
+
+    /// Page `page`'s text in lines, invisible text included, each with
+    /// a box for each of its chars (an empty one, left above right, for
+    /// a space put between pieces).
+    pub(crate) fn line_boxes(&self, page: usize) -> Vec<(String, Vec<Area>)> {
+        let Some(page_ref) = self.pages().get(page).copied() else {
+            return Vec::new();
+        };
+        let Some(read) = self.read_page(page) else {
+            return Vec::new();
+        };
+        let dict = page_dict(self, page_ref);
+        let resources = match dict.get("Resources").map(|r| self.resolve(r)) {
+            Some(Object::Dict(d)) => d,
+            _ => Dict::new(),
+        };
+        let read = self.read_content(read.content, &resources, IDENTITY, true);
+        let mut out = Vec::new();
+        for run in runs(&read) {
+            let count = run.text.chars().count();
+            let mut boxes = vec![[f64::MAX, f64::MAX, f64::MIN, f64::MIN]; count];
+            for (k, &p) in run.ops.iter().enumerate() {
+                let piece = &read.pieces[p];
+                let mut at = run.starts[k];
+                let mut pos = 0.0;
+                for atom in &piece.atoms {
+                    let b = glyph_box(piece, pos, atom.advance);
+                    pos += atom.advance;
+                    for j in 0..atom.chars {
+                        if let Some(slot) = boxes.get_mut(at + j) {
+                            // A ligature's letters share its box.
+                            *slot = if atom.chars > 1 {
+                                let w = (b[2] - b[0]) / atom.chars as f64;
+                                [b[0] + w * j as f64, b[1], b[0] + w * (j + 1) as f64, b[3]]
+                            } else {
+                                b
+                            };
+                        }
+                    }
+                    at += atom.chars;
+                }
+            }
+            out.push((run.text, boxes));
+        }
+        out
+    }
+}
+
+/// The box of the glyph or move at `pos` along `piece`, `advance` long,
+/// in the page's space. A glyph with no width is given half its size.
+fn glyph_box(piece: &Piece, pos: f64, advance: f64) -> Area {
+    let size = piece.size.abs();
+    let (mut start, mut end) = (pos.min(pos + advance), pos.max(pos + advance));
+    if end - start < 0.1 * size {
+        start = pos;
+        end = pos + 0.5 * size;
+    }
+    let low = piece.rise - DESCENT * size;
+    let high = piece.rise + ASCENT * size;
+    let corners = [
+        apply(&piece.m, start, low),
+        apply(&piece.m, end, low),
+        apply(&piece.m, end, high),
+        apply(&piece.m, start, high),
+    ];
+    let mut r = [f64::MAX, f64::MAX, f64::MIN, f64::MIN];
+    for (x, y) in corners {
+        r[0] = r[0].min(x);
+        r[1] = r[1].min(y);
+        r[2] = r[2].max(x);
+        r[3] = r[3].max(y);
+    }
+    r
+}
+
+/// Whether box `b` is under one of `areas`: its middle, or a good share
+/// of it.
+fn under(b: &Area, areas: &[Area]) -> bool {
+    let (mx, my) = ((b[0] + b[2]) / 2.0, (b[1] + b[3]) / 2.0);
+    let whole = ((b[2] - b[0]) * (b[3] - b[1])).max(1e-9);
+    areas.iter().any(|a| {
+        let inside = mx >= a[0] && mx <= a[2] && my >= a[1] && my <= a[3];
+        let w = (b[2].min(a[2]) - b[0].max(a[0])).max(0.0);
+        let h = (b[3].min(a[3]) - b[1].max(a[1])).max(0.0);
+        inside || w * h / whole >= COVERED
+    })
 }

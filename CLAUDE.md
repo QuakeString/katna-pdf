@@ -35,7 +35,10 @@ cargo run --release -p katna-pdf-bench -- file.pdf
   document's properties in `/Info` and XMP (`meta.rs`), opening
   password-locked files (`crypt.rs`: RC4, AES-128 and AES-256, an empty
   password tried first; updates to them stay locked) and putting an
-  AES-256 password on or taking it off (`lock.rs`), and
+  AES-256 password on or taking it off (`lock.rs`), true redaction
+  (`redact.rs`: glyphs, pixels, shapes and annotations under an area
+  taken out, PAN, Aadhaar, phone and email found, the file written
+  again whole with only the objects it still uses), and
   page lists as people write them (`ranges.rs`). No GPUI, no C.
 - `crates/katna-pdf-sign` — signing and checking signatures, pure
   Rust: certificate files (`p12.rs`), CMS / PAdES B-B (`cms.rs`),
@@ -54,7 +57,7 @@ cargo run --release -p katna-pdf-bench -- file.pdf
   data (PAdES B-LT DSS) its `dss.rs`.
 - `apps/katna-pdf` — the app window.
 - `apps/katna-pdf-cli` — the command line: info, merge, split, pages,
-  rotate, crop, sign (and certify), add-field, ltv, tokens, token-check, verify (with `--report` as a PDF), text and edit-text (`--blocks` / `--block` for paragraphs), insert, stamp, meta, lock and unlock, objects and object, annotations and XFDF; `--json` for scripts and agents.
+  rotate, crop, sign (and certify), add-field, ltv, tokens, token-check, verify (with `--report` as a PDF), text and edit-text (`--blocks` / `--block` for paragraphs), insert, stamp, redact, meta, lock and unlock, objects and object, annotations and XFDF; `--json` for scripts and agents.
 - `tools/katna-pdf-cos-check` — runs katna-pdf-cos over a folder of PDFs
   (loads, page counts against hayro, update round trips).
 - `vendor/hayro`, `vendor/hayro-interpret` — hayro with our patches
