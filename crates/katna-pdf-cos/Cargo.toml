@@ -12,6 +12,7 @@ publish.workspace = true
 aes.workspace = true
 cbc.workspace = true
 flate2.workspace = true
+jpeg-encoder.workspace = true
 md-5.workspace = true
 rand_core.workspace = true
 sha2.workspace = true

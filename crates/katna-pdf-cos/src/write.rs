@@ -105,9 +105,11 @@ fn write_real(out: &mut Vec<u8>, r: f64) {
         out.push(b'0');
         return;
     }
-    // PDF has no exponents: fixed point, trailing zeros trimmed.
-    let s = format!("{r:.6}");
-    let s = s.trim_end_matches('0').trim_end_matches('.');
+    // PDF has no exponents: fixed point (Rust writes floats that way),
+    // with as few digits as read back the same number. Tiny ones, such
+    // as a Type 3 font's matrix, keep every digit they need.
+    let s = format!("{r}");
+    let s = s.as_str();
     out.extend_from_slice(if s.is_empty() || s == "-" {
         b"0"
     } else {

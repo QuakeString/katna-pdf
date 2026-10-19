@@ -68,6 +68,11 @@ usage: katna-pdf-cli COMMAND [--json] ...
   unlock FILE -o OUT --owner PW   the password taken off, given the owner's
                                   (any command opens a locked file with the password
                                   in KATNA_PDF_OPEN_PASSWORD)
+  compress FILE -o OUT [--level lossless|medium|strong]
+                                  the file made smaller: unused objects left out,
+                                  streams packed tighter, copies kept once; medium
+                                  (the default) brings pictures down to 150 dpi,
+                                  strong to 96 dpi, lossless leaves them
   redact FILE -o OUT [--area PAGE:L,B,R,T]... [--find pan,aadhaar,phone,email]
          [--words TEXT]... [--pages PAGES] [--scrub] [--no-fill]
                                   what lies under each box taken out of the file, not
@@ -226,6 +231,7 @@ fn main() -> ExitCode {
         "lock" => lock(rest, json),
         "redact" => redact(rest, json),
         "unlock" => unlock(rest, json),
+        "compress" => compress(rest, json),
         "objects" => objects(rest, json),
         "bookmarks" => bookmarks(rest, json),
         "links" => links(rest, json),
@@ -375,6 +381,7 @@ impl<'a> Args<'a> {
                     | "--format"
                     | "--from"
                     | "--range"
+                    | "--level"
             ) {
                 let Some(value) = it.next() else {
                     return Err(Failure::Usage(format!("{a} needs a value")));
@@ -1335,6 +1342,58 @@ fn unlock(args: &[String], json: bool) -> Done {
         .map_err(|e| failed(format!("{file}: {e}")))?;
     write(&out, &bytes)?;
     Ok(wrote(&[(out, doc.pages().len())], json))
+}
+
+/// Makes a file smaller.
+fn compress(args: &[String], json: bool) -> Done {
+    use katna_pdf_cos::Optimize;
+    let args = Args::parse(args)?;
+    let [file] = args.words()?;
+    let out = args.output()?;
+    let how = match args.option("--level").unwrap_or("medium") {
+        "lossless" => Optimize::LOSSLESS,
+        "medium" => Optimize::MEDIUM,
+        "strong" => Optimize::STRONG,
+        other => {
+            return Err(Failure::Usage(format!(
+                "--level {other}: lossless, medium or strong"
+            )));
+        }
+    };
+    let doc = open(file)?;
+    let before = doc.bytes().len();
+    let done = doc
+        .optimize(&how)
+        .map_err(|e| failed(format!("{file}: {e}")))?;
+    // Never larger than it was.
+    let bytes = if done.bytes.len() < before {
+        &done.bytes[..]
+    } else {
+        doc.bytes()
+    };
+    write(&out, bytes)?;
+    let after = bytes.len();
+    Ok(if json {
+        format!(
+            "{{\"file\":{},\"pages\":{},\"before\":{before},\"after\":{after},\
+             \"unused\":{},\"copies\":{},\"images\":{}}}\n",
+            string(&out.display().to_string()),
+            doc.pages().len(),
+            done.unused,
+            done.copies,
+            done.images
+        )
+    } else {
+        format!(
+            "{}: {before} → {after} bytes ({:.0}% smaller); {} unused objects left out, \
+             {} copies kept once, {} pictures brought down\n",
+            out.display(),
+            100.0 * (1.0 - after as f64 / before.max(1) as f64),
+            done.unused,
+            done.copies,
+            done.images
+        )
+    })
 }
 
 /// Takes what lies under boxes out of a file.

@@ -200,7 +200,10 @@ impl Document {
 
     /// The numbers of the objects the file uses: those its trailer leads
     /// to, through any number of references.
-    fn reachable(&self, changed: &BTreeMap<u32, (u16, Object)>) -> std::collections::HashSet<u32> {
+    pub(crate) fn reachable(
+        &self,
+        changed: &BTreeMap<u32, (u16, Object)>,
+    ) -> std::collections::HashSet<u32> {
         let mut seen = std::collections::HashSet::new();
         let mut todo: Vec<Ref> = Vec::new();
         let trailer = Object::Dict(self.trailer().clone());

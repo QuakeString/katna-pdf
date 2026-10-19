@@ -886,6 +886,45 @@ impl LibraryView {
         .detach();
     }
 
+    /// Makes the chosen files smaller in their places, their pages kept
+    /// as they are.
+    fn compress_chosen(&mut self, cx: &mut Context<Self>) {
+        if self.busy {
+            return;
+        }
+        let files: Vec<(i64, PathBuf)> = self
+            .chosen_docs()
+            .iter()
+            .map(|d| (d.id, d.path.clone()))
+            .collect();
+        if files.is_empty() {
+            return;
+        }
+        self.busy = true;
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let (report, saved) = cx
+                .background_executor()
+                .spawn(async move { katna_pdf_library::compress(&files) })
+                .await;
+            this.update(cx, |this, cx| {
+                this.busy = false;
+                let mut line = report_line("library-compressed", &report);
+                if saved > 0 {
+                    line = format!(
+                        "{line} {}",
+                        t("library-compress-saved", &[("size", &size_text(saved))])
+                    );
+                }
+                this.notice = Some(line);
+                this.reload(cx);
+                this.scan(cx);
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     fn tag_chosen(&mut self, cx: &mut Context<Self>) {
         let tag = self.add_tag.read(cx).text().trim().to_owned();
         let ids: Vec<i64> = self.chosen.clone();
@@ -1884,6 +1923,10 @@ impl LibraryView {
                     .on_click(cx.listener(|this, _, window, cx| this.start_renaming(window, cx))),
             )
             .child(
+                action("library-compress", "compress")
+                    .on_click(cx.listener(|this, _, _, cx| this.compress_chosen(cx))),
+            )
+            .child(
                 action("library-copy", "download")
                     .on_click(cx.listener(|this, _, window, cx| this.copy_chosen(window, cx))),
             )
@@ -2182,7 +2225,7 @@ fn doc_line(doc: &Doc) -> String {
     t(id, &[("pages", &doc.pages.to_string()), ("size", &size)])
 }
 
-fn size_text(bytes: u64) -> String {
+pub(crate) fn size_text(bytes: u64) -> String {
     let kb = bytes as f64 / 1024.0;
     if kb < 1024.0 {
         t("size-kb", &[("n", &format!("{:.0}", kb.max(1.0)))])

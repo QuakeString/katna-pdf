@@ -48,8 +48,11 @@ cargo run --release -p katna-pdf-bench -- file.pdf
   fields a flat form asks for found from its blanks, boxes, grid cells
   and squares to tick (`detect.rs`), the outline, links and named
   destinations changed (`nav.rs`), page labels read and written
-  (`labels.rs`), and
-  page lists as people write them (`ranges.rs`). No GPUI, no C.
+  (`labels.rs`),
+  page lists as people write them (`ranges.rs`), and files made smaller
+  (`optimize.rs`: unused objects dropped, streams packed tighter, copies
+  kept once, object streams, pictures brought down to a resolution, the
+  result checked to draw the same). No GPUI, no C.
 - `crates/katna-pdf-sign` — signing and checking signatures, pure
   Rust: certificate files (`p12.rs`), CMS / PAdES B-B (`cms.rs`),
   timestamps for B-T and document timestamps for B-LTA (`tsa.rs`, RFC
@@ -70,7 +73,7 @@ cargo run --release -p katna-pdf-bench -- file.pdf
   title, author, pages, signed, form, scanned, locked; a cover; each
   page's text in an FTS5 index), tags, stars, notes, smart collections
   as queries (`filter.rs`), copies by bytes or words, and many files
-  merged, renamed from their properties, copied or tagged (`bulk.rs`). Text and
+  merged, renamed from their properties, copied, tagged or made smaller (`bulk.rs`). Text and
   covers come through an `Engine`. No GPUI.
 - `apps/katna-pdf` — the app window; `drives.rs` asks `katna-daemon` over
   D-Bus (`katna-dbus`) for the Google Drive and OneDrive of accounts signed
@@ -78,7 +81,7 @@ cargo run --release -p katna-pdf-bench -- file.pdf
   read-only) for PDFs attached to mail; the library browses and opens both
   (`library/drive.rs`, `library/mail.rs`).
 - `apps/katna-pdf-cli` — the command line: info, merge, split, pages,
-  rotate, crop, sign (and certify), add-field, ltv, tokens, token-check, verify (with `--report` as a PDF), text and edit-text (`--blocks` / `--block` for paragraphs), insert, stamp, background, redact, form (with `--detect`), form-data and fill, meta, lock and unlock, objects and object, bookmarks, links, dests and labels, annotations and XFDF, and library; `--json` for scripts and agents.
+  rotate, crop, sign (and certify), add-field, ltv, tokens, token-check, verify (with `--report` as a PDF), text and edit-text (`--blocks` / `--block` for paragraphs), insert, stamp, background, redact, compress, form (with `--detect`), form-data and fill, meta, lock and unlock, objects and object, bookmarks, links, dests and labels, annotations and XFDF, and library; `--json` for scripts and agents.
 - `tools/katna-pdf-cos-check` — runs katna-pdf-cos over a folder of PDFs
   (loads, page counts against hayro, update round trips).
 - `vendor/hayro`, `vendor/hayro-interpret`, `vendor/hayro-syntax` — hayro with our patches

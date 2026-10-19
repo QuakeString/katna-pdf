@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Work on many documents at once: merged into one file, renamed from
-//! their properties, copied to another folder.
+//! their properties, copied to another folder, made smaller.
 
 use std::path::{Path, PathBuf};
 
-use katna_pdf_cos::{Document, PageSource};
+use katna_pdf_cos::{Document, Optimize, PageSource};
 
 use crate::{Doc, Library, Result};
 
@@ -224,6 +224,46 @@ pub fn merge(paths: &[PathBuf], out: &Path) -> std::result::Result<usize, String
             e.to_string()
         })?;
     Ok(sources.len())
+}
+
+/// Makes each of `files` (catalog id and path) smaller in its place,
+/// its pages kept as they are ([`Optimize::LOSSLESS`]): those it
+/// changed, and the bytes saved in all. A file already as small as it
+/// gets is left as it was and counts as done; a signed one fails, since
+/// writing it again would break its signatures.
+pub fn compress(files: &[(i64, PathBuf)]) -> (BulkReport, u64) {
+    let mut report = BulkReport::default();
+    let mut saved = 0;
+    for (id, path) in files {
+        let made = std::fs::read(path)
+            .map_err(|e| e.to_string())
+            .and_then(|bytes| {
+                let before = bytes.len();
+                let doc = Document::load(bytes).map_err(|e| e.to_string())?;
+                let done = doc
+                    .optimize(&Optimize::LOSSLESS)
+                    .map_err(|e| e.to_string())?;
+                if done.bytes.len() >= before {
+                    return Ok(0);
+                }
+                let partial = path.with_extension("pdf.part");
+                std::fs::write(&partial, &done.bytes)
+                    .and_then(|()| std::fs::rename(&partial, path))
+                    .map_err(|e| {
+                        let _ = std::fs::remove_file(&partial);
+                        e.to_string()
+                    })?;
+                Ok((before - done.bytes.len()) as u64)
+            });
+        match made {
+            Ok(n) => {
+                saved += n;
+                report.done.push((*id, path.clone()));
+            }
+            Err(e) => report.failed.push((path.clone(), e)),
+        }
+    }
+    (report, saved)
 }
 
 #[cfg(test)]

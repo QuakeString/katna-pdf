@@ -276,6 +276,16 @@ fn many_documents_are_renamed_copied_tagged_and_merged() {
             .len(),
         2
     );
+    // Made smaller in place: still two pages, and smaller.
+    let before = std::fs::metadata(&merged).unwrap().len();
+    let (report, saved) = katna_pdf_library::compress(&[(0, merged.clone())]);
+    assert_eq!(report.done.len(), 1);
+    let after = std::fs::read(&merged).unwrap();
+    assert_eq!(after.len() as u64, before - saved);
+    assert_eq!(
+        katna_pdf_cos::Document::load(after).unwrap().pages().len(),
+        2
+    );
     std::fs::remove_dir_all(&dir).ok();
     std::fs::remove_dir_all(&out).ok();
 }
