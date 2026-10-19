@@ -41,7 +41,9 @@ cargo run --release -p katna-pdf-bench -- file.pdf
   again whole with only the objects it still uses),
   designing forms (`design.rs`: fields of every kind added with their
   own appearances, changed, moved, copied to other pages, taken out and
-  put in Tab order), and
+  put in Tab order), form data in and out as JSON and CSV
+  (`formdata.rs`), totals and number, date and percent formats done in
+  Rust from the calls Acrobat's form tools write (`calc.rs`), and
   page lists as people write them (`ranges.rs`). No GPUI, no C.
 - `crates/katna-pdf-sign` — signing and checking signatures, pure
   Rust: certificate files (`p12.rs`), CMS / PAdES B-B (`cms.rs`),

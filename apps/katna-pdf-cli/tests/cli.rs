@@ -948,3 +948,57 @@ fn form_data_is_read_and_filled() {
     let (code, _) = run(&["fill", s(&out), "-o", s(&out), "--set", "Agree=maybe"]);
     assert_eq!(code, 1);
 }
+
+#[test]
+fn form_totals_and_formats_are_set() {
+    let d = dir("form-calc");
+    let file = d.join("blank.pdf");
+    std::fs::write(&file, katna_pdf_cos::text_pdf("Form", &[])).unwrap();
+    let form = d.join("form.pdf");
+    let (code, text) = run(&[
+        "form",
+        s(&file),
+        "-o",
+        s(&form),
+        "--add",
+        "text:1:100,700,300,720:Fee",
+        "--add",
+        "text:1:100,660,300,680:Tax",
+        "--add",
+        "text:1:100,620,300,640:Total",
+        "--total",
+        "Total=sum:Fee,Tax",
+    ]);
+    assert_eq!(code, 0, "{text}");
+    // A format put on a field already there keeps its total.
+    let (code, text) = run(&[
+        "form",
+        s(&form),
+        "-o",
+        s(&form),
+        "--format",
+        "Total=number:2:Rs. ",
+    ]);
+    assert_eq!(code, 0, "{text}");
+    let out = d.join("out.pdf");
+    let (code, text) = run(&[
+        "fill",
+        s(&form),
+        "-o",
+        s(&out),
+        "--set",
+        "Fee=1200",
+        "--set",
+        "Tax=34.5",
+    ]);
+    assert_eq!(code, 0, "{text}");
+    let (_, text) = run(&["form-data", s(&out), "--csv"]);
+    assert_eq!(text.trim(), "Fee,Tax,Total\r\n1200,34.5,1234.5");
+    let doc = katna_pdf_cos::Document::load(std::fs::read(&out).unwrap()).unwrap();
+    let fields = doc.form();
+    let scripts = doc.form_scripts(&fields);
+    let total = &scripts[&fields[2].id];
+    assert!(total.calculate.is_some() && total.format.is_some());
+    let (code, _) = run(&["form", s(&form), "-o", s(&form), "--total", "Total=avg"]);
+    assert_eq!(code, 2);
+}

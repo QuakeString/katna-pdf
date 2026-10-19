@@ -97,13 +97,18 @@ usage: katna-pdf-cli COMMAND [--json] ...
        [--required NAME]... [--optional NAME]... [--read-only NAME]...
        [--rename NAME=NEW]... [--move NAME:L,B,R,T]... [--copy NAME:PAGES]...
        [--remove NAME]... [--order PAGE:NAME,NAME,...]...
+       [--total NAME=SUM:FIELD,FIELD,...]... [--format NAME=FORMAT]...
                                   the form designed: fields added (KIND text, multiline,
                                   password, check, radio=CHOICE, combo=A;B;C,
                                   list=A;B;C, button=CAPTION or signature; radio
                                   buttons with one NAME are one group), their tips and
                                   flags set, renamed, moved, shown on more pages too,
                                   taken out, and the order Tab goes through a page's
-                                  fields set
+                                  fields set; a total (sum, product, average, min or
+                                  max of other fields, worked out as the form is
+                                  filled) and a format (number:DECIMALS[:CURRENCY],
+                                  percent:DECIMALS, date:PATTERN such as dd/mm/yyyy,
+                                  phone, or none) given
   form-data FILE [--csv]          each field's value by its full name, as one JSON
                                   object (or CSV: names, then values)
   fill FILE -o OUT [--data DATA.json|DATA.csv] [--set NAME=VALUE]...
@@ -308,6 +313,8 @@ impl<'a> Args<'a> {
                     | "--order"
                     | "--data"
                     | "--set"
+                    | "--total"
+                    | "--format"
             ) {
                 let Some(value) = it.next() else {
                     return Err(Failure::Usage(format!("{a} needs a value")));
@@ -1610,6 +1617,7 @@ fn form(args: &[String], json: bool) -> Done {
             required: false,
             read_only: false,
             value: None,
+            scripts: katna_pdf_cos::Scripts::default(),
         });
     }
     let field = |name: &str| {
@@ -1648,6 +1656,7 @@ fn form(args: &[String], json: bool) -> Done {
                 required: false,
                 read_only: false,
                 value: None,
+                scripts: katna_pdf_cos::Scripts::default(),
             };
             how(&mut spec, &mut edits[at]);
             Ok(())
@@ -1677,6 +1686,75 @@ fn form(args: &[String], json: bool) -> Done {
         change(name, &|s, e| {
             s.read_only = true;
             e.read_only = Some(true);
+        })?;
+    }
+    let current = doc.form_scripts(&fields);
+    let scripts_of = |e: &FieldEdit| {
+        e.scripts
+            .clone()
+            .unwrap_or_else(|| current.get(&e.field).cloned().unwrap_or_default())
+    };
+    for item in args.all("--total") {
+        let bad = || Failure::Usage(format!("--total {item}: NAME=SUM:FIELD,FIELD,..."));
+        let (name, how) = item.split_once('=').ok_or_else(bad)?;
+        let (op, from) = how.split_once(':').ok_or_else(bad)?;
+        let op = match op.to_ascii_lowercase().as_str() {
+            "sum" => katna_pdf_cos::CalcOp::Sum,
+            "product" | "prd" => katna_pdf_cos::CalcOp::Product,
+            "average" | "avg" => katna_pdf_cos::CalcOp::Average,
+            "min" => katna_pdf_cos::CalcOp::Min,
+            "max" => katna_pdf_cos::CalcOp::Max,
+            _ => return Err(bad()),
+        };
+        let calc = katna_pdf_cos::Calculation::Simple {
+            op,
+            fields: from.split(',').map(|f| f.trim().to_owned()).collect(),
+        };
+        change(name, &|s, e| {
+            s.scripts.calculate = Some(calc.clone());
+            let mut scripts = scripts_of(e);
+            scripts.calculate = Some(calc.clone());
+            e.scripts = Some(scripts);
+        })?;
+    }
+    for item in args.all("--format") {
+        let bad = || {
+            Failure::Usage(format!(
+                "--format {item}: NAME=number:DECIMALS[:CURRENCY], percent:DECIMALS, date:PATTERN, phone or none"
+            ))
+        };
+        let (name, how) = item.split_once('=').ok_or_else(bad)?;
+        let mut parts = how.splitn(3, ':');
+        let kind = parts.next().unwrap_or_default();
+        let decimals = |p: Option<&str>| p.and_then(|d| d.parse::<usize>().ok()).unwrap_or(2);
+        let format = match kind {
+            "number" => Some(katna_pdf_cos::Format::Number {
+                decimals: decimals(parts.next()),
+                separators: 0,
+                negative: 0,
+                currency: parts.next().unwrap_or_default().to_owned(),
+                currency_first: true,
+            }),
+            "percent" => Some(katna_pdf_cos::Format::Percent {
+                decimals: decimals(parts.next()),
+                separators: 0,
+            }),
+            "date" => Some(katna_pdf_cos::Format::Date(
+                parts
+                    .next()
+                    .filter(|p| !p.is_empty())
+                    .ok_or_else(bad)?
+                    .to_owned(),
+            )),
+            "phone" => Some(katna_pdf_cos::Format::Special(2)),
+            "none" => None,
+            _ => return Err(bad()),
+        };
+        change(name, &|s, e| {
+            s.scripts.format = format.clone();
+            let mut scripts = scripts_of(e);
+            scripts.format = format.clone();
+            e.scripts = Some(scripts);
         })?;
     }
     for rename in args.all("--rename") {
