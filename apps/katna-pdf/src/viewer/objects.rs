@@ -25,6 +25,9 @@ const CLICK: f32 = 3.0;
 const GRIP: f32 = 6.0;
 /// Smallest an object is made, in points.
 const SMALLEST: f32 = 2.0;
+/// How near, in pixels on screen, an edge or middle must come to a line
+/// to line up with it.
+const SNAP: f32 = 6.0;
 /// Objects covering more of the page than this share of it (a page's
 /// background) are not picked with a click.
 const BACKGROUND: f32 = 0.8;
@@ -73,6 +76,41 @@ impl Viewer {
 
     /// The box the picked object is dragged to, on the page shown.
     fn moved_box(&self) -> Option<[f32; 4]> {
+        self.moved_snapped().map(|(b, _)| b)
+    }
+
+    /// Where the picked object is being dragged to, lined up with the
+    /// page's edges and middle and the other objects' edges and middles
+    /// when near them, and the lines it meets (across, then down).
+    fn moved_snapped(&self) -> Option<([f32; 4], [Option<f32>; 2])> {
+        let raw = self.moved_raw()?;
+        let picked = self.picked_object.as_ref()?;
+        let moving = self.moving.as_ref()?;
+        let page = picked.page;
+        // The page as shown, in points (the bounds drawn last are cleared
+        // while a frame is laid out).
+        let size = match &self.content {
+            super::Content::Ready(opened) => opened.doc.page_size(page)?,
+            _ => return None,
+        };
+        let size = [size.0, size.1];
+        let mut xs = vec![0.0, size[0] / 2.0, size[0]];
+        let mut ys = vec![0.0, size[1] / 2.0, size[1]];
+        let count = self.runs.objects.get(&page).map_or(0, |o| o.len());
+        for i in (0..count).filter(|&i| i != picked.index) {
+            if let Some((_, [l, t, r, b])) = self.object_shown(page, i) {
+                // Not a page's background, whose edges are the page's.
+                if (r - l) * (b - t) > size[0] * size[1] * BACKGROUND {
+                    continue;
+                }
+                xs.extend([l, (l + r) / 2.0, r]);
+                ys.extend([t, (t + b) / 2.0, b]);
+            }
+        }
+        Some(snap(raw, moving.grip, &xs, &ys, SNAP / self.shown))
+    }
+
+    fn moved_raw(&self) -> Option<[f32; 4]> {
         let picked = self.picked_object.as_ref()?;
         let (_, b) = self.object_shown(picked.page, picked.index)?;
         let moving = self.moving.as_ref()?;
@@ -491,8 +529,9 @@ impl Viewer {
         let Some(picked) = self.picked_object.as_ref().filter(|p| p.page == page) else {
             return Vec::new();
         };
-        let Some(b) = self
-            .moved_box()
+        let moved = self.moved_snapped();
+        let Some(b) = moved
+            .map(|(b, _)| b)
             .or_else(|| self.object_shown(page, picked.index).map(|(_, b)| b))
         else {
             return Vec::new();
@@ -500,18 +539,45 @@ impl Viewer {
         let shown = self.shown;
         let accent = gpui::rgba(self.theme.katna.accent);
         let paper = self.paper();
-        let mut out = vec![
-            div()
-                .absolute()
-                .left(desktop_px(b[0] * shown - 1.0))
-                .top(desktop_px(b[1] * shown - 1.0))
-                .w(desktop_px((b[2] - b[0]) * shown + 2.0))
-                .h(desktop_px((b[3] - b[1]) * shown + 2.0))
-                .border_1()
-                .border_color(accent)
-                .cursor_move()
-                .into_any_element(),
-        ];
+        let mut out = Vec::new();
+        // The lines it lines up with, across the whole page.
+        if let Some((_, [gx, gy])) = moved {
+            let guide = gpui::rgba(0xe0_30_80_ff);
+            if let Some(x) = gx {
+                out.push(
+                    div()
+                        .absolute()
+                        .left(desktop_px(x * shown))
+                        .top_0()
+                        .bottom_0()
+                        .w(desktop_px(1.0))
+                        .bg(guide)
+                        .into_any_element(),
+                );
+            }
+            if let Some(y) = gy {
+                out.push(
+                    div()
+                        .absolute()
+                        .top(desktop_px(y * shown))
+                        .left_0()
+                        .right_0()
+                        .h(desktop_px(1.0))
+                        .bg(guide)
+                        .into_any_element(),
+                );
+            }
+        }
+        out.extend([div()
+            .absolute()
+            .left(desktop_px(b[0] * shown - 1.0))
+            .top(desktop_px(b[1] * shown - 1.0))
+            .w(desktop_px((b[2] - b[0]) * shown + 2.0))
+            .h(desktop_px((b[3] - b[1]) * shown + 2.0))
+            .border_1()
+            .border_color(accent)
+            .cursor_move()
+            .into_any_element()]);
         let size = 8.0;
         for (i, [x, y]) in [[b[0], b[1]], [b[2], b[1]], [b[0], b[3]], [b[2], b[3]]]
             .into_iter()
@@ -614,5 +680,98 @@ impl Viewer {
                 })),
         );
         Some(row.into_any_element())
+    }
+}
+
+/// The nearest of `lines` to any of `at`, within `reach`: how far to go
+/// to it, and the line.
+fn nearest(at: &[f32], lines: &[f32], reach: f32) -> Option<(f32, f32)> {
+    let mut best: Option<(f32, f32)> = None;
+    for &a in at {
+        for &line in lines {
+            let d = line - a;
+            if d.abs() <= reach && best.is_none_or(|(b, _)| d.abs() < b.abs()) {
+                best = Some((d, line));
+            }
+        }
+    }
+    best
+}
+
+/// Box `b` (left, top, right, bottom) moved, or resized by corner
+/// `grip`, so that what moves meets the nearest of the lines down (`xs`)
+/// and across (`ys`) within `reach`; with the lines met.
+fn snap(
+    b: [f32; 4],
+    grip: Option<usize>,
+    xs: &[f32],
+    ys: &[f32],
+    reach: f32,
+) -> ([f32; 4], [Option<f32>; 2]) {
+    let [mut l, mut t, mut r, mut bo] = b;
+    match grip {
+        None => {
+            let x = nearest(&[l, (l + r) / 2.0, r], xs, reach);
+            let y = nearest(&[t, (t + bo) / 2.0, bo], ys, reach);
+            let (dx, dy) = (x.map_or(0.0, |x| x.0), y.map_or(0.0, |y| y.0));
+            (
+                [l + dx, t + dy, r + dx, bo + dy],
+                [x.map(|x| x.1), y.map(|y| y.1)],
+            )
+        }
+        Some(grip) => {
+            // The corner held: 0 top left, 1 top right, 2 bottom left,
+            // 3 bottom right.
+            let left = grip == 0 || grip == 2;
+            let top = grip < 2;
+            let x = nearest(&[if left { l } else { r }], xs, reach).filter(|&(_, line)| {
+                if left {
+                    line < r - SMALLEST
+                } else {
+                    line > l + SMALLEST
+                }
+            });
+            let y = nearest(&[if top { t } else { bo }], ys, reach).filter(|&(_, line)| {
+                if top {
+                    line < bo - SMALLEST
+                } else {
+                    line > t + SMALLEST
+                }
+            });
+            if let Some((_, line)) = x {
+                if left { l = line } else { r = line }
+            }
+            if let Some((_, line)) = y {
+                if top { t = line } else { bo = line }
+            }
+            ([l, t, r, bo], [x.map(|x| x.1), y.map(|y| y.1)])
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn things_line_up_when_near() {
+        let xs = [0.0, 300.0, 600.0];
+        let ys = [0.0, 400.0, 800.0];
+        // Moved: its middle meets the page's middle; nothing near across.
+        let (b, lines) = snap([196.0, 100.0, 398.0, 150.0], None, &xs, &ys, 5.0);
+        assert_eq!(b, [199.0, 100.0, 401.0, 150.0]);
+        assert_eq!(lines, [Some(300.0), None]);
+        // Its left edge meets the page's.
+        let (b, lines) = snap([3.0, 397.0, 53.0, 447.0], None, &xs, &ys, 5.0);
+        assert_eq!(b, [0.0, 400.0, 50.0, 450.0]);
+        assert_eq!(lines, [Some(0.0), Some(400.0)]);
+        // Resized by the bottom right corner: that corner only.
+        let (b, lines) = snap([10.0, 10.0, 597.0, 120.0], Some(3), &xs, &ys, 5.0);
+        assert_eq!(b, [10.0, 10.0, 600.0, 120.0]);
+        assert_eq!(lines, [Some(600.0), None]);
+        // Too far: as it was.
+        let (b, lines) = snap([20.0, 20.0, 40.0, 40.0], None, &xs, &ys, 5.0);
+        assert_eq!(b, [20.0, 20.0, 40.0, 40.0]);
+        assert_eq!(lines, [None, None]);
     }
 }
