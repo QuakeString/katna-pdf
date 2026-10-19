@@ -336,6 +336,14 @@ impl Render for Tabs {
             self.title = title;
         }
         let th = self.theme;
+        // A presentation fills the window, with nothing around it.
+        if self.viewer(cx).presenting() {
+            return div()
+                .id("katna-pdf")
+                .size_full()
+                .bg(gpui::black())
+                .child(self.viewer_entity().clone());
+        }
         div()
             .id("katna-pdf")
             .key_context("Tabs")
