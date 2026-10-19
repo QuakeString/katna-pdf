@@ -217,3 +217,107 @@ fn characters_no_font_has_are_refused() {
     let err = doc.edit_text(0, &[(0, "Hi नमस्ते".into())]).unwrap_err();
     assert!(err.to_string().contains("न"), "{err}");
 }
+
+const PARAGRAPH: &str = "BT /F1 12 Tf 14 TL 72 700 Td (Katna reads the lines of a) Tj \
+     T* (paragraph as one block of text) Tj T* (to edit.) Tj ET \
+     BT /F1 12 Tf 72 600 Td (Apart) Tj ET";
+
+/// Each run's text and baseline.
+fn lines(doc: &Document) -> Vec<(String, f32)> {
+    doc.text_runs(0)
+        .into_iter()
+        .map(|r| (r.text, ((r.rect[1] + 2.4) * 10.0).round() / 10.0))
+        .collect()
+}
+
+#[test]
+fn lines_under_one_another_are_a_paragraph() {
+    let doc = page(PARAGRAPH, "/F1 5 0 R", &[HELVETICA]);
+    let blocks = doc.text_blocks(0);
+    assert_eq!(blocks.len(), 2, "{blocks:?}");
+    assert_eq!(blocks[0].runs, [0, 1, 2]);
+    assert_eq!(
+        blocks[0].text,
+        "Katna reads the lines of a paragraph as one block of text to edit."
+    );
+    assert_eq!(blocks[1].text, "Apart");
+}
+
+#[test]
+fn a_paragraph_rewraps_to_its_width() {
+    let doc = page(PARAGRAPH, "/F1 5 0 R", &[HELVETICA]);
+    let text = "Katna reads the lines of a paragraph as one block of text, so a word \
+                put in wraps on to the lines below it.";
+    let out = Document::load(doc.edit_block(0, &[0, 1, 2], text).unwrap()).unwrap();
+    let got = lines(&out);
+    // The first line is as it was; the rest wrap, a line more under it.
+    assert_eq!(got[0], ("Katna reads the lines of a".into(), 700.0));
+    let joined: Vec<&str> = got[..got.len() - 1].iter().map(|l| l.0.as_str()).collect();
+    assert_eq!(joined.join(" "), text);
+    for (j, line) in got[..got.len() - 1].iter().enumerate() {
+        assert!((line.1 - (700.0 - 14.0 * j as f32)).abs() < 0.05, "{got:?}");
+    }
+    assert!(got.len() > 4, "{got:?}");
+    let right = doc.text_runs(0)[1].rect[2].max(doc.text_runs(0)[0].rect[2]);
+    for run in &out.text_runs(0) {
+        assert!(run.rect[2] <= right + 1.0, "{run:?}");
+    }
+    // The text after the paragraph is where it was.
+    assert_eq!(got.last().unwrap(), &("Apart".into(), 600.0));
+    assert_eq!(out.text_blocks(0)[0].text, text);
+}
+
+#[test]
+fn a_shorter_paragraph_empties_lines() {
+    let doc = page(PARAGRAPH, "/F1 5 0 R", &[HELVETICA]);
+    let out = Document::load(doc.edit_block(0, &[0, 1, 2], "Short now.").unwrap()).unwrap();
+    assert_eq!(
+        lines(&out),
+        [("Short now.".into(), 700.0), ("Apart".into(), 600.0)]
+    );
+}
+
+#[test]
+fn a_line_break_starts_a_new_line() {
+    let doc = page(PARAGRAPH, "/F1 5 0 R", &[HELVETICA]);
+    let out = Document::load(doc.edit_block(0, &[3], "Apart\nand below").unwrap()).unwrap();
+    let got = lines(&out);
+    assert_eq!(
+        got[3..],
+        [("Apart".into(), 600.0), ("and below".into(), 585.6)]
+    );
+    // Text drawn after it in the same text object is where it was.
+    let doc = page(
+        "BT /F1 12 Tf 72 600 Td (One) Tj 0 -20 Td (Two) Tj ET",
+        "/F1 5 0 R",
+        &[HELVETICA],
+    );
+    let out = Document::load(doc.edit_block(0, &[0], "One\nmore").unwrap()).unwrap();
+    assert_eq!(
+        lines(&out),
+        [
+            ("One".into(), 600.0),
+            ("more".into(), 585.6),
+            ("Two".into(), 580.0)
+        ]
+    );
+}
+
+#[test]
+fn lines_lined_up_on_the_right_stay_so() {
+    // Each line ends at 400: "Hi there" and "you" in Helvetica at 10 pt.
+    let doc = page(
+        "BT /F1 10 Tf 364.99 700 Td (Hi there) Tj ET BT /F1 10 Tf 383.88 688 Td (you) Tj ET",
+        "/F1 5 0 R",
+        &[HELVETICA],
+    );
+    let blocks = doc.text_blocks(0);
+    assert_eq!(blocks.len(), 1, "{blocks:?}");
+    let out = Document::load(doc.edit_block(0, &blocks[0].runs, "Hi you there").unwrap()).unwrap();
+    let runs = out.text_runs(0);
+    let texts: Vec<&str> = runs.iter().map(|r| r.text.as_str()).collect();
+    assert_eq!(texts, ["Hi you", "there"]);
+    for run in &runs {
+        assert!((run.rect[2] - 400.0).abs() < 0.05, "{runs:?}");
+    }
+}

@@ -1,39 +1,42 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Editing the text on a page (docs/PLAN.md §4.3, Phase 4): with Edit
-//! text on, each line of a page's text shows as a box to click; the
-//! click opens it for typing in place, and Enter writes the change into
-//! the file (`katna_pdf_cos::edit`), in the line's own font where it has
-//! the letters.
+//! text on, each paragraph of a page's text (a line alone, or lines one
+//! under another) shows as a box to click; the click opens it for typing
+//! in place, Enter starting a new line, and Ctrl+Enter or a click
+//! elsewhere writes the change into the file (`katna_pdf_cos::edit`):
+//! the words wrapped to the paragraph's width, in its own font where it
+//! has the letters.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use gpui::{AnyElement, Context, Entity, Focusable, Subscription, Window, div, prelude::*};
-use katna_pdf_cos::TextRun;
+use katna_pdf_cos::TextBlock;
 use katna_ui::px;
 use katna_ui::scale::desktop_px;
-use katna_ui::text_input::{InputEvent, TextInput};
+use katna_ui::text_area::TextArea;
+use katna_ui::text_input::InputEvent;
 use katna_ui::tokens::radius;
 
 use super::{Content, Viewer};
 use crate::text::t;
 
-/// The text runs read so far, by page, and the pages being read.
+/// The paragraphs read so far, by page, and the pages being read.
 #[derive(Default)]
 pub(super) struct Runs {
-    pages: HashMap<usize, Arc<Vec<TextRun>>>,
+    pages: HashMap<usize, Arc<Vec<TextBlock>>>,
     reading: HashSet<usize>,
     /// Bumped when the file changes, so runs read from the old one are
     /// dropped.
     generation: u64,
 }
 
-/// The line being typed in.
+/// The paragraph being typed in.
 pub(super) struct Typing {
     page: usize,
-    run: usize,
-    input: Entity<TextInput>,
+    block: usize,
+    input: Entity<TextArea>,
     _input: Subscription,
 }
 
@@ -67,7 +70,7 @@ impl Viewer {
         self.runs.generation += 1;
     }
 
-    /// Reads page `page`'s runs in the background, from the file as
+    /// Reads page `page`'s paragraphs in the background, from the file as
     /// changed so far.
     fn read_runs(&mut self, page: usize, cx: &mut Context<Self>) {
         if self.runs.pages.contains_key(&page) || !self.runs.reading.insert(page) {
@@ -87,7 +90,7 @@ impl Viewer {
                         None => std::fs::read(&path).ok()?,
                     };
                     let doc = katna_pdf_cos::Document::load(bytes).ok()?;
-                    Some(doc.text_runs(page))
+                    Some(doc.text_blocks(page))
                 })
                 .await;
             this.update(cx, |this, cx| {
@@ -105,18 +108,18 @@ impl Viewer {
         .detach();
     }
 
-    /// Opens run `run` of page `page` for typing.
+    /// Opens paragraph `block` of page `page` for typing.
     fn start_text_edit(
         &mut self,
         page: usize,
-        run: usize,
+        block: usize,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         if self
             .typing
             .as_ref()
-            .is_some_and(|t| t.page == page && t.run == run)
+            .is_some_and(|t| t.page == page && t.block == block)
         {
             return;
         }
@@ -125,16 +128,17 @@ impl Viewer {
             .runs
             .pages
             .get(&page)
-            .and_then(|runs| runs.get(run))
-            .map(|r| r.text.clone())
+            .and_then(|blocks| blocks.get(block))
+            .map(|b| b.text.clone())
         else {
             return;
         };
         let accent = gpui::rgba(self.theme.katna.accent).into();
         let input = cx.new(|cx| {
-            let mut input = TextInput::new("", cx);
+            let mut input = TextArea::new("", cx);
             input.set_accent(accent);
-            input.set_text(text, cx);
+            let end = text.len();
+            input.set_text(text, end, cx);
             input
         });
         let sub = cx.subscribe(&input, |this, _, event, cx| match event {
@@ -145,35 +149,45 @@ impl Viewer {
         window.focus(&input.focus_handle(cx), cx);
         self.typing = Some(Typing {
             page,
-            run,
+            block,
             input,
             _input: sub,
         });
         cx.notify();
     }
 
-    /// Ends typing in a line, writing the change into the file or not.
+    /// Ends typing in a paragraph, writing the change into the file or
+    /// not.
     pub(super) fn finish_text_edit(&mut self, keep: bool, cx: &mut Context<Self>) {
         let Some(typing) = self.typing.take() else {
             return;
         };
         cx.notify();
         let text = typing.input.read(cx).text().to_owned();
-        let unchanged = self
+        let Some(block) = self
             .runs
             .pages
             .get(&typing.page)
-            .and_then(|runs| runs.get(typing.run))
-            .is_none_or(|r| r.text == text);
-        if !keep || unchanged {
+            .and_then(|blocks| blocks.get(typing.block))
+            .filter(|b| b.text != text)
+            .cloned()
+        else {
             return;
+        };
+        if keep {
+            self.write_text_edit(typing.page, block.runs, text, cx);
         }
-        self.write_text_edit(typing.page, typing.run, text, cx);
     }
 
-    /// Writes the new text of run `run` on page `page` into the file on a
-    /// background thread, and shows the file written.
-    fn write_text_edit(&mut self, page: usize, run: usize, text: String, cx: &mut Context<Self>) {
+    /// Writes the new text of the paragraph of runs `runs` on page `page`
+    /// into the file on a background thread, and shows the file written.
+    fn write_text_edit(
+        &mut self,
+        page: usize,
+        runs: Vec<usize>,
+        text: String,
+        cx: &mut Context<Self>,
+    ) {
         let (Some(path), Content::Ready(_)) = (self.path.clone(), &self.content) else {
             return;
         };
@@ -191,7 +205,7 @@ impl Viewer {
                     };
                     let base = katna_pdf_cos::Document::load(bytes).map_err(|e| e.to_string())?;
                     let out = Arc::new(
-                        base.edit_text(page, &[(run, text)])
+                        base.edit_block(page, &runs, &text)
                             .map_err(|e| e.to_string())?,
                     );
                     let doc = crate::engine::engine()
@@ -222,8 +236,8 @@ impl Viewer {
         .detach();
     }
 
-    /// Page `page`'s lines to click while Edit text is on, and the one
-    /// being typed in.
+    /// Page `page`'s paragraphs to click while Edit text is on, and the
+    /// one being typed in.
     pub(super) fn text_edit_overlay(
         &mut self,
         page: usize,
@@ -236,7 +250,7 @@ impl Viewer {
         let Some(transform) = transform else {
             return Vec::new();
         };
-        let Some(runs) = self.runs.pages.get(&page).cloned() else {
+        let Some(blocks) = self.runs.pages.get(&page).cloned() else {
             self.read_runs(page, cx);
             return Vec::new();
         };
@@ -246,32 +260,36 @@ impl Viewer {
             let [r, g, b] = self.page_colors().ink();
             gpui::rgb(u32::from_be_bytes([0, r, g, b]))
         };
-        runs.iter()
+        blocks
+            .iter()
             .enumerate()
-            .map(|(i, run)| {
-                let b = katna_pdf_render::map_rect(transform, run.rect);
+            .map(|(i, block)| {
+                let b = katna_pdf_render::map_rect(transform, block.rect);
                 let area = div()
-                    .id(("text-run", i))
+                    .id(("text-run", page * 100_000 + i))
                     .absolute()
                     .left(desktop_px(b[0] * shown - 2.0))
                     .top(desktop_px(b[1] * shown - 1.0))
-                    .h(desktop_px((b[3] - b[1]) * shown + 2.0))
                     .rounded(px(radius::XS / 2.0));
+                let height = (b[3] - b[1]) * shown + 2.0;
                 let typing = self
                     .typing
                     .as_ref()
-                    .filter(|t| t.page == page && t.run == i);
+                    .filter(|t| t.page == page && t.block == i);
                 if let Some(typing) = typing {
-                    // Wide enough to type more than was there.
-                    let width = (b[2] - b[0]).max(run.size * 6.0) + run.size * 4.0;
+                    // As wide as the paragraph, with room for a few more
+                    // letters on a short one; as tall as its text wraps to.
+                    let size = block.size;
+                    let width = (b[2] - b[0]).max(size * 8.0) + size;
                     return area
                         .w(desktop_px(width * shown + 4.0))
-                        .flex()
-                        .items_center()
+                        .min_h(desktop_px(height))
+                        .px(desktop_px(1.0))
                         .bg(self.paper())
                         .border_1()
                         .border_color(gpui::rgb(self.theme.katna.accent >> 8))
-                        .text_size(desktop_px(run.size * shown))
+                        .text_size(desktop_px(size * shown))
+                        .line_height(desktop_px(size * 1.2 * shown))
                         .text_color(ink)
                         .cursor(gpui::CursorStyle::IBeam)
                         .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
@@ -279,6 +297,7 @@ impl Viewer {
                         .into_any_element();
                 }
                 area.w(desktop_px((b[2] - b[0]) * shown + 4.0))
+                    .h(desktop_px(height))
                     .border_1()
                     .border_color(gpui::rgba(accent | 0x40))
                     .hover(move |s| {
@@ -295,7 +314,8 @@ impl Viewer {
             .collect()
     }
 
-    /// A press on the pages while Edit text is on, outside the lines:
+    /// A press on the pages while Edit text is on, outside the
+    /// paragraphs:
     /// ends the typing. The pointer selects nothing meanwhile.
     pub(super) fn text_edit_press(&mut self, cx: &mut Context<Self>) -> bool {
         if !self.text_editing {
