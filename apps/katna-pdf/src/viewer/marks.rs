@@ -63,6 +63,7 @@ impl Viewer {
             return;
         }
         self.pick_adding(None, cx);
+        self.properties = None;
         let accent = gpui::rgba(self.theme.katna.accent).into();
         let field = |placeholder: String, cx: &mut Context<Self>| {
             cx.new(|cx| {
@@ -199,6 +200,7 @@ impl Viewer {
         let shown = pages.clone();
         self.change_document(
             shown,
+            "marks-failed",
             move |doc| doc.stamp(&pages, &stamp).map_err(|e| e.to_string()),
             cx,
         );

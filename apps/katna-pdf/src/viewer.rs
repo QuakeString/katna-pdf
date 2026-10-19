@@ -39,6 +39,7 @@ mod insert;
 mod marks;
 mod objects;
 mod organizer;
+mod properties;
 mod sign;
 mod textedit;
 
@@ -85,6 +86,7 @@ actions!(
         Organize,
         Sign,
         PastePicture,
+        Properties,
         Quit
     ]
 );
@@ -112,6 +114,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl-o", Open, None),
         KeyBinding::new("ctrl-p", Print, None),
         KeyBinding::new("ctrl-s", Save, None),
+        KeyBinding::new("ctrl-d", Properties, None),
         KeyBinding::new("ctrl-=", ZoomIn, None),
         KeyBinding::new("ctrl-+", ZoomIn, None),
         KeyBinding::new("ctrl--", ZoomOut, None),
@@ -316,6 +319,7 @@ pub struct Viewer {
     /// The picture or shape picked with Edit text on, and its drag.
     picked_object: Option<objects::Picked>,
     marking: Option<marks::Marking>,
+    properties: Option<properties::Properties>,
     moving: Option<objects::Moving>,
     tool: Option<Tool>,
     colour: usize,
@@ -431,6 +435,7 @@ impl Viewer {
             ink: 0,
             picked_object: None,
             marking: None,
+            properties: None,
             moving: None,
             tool: None,
             colour: 0,
@@ -2681,16 +2686,27 @@ impl Viewer {
                 cx.listener(|_, _, _, cx| cx.emit(ViewerEvent::ChooseFiles)),
             ))
             .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .overflow_hidden()
-                    .text_ellipsis()
-                    .whitespace_nowrap()
-                    .text_size(px(text::BODY))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(th.text)
-                    .child(title),
+                div().flex_1().min_w_0().flex().child(
+                    div()
+                        .id("file-name")
+                        .min_w_0()
+                        .px(px(space::S2))
+                        .py(px(space::S1))
+                        .rounded(px(radius::SM))
+                        .overflow_hidden()
+                        .text_ellipsis()
+                        .whitespace_nowrap()
+                        .text_size(px(text::BODY))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(th.text)
+                        .when(matches!(self.content, Content::Ready(_)), |d| {
+                            d.cursor_pointer()
+                                .hover(move |s| s.bg(th.hover))
+                                .tip(t("properties-tip", &[]), &th.katna)
+                                .on_click(cx.listener(|this, _, _, cx| this.toggle_properties(cx)))
+                        })
+                        .child(title),
+                ),
             )
             .when(self.dirty(), |bar| {
                 bar.child(
@@ -3003,6 +3019,11 @@ impl Render for Viewer {
         {
             window.focus(&input.focus_handle(cx), cx);
         }
+        // A card's field gone with its card leaves nothing with the keys;
+        // the pages take them back.
+        if window.focused(cx).is_none() {
+            window.focus(&self.focus, cx);
+        }
         let th = self.theme;
         // The pages' width: the window less its padding and the pane.
         let pane_width = if self.pane_shown() {
@@ -3033,6 +3054,7 @@ impl Render for Viewer {
         let signatures_line = self.signatures_line(cx);
         let signing_card = self.signing_card(cx);
         let marks_card = self.marks_card(cx);
+        let properties_card = self.properties_card(cx);
         let find_bar = self.find_bar(cx);
         let notice = self.notice.clone().map(|notice| {
             div()
@@ -3158,6 +3180,7 @@ impl Render for Viewer {
             .on_action(cx.listener(|this, _: &Annotate, _, cx| this.toggle_tools(cx)))
             .on_action(cx.listener(|this, _: &Organize, _, cx| this.toggle_organizer(cx)))
             .on_action(cx.listener(|this, _: &Sign, _, cx| this.toggle_signing(cx)))
+            .on_action(cx.listener(|this, _: &Properties, _, cx| this.toggle_properties(cx)))
             .on_action(cx.listener(|this, _: &PastePicture, _, cx| {
                 this.paste_picture(cx);
             }))
@@ -3220,7 +3243,8 @@ impl Render for Viewer {
                             .flex_col()
                             .child(pages)
                             .children(signing_card)
-                            .children(marks_card),
+                            .children(marks_card)
+                            .children(properties_card),
                     ),
             )
     }

@@ -241,13 +241,15 @@ impl Viewer {
         change: impl FnOnce(&katna_pdf_cos::Document) -> Result<Vec<u8>, String> + Send + 'static,
         cx: &mut Context<Self>,
     ) {
-        self.change_document(vec![page], change, cx);
+        self.change_document(vec![page], "text-edit-failed", change, cx);
     }
 
-    /// Changes the file with `change`, then shows it, `pages` drawn again.
+    /// Changes the file with `change`, then shows it, `pages` drawn again;
+    /// message `failed` says why when it could not.
     pub(super) fn change_document(
         &mut self,
         pages: Vec<usize>,
+        failed: &'static str,
         change: impl FnOnce(&katna_pdf_cos::Document) -> Result<Vec<u8>, String> + Send + 'static,
         cx: &mut Context<Self>,
     ) {
@@ -286,7 +288,7 @@ impl Viewer {
                         this.show_annotated(bytes, doc, cos, &pages, None);
                     }
                     Err(error) => {
-                        this.notice = Some(t("text-edit-failed", &[("error", &error)]));
+                        this.notice = Some(t(failed, &[("error", &error)]));
                     }
                 }
                 cx.notify();

@@ -743,3 +743,35 @@ fn footers_watermarks_and_bates_numbers_go_on_pages() {
     ]);
     assert_ne!(code, 0);
 }
+
+#[test]
+fn properties_are_changed() {
+    let d = dir("meta");
+    let file = d.join("note.pdf");
+    std::fs::write(
+        &file,
+        katna_pdf_cos::text_pdf("Note", &["  Hello".to_string()]),
+    )
+    .unwrap();
+    let out = d.join("out.pdf");
+    let (code, text) = run(&[
+        "meta",
+        s(&file),
+        "-o",
+        s(&out),
+        "--title",
+        "Minutes – Monday",
+        "--author",
+        "Asha",
+    ]);
+    assert_eq!(code, 0, "{text}");
+    let (_, text) = run(&["info", s(&out)]);
+    assert!(text.contains("Minutes – Monday"), "{text}");
+    assert!(text.contains("Asha"), "{text}");
+    let again = d.join("again.pdf");
+    let (code, text) = run(&["meta", s(&out), "-o", s(&again), "--author", ""]);
+    assert_eq!(code, 0, "{text}");
+    let (_, text) = run(&["info", s(&again)]);
+    assert!(!text.contains("Asha"), "{text}");
+    assert!(text.contains("Minutes – Monday"), "{text}");
+}
