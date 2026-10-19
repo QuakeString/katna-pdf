@@ -104,6 +104,12 @@ usage: katna-pdf-cli COMMAND [--json] ...
                                   flags set, renamed, moved, shown on more pages too,
                                   taken out, and the order Tab goes through a page's
                                   fields set
+  form-data FILE [--csv]          each field's value by its full name, as one JSON
+                                  object (or CSV: names, then values)
+  fill FILE -o OUT [--data DATA.json|DATA.csv] [--set NAME=VALUE]...
+                                  the form filled in from form-data's JSON or CSV,
+                                  or values given one by one (a check box: yes or
+                                  no; a radio group: the button's choice)
   add-field FILE -o OUT --rect L,B,R,T [--page N] [--name NAME]
                                   an empty signature field, for someone to sign later
   ltv FILE -o OUT [--trust PATH] [--tsa URL]
@@ -155,6 +161,8 @@ fn main() -> ExitCode {
         "verify" => verify(rest, json),
         "add-field" => add_field(rest, json),
         "form" => form(rest, json),
+        "form-data" => form_data(rest),
+        "fill" => fill(rest, json),
         "insert" => insert(rest, json),
         "stamp" => stamp(rest, json),
         "meta" => meta(rest, json),
@@ -298,6 +306,8 @@ impl<'a> Args<'a> {
                     | "--copy"
                     | "--remove"
                     | "--order"
+                    | "--data"
+                    | "--set"
             ) {
                 let Some(value) = it.next() else {
                     return Err(Failure::Usage(format!("{a} needs a value")));
@@ -314,6 +324,7 @@ impl<'a> Args<'a> {
                 "--under",
                 "--scrub",
                 "--no-fill",
+                "--csv",
             ]
             .contains(&a.as_str())
             {
@@ -1721,6 +1732,51 @@ fn form(args: &[String], json: bool) -> Done {
         .map_err(|e| failed(format!("{file}: {e}")))?;
     write(&out, &bytes)?;
     Ok(wrote(&[(out, count)], json))
+}
+
+/// Prints the form's data as JSON, or CSV.
+fn form_data(args: &[String]) -> Done {
+    let args = Args::parse(args)?;
+    let [file] = args.words()?;
+    let data = open(file)?.form_data();
+    Ok(if args.flag("--csv") {
+        katna_pdf_cos::data_to_csv(&data)
+    } else {
+        katna_pdf_cos::data_to_json(&data)
+    })
+}
+
+/// Fills the form in from a JSON or CSV file and values given.
+fn fill(args: &[String], json: bool) -> Done {
+    let args = Args::parse(args)?;
+    let [file] = args.words()?;
+    let out = args.output()?;
+    let doc = open(file)?;
+    let mut data = Vec::new();
+    if let Some(path) = args.option("--data") {
+        let text = std::fs::read_to_string(path).map_err(|e| failed(format!("{path}: {e}")))?;
+        let csv = args.flag("--csv") || path.to_ascii_lowercase().ends_with(".csv");
+        let read = if csv {
+            katna_pdf_cos::data_from_csv(&text)
+        } else {
+            katna_pdf_cos::data_from_json(&text)
+        };
+        data = read.map_err(|e| failed(format!("{path}: {e}")))?;
+    }
+    for set in args.all("--set") {
+        let (name, value) = set
+            .split_once('=')
+            .ok_or_else(|| Failure::Usage(format!("--set {set}: NAME=VALUE")))?;
+        data.push((name.to_owned(), value.to_owned()));
+    }
+    if data.is_empty() {
+        return Err(Failure::Usage("give values with --data or --set".into()));
+    }
+    let bytes = doc
+        .fill_data(&data)
+        .map_err(|e| failed(format!("{file}: {e}")))?;
+    write(&out, &bytes)?;
+    Ok(wrote(&[(out, doc.pages().len())], json))
 }
 
 /// Adds an empty signature field, for someone to sign later.

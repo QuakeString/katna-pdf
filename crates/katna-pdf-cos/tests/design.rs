@@ -331,3 +331,51 @@ fn fields_are_copied_to_other_pages_and_ordered() {
     .to_vec();
     assert_eq!(annots, ids);
 }
+
+#[test]
+fn form_data_goes_out_and_comes_back() {
+    let doc = designed(
+        &blank(1),
+        &FormDesign {
+            add: every_kind(),
+            ..FormDesign::default()
+        },
+    );
+    let before = doc.form_data();
+    let names: Vec<&str> = before.iter().map(|(n, _)| n.as_str()).collect();
+    assert_eq!(names, ["Name", "Agree", "Answer", "City", "Cities"]);
+    let json = r#"{"Name": "Asha Rao\nPune", "Agree": true, "Answer": "No", "Cities": "Kolkata"}"#;
+    let data = katna_pdf_cos::data_from_json(json).unwrap();
+    let filled = Document::load(doc.fill_data(&data).unwrap()).unwrap();
+    let after = filled.form_data();
+    let value = |name: &str| after.iter().find(|(n, _)| n == name).unwrap().1.clone();
+    assert_eq!(value("Name"), "Asha Rao\nPune");
+    assert_eq!(value("Agree"), "Yes");
+    assert_eq!(value("Answer"), "No");
+    assert_eq!(value("City"), "Pune");
+    assert_eq!(value("Cities"), "Kolkata");
+    // Through CSV and back, nothing changes.
+    let csv = katna_pdf_cos::data_to_csv(&after);
+    let again = Document::load(
+        filled
+            .fill_data(&katna_pdf_cos::data_from_csv(&csv).unwrap())
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(again.form_data(), after);
+    // Off again; and what cannot be is refused.
+    let off = Document::load(
+        filled
+            .fill_data(&[
+                ("Agree".into(), "no".into()),
+                ("Answer".into(), "Off".into()),
+            ])
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(off.form_data()[1].1, "Off");
+    assert_eq!(off.form_data()[2].1, "Off");
+    assert!(doc.fill_data(&[("Answer".into(), "Maybe".into())]).is_err());
+    assert!(doc.fill_data(&[("Cities".into(), "Agra".into())]).is_err());
+    assert!(doc.fill_data(&[("Nobody".into(), "x".into())]).is_err());
+}

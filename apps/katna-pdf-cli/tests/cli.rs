@@ -912,3 +912,39 @@ fn forms_are_designed() {
     let (code, _) = run(&["form", s(&out), "-o", s(&again), "--remove", "Nobody"]);
     assert_eq!(code, 1);
 }
+
+#[test]
+fn form_data_is_read_and_filled() {
+    let d = dir("form-data");
+    let file = d.join("blank.pdf");
+    std::fs::write(&file, katna_pdf_cos::text_pdf("Form", &[])).unwrap();
+    let form = d.join("form.pdf");
+    let (code, text) = run(&[
+        "form",
+        s(&file),
+        "-o",
+        s(&form),
+        "--add",
+        "text:1:100,700,300,720:Name",
+        "--add",
+        "check:1:100,660,114,674:Agree",
+    ]);
+    assert_eq!(code, 0, "{text}");
+    let data = d.join("data.csv");
+    std::fs::write(&data, "Name,Agree\r\n\"Rao, Asha\",yes\r\n").unwrap();
+    let out = d.join("out.pdf");
+    let (code, text) = run(&["fill", s(&form), "-o", s(&out), "--data", s(&data)]);
+    assert_eq!(code, 0, "{text}");
+    let (code, text) = run(&["form-data", s(&out)]);
+    assert_eq!(code, 0, "{text}");
+    assert_eq!(
+        text.trim(),
+        "{\n  \"Name\": \"Rao, Asha\",\n  \"Agree\": \"Yes\"\n}"
+    );
+    let (code, text) = run(&["fill", s(&out), "-o", s(&out), "--set", "Agree=no"]);
+    assert_eq!(code, 0, "{text}");
+    let (_, text) = run(&["form-data", s(&out), "--csv"]);
+    assert_eq!(text.trim(), "Name,Agree\r\n\"Rao, Asha\",Off");
+    let (code, _) = run(&["fill", s(&out), "-o", s(&out), "--set", "Agree=maybe"]);
+    assert_eq!(code, 1);
+}
