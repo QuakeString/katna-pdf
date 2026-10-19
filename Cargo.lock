@@ -3635,6 +3635,7 @@ dependencies = [
  "jiff",
  "katna-core",
  "katna-pdf-cos",
+ "katna-pdf-library",
  "katna-pdf-render",
  "katna-pdf-sign",
  "katna-platform",
