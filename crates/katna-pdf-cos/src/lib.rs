@@ -14,6 +14,7 @@ mod calc;
 mod content;
 mod crypt;
 mod design;
+mod detect;
 mod document;
 mod dss;
 mod edit;

@@ -574,7 +574,7 @@ impl Viewer {
     fn design(&mut self, pages: Vec<usize>, design: FormDesign, cx: &mut Context<Self>) {
         self.change_document(
             pages,
-            "form-failed",
+            "form-design-failed",
             move |doc| doc.design_form(&design).map_err(|e| e.to_string()),
             cx,
         );
@@ -736,6 +736,39 @@ impl Viewer {
             ..FormDesign::default()
         };
         self.design(Self::pages_of(&field), design, cx);
+    }
+
+    /// Adds the fields every page of a flat form seems to ask for:
+    /// blanks, boxes and squares to tick, named from the words beside
+    /// them.
+    fn find_fields(&mut self, cx: &mut Context<Self>) {
+        let count = match &self.content {
+            Content::Ready(opened) => opened.doc.page_count(),
+            _ => return,
+        };
+        let none = t("form-none-found", &[]);
+        self.change_document(
+            (0..count).collect(),
+            "form-design-failed",
+            move |doc| {
+                let mut taken: Vec<String> = doc.form().into_iter().map(|f| f.name).collect();
+                let mut add = Vec::new();
+                for page in 0..doc.pages().len() {
+                    let found = doc.detect_fields(page, &taken);
+                    taken.extend(found.iter().map(|s| s.name.clone()));
+                    add.extend(found);
+                }
+                if add.is_empty() {
+                    return Err(none);
+                }
+                doc.design_form(&FormDesign {
+                    add,
+                    ..FormDesign::default()
+                })
+                .map_err(|e| e.to_string())
+            },
+            cx,
+        );
     }
 
     /// Moves widget `widget` one place earlier in page `page`'s Tab
@@ -952,7 +985,14 @@ impl Viewer {
             } else {
                 "form-hint"
             }))
-            .child(kinds);
+            .child(kinds)
+            .child(
+                div().flex().child(
+                    widgets::outlined_button("form-find", t("form-find", &[]), &th.katna)
+                        .tip(t("form-find-tip", &[]), &th.katna)
+                        .on_click(cx.listener(|this, _, _, cx| this.find_fields(cx))),
+                ),
+            );
         if let Some(field) = self.chosen_field() {
             card = card
                 .child(div().h(px(1.0)).my(px(space::S1)).bg(th.line))
@@ -1152,7 +1192,7 @@ impl Viewer {
             this.update(cx, |this, cx| {
                 this.notice = Some(match written {
                     Ok(target) => t("form-exported", &[("name", &super::file_name(&target))]),
-                    Err(error) => t("form-failed", &[("error", &error)]),
+                    Err(error) => t("form-design-failed", &[("error", &error)]),
                 });
                 cx.notify();
             })
@@ -1200,7 +1240,7 @@ impl Viewer {
             .unwrap_or_default();
         self.change_document(
             pages,
-            "form-failed",
+            "form-design-failed",
             move |doc| {
                 let text = std::fs::read_to_string(&file).map_err(|e| e.to_string())?;
                 let csv = file

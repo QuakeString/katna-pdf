@@ -1002,3 +1002,24 @@ fn form_totals_and_formats_are_set() {
     let (code, _) = run(&["form", s(&form), "-o", s(&form), "--total", "Total=avg"]);
     assert_eq!(code, 2);
 }
+
+#[test]
+fn flat_form_fields_are_found() {
+    let d = dir("form-detect");
+    let file = d.join("flat.pdf");
+    let lines = [
+        "Name: ____________________".to_string(),
+        "City: ______________".into(),
+    ];
+    std::fs::write(&file, katna_pdf_cos::text_pdf("Form", &lines)).unwrap();
+    let out = d.join("out.pdf");
+    let (code, text) = run(&["form", s(&file), "-o", s(&out), "--detect", "all"]);
+    assert_eq!(code, 0, "{text}");
+    let (_, text) = run(&["form-data", s(&out), "--csv"]);
+    assert_eq!(text.trim(), "Name,City\r\n,");
+    // Found again, nothing is new.
+    let (code, _) = run(&["form", s(&out), "-o", s(&out), "--detect", "1"]);
+    assert_eq!(code, 0);
+    let (_, text) = run(&["form-data", s(&out), "--csv"]);
+    assert_eq!(text.trim(), "Name,City\r\n,");
+}
