@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use gpui::{Entity, Subscription};
-use katna_pdf_cos::{Calculation, Document, Field, FieldKind, FieldValue, Ref, Widget};
+use katna_pdf_cos::{Calculation, Document, Field, FieldKind, FieldValue, Format, Ref, Widget};
 use katna_ui::text_input::TextInput;
 
 pub struct Form {
@@ -22,6 +22,8 @@ pub struct Form {
     on_page: HashMap<usize, Vec<(usize, usize)>>,
     /// Fields worked out from others (totals), with how.
     calculated: Vec<(usize, Calculation)>,
+    /// Fields that hold a date, with how it is written (`dd/mm/yyyy`).
+    dates: HashMap<usize, String>,
     /// Values changed since the file was opened or saved.
     pub changes: Vec<(Ref, FieldValue)>,
     /// The file with the changes made, once written.
@@ -38,6 +40,8 @@ pub struct Editing {
     pub widget: usize,
     pub input: Entity<TextInput>,
     pub _input: Subscription,
+    /// For a date field, the month its calendar shows (year, month).
+    pub month: Option<(i16, i8)>,
 }
 
 impl Form {
@@ -58,11 +62,22 @@ impl Form {
             .enumerate()
             .filter_map(|(f, field)| Some((f, scripts.get(&field.id)?.calculate.clone()?)))
             .collect();
+        let dates = fields
+            .iter()
+            .enumerate()
+            .filter_map(
+                |(f, field)| match scripts.get(&field.id)?.format.as_ref()? {
+                    Format::Date(pattern) => Some((f, pattern.clone())),
+                    _ => None,
+                },
+            )
+            .collect();
         (!on_page.is_empty()).then_some(Self {
             source,
             fields,
             on_page,
             calculated,
+            dates,
             changes: Vec::new(),
             filled: None,
             editing: None,
@@ -77,6 +92,11 @@ impl Form {
             .into_iter()
             .flatten()
             .map(|&(f, w)| (f, w, &self.fields[f].widgets[w]))
+    }
+
+    /// How field `field` writes its date, if it holds one.
+    pub fn date_pattern(&self, field: usize) -> Option<&str> {
+        self.dates.get(&field).map(String::as_str)
     }
 
     /// Whether there are changes not saved.

@@ -35,6 +35,7 @@ use katna_ui::{ScrollBar, px, unpx};
 
 mod annots;
 mod crop;
+mod datepick;
 mod design;
 mod insert;
 mod marks;
@@ -1741,11 +1742,15 @@ impl Viewer {
             InputEvent::Changed => {}
         });
         window.focus(&input.focus_handle(cx), cx);
+        let month = form
+            .date_pattern(field)
+            .map(|pattern| datepick::month_of(&form.fields[field].value, pattern));
         form.editing = Some(Editing {
             field,
             widget,
             input,
             _input: sub,
+            month,
         });
         cx.notify();
     }
@@ -2471,6 +2476,10 @@ impl Viewer {
                                     cx.stop_propagation()
                                 })
                                 .child(editing.input.clone())
+                                .children(editing.month.and_then(|month| {
+                                    let pattern = form.date_pattern(f)?;
+                                    Some(self.date_picker(pattern, month, cx))
+                                }))
                                 .into_any_element();
                         }
                         area.bg(gpui::rgba(tint | 0x14))

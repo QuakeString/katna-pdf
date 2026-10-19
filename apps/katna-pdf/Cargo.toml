@@ -13,6 +13,7 @@ katna-pdf-render.workspace = true
 katna-pdf-cos.workspace = true
 katna-pdf-sign.workspace = true
 katna-core.workspace = true
+jiff = { version = "0.2.37", default-features = false, features = ["std", "tz-system", "tzdb-zoneinfo", "tzdb-bundle-always"] }
 katna-ui.workspace = true
 gpui.workspace = true
 gpui-platform.workspace = true
