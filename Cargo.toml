@@ -27,6 +27,8 @@ katna-ui = { git = "https://github.com/QuakeString/katna", rev = "a201ec5c904a7d
 katna-platform = { git = "https://github.com/QuakeString/katna", rev = "a201ec5c904a7da7f174f3da066a7dc9a9b78387" }
 # The Katna daemon's D-Bus API: cloud drives of Katna Mail's accounts.
 katna-dbus = { git = "https://github.com/QuakeString/katna", rev = "a201ec5c904a7da7f174f3da066a7dc9a9b78387" }
+# Katna Mail's store, read-only: the PDFs attached to mail.
+katna-store = { git = "https://github.com/QuakeString/katna", rev = "a201ec5c904a7da7f174f3da066a7dc9a9b78387" }
 
 # GPUI as Katna builds it: the same versions, patched from Katna's vendor/.
 gpui = { package = "gpui-pre", version = "=0.3.6" }
@@ -85,6 +87,7 @@ zune-core = "0.5"
 # with FTS5, at the version Katna uses.
 rusqlite = { version = "0.40", features = ["bundled"] }
 # Watched folders read again when their PDFs change (the library).
+mail-parser = "0.11.9"
 notify = { version = "8", default-features = false, features = ["macos_fsevent"] }
 zune-jpeg = "0.5"
 hayro-ccitt = { version = "0.4", default-features = false }

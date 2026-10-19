@@ -90,6 +90,16 @@ pub fn thumbnail(account: i64, link: &str, width: u32) -> Result<Vec<u8>, String
     block_on(pim.cloud_thumbnail(account, link, width)).map_err(|e| e.to_string())
 }
 
+/// Asks Katna to download mail `message` whole; returns once it is
+/// stored.
+pub fn fetch_body(message: i64) -> Result<(), String> {
+    let bus = bus()?;
+    if !block_on(katna_dbus::daemon_running(&bus)) {
+        return Err(crate::text::t("library-mail-no-daemon", &[]));
+    }
+    block_on(pim(&bus)?.fetch_body(message)).map_err(|e| e.to_string())
+}
+
 /// Whether the library lists `entry`: folders, PDFs, and the drive's own
 /// documents, which open as PDFs.
 pub fn shown(entry: &CloudEntry) -> bool {
