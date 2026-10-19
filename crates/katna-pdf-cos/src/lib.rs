@@ -24,8 +24,10 @@ mod objects;
 mod outline;
 mod pages;
 mod parse;
+pub mod ranges;
 mod report;
 mod sign;
+mod stamp;
 mod write;
 mod xfdf;
 
@@ -50,5 +52,6 @@ pub use sign::{
     CONTENTS_LEN, Coverage, Picture, Placement, Prepared, SignError, SignRequest, Signature,
     SigningInfo,
 };
+pub use stamp::{Bates, Stamp, StampPlace};
 pub use write::{Update, UpdateError, write_object};
 pub use xfdf::{XfdfAnnotation, XfdfError, from_xfdf, to_xfdf};

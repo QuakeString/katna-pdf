@@ -36,6 +36,7 @@ use katna_ui::{ScrollBar, px, unpx};
 mod annots;
 mod crop;
 mod insert;
+mod marks;
 mod objects;
 mod organizer;
 mod sign;
@@ -314,6 +315,7 @@ pub struct Viewer {
     ink: usize,
     /// The picture or shape picked with Edit text on, and its drag.
     picked_object: Option<objects::Picked>,
+    marking: Option<marks::Marking>,
     moving: Option<objects::Moving>,
     tool: Option<Tool>,
     colour: usize,
@@ -428,6 +430,7 @@ impl Viewer {
             placing: None,
             ink: 0,
             picked_object: None,
+            marking: None,
             moving: None,
             tool: None,
             colour: 0,
@@ -3029,6 +3032,7 @@ impl Render for Viewer {
         let tools = self.tools_row(cx).or_else(|| self.edit_row(cx));
         let signatures_line = self.signatures_line(cx);
         let signing_card = self.signing_card(cx);
+        let marks_card = self.marks_card(cx);
         let find_bar = self.find_bar(cx);
         let notice = self.notice.clone().map(|notice| {
             div()
@@ -3215,7 +3219,8 @@ impl Render for Viewer {
                             .flex()
                             .flex_col()
                             .child(pages)
-                            .children(signing_card),
+                            .children(signing_card)
+                            .children(marks_card),
                     ),
             )
     }

@@ -30,7 +30,9 @@ cargo run --release -p katna-pdf-bench -- file.pdf
   `fonts/`'s encodings and widths; letters a font lacks come from a
   standard font), and putting new text, pictures and shapes into a
   page's own content (`insert.rs`), and moving, resizing and deleting
-  the pictures and shapes already there (`objects.rs`). No GPUI, no C.
+  the pictures and shapes already there (`objects.rs`), headers,
+  footers, watermarks and Bates numbers on many pages (`stamp.rs`), and
+  page lists as people write them (`ranges.rs`). No GPUI, no C.
 - `crates/katna-pdf-sign` — signing and checking signatures, pure
   Rust: certificate files (`p12.rs`), CMS / PAdES B-B (`cms.rs`),
   timestamps for B-T and document timestamps for B-LTA (`tsa.rs`, RFC
@@ -48,7 +50,7 @@ cargo run --release -p katna-pdf-bench -- file.pdf
   data (PAdES B-LT DSS) its `dss.rs`.
 - `apps/katna-pdf` — the app window.
 - `apps/katna-pdf-cli` — the command line: info, merge, split, pages,
-  rotate, crop, sign (and certify), add-field, ltv, tokens, token-check, verify (with `--report` as a PDF), text and edit-text (`--blocks` / `--block` for paragraphs), insert, objects and object, annotations and XFDF; `--json` for scripts and agents.
+  rotate, crop, sign (and certify), add-field, ltv, tokens, token-check, verify (with `--report` as a PDF), text and edit-text (`--blocks` / `--block` for paragraphs), insert, stamp, objects and object, annotations and XFDF; `--json` for scripts and agents.
 - `tools/katna-pdf-cos-check` — runs katna-pdf-cos over a folder of PDFs
   (loads, page counts against hayro, update round trips).
 - `vendor/hayro`, `vendor/hayro-interpret` — hayro with our patches

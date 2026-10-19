@@ -241,6 +241,16 @@ impl Viewer {
         change: impl FnOnce(&katna_pdf_cos::Document) -> Result<Vec<u8>, String> + Send + 'static,
         cx: &mut Context<Self>,
     ) {
+        self.change_document(vec![page], change, cx);
+    }
+
+    /// Changes the file with `change`, then shows it, `pages` drawn again.
+    pub(super) fn change_document(
+        &mut self,
+        pages: Vec<usize>,
+        change: impl FnOnce(&katna_pdf_cos::Document) -> Result<Vec<u8>, String> + Send + 'static,
+        cx: &mut Context<Self>,
+    ) {
         let (Some(path), Content::Ready(_)) = (self.path.clone(), &self.content) else {
             return;
         };
@@ -273,7 +283,7 @@ impl Viewer {
                 match written {
                     Ok((bytes, doc, cos)) => {
                         this.forget_runs();
-                        this.show_annotated(bytes, doc, cos, &[page], None);
+                        this.show_annotated(bytes, doc, cos, &pages, None);
                     }
                     Err(error) => {
                         this.notice = Some(t("text-edit-failed", &[("error", &error)]));

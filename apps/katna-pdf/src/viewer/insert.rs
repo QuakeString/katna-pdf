@@ -80,7 +80,7 @@ const PICTURE_WIDTH: f32 = 200.0;
 /// A drag shorter than this, in points, is a click.
 const CLICK: f32 = 3.0;
 
-fn colour([r, g, b]: [f32; 3]) -> gpui::Rgba {
+pub(super) fn colour([r, g, b]: [f32; 3]) -> gpui::Rgba {
     gpui::rgb(u32::from_be_bytes([
         0,
         (r * 255.0) as u8,
@@ -139,6 +139,15 @@ impl Viewer {
                 .on_click(cx.listener(move |this, _, _, cx| this.pick_adding(Some(adding), cx))),
             );
         }
+        row = row.child(
+            button(
+                Adding::ALL.len() + 1,
+                "water-drop",
+                "page-marks",
+                self.marking.is_some(),
+            )
+            .on_click(cx.listener(|this, _, _, cx| this.toggle_marking(cx))),
+        );
         row = row.child(separator(th));
         for (i, ink) in INKS.into_iter().enumerate() {
             let on = self.ink == i;

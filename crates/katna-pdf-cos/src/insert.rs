@@ -23,6 +23,7 @@ use crate::write::Update;
 /// The start of the names given to fonts and pictures put in.
 const FONT_KEY: &str = "KatnaT";
 const IMAGE_KEY: &str = "KatnaI";
+const STATE_KEY: &str = "KatnaG";
 /// How far the curve handles of a quarter circle reach, as a share of
 /// its radius.
 const KAPPA: f32 = 0.552_284_8;
@@ -78,23 +79,10 @@ pub enum Image {
 impl Document {
     /// The file with `items` drawn on page `page`, over what it draws.
     pub fn insert(&self, page: usize, items: &[Insert]) -> Result<Vec<u8>, EditError> {
-        let page_ref = *self.pages().get(page).ok_or(EditError::NoPage)?;
-        let rotate = self.page_info(page).map_or(0, |i| i.rotate);
         let mut update = self.update()?;
-        let full = page_dict(self, page_ref);
-        let mut resources = match full.get("Resources").map(|r| self.resolve(r)) {
-            Some(Object::Dict(d)) => d,
-            _ => Dict::new(),
-        };
-        let mut fonts = match self.resolve_key(&resources, "Font") {
-            Object::Dict(d) => d,
-            _ => Dict::new(),
-        };
-        let mut xobjects = match self.resolve_key(&resources, "XObject") {
-            Object::Dict(d) => d,
-            _ => Dict::new(),
-        };
-        let mut out = b"Q\n".to_vec();
+        let mut add = PageAdd::new(self, page)?;
+        let rotate = add.rotate;
+        let mut out = Vec::new();
         for item in items {
             match item {
                 Insert::Text {
@@ -105,7 +93,7 @@ impl Document {
                     colour,
                 } => {
                     let (name, _) = stand_in(font);
-                    let key = font_key(self, &mut update, &mut fonts, name);
+                    let key = add.font(&mut update, name);
                     let [a, b, c, d] = upright(rotate);
                     let [r, g, bl] = colour;
                     let _ = writeln!(
@@ -149,8 +137,7 @@ impl Document {
                         } => jpeg_stream(data, *width, *height, *components),
                     };
                     let r = update.add(Object::Stream(stream));
-                    let key = free_key(&xobjects, IMAGE_KEY);
-                    xobjects.0.push((Name::new(&key), Object::Ref(r)));
+                    let key = add.xobject(r);
                     let m = placed(rotate, *rect);
                     let _ = writeln!(
                         out,
@@ -213,29 +200,118 @@ impl Document {
                 }
             }
         }
-        // The page's drawing so far, wrapped in q … Q, then the new.
-        let before = update.add(Object::Stream(crate::dss::compressed(b"q\n")));
-        let after = update.add(Object::Stream(crate::dss::compressed(&out)));
-        let mut contents = vec![Object::Ref(before)];
-        match full.get("Contents") {
-            Some(Object::Ref(r)) => match self.get(*r) {
-                Some(Object::Array(a)) => contents.extend(a),
-                _ => contents.push(Object::Ref(*r)),
+        add.finish(&mut update, &out, false);
+        Ok(update.finish())
+    }
+}
+
+/// A page being drawn on: its dictionary and the resources new drawing
+/// adds to, written back by [`PageAdd::finish`].
+pub(crate) struct PageAdd<'a> {
+    doc: &'a Document,
+    page_ref: Ref,
+    contents: Option<Object>,
+    resources: Dict,
+    fonts: Dict,
+    xobjects: Dict,
+    states: Dict,
+    pub(crate) rotate: i64,
+}
+
+impl<'a> PageAdd<'a> {
+    pub(crate) fn new(doc: &'a Document, page: usize) -> Result<Self, EditError> {
+        let page_ref = *doc.pages().get(page).ok_or(EditError::NoPage)?;
+        let rotate = doc.page_info(page).map_or(0, |i| i.rotate);
+        let full = page_dict(doc, page_ref);
+        let resources = match full.get("Resources").map(|r| doc.resolve(r)) {
+            Some(Object::Dict(d)) => d,
+            _ => Dict::new(),
+        };
+        let part = |key| match doc.resolve_key(&resources, key) {
+            Object::Dict(d) => d,
+            _ => Dict::new(),
+        };
+        Ok(Self {
+            doc,
+            page_ref,
+            contents: full.get("Contents").cloned(),
+            fonts: part("Font"),
+            xobjects: part("XObject"),
+            states: part("ExtGState"),
+            resources,
+            rotate,
+        })
+    }
+
+    /// The key of standard font `name` in the page's fonts, brought in if
+    /// not there yet.
+    pub(crate) fn font(&mut self, update: &mut Update, name: &str) -> String {
+        font_key(self.doc, update, &mut self.fonts, name)
+    }
+
+    pub(crate) fn xobject(&mut self, r: Ref) -> String {
+        let key = free_key(&self.xobjects, IMAGE_KEY);
+        self.xobjects.0.push((Name::new(&key), Object::Ref(r)));
+        key
+    }
+
+    /// The key of a graphics state drawing at `opacity` (0 to 1).
+    pub(crate) fn opacity(&mut self, update: &mut Update, opacity: f32) -> String {
+        let state = Dict(vec![
+            (Name::new("Type"), Object::name("ExtGState")),
+            (Name::new("CA"), Object::Real(f64::from(opacity))),
+            (Name::new("ca"), Object::Real(f64::from(opacity))),
+        ]);
+        let r = update.add(Object::Dict(state));
+        let key = free_key(&self.states, STATE_KEY);
+        self.states.0.push((Name::new(&key), Object::Ref(r)));
+        key
+    }
+
+    /// Writes the page back with `drawing` after what it draws, or under
+    /// it with `under`; either way what is drawn first is wrapped in
+    /// `q` … `Q` so nothing it leaves set reaches what comes after.
+    pub(crate) fn finish(mut self, update: &mut Update, drawing: &[u8], under: bool) {
+        let mut old = Vec::new();
+        match &self.contents {
+            Some(Object::Ref(r)) => match self.doc.get(*r) {
+                Some(Object::Array(a)) => old.extend(a),
+                _ => old.push(Object::Ref(*r)),
             },
-            Some(Object::Array(a)) => contents.extend(a.iter().cloned()),
+            Some(Object::Array(a)) => old.extend(a.iter().cloned()),
             _ => {}
         }
-        contents.push(Object::Ref(after));
+        let contents = if under {
+            let mut new = b"q\n".to_vec();
+            new.extend_from_slice(drawing);
+            new.extend_from_slice(b"Q\n");
+            let new = update.add(Object::Stream(crate::dss::compressed(&new)));
+            let mut all = vec![Object::Ref(new)];
+            all.extend(old);
+            all
+        } else {
+            let before = update.add(Object::Stream(crate::dss::compressed(b"q\n")));
+            let mut new = b"Q\n".to_vec();
+            new.extend_from_slice(drawing);
+            let after = update.add(Object::Stream(crate::dss::compressed(&new)));
+            let mut all = vec![Object::Ref(before)];
+            all.extend(old);
+            all.push(Object::Ref(after));
+            all
+        };
         let mut dict = self
-            .get(page_ref)
+            .doc
+            .get(self.page_ref)
             .and_then(|o| o.as_dict().cloned())
             .unwrap_or_default();
         dict.set("Contents", Object::Array(contents));
-        resources.set("Font", fonts);
-        resources.set("XObject", xobjects);
-        dict.set("Resources", resources);
-        update.replace(page_ref, Object::Dict(dict));
-        Ok(update.finish())
+        self.resources.set("Font", self.fonts);
+        self.resources.set("XObject", self.xobjects);
+        if !self.states.0.is_empty() {
+            self.resources.set("ExtGState", self.states);
+        }
+        dict.set("Resources", self.resources);
+        update.replace(self.page_ref, Object::Dict(dict));
     }
 }
 
@@ -344,7 +420,7 @@ fn jpeg_stream(data: &[u8], width: u32, height: u32, components: u8) -> crate::o
 }
 
 /// A number as content streams write it: no more digits than needed.
-fn num(v: f32) -> String {
+pub(crate) fn num(v: f32) -> String {
     let rounded = (v * 1000.0).round() / 1000.0;
     if rounded.fract() == 0.0 {
         format!("{}", rounded as i64)
