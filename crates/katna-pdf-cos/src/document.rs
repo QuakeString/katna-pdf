@@ -737,18 +737,32 @@ fn parse_table(data: &[u8], pos: usize) -> Option<(Dict, Vec<(u32, Entry)>)> {
         let (Some(start), Some(count)) = (p.uint(), p.uint()) else {
             return None;
         };
-        let start = u32::try_from(start).ok()?;
+        let mut start = u32::try_from(start).ok()?;
         for i in 0..count.min(1 << 24) {
             // "nnnnnnnnnn ggggg n" — read tokens, as line endings vary.
             let (Some(off), Some(generation)) = (p.uint(), p.uint()) else {
                 return None;
             };
             let kind = p.token();
+            // Object 0 is the head of the free list; a few files number
+            // their table from 1 by mistake. Such a table is numbered
+            // again from 0 when its next entry is where object 1 is.
+            if i == 0 && start == 1 && kind == b"f" && off == 0 && generation == 65535 {
+                let saved = p.pos;
+                let next = (p.uint(), p.uint(), p.token());
+                p.pos = saved;
+                if let (Some(at), Some(_), b"n") = next
+                    && let Ok(at) = usize::try_from(at)
+                    && Parser::new(data, at)
+                        .object_header()
+                        .is_some_and(|r| r.num == 1)
+                {
+                    start = 0;
+                }
+            }
             let Some(num) = start.checked_add(i as u32) else {
                 break;
             };
-            // Object 0 is the head of the free list; a few files
-            // number their table from 1 by mistake.
             let entry = match kind {
                 b"n" if off > 0 => Entry::InFile {
                     offset: usize::try_from(off).ok()?,

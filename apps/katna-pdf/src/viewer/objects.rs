@@ -111,7 +111,7 @@ impl Viewer {
         position: gpui::Point<gpui::Pixels>,
         cx: &mut Context<Self>,
     ) -> bool {
-        if !self.text_editing || self.adding.is_some() {
+        if !self.text_editing || self.adding.is_some() || self.redacting.is_some() {
             return false;
         }
         let Some((page, point)) = self.page_point(position) else {

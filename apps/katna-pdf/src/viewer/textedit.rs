@@ -56,6 +56,7 @@ impl Viewer {
         self.finish_text_edit(true, cx);
         self.text_editing = !self.text_editing;
         self.adding = None;
+        self.redacting = None;
         self.placing = None;
         self.picked_object = None;
         self.moving = None;
@@ -76,6 +77,7 @@ impl Viewer {
         self.finish_text_edit(true, cx);
         self.text_editing = false;
         self.adding = None;
+        self.redacting = None;
         self.placing = None;
         self.picked_object = None;
         self.moving = None;
@@ -342,7 +344,7 @@ impl Viewer {
         };
         // With a tool for adding in hand, the paragraphs are not boxes to
         // click.
-        let listed = if self.adding.is_some() {
+        let listed = if self.adding.is_some() || self.redacting.is_some() {
             &[][..]
         } else {
             &blocks[..]
@@ -427,6 +429,7 @@ impl Viewer {
         }
         out.extend(self.objects_overlay(page));
         out.extend(self.insert_preview(page));
+        out.extend(self.redact_overlay(page));
         out
     }
 

@@ -811,3 +811,40 @@ fn a_password_is_put_on_and_taken_off() {
     let (code, _) = run(&["lock", s(&file), "-o", s(&open), "--allow", "fly"]);
     assert_ne!(code, 0);
 }
+
+#[test]
+fn numbers_and_boxes_are_redacted() {
+    let d = dir("redact");
+    let file = d.join("form.pdf");
+    std::fs::write(
+        &file,
+        katna_pdf_cos::text_pdf(
+            "Form",
+            &[
+                "  PAN: ABCDE1234F".to_string(),
+                "  Mail asha@example.in".to_string(),
+                "  Kept".to_string(),
+            ],
+        ),
+    )
+    .unwrap();
+    let out = d.join("out.pdf");
+    let (code, text) = run(&[
+        "redact",
+        s(&file),
+        "-o",
+        s(&out),
+        "--find",
+        "pan,email",
+        "--json",
+    ]);
+    assert_eq!(code, 0, "{text}");
+    assert_eq!(text.matches("\"page\":1").count(), 2, "{text}");
+    let (_, text) = run(&["text", s(&out)]);
+    assert!(!text.contains("ABCDE") && !text.contains("asha@"), "{text}");
+    assert!(text.contains("PAN:") && text.contains("Kept"), "{text}");
+    let (code, _) = run(&["redact", s(&file), "-o", s(&out), "--find", "dates"]);
+    assert_eq!(code, 2);
+    let (code, _) = run(&["redact", s(&file), "-o", s(&out), "--area", "9:0,0,1,1"]);
+    assert_eq!(code, 2);
+}

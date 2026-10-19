@@ -16,6 +16,12 @@ md-5.workspace = true
 rand_core.workspace = true
 sha2.workspace = true
 unicode-normalization.workspace = true
+regex.workspace = true
+zune-core.workspace = true
+zune-jpeg.workspace = true
+hayro-ccitt.workspace = true
+hayro-jbig2.workspace = true
+hayro-jpeg2000.workspace = true
 hayro-cmap.workspace = true
 phf.workspace = true
 
