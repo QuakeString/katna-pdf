@@ -127,16 +127,7 @@ impl Document {
                     out.extend_from_slice(b"ET Q\n");
                 }
                 Insert::Image { rect, image } => {
-                    let stream = match image {
-                        Image::Pixels(picture) => image_stream(&mut update, picture),
-                        Image::Jpeg {
-                            data,
-                            width,
-                            height,
-                            components,
-                        } => jpeg_stream(data, *width, *height, *components),
-                    };
-                    let r = update.add(Object::Stream(stream));
+                    let r = image_object(&mut update, image);
                     let key = add.xobject(r);
                     let m = placed(rotate, *rect);
                     let _ = writeln!(
@@ -205,6 +196,20 @@ impl Document {
     }
 }
 
+/// `image` added as an image XObject.
+pub(crate) fn image_object(update: &mut Update, image: &Image) -> Ref {
+    let stream = match image {
+        Image::Pixels(picture) => image_stream(update, picture),
+        Image::Jpeg {
+            data,
+            width,
+            height,
+            components,
+        } => jpeg_stream(data, *width, *height, *components),
+    };
+    update.add(Object::Stream(stream))
+}
+
 /// A page being drawn on: its dictionary and the resources new drawing
 /// adds to, written back by [`PageAdd::finish`].
 pub(crate) struct PageAdd<'a> {
@@ -266,6 +271,26 @@ impl<'a> PageAdd<'a> {
         let key = free_key(&self.states, STATE_KEY);
         self.states.0.push((Name::new(&key), Object::Ref(r)));
         key
+    }
+
+    /// Writes the page back drawing `content` in place of what it drew,
+    /// with the resources added.
+    pub(crate) fn finish_replacing(mut self, update: &mut Update, content: &[u8]) {
+        let stream = update.add(Object::Stream(crate::dss::compressed(content)));
+        let mut dict = self
+            .doc
+            .get(self.page_ref)
+            .and_then(|o| o.as_dict().cloned())
+            .unwrap_or_default();
+        dict.set("Contents", Object::Ref(stream));
+        if !self.xobjects.0.is_empty() {
+            self.resources.set("XObject", self.xobjects);
+        }
+        if !self.states.0.is_empty() {
+            self.resources.set("ExtGState", self.states);
+        }
+        dict.set("Resources", self.resources);
+        update.replace(self.page_ref, Object::Dict(dict));
     }
 
     /// Writes the page back with `drawing` after what it draws, or under

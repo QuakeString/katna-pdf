@@ -186,6 +186,8 @@ impl Viewer {
                     .tip(t("tool-colour", &[]), &th.katna)
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.ink = i;
+                        // A shape picked takes the colour.
+                        this.colour_picked(ink, cx);
                         cx.notify();
                     }))
                     .child(

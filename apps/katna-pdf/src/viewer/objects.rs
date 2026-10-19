@@ -9,7 +9,7 @@
 //! (`katna_pdf_cos::objects`).
 
 use gpui::{AnyElement, Context, Entity, Subscription, div, prelude::*};
-use katna_pdf_cos::{ObjectKind, PageObject};
+use katna_pdf_cos::{ObjectChange, ObjectKind, PageObject};
 use katna_ui::px;
 use katna_ui::scale::desktop_px;
 use katna_ui::text_input::{InputEvent, TextInput};
@@ -36,6 +36,8 @@ pub(super) struct Picked {
     index: usize,
     fields: [Entity<TextInput>; 4],
     _fields: Vec<Subscription>,
+    /// How see-through it was last made here (1 when not yet).
+    opacity: f32,
 }
 
 /// The picked object being dragged: by its body, or by a corner (0 top
@@ -239,6 +241,7 @@ impl Viewer {
             index,
             fields,
             _fields: subs,
+            opacity: 1.0,
         });
         self.refresh_inspector(cx);
     }
@@ -364,6 +367,108 @@ impl Viewer {
         );
     }
 
+    /// Changes the picked object as `change` says; one moved to the
+    /// front or back stays picked where it now is in the page's list.
+    fn change_picked(&mut self, change: ObjectChange, cx: &mut Context<Self>) {
+        let Some(page) = self.picked_object.as_ref().map(|p| p.page) else {
+            return;
+        };
+        let count = self.runs.objects.get(&page).map_or(0, |o| o.len());
+        let Some(picked) = self.picked_object.as_mut() else {
+            return;
+        };
+        let index = picked.index;
+        match change {
+            ObjectChange::Front => picked.index = count.saturating_sub(1),
+            ObjectChange::Back => picked.index = 0,
+            ObjectChange::Opacity(o) => picked.opacity = o,
+            _ => {}
+        }
+        self.change_page(
+            page,
+            move |doc| {
+                doc.change_object(page, index, &change)
+                    .map_err(|e| e.to_string())
+            },
+            cx,
+        );
+    }
+
+    /// The picked object, when a shape, filled and drawn in `ink`.
+    pub(super) fn colour_picked(&mut self, ink: [f32; 3], cx: &mut Context<Self>) {
+        let Some(picked) = self.picked_object.as_ref() else {
+            return;
+        };
+        if self
+            .object_shown(picked.page, picked.index)
+            .is_some_and(|(o, _)| o.kind == ObjectKind::Path)
+        {
+            let change = ObjectChange::Colours {
+                fill: Some(ink),
+                stroke: Some(ink),
+            };
+            self.change_picked(change, cx);
+        }
+    }
+
+    /// Turns the picked object a quarter turn right about its middle.
+    fn rotate_picked(&mut self, cx: &mut Context<Self>) {
+        let Some(picked) = self.picked_object.as_ref() else {
+            return;
+        };
+        let (page, index) = (picked.page, picked.index);
+        let Some((object, _)) = self.object_shown(page, index) else {
+            return;
+        };
+        let [l, b, r, t] = object.rect;
+        let (mx, my) = ((l + r) / 2.0, (b + t) / 2.0);
+        let matrix = [0.0, -1.0, 1.0, 0.0, mx - my, mx + my];
+        self.change_page(
+            page,
+            move |doc| {
+                doc.transform_object(page, index, matrix)
+                    .map_err(|e| e.to_string())
+            },
+            cx,
+        );
+    }
+
+    /// Asks for a picture file to show in the picked picture's place.
+    fn replace_picked(&mut self, cx: &mut Context<Self>) {
+        let Some(picked) = self.picked_object.as_ref() else {
+            return;
+        };
+        let (page, index) = (picked.page, picked.index);
+        let chosen = cx.prompt_for_paths(gpui::PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some(t("object-replace-choose", &[]).into()),
+        });
+        cx.spawn(async move |this, cx| {
+            let Ok(Ok(Some(paths))) = chosen.await else {
+                return;
+            };
+            let Some(file) = paths.into_iter().next() else {
+                return;
+            };
+            this.update(cx, |this, cx| {
+                this.change_page(
+                    page,
+                    move |doc| {
+                        let bytes = std::fs::read(&file).map_err(|e| e.to_string())?;
+                        let image = katna_pdf_sign::page_image(&bytes)?;
+                        doc.change_object(page, index, &ObjectChange::Picture(image))
+                            .map_err(|e| e.to_string())
+                    },
+                    cx,
+                )
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     /// Delete with an object picked: it is taken out. Returns whether one
     /// was.
     pub(super) fn delete_picked_object(&mut self, cx: &mut Context<Self>) -> bool {
@@ -439,18 +544,7 @@ impl Viewer {
         let picked = self.picked_object.as_ref()?;
         let (object, _) = self.object_shown(picked.page, picked.index)?;
         let th = self.theme;
-        let kind = match object.kind {
-            ObjectKind::Picture => "object-picture",
-            ObjectKind::Form => "object-form",
-            ObjectKind::Path => "object-shape",
-        };
-        let mut row = div().flex().items_center().gap(px(space::S1)).child(
-            div()
-                .text_size(px(text::SMALL))
-                .text_color(gpui::rgba(th.katna.text_dim))
-                .mr(px(space::S1))
-                .child(t(kind, &[])),
-        );
+        let mut row = div().flex().items_center().gap(px(space::S1));
         for (field, label) in picked.fields.iter().zip(["X", "Y", "W", "H"]) {
             row = row.child(
                 div()
@@ -460,7 +554,7 @@ impl Viewer {
             );
             row = row.child(
                 div()
-                    .w(px(56.0))
+                    .w(px(44.0))
                     .h(px(28.0))
                     .px(px(space::S1))
                     .flex()
@@ -469,6 +563,47 @@ impl Viewer {
                     .bg(th.field)
                     .text_size(px(text::SMALL))
                     .child(field.clone()),
+            );
+        }
+        let tool = |id: &'static str, icon: &'static str, tip: String| {
+            widgets::icon_button(id, icon, 18.0, &th.katna).tip(tip, &th.katna)
+        };
+        row = row
+            .child(
+                tool("object-rotate", "rotate-cw", t("object-rotate", &[]))
+                    .on_click(cx.listener(|this, _, _, cx| this.rotate_picked(cx))),
+            )
+            .child(
+                tool("object-front", "to-front", t("object-front", &[])).on_click(
+                    cx.listener(|this, _, _, cx| this.change_picked(ObjectChange::Front, cx)),
+                ),
+            )
+            .child(
+                tool("object-back", "to-back", t("object-back", &[])).on_click(
+                    cx.listener(|this, _, _, cx| this.change_picked(ObjectChange::Back, cx)),
+                ),
+            );
+        let percent = (picked.opacity * 100.0).round() as u32;
+        // 100, 75, 50, 25, then fully again.
+        let next = if picked.opacity <= 0.3 {
+            1.0
+        } else {
+            picked.opacity - 0.25
+        };
+        row = row.child(
+            tool(
+                "object-opacity",
+                "contrast",
+                t("object-opacity", &[("percent", &percent.to_string())]),
+            )
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.change_picked(ObjectChange::Opacity(next), cx)
+            })),
+        );
+        if object.kind == ObjectKind::Picture {
+            row = row.child(
+                tool("object-replace", "image", t("object-replace", &[]))
+                    .on_click(cx.listener(|this, _, _, cx| this.replace_picked(cx))),
             );
         }
         row = row.child(

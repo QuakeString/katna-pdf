@@ -221,6 +221,137 @@ impl Document {
         self.write_page_content(page, &content)
     }
 
+    /// The file with object `index` of `page_objects(page)` changed as
+    /// `change` says.
+    pub fn change_object(
+        &self,
+        page: usize,
+        index: usize,
+        change: &ObjectChange,
+    ) -> Result<Vec<u8>, EditError> {
+        let object = self
+            .page_objects(page)
+            .into_iter()
+            .nth(index)
+            .ok_or(EditError::NoRun)?;
+        let read = self.page_content(page).ok_or(EditError::Content)?;
+        let first = read.ops[*object.ops.start()].span.start;
+        let last = read.ops[*object.ops.end()].span.end;
+        let body = &read.content[first..last];
+        let mut update = self.update()?;
+        let mut add = crate::insert::PageAdd::new(self, page)?;
+        // A see-through or colour wrapper this put round the object
+        // before is changed rather than wrapped again (the inner one would
+        // win): its `q`, and the operators in it.
+        let start = *object.ops.start();
+        let mut own = Vec::new();
+        let mut at = start;
+        while at > 0 {
+            let op = &read.ops[at - 1];
+            let ours = op.is("rg")
+                || op.is("RG")
+                || (op.is("gs")
+                    && op
+                        .operands
+                        .first()
+                        .and_then(Object::as_name)
+                        .is_some_and(|n| n.starts_with(b"KatnaG")));
+            if !ours {
+                break;
+            }
+            own.push(at - 1);
+            at -= 1;
+        }
+        let wrapped = at > 0
+            && read.ops[at - 1].is("q")
+            && read
+                .ops
+                .get(*object.ops.end() + 1)
+                .is_some_and(|op| op.is("Q"));
+        let wrap = |keep: &dyn Fn(&Op) -> bool, new: String| {
+            if wrapped {
+                let mut before = b"q ".to_vec();
+                for &i in own.iter().rev() {
+                    if keep(&read.ops[i]) {
+                        before.extend_from_slice(&read.content[read.ops[i].span.clone()]);
+                        before.push(b' ');
+                    }
+                }
+                before.extend_from_slice(new.as_bytes());
+                let from = read.ops[at - 1].span.start;
+                splice(&read.content, vec![(from..first, before)])
+            } else {
+                splice(
+                    &read.content,
+                    vec![
+                        (first..first, format!("q {new}").into_bytes()),
+                        (last..last, b" Q".to_vec()),
+                    ],
+                )
+            }
+        };
+        let content = match change {
+            ObjectChange::Front | ObjectChange::Back => {
+                // Moved, it takes along the state it was drawn in.
+                let mut moved = b"q ".to_vec();
+                for &i in &state_at(&read.ops, *object.ops.start()) {
+                    moved.extend_from_slice(&read.content[read.ops[i].span.clone()]);
+                    moved.push(b' ');
+                }
+                moved.extend_from_slice(body);
+                moved.extend_from_slice(b" Q\n");
+                let mut kept = Vec::new();
+                for op in &read.ops[object.ops.clone()] {
+                    if !is_path_or_paint(op) && !op.is("Do") && !op.is("BI") {
+                        kept.extend_from_slice(&read.content[op.span.clone()]);
+                        kept.push(b' ');
+                    }
+                }
+                let rest = splice(&read.content, vec![(first..last, kept)]);
+                if matches!(change, ObjectChange::Front) {
+                    let mut out = b"q\n".to_vec();
+                    out.extend_from_slice(&rest);
+                    out.extend_from_slice(b"\nQ\n");
+                    out.extend_from_slice(&moved);
+                    out
+                } else {
+                    let mut out = moved;
+                    out.extend_from_slice(&rest);
+                    out
+                }
+            }
+            ObjectChange::Opacity(opacity) => {
+                let key = add.opacity(&mut update, opacity.clamp(0.0, 1.0));
+                wrap(&|op| !op.is("gs"), format!("/{key} gs "))
+            }
+            ObjectChange::Colours { fill, stroke } => {
+                let mut before = String::new();
+                let n = crate::insert::num;
+                if let Some([r, g, b]) = fill {
+                    before.push_str(&format!("{} {} {} rg ", n(*r), n(*g), n(*b)));
+                }
+                if let Some([r, g, b]) = stroke {
+                    before.push_str(&format!("{} {} {} RG ", n(*r), n(*g), n(*b)));
+                }
+                let (f, st) = (fill.is_some(), stroke.is_some());
+                wrap(&|op| !(f && op.is("rg") || st && op.is("RG")), before)
+            }
+            ObjectChange::Picture(image) => {
+                if object.kind != ObjectKind::Picture {
+                    return Err(EditError::NoRun);
+                }
+                let r = crate::insert::image_object(&mut update, image);
+                let key = add.xobject(r);
+                splice(
+                    &read.content,
+                    vec![(first..last, format!("/{key} Do").into_bytes())],
+                )
+            }
+        };
+        add.finish_replacing(&mut update, &content);
+        Ok(update.finish())
+    }
+
     /// The file with object `index` of `page_objects(page)` taken out.
     pub fn delete_object(&self, page: usize, index: usize) -> Result<Vec<u8>, EditError> {
         let object = self
@@ -336,6 +467,59 @@ impl Document {
         update.replace(page_ref, Object::Dict(dict));
         Ok(update.finish())
     }
+}
+
+/// What can be changed about an object besides where it is.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ObjectChange {
+    /// Drawn last, over everything else the page draws.
+    Front,
+    /// Drawn first, under everything else.
+    Back,
+    /// Drawn see-through: 0 is not at all, 1 fully.
+    Opacity(f32),
+    /// A shape's fill and line colours (RGB, 0 to 1), each if given.
+    Colours {
+        fill: Option<[f32; 3]>,
+        stroke: Option<[f32; 3]>,
+    },
+    /// A picture shown in place of this one, in the same box.
+    Picture(crate::insert::Image),
+}
+
+/// The operators that set the graphics state in force at operator `at`:
+/// the matrix, colours, line style, graphics states and clipping, as
+/// `q` and `Q` leave them.
+fn state_at(ops: &[Op], at: usize) -> Vec<usize> {
+    let mut stack: Vec<Vec<usize>> = Vec::new();
+    let mut now: Vec<usize> = Vec::new();
+    let mut path: Vec<usize> = Vec::new();
+    let mut clipping = false;
+    for (i, op) in ops[..at].iter().enumerate() {
+        match op.operator.as_slice() {
+            b"q" => stack.push(now.clone()),
+            b"Q" => now = stack.pop().unwrap_or_default(),
+            b"cm" | b"w" | b"J" | b"j" | b"M" | b"d" | b"ri" | b"i" | b"gs" | b"CS" | b"cs"
+            | b"SC" | b"SCN" | b"sc" | b"scn" | b"G" | b"g" | b"RG" | b"rg" | b"K" | b"k" => {
+                now.push(i)
+            }
+            b"W" | b"W*" => {
+                clipping = true;
+                path.push(i);
+            }
+            b"m" | b"l" | b"c" | b"v" | b"y" | b"h" | b"re" => path.push(i),
+            b"S" | b"s" | b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*" | b"n" => {
+                if clipping {
+                    now.append(&mut path);
+                    now.push(i);
+                }
+                path.clear();
+                clipping = false;
+            }
+            _ => {}
+        }
+    }
+    now
 }
 
 fn is_path_or_paint(op: &Op) -> bool {
