@@ -68,6 +68,12 @@ usage: katna-pdf-cli COMMAND [--json] ...
   unlock FILE -o OUT --owner PW   the password taken off, given the owner's
                                   (any command opens a locked file with the password
                                   in KATNA_PDF_OPEN_PASSWORD)
+  compare OLD NEW [--overlay PAGE -o OUT.png]
+                                  what changed from OLD to NEW: words added, removed
+                                  and changed (text moved to another page is not a
+                                  change), and areas of pages that draw differently;
+                                  --overlay writes NEW's page PAGE over the OLD page
+                                  it came from, red only in OLD, blue only in NEW
   compress FILE -o OUT [--level lossless|medium|strong]
                                   the file made smaller: unused objects left out,
                                   streams packed tighter, copies kept once; medium
@@ -232,6 +238,7 @@ fn main() -> ExitCode {
         "redact" => redact(rest, json),
         "unlock" => unlock(rest, json),
         "compress" => compress(rest, json),
+        "compare" => compare(rest, json),
         "objects" => objects(rest, json),
         "bookmarks" => bookmarks(rest, json),
         "links" => links(rest, json),
@@ -382,6 +389,7 @@ impl<'a> Args<'a> {
                     | "--from"
                     | "--range"
                     | "--level"
+                    | "--overlay"
             ) {
                 let Some(value) = it.next() else {
                     return Err(Failure::Usage(format!("{a} needs a value")));
@@ -1345,6 +1353,108 @@ fn unlock(args: &[String], json: bool) -> Done {
 }
 
 /// Makes a file smaller.
+fn compare(args: &[String], json: bool) -> Done {
+    use katna_pdf_render::Engine as _;
+    use katna_pdf_render::compare::{self, Kind};
+    let args = Args::parse(args)?;
+    let [old_file, new_file] = args.words()?;
+    let password = std::env::var("KATNA_PDF_OPEN_PASSWORD").unwrap_or_default();
+    let load = |file: &str| {
+        let bytes = std::fs::read(file).map_err(|e| failed(format!("{file}: {e}")))?;
+        katna_pdf_render::Hayro
+            .open(std::sync::Arc::new(bytes), &password)
+            .map_err(|e| failed(format!("{file}: {e}")))
+    };
+    let (old, new) = (load(old_file)?, load(new_file)?);
+    // Small enough to be quick, large enough to see a changed line.
+    const LOOK: f32 = 1.0;
+    if let Some(page) = args.option("--overlay") {
+        let out = args.output()?;
+        let count = new.page_count();
+        let page = match page.parse::<usize>() {
+            Ok(p) if (1..=count).contains(&p) => p - 1,
+            _ => return Err(Failure::Usage(format!("--overlay {page}: 1 to {count}"))),
+        };
+        let c = compare::compare(old.as_ref(), new.as_ref());
+        let Some(old_page) = c.pages.get(page).copied().flatten() else {
+            return Err(failed(format!(
+                "{old_file} has no page to set against page {}",
+                page + 1
+            )));
+        };
+        let scale = 2.0;
+        let (Some(a), Some(b)) = (old.render(old_page, scale), new.render(page, scale)) else {
+            return Err(failed("the pages could not be drawn"));
+        };
+        write(&out, &compare::overlay(&a, &b).png())?;
+        return Ok(format!(
+            "{}: page {} over page {} of {old_file}\n",
+            out.display(),
+            page + 1,
+            old_page + 1
+        ));
+    }
+    let mut c = compare::compare(old.as_ref(), new.as_ref());
+    for (page, old_page) in c.pages_to_look_at() {
+        if let (Some(a), Some(b)) = (old.render(old_page, LOOK), new.render(page, LOOK)) {
+            let areas = compare::differences(&a, &b, LOOK);
+            c.add_drawing(page, areas);
+        }
+    }
+    let kind = |k: Kind| match k {
+        Kind::Added => "added",
+        Kind::Removed => "removed",
+        Kind::Changed => "changed",
+        Kind::Drawing => "drawing",
+    };
+    let mut out = String::new();
+    let mut items = Vec::new();
+    for change in &c.changes {
+        let (was, now) = c.texts(change);
+        let page = c.new_place(change).map(|(p, _)| p + 1);
+        let old_page = c.old_place(change).map(|(p, _)| p + 1);
+        let rect = c.new_place(change).map(|(_, r)| r).unwrap_or_default();
+        if json {
+            items.push(format!(
+                "{{\"kind\":\"{}\",\"page\":{},\"old_page\":{},\"rect\":[{}],\"old\":{},\"new\":{}}}",
+                kind(change.kind),
+                page.map_or("null".into(), |p| p.to_string()),
+                old_page.map_or("null".into(), |p| p.to_string()),
+                rect.iter().map(|v| num(*v)).collect::<Vec<_>>().join(","),
+                string(&was),
+                string(&now),
+            ));
+            continue;
+        }
+        let at = page.map_or(String::new(), |p| format!("page {p}"));
+        let _ = match change.kind {
+            Kind::Added => writeln!(out, "{at:<9} + {now}"),
+            Kind::Removed => writeln!(out, "{at:<9} - {was}"),
+            Kind::Changed => writeln!(out, "{at:<9} ~ {was} → {now}"),
+            Kind::Drawing => writeln!(
+                out,
+                "{at:<9} * draws differently at {}",
+                rect.iter()
+                    .map(|v| format!("{v:.0}"))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            ),
+        };
+    }
+    Ok(if json {
+        format!(
+            "{{\"old_pages\":{},\"new_pages\":{},\"changes\":[{}]}}\n",
+            old.page_count(),
+            new.page_count(),
+            items.join(",")
+        )
+    } else if c.changes.is_empty() {
+        "no changes\n".into()
+    } else {
+        out
+    })
+}
+
 fn compress(args: &[String], json: bool) -> Done {
     use katna_pdf_cos::Optimize;
     let args = Args::parse(args)?;

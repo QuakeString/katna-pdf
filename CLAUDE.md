@@ -20,6 +20,9 @@ cargo run --release -p katna-pdf-bench -- file.pdf
 - `crates/katna-pdf-render` — the page renderer behind an `Engine` trait
   (hayro today); `scene.rs` draws vector-heavy pages such as CAD
   drawings from a grid index (`docs/bakeoff/2026-10-cad.md`);
+  `compare.rs` finds what changed between two versions (words lined up
+  across pages, then pages drawn small for changed pictures and
+  drawings) and draws the red and blue overlay;
   `worker.rs` draws in worker processes (the app runs itself with
   `--render-worker`; `KATNA_PDF_IN_PROCESS=1` draws in the app). No GPUI.
 - `crates/katna-pdf-cos` — our own PDF object layer: parsing, xref and
@@ -79,9 +82,10 @@ cargo run --release -p katna-pdf-bench -- file.pdf
   D-Bus (`katna-dbus`) for the Google Drive and OneDrive of accounts signed
   in to Katna Mail, and `mail.rs` reads Katna Mail's store (`katna-store`,
   read-only) for PDFs attached to mail; the library browses and opens both
-  (`library/drive.rs`, `library/mail.rs`).
+  (`library/drive.rs`, `library/mail.rs`). `katna-pdf --compare OLDER NEWER`
+  opens a comparison (`viewer/compare.rs`).
 - `apps/katna-pdf-cli` — the command line: info, merge, split, pages,
-  rotate, crop, sign (and certify), add-field, ltv, tokens, token-check, verify (with `--report` as a PDF), text and edit-text (`--blocks` / `--block` for paragraphs), insert, stamp, background, redact, compress, form (with `--detect`), form-data and fill, meta, lock and unlock, objects and object, bookmarks, links, dests and labels, annotations and XFDF, and library; `--json` for scripts and agents.
+  rotate, crop, sign (and certify), add-field, ltv, tokens, token-check, verify (with `--report` as a PDF), text and edit-text (`--blocks` / `--block` for paragraphs), insert, stamp, background, redact, compress, compare (with `--overlay` as a PNG), form (with `--detect`), form-data and fill, meta, lock and unlock, objects and object, bookmarks, links, dests and labels, annotations and XFDF, and library; `--json` for scripts and agents.
 - `tools/katna-pdf-cos-check` — runs katna-pdf-cos over a folder of PDFs
   (loads, page counts against hayro, update round trips).
 - `vendor/hayro`, `vendor/hayro-interpret`, `vendor/hayro-syntax` — hayro with our patches

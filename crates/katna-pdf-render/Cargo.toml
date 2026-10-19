@@ -11,6 +11,7 @@ publish.workspace = true
 [dependencies]
 hayro.workspace = true
 flate2.workspace = true
+similar.workspace = true
 
 [dev-dependencies]
 katna-pdf-cos.workspace = true
