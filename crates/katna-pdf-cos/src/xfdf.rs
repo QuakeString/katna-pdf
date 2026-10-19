@@ -291,19 +291,19 @@ pub struct XfdfAnnotation {
 }
 
 /// One element: its name, attributes and text, and where it sits.
-struct Element {
+pub(crate) struct Element {
     index: usize,
-    parent: Option<usize>,
+    pub(crate) parent: Option<usize>,
     depth: usize,
-    name: String,
-    attrs: HashMap<String, String>,
-    text: String,
+    pub(crate) name: String,
+    pub(crate) attrs: HashMap<String, String>,
+    pub(crate) text: String,
 }
 
 /// The elements of `xml` in document order, with namespace prefixes
 /// dropped. Comments, the declaration and processing instructions are
 /// skipped; text is gathered into the innermost open element.
-fn parse(xml: &str) -> Vec<Element> {
+pub(crate) fn parse(xml: &str) -> Vec<Element> {
     let mut out: Vec<Element> = Vec::new();
     let mut open: Vec<usize> = Vec::new();
     let mut rest = xml;
@@ -435,7 +435,7 @@ fn unescape(s: &str) -> String {
     out
 }
 
-fn escape(s: &str) -> String {
+pub(crate) fn escape(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
         match c {
