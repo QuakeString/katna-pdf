@@ -1,0 +1,20 @@
+[package]
+name = "katna-pdf-library"
+description = "Katna PDF's library: a catalog of the PDFs in watched folders, their tags and notes, full-text search and duplicates."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+katna-pdf-cos.workspace = true
+katna-pdf-render.workspace = true
+katna-core.workspace = true
+rusqlite.workspace = true
+sha2.workspace = true
+flate2.workspace = true
+
+[lints]
+workspace = true

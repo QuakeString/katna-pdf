@@ -33,7 +33,17 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
-      - run: cargo test --workspace --locked --no-fail-fast
+      - name: cargo test
+        shell: bash
+        # Each test's panic is also raised as an annotation, which the checks
+        # API returns where the log itself cannot be fetched.
+        run: |
+          set +e
+          cargo test --workspace --locked --no-fail-fast > test.log 2>&1
+          status=$?
+          cat test.log
+          awk '/panicked at/ { n = 5; msg = "" } n > 0 { msg = msg $0 "%0A"; n--; if (n == 0) print "::error::" msg }' test.log | head -10
+          exit $status
 
   windows:
     runs-on: windows-latest
@@ -44,7 +54,17 @@ jobs:
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
-      - run: cargo test --workspace --locked --no-fail-fast
+      - name: cargo test
+        shell: bash
+        # Each test's panic is also raised as an annotation, which the checks
+        # API returns where the log itself cannot be fetched.
+        run: |
+          set +e
+          cargo test --workspace --locked --no-fail-fast > test.log 2>&1
+          status=$?
+          cat test.log
+          awk '/panicked at/ { n = 5; msg = "" } n > 0 { msg = msg $0 "%0A"; n--; if (n == 0) print "::error::" msg }' test.log | head -10
+          exit $status
 
   deny:
     runs-on: ubuntu-latest

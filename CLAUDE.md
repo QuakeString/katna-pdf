@@ -65,9 +65,15 @@ cargo run --release -p katna-pdf-bench -- file.pdf
   PDF side (fields, byte ranges) is `katna-pdf-cos`'s `sign.rs`, , certified
   files' allowed changes (DocMDP) and locked fields (FieldMDP) its `mdp.rs`, and long-term validation
   data (PAdES B-LT DSS) its `dss.rs`.
+- `crates/katna-pdf-library` — the library: a SQLite catalog of the
+  PDFs in watched folders (`scan.rs`: new, changed, moved and gone files;
+  title, author, pages, signed, form, scanned, locked; a cover; each
+  page's text in an FTS5 index), tags, stars, notes, smart collections
+  as queries (`filter.rs`), and copies by bytes or words. Text and
+  covers come through an `Engine`. No GPUI.
 - `apps/katna-pdf` — the app window.
 - `apps/katna-pdf-cli` — the command line: info, merge, split, pages,
-  rotate, crop, sign (and certify), add-field, ltv, tokens, token-check, verify (with `--report` as a PDF), text and edit-text (`--blocks` / `--block` for paragraphs), insert, stamp, background, redact, form (with `--detect`), form-data and fill, meta, lock and unlock, objects and object, bookmarks, links, dests and labels, annotations and XFDF; `--json` for scripts and agents.
+  rotate, crop, sign (and certify), add-field, ltv, tokens, token-check, verify (with `--report` as a PDF), text and edit-text (`--blocks` / `--block` for paragraphs), insert, stamp, background, redact, form (with `--detect`), form-data and fill, meta, lock and unlock, objects and object, bookmarks, links, dests and labels, annotations and XFDF, and library; `--json` for scripts and agents.
 - `tools/katna-pdf-cos-check` — runs katna-pdf-cos over a folder of PDFs
   (loads, page counts against hayro, update round trips).
 - `vendor/hayro`, `vendor/hayro-interpret`, `vendor/hayro-syntax` — hayro with our patches

@@ -178,6 +178,21 @@ usage: katna-pdf-cli COMMAND [--json] ...
                                   in ranges from page FROM: STYLE 1, i, I, a, A or
                                   none, after PREFIX, counting from START
   annots FILE                     the annotations, page by page
+  library [--db CATALOG] (folders | add-folder DIR | remove-folder DIR | scan |
+          list [QUERY] | search WORDS [--limit N] | tags ID [TAG,...] |
+          rate ID STARS | note ID TEXT | duplicates | collections |
+          collection NAME [QUERY] | forget ID)
+                                  the library: the folders watched, read into the
+                                  catalog by scan (new, changed, moved and gone
+                                  PDFs); its documents listed by a QUERY of words,
+                                  tag:NAME, author:NAME, signed, forms, scanned,
+                                  locked, missing (each also :no), rating:N,
+                                  in:FOLDER and sort:title|author|added|opened|
+                                  modified|size|pages|rating; the pages holding
+                                  WORDS found; tags, stars and notes given; copies
+                                  found (the same bytes or words); queries kept as
+                                  smart collections. CATALOG is the app's own unless
+                                  given
   xfdf-export FILE -o OUT.xfdf    the annotations as XFDF
   xfdf-import FILE XFDF -o OUT    the annotations of XFDF added to the PDF
 
@@ -223,6 +238,7 @@ fn main() -> ExitCode {
         "text" => text(rest, json),
         "edit-text" => edit_text(rest, json),
         "annots" => annots(rest, json),
+        "library" => library(rest, json),
         "xfdf-export" => xfdf_export(rest, json),
         "xfdf-import" => xfdf_import(rest, json),
         "help" | "-h" | "--help" => {
@@ -3101,6 +3117,312 @@ fn xfdf_import(args: &[String], json: bool) -> Done {
             out.display()
         )
     })
+}
+
+/// The library: its folders, scanned, listed, searched, tagged.
+fn library(args: &[String], json: bool) -> Done {
+    use katna_pdf_library::{Doc, Filter, Library};
+    // The library's own options, then a subcommand and its words.
+    let mut db = None;
+    let mut limit = 50;
+    let mut words = Vec::new();
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--db" | "--limit" => {
+                let Some(value) = it.next() else {
+                    return Err(Failure::Usage(format!("{a} needs a value")));
+                };
+                if a == "--db" {
+                    db = Some(PathBuf::from(value));
+                } else {
+                    limit = value
+                        .parse()
+                        .map_err(|_| Failure::Usage(format!("--limit {value}: a number")))?;
+                }
+            }
+            _ => words.push(a.as_str()),
+        }
+    }
+    let Some((&sub, rest)) = words.split_first() else {
+        return Err(Failure::Usage("say what to do with the library".into()));
+    };
+    let lib = match &db {
+        Some(path) => Library::open(path),
+        None => Library::open_default(),
+    }
+    .map_err(failed)?;
+    let id = |word: Option<&&str>| -> Result<i64, Failure> {
+        word.and_then(|w| w.parse().ok())
+            .ok_or_else(|| Failure::Usage(format!("{sub}: give a document's number (from list)")))
+    };
+    let doc_json = |d: &Doc| {
+        let opt = |v: &Option<String>| v.as_deref().map_or("null".into(), string);
+        let tags: Vec<String> = d.tags.iter().map(|t| string(t)).collect();
+        format!(
+            "{{\"id\":{},\"path\":{},\"name\":{},\"title\":{},\"author\":{},\"pages\":{},\
+             \"size\":{},\"signed\":{},\"forms\":{},\"scanned\":{},\"locked\":{},\
+             \"missing\":{},\"rating\":{},\"note\":{},\"tags\":[{}]}}",
+            d.id,
+            string(&d.path.to_string_lossy()),
+            string(&d.name()),
+            opt(&d.title),
+            opt(&d.author),
+            d.pages,
+            d.size,
+            d.signed,
+            d.forms,
+            d.scanned,
+            d.locked,
+            d.missing,
+            d.rating,
+            string(&d.note),
+            tags.join(",")
+        )
+    };
+    let doc_line = |d: &Doc| {
+        let mut marks = Vec::new();
+        for (on, mark) in [
+            (d.signed, "signed"),
+            (d.forms, "form"),
+            (d.scanned, "scanned"),
+            (d.locked, "locked"),
+            (d.missing, "missing"),
+        ] {
+            if on {
+                marks.push(mark.to_owned());
+            }
+        }
+        if d.rating > 0 {
+            marks.push("*".repeat(d.rating.into()));
+        }
+        marks.extend(d.tags.iter().map(|t| format!("#{t}")));
+        format!(
+            "{:<5} {}\t{} p.\t{}\t{}\n",
+            d.id,
+            d.name(),
+            d.pages,
+            d.path.display(),
+            marks.join(" ")
+        )
+    };
+    let docs = |list: &[Doc]| {
+        if json {
+            let items: Vec<String> = list.iter().map(doc_json).collect();
+            format!("{{\"docs\":[{}]}}\n", items.join(","))
+        } else {
+            list.iter().map(doc_line).collect()
+        }
+    };
+    let done = |what: &str| {
+        if json {
+            "{\"done\":true}\n".to_owned()
+        } else {
+            format!("{what}\n")
+        }
+    };
+    let one = |id: i64| -> Done {
+        let doc = lib
+            .doc(id)
+            .map_err(failed)?
+            .ok_or_else(|| failed(format!("no document {id} in the library")))?;
+        Ok(docs(&[doc]))
+    };
+    match sub {
+        "folders" => {
+            let folders = lib.folders().map_err(failed)?;
+            Ok(if json {
+                let items: Vec<String> = folders
+                    .iter()
+                    .map(|f| string(&f.to_string_lossy()))
+                    .collect();
+                format!("{{\"folders\":[{}]}}\n", items.join(","))
+            } else {
+                folders
+                    .iter()
+                    .map(|f| format!("{}\n", f.display()))
+                    .collect()
+            })
+        }
+        "add-folder" | "remove-folder" => {
+            let [dir] = rest else {
+                return Err(Failure::Usage(format!("{sub} DIR")));
+            };
+            if sub == "add-folder" {
+                lib.add_folder(Path::new(dir))
+                    .map_err(|e| failed(format!("{dir}: {e}")))?;
+                Ok(done("watching it; scan reads it"))
+            } else {
+                lib.remove_folder(Path::new(dir)).map_err(failed)?;
+                Ok(done("no longer watched"))
+            }
+        }
+        "scan" => {
+            let engine = katna_pdf_render::Hayro;
+            let quiet = json || !std::io::IsTerminal::is_terminal(&std::io::stderr());
+            let report = lib
+                .scan(&engine, &mut |done, total, file| {
+                    if !quiet && done < total {
+                        eprint!("\r\x1b[K{}/{total} {}", done + 1, file.display());
+                    }
+                })
+                .map_err(failed)?;
+            if !quiet {
+                eprint!("\r\x1b[K");
+            }
+            if json {
+                let failures: Vec<String> = report
+                    .failed
+                    .iter()
+                    .map(|(p, e)| {
+                        format!(
+                            "{{\"path\":{},\"error\":{}}}",
+                            string(&p.to_string_lossy()),
+                            string(e)
+                        )
+                    })
+                    .collect();
+                return Ok(format!(
+                    "{{\"added\":{},\"updated\":{},\"moved\":{},\"unchanged\":{},\
+                     \"missing\":{},\"failed\":[{}]}}\n",
+                    report.added,
+                    report.updated,
+                    report.moved,
+                    report.unchanged,
+                    report.missing,
+                    failures.join(",")
+                ));
+            }
+            let mut out = format!(
+                "{} added, {} changed, {} moved, {} as they were, {} missing\n",
+                report.added, report.updated, report.moved, report.unchanged, report.missing
+            );
+            for (path, e) in &report.failed {
+                let _ = writeln!(out, "not read: {}: {e}", path.display());
+            }
+            Ok(out)
+        }
+        "list" => {
+            let filter = Filter::parse(&rest.join(" "));
+            Ok(docs(&lib.docs(&filter).map_err(failed)?))
+        }
+        "search" => {
+            let hits = lib.search(&rest.join(" "), limit).map_err(failed)?;
+            let name = |id: i64| lib.doc(id).ok().flatten();
+            if json {
+                let items: Vec<String> = hits
+                    .iter()
+                    .map(|h| {
+                        let path = name(h.doc).map(|d| d.path.to_string_lossy().into_owned());
+                        format!(
+                            "{{\"id\":{},\"path\":{},\"page\":{},\"snippet\":{}}}",
+                            h.doc,
+                            path.as_deref().map_or("null".into(), string),
+                            h.page + 1,
+                            string(&h.snippet)
+                        )
+                    })
+                    .collect();
+                return Ok(format!("{{\"hits\":[{}]}}\n", items.join(",")));
+            }
+            let mut out = String::new();
+            for hit in &hits {
+                let doc = name(hit.doc).map(|d| d.name()).unwrap_or_default();
+                let snippet = hit.snippet.split_whitespace().collect::<Vec<_>>().join(" ");
+                let _ = writeln!(
+                    out,
+                    "{:<5} {doc}, page {}: {snippet}",
+                    hit.doc,
+                    hit.page + 1
+                );
+            }
+            Ok(out)
+        }
+        "tags" => {
+            if rest.is_empty() {
+                let tags = lib.tags().map_err(failed)?;
+                return Ok(if json {
+                    let items: Vec<String> = tags
+                        .iter()
+                        .map(|(t, n)| format!("{{\"tag\":{},\"docs\":{n}}}", string(t)))
+                        .collect();
+                    format!("{{\"tags\":[{}]}}\n", items.join(","))
+                } else {
+                    tags.iter().map(|(t, n)| format!("{t}\t{n}\n")).collect()
+                });
+            }
+            let doc = id(rest.first())?;
+            let tags: Vec<String> = rest[1..]
+                .join(" ")
+                .split(',')
+                .map(|t| t.trim().to_owned())
+                .collect();
+            lib.set_tags(doc, &tags).map_err(failed)?;
+            one(doc)
+        }
+        "rate" => {
+            let doc = id(rest.first())?;
+            let stars = rest
+                .get(1)
+                .and_then(|s| s.parse::<u8>().ok())
+                .filter(|&s| s <= 5)
+                .ok_or_else(|| Failure::Usage("rate ID STARS (0 to 5)".into()))?;
+            lib.set_rating(doc, stars).map_err(failed)?;
+            one(doc)
+        }
+        "note" => {
+            let doc = id(rest.first())?;
+            lib.set_note(doc, &rest[1..].join(" ")).map_err(failed)?;
+            one(doc)
+        }
+        "forget" => {
+            let doc = id(rest.first())?;
+            lib.forget(doc).map_err(failed)?;
+            Ok(done("forgotten"))
+        }
+        "duplicates" => {
+            let groups = lib.duplicates().map_err(failed)?;
+            if json {
+                let items: Vec<String> = groups
+                    .iter()
+                    .map(|g| {
+                        let docs: Vec<String> = g.iter().map(doc_json).collect();
+                        format!("[{}]", docs.join(","))
+                    })
+                    .collect();
+                return Ok(format!("{{\"groups\":[{}]}}\n", items.join(",")));
+            }
+            Ok(groups
+                .iter()
+                .map(|g| g.iter().map(doc_line).collect::<String>())
+                .collect::<Vec<_>>()
+                .join("\n"))
+        }
+        "collections" => {
+            let all = lib.collections().map_err(failed)?;
+            Ok(if json {
+                let items: Vec<String> = all
+                    .iter()
+                    .map(|(n, q)| format!("{{\"name\":{},\"query\":{}}}", string(n), string(q)))
+                    .collect();
+                format!("{{\"collections\":[{}]}}\n", items.join(","))
+            } else {
+                all.iter().map(|(n, q)| format!("{n}\t{q}\n")).collect()
+            })
+        }
+        "collection" => {
+            let Some((name, query)) = rest.split_first() else {
+                return Err(Failure::Usage("collection NAME [QUERY]".into()));
+            };
+            let query = query.join(" ");
+            lib.set_collection(name, &query).map_err(failed)?;
+            if query.trim().is_empty() {
+                return Ok(done("taken away"));
+            }
+            Ok(docs(&lib.docs(&Filter::parse(&query)).map_err(failed)?))
+        }
+        _ => Err(Failure::Usage(format!("unknown library command {sub}"))),
+    }
 }
 
 fn yes(b: bool) -> &'static str {

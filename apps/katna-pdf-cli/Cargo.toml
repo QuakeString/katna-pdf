@@ -11,6 +11,8 @@ publish.workspace = true
 [dependencies]
 katna-pdf-cos.workspace = true
 katna-pdf-sign.workspace = true
+katna-pdf-library.workspace = true
+katna-pdf-render.workspace = true
 
 [lints]
 workspace = true
