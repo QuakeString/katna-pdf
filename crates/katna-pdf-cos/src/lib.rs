@@ -77,6 +77,6 @@ pub use sign::{
     CONTENTS_LEN, Coverage, Picture, Placement, Prepared, SignError, SignRequest, Signature,
     SigningInfo,
 };
-pub use stamp::{Bates, Stamp, StampPlace};
+pub use stamp::{Background, Bates, Stamp, StampPlace};
 pub use write::{Update, UpdateError, write_object};
 pub use xfdf::{XfdfAnnotation, XfdfError, from_xfdf, to_xfdf};

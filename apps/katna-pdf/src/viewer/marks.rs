@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Page marks (docs/PLAN.md §4.3, Phase 4): headers and footers,
-//! watermarks and Bates numbers put on many pages at once, from a card
-//! opened on the edit row. They are drawn into each page's own content
+//! watermarks, Bates numbers and backgrounds (a colour, a picture or
+//! both) put on many pages at once, from a card opened on the edit row. They are drawn into each page's own content
 //! (`katna_pdf_cos::stamp`), so every reader shows and prints them.
 
+use std::path::PathBuf;
+
 use gpui::{AnyElement, Context, Entity, Subscription, div, prelude::*};
-use katna_pdf_cos::{Bates, Stamp, StampPlace};
+use katna_pdf_cos::{Background, Bates, Stamp, StampPlace};
 use katna_ui::px;
 use katna_ui::text_input::{InputEvent, TextInput};
 use katna_ui::tokens::{radius, space, text};
@@ -23,7 +25,17 @@ pub(super) enum MarkKind {
     Header,
     Watermark,
     Bates,
+    Background,
 }
+
+/// Background colours: pale, for text to stay easy to read over them.
+const PAPERS: [[f32; 3]; 5] = [
+    [1.0, 0.98, 0.9],
+    [1.0, 0.96, 0.75],
+    [0.88, 0.94, 1.0],
+    [0.9, 0.97, 0.88],
+    [0.93, 0.93, 0.93],
+];
 
 /// The card's choices.
 pub(super) struct Marking {
@@ -36,6 +48,11 @@ pub(super) struct Marking {
     pages: Entity<TextInput>,
     prefix: Entity<TextInput>,
     start: Entity<TextInput>,
+    /// A background's colour, from [`PAPERS`], and picture.
+    paper: Option<usize>,
+    picture: Option<PathBuf>,
+    /// The picture stretched over the whole page.
+    stretch: bool,
     _inputs: Vec<Subscription>,
 }
 
@@ -101,6 +118,9 @@ impl Viewer {
             pages,
             prefix,
             start,
+            paper: Some(0),
+            picture: None,
+            stretch: false,
             _inputs: inputs,
         });
         self.set_mark_kind(MarkKind::Header, cx);
@@ -125,7 +145,9 @@ impl Viewer {
                 StampPlace::Across,
                 1,
             ),
-            MarkKind::Bates => (String::new(), "10", StampPlace::BottomRight, 0),
+            MarkKind::Bates | MarkKind::Background => {
+                (String::new(), "10", StampPlace::BottomRight, 0)
+            }
         };
         marking.place = place;
         marking.ink = ink;
@@ -163,6 +185,35 @@ impl Viewer {
                 }
             }
         };
+        if marking.kind == MarkKind::Background {
+            let background = Background {
+                colour: marking.paper.map(|i| PAPERS[i]),
+                image: None,
+                stretch: marking.stretch,
+                opacity: 1.0,
+            };
+            let picture = marking.picture.clone();
+            if background.colour.is_none() && picture.is_none() {
+                return;
+            }
+            self.marking = None;
+            let shown = pages.clone();
+            self.change_document(
+                shown,
+                "marks-failed",
+                move |doc| {
+                    let mut background = background;
+                    if let Some(file) = picture {
+                        let bytes = std::fs::read(&file).map_err(|e| e.to_string())?;
+                        background.image = Some(katna_pdf_sign::page_image(&bytes)?);
+                    }
+                    doc.background(&pages, &background)
+                        .map_err(|e| e.to_string())
+                },
+                cx,
+            );
+            return;
+        }
         let size = read(&marking.size)
             .replace(',', ".")
             .parse::<f32>()
@@ -208,6 +259,167 @@ impl Viewer {
             move |doc| doc.stamp(&pages, &stamp).map_err(|e| e.to_string()),
             cx,
         );
+    }
+
+    /// Asks for a picture to put under the pages.
+    fn choose_background(&mut self, cx: &mut Context<Self>) {
+        let chosen = cx.prompt_for_paths(gpui::PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some(t("marks-background-choose", &[]).into()),
+        });
+        cx.spawn(async move |this, cx| {
+            let Ok(Ok(Some(paths))) = chosen.await else {
+                return;
+            };
+            this.update(cx, |this, cx| {
+                if let Some(m) = this.marking.as_mut() {
+                    m.picture = paths.into_iter().next();
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// A background's colours and picture, in the card.
+    fn background_choices(&self, marking: &Marking, cx: &mut Context<Self>) -> AnyElement {
+        let th = self.theme;
+        let mut papers = div().flex().gap(px(space::S1));
+        let swatch = |id: usize, on: bool| {
+            div()
+                .id(("marks-paper", id))
+                .size(px(28.0))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded_full()
+                .cursor_pointer()
+                .when(on, |d| {
+                    d.border_2().border_color(gpui::rgba(th.katna.accent))
+                })
+                .hover(move |s| s.bg(th.hover))
+        };
+        papers = papers.child(
+            swatch(PAPERS.len(), marking.paper.is_none())
+                .tip(t("marks-background-no-colour", &[]), &th.katna)
+                .on_click(cx.listener(|this, _, _, cx| {
+                    if let Some(m) = this.marking.as_mut() {
+                        m.paper = None;
+                    }
+                    cx.notify();
+                }))
+                .child(
+                    gpui::svg()
+                        .path("icons/close.svg")
+                        .size(px(16.0))
+                        .text_color(th.dim),
+                ),
+        );
+        for (i, paper) in PAPERS.into_iter().enumerate() {
+            papers = papers.child(
+                swatch(i, marking.paper == Some(i))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if let Some(m) = this.marking.as_mut() {
+                            m.paper = Some(i);
+                        }
+                        cx.notify();
+                    }))
+                    .child(
+                        div()
+                            .size(px(18.0))
+                            .rounded_full()
+                            .border_1()
+                            .border_color(th.line)
+                            .bg(super::insert::colour(paper)),
+                    ),
+            );
+        }
+        let name = marking
+            .picture
+            .as_ref()
+            .map(|p| super::file_name(p))
+            .unwrap_or_else(|| t("marks-background-no-picture", &[]));
+        let stretch = marking.stretch;
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(space::S2))
+            .child(
+                div()
+                    .text_size(px(text::SMALL))
+                    .text_color(th.dim)
+                    .child(t("marks-background-colour", &[])),
+            )
+            .child(papers)
+            .child(
+                div()
+                    .text_size(px(text::SMALL))
+                    .text_color(th.dim)
+                    .child(t("marks-background-picture", &[])),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(space::S2))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .whitespace_nowrap()
+                            .text_size(px(text::BODY))
+                            .text_color(th.text)
+                            .child(name),
+                    )
+                    .when(marking.picture.is_some(), |row| {
+                        row.child(
+                            widgets::icon_button("marks-picture-off", "close", 16.0, &th.katna)
+                                .size(px(28.0))
+                                .tip(t("marks-background-no-picture-tip", &[]), &th.katna)
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    if let Some(m) = this.marking.as_mut() {
+                                        m.picture = None;
+                                    }
+                                    cx.notify();
+                                })),
+                        )
+                    })
+                    .child(
+                        widgets::outlined_button(
+                            "marks-picture",
+                            t("marks-background-choose", &[]),
+                            &th.katna,
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| this.choose_background(cx))),
+                    ),
+            )
+            .child(
+                div()
+                    .id("marks-stretch")
+                    .flex()
+                    .items_center()
+                    .gap(px(space::S2))
+                    .cursor_pointer()
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        if let Some(m) = this.marking.as_mut() {
+                            m.stretch = !m.stretch;
+                        }
+                        cx.notify();
+                    }))
+                    .child(check_box(stretch, th))
+                    .child(
+                        div()
+                            .text_size(px(text::BODY))
+                            .text_color(th.text)
+                            .child(t("marks-background-stretch", &[])),
+                    ),
+            )
+            .into_any_element()
     }
 
     /// The page marks card, while it is open.
@@ -257,13 +469,19 @@ impl Viewer {
             (MarkKind::Header, "marks-header"),
             (MarkKind::Watermark, "marks-watermark"),
             (MarkKind::Bates, "marks-bates"),
+            (MarkKind::Background, "marks-background"),
         ];
-        let mut kind_row = div().flex().gap(px(space::S1));
-        for (i, (kind, id)) in kinds.into_iter().enumerate() {
-            kind_row = kind_row.child(
-                chip(("marks-kind", i), t(id, &[]), marking.kind == kind)
-                    .on_click(cx.listener(move |this, _, _, cx| this.set_mark_kind(kind, cx))),
-            );
+        // Two rows of two, so each name fits.
+        let mut kind_row = div().flex().flex_col().gap(px(space::S1));
+        for (r, pair) in kinds.chunks(2).enumerate() {
+            let mut row = div().flex().gap(px(space::S1));
+            for (j, &(kind, id)) in pair.iter().enumerate() {
+                row = row.child(
+                    chip(("marks-kind", r * 2 + j), t(id, &[]), marking.kind == kind)
+                        .on_click(cx.listener(move |this, _, _, cx| this.set_mark_kind(kind, cx))),
+                );
+            }
+            kind_row = kind_row.child(row);
         }
         let place = marking.place;
         let pick_place = move |p: StampPlace| {
@@ -388,6 +606,8 @@ impl Viewer {
             );
         }
         let under = marking.under;
+        let text_mark = marking.kind != MarkKind::Background;
+        let background = (!text_mark).then(|| self.background_choices(marking, cx));
         Some(
             div()
                 .id("marks-card")
@@ -413,7 +633,7 @@ impl Viewer {
                         .child(t("marks-title", &[])),
                 )
                 .child(kind_row)
-                .when(marking.kind != MarkKind::Bates, |d| {
+                .when(text_mark && marking.kind != MarkKind::Bates, |d| {
                     d.child(label("marks-text-label"))
                         .child(field(&marking.words))
                 })
@@ -434,8 +654,10 @@ impl Viewer {
                             .child(div().w(px(96.0)).child(field(&marking.start))),
                     )
                 })
-                .child(label("marks-place"))
-                .child(place_row)
+                .children(background)
+                .when(text_mark, |d| {
+                    d.child(label("marks-place")).child(place_row)
+                })
                 .when(marking.kind == MarkKind::Watermark, |d| {
                     d.child(
                         div()
@@ -463,15 +685,17 @@ impl Viewer {
                     div()
                         .flex()
                         .gap(px(space::S2))
-                        .child(
-                            div()
-                                .w(px(80.0))
-                                .flex()
-                                .flex_col()
-                                .gap(px(space::S1))
-                                .child(label("marks-size-label"))
-                                .child(field(&marking.size)),
-                        )
+                        .when(text_mark, |row| {
+                            row.child(
+                                div()
+                                    .w(px(80.0))
+                                    .flex()
+                                    .flex_col()
+                                    .gap(px(space::S1))
+                                    .child(label("marks-size-label"))
+                                    .child(field(&marking.size)),
+                            )
+                        })
                         .child(
                             div()
                                 .flex_1()
@@ -482,7 +706,7 @@ impl Viewer {
                                 .child(field(&marking.pages)),
                         ),
                 )
-                .child(inks)
+                .when(text_mark, |d| d.child(inks))
                 .child(
                     div()
                         .flex()

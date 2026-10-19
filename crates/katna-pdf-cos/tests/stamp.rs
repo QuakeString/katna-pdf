@@ -3,7 +3,8 @@
 //! Headers, footers, watermarks and Bates numbers on many pages.
 
 use katna_pdf_cos::{
-    Bates, Document, Object, PageSource, Stamp, StampPlace, compose, decode, text_pdf,
+    Background, Bates, Document, Image, Object, PageSource, Picture, Stamp, StampPlace, compose,
+    decode, text_pdf,
 };
 
 /// All the page's content streams, decoded, one string each.
@@ -149,4 +150,45 @@ fn a_footer_sits_at_the_foot_of_a_turned_page() {
         .find(|r| r.text == "Foot")
         .unwrap();
     assert!(run.rect[0] > 545.0 && run.rect[1] > 30.0, "{run:?}");
+}
+
+#[test]
+fn a_background_goes_under_each_page_and_shares_one_picture() {
+    let doc = three(true);
+    // A 2 by 1 picture: fitted to the A4 page's width, centred upright.
+    let picture = Image::Pixels(Picture {
+        width: 2,
+        height: 1,
+        rgb: vec![255, 0, 0, 0, 0, 255],
+        alpha: None,
+    });
+    let background = Background {
+        colour: Some([1.0, 1.0, 0.8]),
+        image: Some(picture),
+        stretch: false,
+        opacity: 0.5,
+    };
+    let out = Document::load(doc.background(&[0, 1, 2], &background).unwrap()).unwrap();
+    let first = streams(&out, 0);
+    assert!(
+        first[0].contains("1 1 0.8 rg 0 0 595 842 re f"),
+        "{first:?}"
+    );
+    assert!(first[0].contains("595 0 0 297.5 0 272.25 cm"), "{first:?}");
+    assert!(first[0].contains(" Do"), "{first:?}");
+    assert!(first[0].contains(" gs"), "{first:?}");
+    assert!(first.last().unwrap().contains("Dear Asha"), "{first:?}");
+    // The turned page: its shown width is the page's height.
+    let turned = streams(&out, 1);
+    assert!(turned[0].contains("0 0 842 595 re f"), "{turned:?}");
+    // Each page names the same picture.
+    let picture_of = |page: usize| {
+        let dict = out.get(out.pages()[page]).unwrap();
+        let res = out.resolve(dict.as_dict().unwrap().get("Resources").unwrap());
+        let Object::Dict(x) = out.resolve_key(res.as_dict().unwrap(), "XObject") else {
+            panic!("no pictures");
+        };
+        x.iter().next().unwrap().1.as_ref().unwrap()
+    };
+    assert_eq!(picture_of(0), picture_of(2));
 }
