@@ -1229,3 +1229,40 @@ fn pages_are_numbered_in_ranges() {
         2
     );
 }
+
+#[test]
+fn a_background_goes_under_the_pages() {
+    let d = dir("background");
+    let file = d.join("two.pdf");
+    std::fs::write(&file, pdf(2)).unwrap();
+    let out = d.join("tinted.pdf");
+    let (code, said) = run(&[
+        "background",
+        s(&file),
+        "-o",
+        s(&out),
+        "--colour",
+        "#ffeecc",
+        "--pages",
+        "2",
+    ]);
+    assert_eq!(code, 0, "{said}");
+    let doc = katna_pdf_cos::Document::load(std::fs::read(&out).unwrap()).unwrap();
+    let page = doc.get(doc.pages()[1]).unwrap();
+    let contents = doc.resolve(page.as_dict().unwrap().get("Contents").unwrap());
+    let first = match contents {
+        katna_pdf_cos::Object::Array(a) => doc.resolve(&a[0]),
+        other => other,
+    };
+    let katna_pdf_cos::Object::Stream(first) = first else {
+        panic!("no content");
+    };
+    let text = katna_pdf_cos::decode(&first.dict, &first.data).unwrap();
+    assert!(
+        String::from_utf8_lossy(&text).contains("1 0.933 0.8 rg 0 0 101 200 re f"),
+        "{}",
+        String::from_utf8_lossy(&text)
+    );
+    // Nothing to put under is a mistake.
+    assert_eq!(run(&["background", s(&file), "-o", s(&out)]).0, 2);
+}

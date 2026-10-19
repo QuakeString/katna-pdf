@@ -6,14 +6,16 @@
 //! prints them. Places are taken as the page is shown (its crop box,
 //! turned by `/Rotate`), so a footer sits at the foot of a turned page
 //! too. The text can carry the page's number, the page count and a Bates
-//! number. The change is one incremental update.
+//! number. Backgrounds, a colour or a picture under each page's own
+//! drawing, are put on the same way. The change is one incremental
+//! update.
 
 use std::io::Write as _;
 
 use crate::document::Document;
 use crate::edit::EditError;
 use crate::fonts::{stand_in, win_ansi_code, win_ansi_width};
-use crate::insert::{PageAdd, num};
+use crate::insert::{Image, PageAdd, image_object, num};
 
 /// Where on the page a stamp goes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -84,7 +86,92 @@ impl Stamp {
     }
 }
 
+/// A colour, a picture, or both (the picture over the colour), under
+/// what pages draw.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Background {
+    pub colour: Option<[f32; 3]>,
+    pub image: Option<Image>,
+    /// The picture stretched over the whole page rather than fitted
+    /// inside it, centred, keeping its shape.
+    pub stretch: bool,
+    /// From 0 (unseen) to 1 (solid).
+    pub opacity: f32,
+}
+
+/// The shown page's width and height, and the matrix from its upright
+/// bottom left corner to the page's own space.
+fn shown_page(crop: [f32; 4], rotate: i64) -> (f32, f32, [f32; 6]) {
+    let [l, b, r, t] = crop;
+    let (l, r, b, t) = (l.min(r), l.max(r), b.min(t), b.max(t));
+    match rotate.rem_euclid(360) {
+        90 => (t - b, r - l, [0.0, 1.0, -1.0, 0.0, r, b]),
+        180 => (r - l, t - b, [-1.0, 0.0, 0.0, -1.0, r, t]),
+        270 => (t - b, r - l, [0.0, -1.0, 1.0, 0.0, l, t]),
+        _ => (r - l, t - b, [1.0, 0.0, 0.0, 1.0, l, b]),
+    }
+}
+
 impl Document {
+    /// The file with `background` under each of `pages` (counted from 0).
+    pub fn background(
+        &self,
+        pages: &[usize],
+        background: &Background,
+    ) -> Result<Vec<u8>, EditError> {
+        let mut update = self.update()?;
+        // One picture, shared by every page.
+        let image = background.image.as_ref().map(|image| {
+            let (w, h) = match image {
+                Image::Pixels(p) => (p.width, p.height),
+                Image::Jpeg { width, height, .. } => (*width, *height),
+            };
+            (
+                image_object(&mut update, image),
+                w.max(1) as f32,
+                h.max(1) as f32,
+            )
+        });
+        for &page in pages {
+            let info = self.page_info(page).ok_or(EditError::NoPage)?;
+            let mut add = PageAdd::new(self, page)?;
+            let state = (background.opacity < 1.0)
+                .then(|| add.opacity(&mut update, background.opacity.clamp(0.0, 1.0)));
+            let (w, h, shown) = shown_page(info.crop, info.rotate);
+            let mut out = Vec::new();
+            let _ = write!(out, "q {} cm ", nums(&shown));
+            if let Some(state) = &state {
+                let _ = write!(out, "/{state} gs ");
+            }
+            if let Some([r, g, b]) = background.colour {
+                let _ = writeln!(
+                    out,
+                    "{} rg 0 0 {} {} re f",
+                    nums(&[r, g, b]),
+                    num(w),
+                    num(h)
+                );
+            }
+            if let Some((image, iw, ih)) = image {
+                let key = add.xobject(image);
+                let (dw, dh) = if background.stretch {
+                    (w, h)
+                } else {
+                    let scale = (w / iw).min(h / ih);
+                    (iw * scale, ih * scale)
+                };
+                let _ = writeln!(
+                    out,
+                    "q {} cm /{key} Do Q",
+                    nums(&[dw, 0.0, 0.0, dh, (w - dw) / 2.0, (h - dh) / 2.0])
+                );
+            }
+            out.extend_from_slice(b"Q\n");
+            add.finish(&mut update, &out, true);
+        }
+        Ok(update.finish())
+    }
+
     /// The file with `stamp` drawn on each of `pages` (counted from 0).
     pub fn stamp(&self, pages: &[usize], stamp: &Stamp) -> Result<Vec<u8>, EditError> {
         let count = self.pages().len();
@@ -114,14 +201,7 @@ impl Document {
                 lines.push((bytes, wide as f32 * stamp.size / 1000.0));
             }
             // The shown page, upright, from its bottom left corner.
-            let [l, b, r, t] = info.crop;
-            let (l, r, b, t) = (l.min(r), l.max(r), b.min(t), b.max(t));
-            let (w, h, shown) = match info.rotate.rem_euclid(360) {
-                90 => (t - b, r - l, [0.0, 1.0, -1.0, 0.0, r, b]),
-                180 => (r - l, t - b, [-1.0, 0.0, 0.0, -1.0, r, t]),
-                270 => (t - b, r - l, [0.0, -1.0, 1.0, 0.0, l, t]),
-                _ => (r - l, t - b, [1.0, 0.0, 0.0, 1.0, l, b]),
-            };
+            let (w, h, shown) = shown_page(info.crop, info.rotate);
             let size = stamp.size;
             let lead = size * 1.2;
             let tall = lead * (lines.len() - 1) as f32;

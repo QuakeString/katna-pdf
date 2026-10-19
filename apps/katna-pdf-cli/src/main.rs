@@ -89,6 +89,11 @@ usage: katna-pdf-cli COMMAND [--json] ...
                                   the page's number, the page count and its Bates
                                   number; across is a large faint watermark corner
                                   to corner; --under draws it beneath the page
+  background FILE -o OUT [--colour #RRGGBB] [--image PICTURE [--stretch]]
+             [--opacity 0..1] [--pages LIST]
+                                  a colour, a picture (fitted inside the page, or
+                                  stretched over it), or both, under every page's
+                                  own drawing (or LIST's)
   objects FILE [--pages LIST]     the pictures, forms and shapes drawn on pages, numbered
                                   PAGE:OBJECT, with where each is
   object FILE PAGE:OBJECT -o OUT (--rect L,B,R,T | --delete | --turn | --front |
@@ -201,6 +206,7 @@ fn main() -> ExitCode {
         "fill" => fill(rest, json),
         "insert" => insert(rest, json),
         "stamp" => stamp(rest, json),
+        "background" => background(rest, json),
         "meta" => meta(rest, json),
         "lock" => lock(rest, json),
         "redact" => redact(rest, json),
@@ -374,6 +380,7 @@ impl<'a> Args<'a> {
                 "--no-fill",
                 "--csv",
                 "--clear",
+                "--stretch",
             ]
             .contains(&a.as_str())
             {
@@ -1774,6 +1781,49 @@ fn links(args: &[String], json: bool) -> Done {
         doc = Document::load(bytes.clone()).map_err(|e| failed(format!("{file}: {e}")))?;
     }
     let out = PathBuf::from(out);
+    write(&out, &bytes)?;
+    Ok(wrote(&[(out, count)], json))
+}
+
+/// Puts a colour or a picture under the pages.
+fn background(args: &[String], json: bool) -> Done {
+    let args = Args::parse(args)?;
+    let [file] = args.words()?;
+    let out = args.output()?;
+    let doc = open(file)?;
+    let count = doc.pages().len();
+    let pages = match args.option("--pages") {
+        Some(spec) => ranges::parse(spec, count).map_err(failed)?,
+        None => (0..count).collect(),
+    };
+    let colour = match args.option("--colour") {
+        Some(_) => Some(colour_option(&args, [1.0; 3])?),
+        None => None,
+    };
+    let image = match args.option("--image") {
+        Some(picture) => {
+            let bytes = std::fs::read(picture).map_err(|e| failed(format!("{picture}: {e}")))?;
+            Some(
+                katna_pdf_sign::page_image(&bytes)
+                    .map_err(|e| failed(format!("{picture}: {e}")))?,
+            )
+        }
+        None => None,
+    };
+    if colour.is_none() && image.is_none() {
+        return Err(Failure::Usage(
+            "say what to put under with --colour or --image".into(),
+        ));
+    }
+    let background = katna_pdf_cos::Background {
+        colour,
+        image,
+        stretch: args.flag("--stretch"),
+        opacity: number_option(&args, "--opacity", 1.0, |v| (0.0..=1.0).contains(&v))?,
+    };
+    let bytes = doc
+        .background(&pages, &background)
+        .map_err(|e| failed(format!("{file}: {e}")))?;
     write(&out, &bytes)?;
     Ok(wrote(&[(out, count)], json))
 }
