@@ -22,13 +22,13 @@ use crate::pages::page_dict;
 /// list none: picking one stroke among them is not what moving is for.
 const MOST: usize = 20_000;
 
-type Matrix = [f64; 6];
+pub(crate) type Matrix = [f64; 6];
 /// A path being built: its first operator, the matrix then, and its points.
 type OpenPath = (usize, Matrix, Vec<(f64, f64)>);
-const IDENTITY: Matrix = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0];
+pub(crate) const IDENTITY: Matrix = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0];
 
 /// `a` then `b`.
-fn mul(a: &Matrix, b: &Matrix) -> Matrix {
+pub(crate) fn mul(a: &Matrix, b: &Matrix) -> Matrix {
     [
         a[0] * b[0] + a[1] * b[2],
         a[0] * b[1] + a[1] * b[3],
@@ -39,7 +39,7 @@ fn mul(a: &Matrix, b: &Matrix) -> Matrix {
     ]
 }
 
-fn apply(m: &Matrix, x: f64, y: f64) -> (f64, f64) {
+pub(crate) fn apply(m: &Matrix, x: f64, y: f64) -> (f64, f64) {
     (m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5])
 }
 
@@ -77,9 +77,9 @@ pub struct PageObject {
 }
 
 /// A page's content and operators, read.
-struct Content {
+pub(crate) struct Content {
     content: Vec<u8>,
-    ops: Vec<Op>,
+    pub(crate) ops: Vec<Op>,
 }
 
 impl Document {
@@ -244,7 +244,7 @@ impl Document {
         self.write_page_content(page, &content)
     }
 
-    fn page_content(&self, page: usize) -> Option<Content> {
+    pub(crate) fn page_content(&self, page: usize) -> Option<Content> {
         let dict = page_dict(self, *self.pages().get(page)?);
         let streams = match dict.get("Contents").map(|c| self.resolve(c)) {
             Some(Object::Array(a)) => a.iter().map(|s| self.resolve(s)).collect(),

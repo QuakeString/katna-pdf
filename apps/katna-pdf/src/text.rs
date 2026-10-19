@@ -52,6 +52,16 @@ mod tests {
     }
 
     #[test]
+    fn every_id_is_used_once() {
+        let mut seen = std::collections::HashSet::new();
+        for line in ENGLISH.lines().filter(|l| !l.starts_with('#')) {
+            if let Some((id, _)) = line.split_once(" = ") {
+                assert!(seen.insert(id.trim()), "{id} twice");
+            }
+        }
+    }
+
+    #[test]
     fn fills_in_variables() {
         assert_eq!(t("page-of", &[("page", "3"), ("count", "24")]), "3 / 24");
     }

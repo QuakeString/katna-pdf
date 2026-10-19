@@ -98,6 +98,7 @@ usage: katna-pdf-cli COMMAND [--json] ...
        [--rename NAME=NEW]... [--move NAME:L,B,R,T]... [--copy NAME:PAGES]...
        [--remove NAME]... [--order PAGE:NAME,NAME,...]...
        [--total NAME=SUM:FIELD,FIELD,...]... [--format NAME=FORMAT]...
+       [--detect PAGES|all]
                                   the form designed: fields added (KIND text, multiline,
                                   password, check, radio=CHOICE, combo=A;B;C,
                                   list=A;B;C, button=CAPTION or signature; radio
@@ -108,7 +109,11 @@ usage: katna-pdf-cli COMMAND [--json] ...
                                   max of other fields, worked out as the form is
                                   filled) and a format (number:DECIMALS[:CURRENCY],
                                   percent:DECIMALS, date:PATTERN such as dd/mm/yyyy,
-                                  phone, or none) given
+                                  phone, or none) given; --detect adds the fields a
+                                  flat form's pages ask for (blanks of underscores,
+                                  rules to write on, empty boxes, rows of letter
+                                  boxes, squares to tick), named from the words
+                                  beside them
   form-data FILE [--csv]          each field's value by its full name, as one JSON
                                   object (or CSV: names, then values)
   fill FILE -o OUT [--data DATA.json|DATA.csv] [--set NAME=VALUE]...
@@ -314,6 +319,7 @@ impl<'a> Args<'a> {
                     | "--data"
                     | "--set"
                     | "--total"
+                    | "--detect"
                     | "--format"
             ) {
                 let Some(value) = it.next() else {
@@ -1619,6 +1625,19 @@ fn form(args: &[String], json: bool) -> Done {
             value: None,
             scripts: katna_pdf_cos::Scripts::default(),
         });
+    }
+    if let Some(spec) = args.option("--detect") {
+        let pages = match spec {
+            "all" => (0..count).collect(),
+            spec => ranges::parse(spec, count).map_err(failed)?,
+        };
+        let mut taken: Vec<String> = fields.iter().map(|f| f.name.clone()).collect();
+        taken.extend(design.add.iter().map(|s| s.name.clone()));
+        for page in pages {
+            let found = doc.detect_fields(page, &taken);
+            taken.extend(found.iter().map(|s| s.name.clone()));
+            design.add.extend(found);
+        }
     }
     let field = |name: &str| {
         fields
