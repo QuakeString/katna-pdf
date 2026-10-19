@@ -59,6 +59,11 @@ usage: katna-pdf-cli COMMAND [--json] ...
                                   text in a standard font (Helvetica, Times-Roman,
                                   Courier, -Bold and so on), its first baseline at X,Y;
                                   a line runs from L,B to R,T
+  objects FILE [--pages LIST]     the pictures, forms and shapes drawn on pages, numbered
+                                  PAGE:OBJECT, with where each is
+  object FILE PAGE:OBJECT -o OUT (--rect L,B,R,T | --delete)
+                                  a picture or shape moved and resized to fill the box,
+                                  or taken out of the page
   add-field FILE -o OUT --rect L,B,R,T [--page N] [--name NAME]
                                   an empty signature field, for someone to sign later
   ltv FILE -o OUT [--trust PATH] [--tsa URL]
@@ -110,6 +115,8 @@ fn main() -> ExitCode {
         "verify" => verify(rest, json),
         "add-field" => add_field(rest, json),
         "insert" => insert(rest, json),
+        "objects" => objects(rest, json),
+        "object" => object(rest, json),
         "ltv" => ltv(rest, json),
         "tokens" => tokens(rest, json),
         "token-check" => token_check(rest, json),
@@ -222,7 +229,7 @@ impl<'a> Args<'a> {
                 };
                 options.push((a.as_str(), value.as_str()));
             } else if [
-                "--uncrop", "--online", "--ltv", "--lta", "--blocks", "--fill",
+                "--uncrop", "--online", "--ltv", "--lta", "--blocks", "--fill", "--delete",
             ]
             .contains(&a.as_str())
             {
@@ -1044,6 +1051,93 @@ fn insert(args: &[String], json: bool) -> Done {
     let bytes = doc
         .insert(page, &[item])
         .map_err(|e| failed(format!("{file}: {e}")))?;
+    write(&out, &bytes)?;
+    Ok(wrote(&[(out, doc.pages().len())], json))
+}
+
+/// Lists the pictures, forms and shapes drawn on pages.
+fn objects(args: &[String], json: bool) -> Done {
+    let args = Args::parse(args)?;
+    let [file] = args.words()?;
+    let doc = open(file)?;
+    let count = doc.pages().len();
+    let pages = match args.option("--pages") {
+        Some(spec) => ranges::parse(spec, count).map_err(failed)?,
+        None => (0..count).collect(),
+    };
+    let mut out = String::new();
+    let mut items = Vec::new();
+    for page in pages {
+        for (i, object) in doc.page_objects(page).iter().enumerate() {
+            let kind = match object.kind {
+                katna_pdf_cos::ObjectKind::Picture => "picture",
+                katna_pdf_cos::ObjectKind::Form => "form",
+                katna_pdf_cos::ObjectKind::Path => "shape",
+            };
+            let rect = object.rect.map(num);
+            if json {
+                items.push(format!(
+                    "{{\"object\":\"{}:{}\",\"kind\":\"{kind}\",\"rect\":[{}]}}",
+                    page + 1,
+                    i + 1,
+                    rect.join(",")
+                ));
+            } else {
+                let _ = writeln!(
+                    out,
+                    "{:<8} {kind:<8} {}",
+                    format!("{}:{}", page + 1, i + 1),
+                    rect.join(",")
+                );
+            }
+        }
+    }
+    if json {
+        out = format!("{{\"objects\":[{}]}}\n", items.join(","));
+    }
+    Ok(out)
+}
+
+/// Moves and resizes a picture or shape, or takes it out of its page.
+fn object(args: &[String], json: bool) -> Done {
+    let args = Args::parse(args)?;
+    let [file, id] = args.words()?;
+    let out = args.output()?;
+    let doc = open(file)?;
+    let bad = || Failure::Usage(format!("{id}: PAGE:OBJECT, as `objects` numbers them"));
+    let (page, index) = id.split_once(':').ok_or_else(bad)?;
+    let page = page
+        .parse::<usize>()
+        .ok()
+        .filter(|p| (1..=doc.pages().len()).contains(p))
+        .ok_or_else(bad)?
+        - 1;
+    let index = index
+        .parse::<usize>()
+        .ok()
+        .and_then(|i| i.checked_sub(1))
+        .ok_or_else(bad)?;
+    let object = doc
+        .page_objects(page)
+        .into_iter()
+        .nth(index)
+        .ok_or_else(|| failed(format!("{id}: no such object")))?;
+    let bytes = match (args.option("--rect"), args.flag("--delete")) {
+        (Some(rect), false) => {
+            let [l, b, r, t] = object.rect;
+            let [nl, nb, nr, nt] = parse_rect(rect)?;
+            let sx = if r > l { (nr - nl) / (r - l) } else { 1.0 };
+            let sy = if t > b { (nt - nb) / (t - b) } else { 1.0 };
+            doc.transform_object(page, index, [sx, 0.0, 0.0, sy, nl - l * sx, nb - b * sy])
+        }
+        (None, true) => doc.delete_object(page, index),
+        _ => {
+            return Err(Failure::Usage(
+                "object takes one of --rect and --delete".into(),
+            ));
+        }
+    }
+    .map_err(|e| failed(format!("{file}: {e}")))?;
     write(&out, &bytes)?;
     Ok(wrote(&[(out, doc.pages().len())], json))
 }

@@ -12,7 +12,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use gpui::{AnyElement, Context, Entity, Focusable, Subscription, Window, div, prelude::*};
-use katna_pdf_cos::TextBlock;
+use katna_pdf_cos::{PageObject, TextBlock};
 use katna_ui::px;
 use katna_ui::scale::desktop_px;
 use katna_ui::text_area::TextArea;
@@ -22,10 +22,12 @@ use katna_ui::tokens::radius;
 use super::{Content, Viewer};
 use crate::text::t;
 
-/// The paragraphs read so far, by page, and the pages being read.
+/// The paragraphs, pictures and shapes read so far, by page, and the
+/// pages being read.
 #[derive(Default)]
 pub(super) struct Runs {
     pages: HashMap<usize, Arc<Vec<TextBlock>>>,
+    pub(super) objects: HashMap<usize, Arc<Vec<PageObject>>>,
     reading: HashSet<usize>,
     /// Bumped when the file changes, so runs read from the old one are
     /// dropped.
@@ -55,6 +57,8 @@ impl Viewer {
         self.text_editing = !self.text_editing;
         self.adding = None;
         self.placing = None;
+        self.picked_object = None;
+        self.moving = None;
         if self.text_editing {
             self.tools = false;
             self.tool = None;
@@ -73,11 +77,14 @@ impl Viewer {
         self.text_editing = false;
         self.adding = None;
         self.placing = None;
+        self.picked_object = None;
+        self.moving = None;
     }
 
     /// Forgets the runs read, as the file changed.
     pub(super) fn forget_runs(&mut self) {
         self.runs.pages.clear();
+        self.runs.objects.clear();
         self.runs.reading.clear();
         self.runs.generation += 1;
     }
@@ -102,7 +109,7 @@ impl Viewer {
                         None => std::fs::read(&path).ok()?,
                     };
                     let doc = katna_pdf_cos::Document::load(bytes).ok()?;
-                    Some(doc.text_blocks(page))
+                    Some((doc.text_blocks(page), doc.page_objects(page)))
                 })
                 .await;
             this.update(cx, |this, cx| {
@@ -110,9 +117,12 @@ impl Viewer {
                     return;
                 }
                 this.runs.reading.remove(&page);
-                this.runs
-                    .pages
-                    .insert(page, Arc::new(runs.unwrap_or_default()));
+                let (blocks, objects) = runs.unwrap_or_default();
+                this.runs.pages.insert(page, Arc::new(blocks));
+                this.runs.objects.insert(page, Arc::new(objects));
+                if this.picked_object_on(page) {
+                    this.refresh_inspector(cx);
+                }
                 cx.notify();
             })
             .ok();
@@ -385,6 +395,7 @@ impl Viewer {
                     .into_any_element(),
             );
         }
+        out.extend(self.objects_overlay(page));
         out.extend(self.insert_preview(page));
         out
     }

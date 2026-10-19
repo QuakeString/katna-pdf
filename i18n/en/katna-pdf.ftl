@@ -34,13 +34,17 @@ search-open = Find (Ctrl+F)
 organize = Organize pages
 annotate = Annotate
 edit-text = Edit text: click a paragraph to change it; Enter starts a new line, Ctrl+Enter keeps the change
-edit-paragraphs = Edit paragraphs: click one to change its words
+edit-paragraphs = Edit: click a paragraph to change its words, or a picture or shape to move, resize or delete it
 add-text = Add text: click where it goes and type; a click elsewhere puts it in the page
 add-picture = Add a picture: click where it goes, or drag out a box for it (Ctrl+V puts in a copied picture)
 add-picture-choose = Picture to add
 add-rectangle = Add a rectangle: drag it out
 add-ellipse = Add an ellipse: drag it out
 add-line = Add a line: drag it out
+object-picture = Picture
+object-form = Drawing
+object-shape = Shape
+object-delete = Delete it (Delete)
 text-edit-failed = The text could not be changed: { $error }
 
 ## Find in the document

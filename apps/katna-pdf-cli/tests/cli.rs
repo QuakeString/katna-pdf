@@ -618,3 +618,55 @@ fn text_and_shapes_are_drawn_into_a_page() {
     ]);
     assert_ne!(code, 0);
 }
+
+#[test]
+fn objects_are_listed_moved_and_taken_out() {
+    let d = dir("objects");
+    let file = d.join("note.pdf");
+    std::fs::write(
+        &file,
+        katna_pdf_cos::text_pdf("Note", &["  Hello".to_string()]),
+    )
+    .unwrap();
+    let boxed = d.join("boxed.pdf");
+    let (code, out) = run(&[
+        "insert",
+        s(&file),
+        "-o",
+        s(&boxed),
+        "--shape",
+        "rectangle",
+        "--rect",
+        "100,100,200,150",
+        "--fill",
+    ]);
+    assert_eq!(code, 0, "{out}");
+    let (code, out) = run(&["objects", s(&boxed), "--json"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(
+        out.contains(r#"{"object":"1:1","kind":"shape","rect":[100,100,200,150]}"#),
+        "{out}"
+    );
+    let moved = d.join("moved.pdf");
+    let (code, out) = run(&[
+        "object",
+        s(&boxed),
+        "1:1",
+        "-o",
+        s(&moved),
+        "--rect",
+        "300,400,500,500",
+    ]);
+    assert_eq!(code, 0, "{out}");
+    let (_, out) = run(&["objects", s(&moved)]);
+    assert!(out.contains("1:1      shape    300,400,500,500"), "{out}");
+    let gone = d.join("gone.pdf");
+    let (code, out) = run(&["object", s(&moved), "1:1", "-o", s(&gone), "--delete"]);
+    assert_eq!(code, 0, "{out}");
+    let (_, out) = run(&["objects", s(&gone)]);
+    assert_eq!(out, "");
+    let (_, out) = run(&["text", s(&gone)]);
+    assert!(out.contains("Hello"), "{out}");
+    let (code, _) = run(&["object", s(&gone), "1:1", "-o", s(&moved), "--delete"]);
+    assert_ne!(code, 0);
+}
