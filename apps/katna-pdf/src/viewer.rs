@@ -34,10 +34,12 @@ use katna_ui::widgets::{self, Tip};
 use katna_ui::{ScrollBar, px, unpx};
 
 mod annots;
+mod bookmarks;
 mod crop;
 mod datepick;
 mod design;
 mod insert;
+mod linking;
 mod marks;
 mod objects;
 mod organizer;
@@ -90,6 +92,7 @@ actions!(
         Sign,
         PastePicture,
         Properties,
+        AddBookmark,
         Quit
     ]
 );
@@ -129,6 +132,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl-p", Print, None),
         KeyBinding::new("ctrl-s", Save, None),
         KeyBinding::new("ctrl-d", Properties, None),
+        KeyBinding::new("ctrl-b", AddBookmark, None),
         KeyBinding::new("ctrl-=", ZoomIn, None),
         KeyBinding::new("ctrl-+", ZoomIn, None),
         KeyBinding::new("ctrl--", ZoomOut, None),
@@ -281,8 +285,10 @@ pub struct Viewer {
     /// Bumped when the file shown changes in place (a form filled in),
     /// so a page drawn from the old one is drawn again.
     revision: u64,
-    /// The document's outline, once read, if it has one.
+    /// The document's outline, once read (empty when it has none).
     contents: Option<Contents>,
+    /// The bookmark being renamed.
+    renaming: Option<bookmarks::Renaming>,
     /// The form, once read, if the file has fields to fill in.
     form: Option<Form>,
     /// Each page's links, once read.
@@ -338,6 +344,8 @@ pub struct Viewer {
     marking: Option<marks::Marking>,
     /// The redact tool, while in hand, and the areas it marked.
     redacting: Option<redact::Redacting>,
+    /// The link tool, while in hand.
+    linking: Option<linking::Linking>,
     /// The form tool, while in hand.
     designing: Option<design::Designing>,
     properties: Option<properties::Properties>,
@@ -430,6 +438,7 @@ impl Viewer {
             generation: 0,
             revision: 0,
             contents: None,
+            renaming: None,
             form: None,
             links: None,
             texts: None,
@@ -458,6 +467,7 @@ impl Viewer {
             picked_object: None,
             marking: None,
             redacting: None,
+            linking: None,
             designing: None,
             properties: None,
             moving: None,
@@ -550,6 +560,7 @@ impl Viewer {
         let generation = self.generation;
         self.content = Content::Opening(name.clone());
         self.contents = None;
+        self.renaming = None;
         self.form = None;
         self.links = None;
         self.texts = None;
@@ -562,6 +573,7 @@ impl Viewer {
         self.typing = None;
         self.adding = None;
         self.redacting = None;
+        self.linking = None;
         self.designing = None;
         self.placing = None;
         self.picked_object = None;
@@ -723,14 +735,12 @@ impl Viewer {
                     this.links = Some(Arc::new(links));
                     cx.notify();
                 }
-                if !outline.is_empty() {
-                    this.contents = Some(Contents::new(outline));
-                    if show {
-                        this.pane = true;
-                        this.tab = PaneTab::Contents;
-                    }
-                    cx.notify();
+                if show && !outline.is_empty() {
+                    this.pane = true;
+                    this.tab = PaneTab::Contents;
                 }
+                this.contents = Some(Contents::new(outline));
+                cx.notify();
             })
             .ok();
         })
@@ -1058,6 +1068,7 @@ impl Viewer {
         if self.sign_press(event.position, cx)
             || self.design_press(event.position, cx)
             || self.redact_press(event.position, cx)
+            || self.link_press(event.position, cx)
             || self.insert_press(event.position, window, cx)
             || self.object_press(event.position, cx)
             || self.text_edit_press(cx)
@@ -1077,6 +1088,7 @@ impl Viewer {
     fn drag(&mut self, event: &gpui::MouseMoveEvent, cx: &mut Context<Self>) {
         if self.design_drag(event.position, cx)
             || self.redact_drag(event.position, cx)
+            || self.link_drag(event.position, cx)
             || self.insert_drag(event.position, cx)
             || self.object_drag(event.position, cx)
             || self.annot_drag(event.position, cx)
@@ -1102,6 +1114,7 @@ impl Viewer {
             || self.crop_release(cx)
             || self.design_release(cx)
             || self.redact_release(cx)
+            || self.link_release(cx)
             || self.insert_release(cx)
             || self.object_release(cx)
             || self.annot_release(cx)
@@ -1462,25 +1475,45 @@ impl Viewer {
         let body = match (tab, self.contents.as_ref()) {
             (PaneTab::Comments, _) => self.comments(window, cx),
             (PaneTab::Signatures, _) => self.signatures_list(cx),
+            (PaneTab::Contents, Some(contents)) if contents.items.is_empty() => div()
+                .p(px(space::S5))
+                .text_size(px(text::SMALL))
+                .text_color(th.dim)
+                .child(t("bookmark-none", &[]))
+                .into_any_element(),
             (PaneTab::Contents, Some(contents)) => {
+                let chosen = contents.chosen.clone();
                 let rows = contents.rows().into_iter().map(|row| {
                     let (path, dest) = (row.path.clone(), row.dest);
+                    let picked = chosen.as_ref() == Some(&path);
+                    let editor = self.renaming_field(&path);
+                    let pick = path.clone();
                     let fold = cx.listener(move |this, _: &(), _, cx| {
                         if let Some(contents) = this.contents.as_mut() {
                             contents.toggle(&path);
                             cx.notify();
                         }
                     });
-                    let go = cx.listener(move |this, _: &(), _, cx| {
-                        if let Some(dest) = dest {
+                    let go = cx.listener(move |this, clicks: &usize, window, cx| {
+                        if let Some(contents) = this.contents.as_mut() {
+                            contents.chosen = Some(pick.clone());
+                        }
+                        if *clicks == 2 {
+                            this.start_renaming(window, cx);
+                        } else if this.renaming.is_none()
+                            && let Some(dest) = dest
+                        {
                             this.go_to(dest, cx);
                         }
+                        cx.notify();
                     });
                     contents::row(
                         row,
                         th,
+                        picked,
+                        editor,
                         move |window, cx| fold(&(), window, cx),
-                        move |window, cx| go(&(), window, cx),
+                        move |clicks, window, cx| go(&clicks, window, cx),
                     )
                 });
                 let list = div()
@@ -1572,6 +1605,7 @@ impl Viewer {
         let actions = match tab {
             PaneTab::Pages => Some(self.page_actions(cx)),
             PaneTab::Comments if self.annots.is_some() => Some(self.comment_actions(cx)),
+            PaneTab::Contents if self.contents.is_some() => Some(self.outline_actions(cx)),
             _ => None,
         };
         Some(
@@ -2159,7 +2193,8 @@ impl Viewer {
         self.selection = None;
         self.reading_text.clear();
         let (outline, links, fields) = (cos.outline(), cos.links(), cos.form());
-        self.contents = (!outline.is_empty()).then(|| Contents::new(outline));
+        self.contents = Some(Contents::new(outline));
+        self.renaming = None;
         self.links = links.iter().any(|l| !l.is_empty()).then(|| Arc::new(links));
         self.annots = Some(Arc::new(cos.annotations()));
         self.signatures = Some(Arc::new(sign::check(&cos)));
@@ -3101,6 +3136,7 @@ impl Render for Viewer {
         let signing_card = self.signing_card(cx);
         let marks_card = self.marks_card(cx);
         let redact_card = self.redact_card(cx);
+        let link_card = self.link_card(window, cx);
         let design_card = self.design_card(cx);
         let properties_card = self.properties_card(cx);
         let find_bar = self.find_bar(cx);
@@ -3229,6 +3265,9 @@ impl Render for Viewer {
             .on_action(cx.listener(|this, _: &Organize, _, cx| this.toggle_organizer(cx)))
             .on_action(cx.listener(|this, _: &Sign, _, cx| this.toggle_signing(cx)))
             .on_action(cx.listener(|this, _: &Properties, _, cx| this.toggle_properties(cx)))
+            .on_action(cx.listener(|this, _: &AddBookmark, window, cx| {
+                this.add_bookmark(window, cx);
+            }))
             .on_action(cx.listener(|this, _: &PastePicture, _, cx| {
                 this.paste_picture(cx);
             }))
@@ -3293,6 +3332,7 @@ impl Render for Viewer {
                             .children(signing_card)
                             .children(marks_card)
                             .children(redact_card)
+                            .children(link_card)
                             .children(design_card)
                             .children(properties_card),
                     ),

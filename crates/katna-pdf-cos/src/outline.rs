@@ -123,7 +123,7 @@ impl<'a> OutlineReader<'a> {
     }
 
     /// An explicit destination array, or a named one looked up.
-    fn destination(&mut self, dest: &Object, depth: usize) -> Option<Destination> {
+    pub(crate) fn destination(&mut self, dest: &Object, depth: usize) -> Option<Destination> {
         match dest {
             Object::Array(parts) => self.explicit(parts),
             // A named destination's value may be the array itself or a

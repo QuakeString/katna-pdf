@@ -153,6 +153,20 @@ usage: katna-pdf-cli COMMAND [--json] ...
                                   or OLD to NEW wherever a run holds it; the run's own
                                   font is kept where it has the letters, a standard
                                   font stands in where not
+  bookmarks FILE [-o OUT (--from LIST | --add PAGE[@TOP]:TITLE... | --clear)]
+                                  the outline, one item a line: two spaces a level in,
+                                  the title, a tab, the page (and @ the height at the
+                                  top of the view); with -o the outline written anew
+                                  from a LIST in that form, items added at the end,
+                                  or taken out
+  links FILE [--pages PAGES] [-o OUT [--remove PAGE:LINK]... [--add PAGE:L,B,R,T:TO]...]
+                                  the links, numbered PAGE:LINK, with their box and
+                                  where they go; with -o some taken out and others
+                                  added, going to TO: a web or mail address, or a
+                                  page (PAGE[@TOP])
+  dests FILE [-o OUT [--set NAME=PAGE[@TOP]]... [--remove NAME]...]
+                                  the named destinations (places links and other
+                                  files go to by name); with -o some set or taken out
   annots FILE                     the annotations, page by page
   xfdf-export FILE -o OUT.xfdf    the annotations as XFDF
   xfdf-import FILE XFDF -o OUT    the annotations of XFDF added to the PDF
@@ -187,6 +201,9 @@ fn main() -> ExitCode {
         "redact" => redact(rest, json),
         "unlock" => unlock(rest, json),
         "objects" => objects(rest, json),
+        "bookmarks" => bookmarks(rest, json),
+        "links" => links(rest, json),
+        "dests" => dests(rest, json),
         "object" => object(rest, json),
         "ltv" => ltv(rest, json),
         "tokens" => tokens(rest, json),
@@ -328,6 +345,7 @@ impl<'a> Args<'a> {
                     | "--total"
                     | "--detect"
                     | "--format"
+                    | "--from"
             ) {
                 let Some(value) = it.next() else {
                     return Err(Failure::Usage(format!("{a} needs a value")));
@@ -348,6 +366,7 @@ impl<'a> Args<'a> {
                 "--scrub",
                 "--no-fill",
                 "--csv",
+                "--clear",
             ]
             .contains(&a.as_str())
             {
@@ -1527,6 +1546,275 @@ fn objects(args: &[String], json: bool) -> Done {
         out = format!("{{\"objects\":[{}]}}\n", items.join(","));
     }
     Ok(out)
+}
+
+/// A place written as `PAGE` or `PAGE@TOP`, the page counted from 1.
+fn place(text: &str, count: usize) -> Result<katna_pdf_cos::Destination, Failure> {
+    let bad = || Failure::Usage(format!("{text}: PAGE or PAGE@TOP, pages from 1 to {count}"));
+    let (page, top) = match text.trim().split_once('@') {
+        Some((p, t)) => (p, Some(t.trim().parse::<f32>().map_err(|_| bad())?)),
+        None => (text.trim(), None),
+    };
+    let page = page.trim().parse::<usize>().map_err(|_| bad())?;
+    if page == 0 || page > count {
+        return Err(bad());
+    }
+    Ok(katna_pdf_cos::Destination {
+        page: page - 1,
+        top,
+    })
+}
+
+fn show_place(dest: &katna_pdf_cos::Destination) -> String {
+    match dest.top {
+        Some(top) => format!("{}@{}", dest.page + 1, num(top)),
+        None => (dest.page + 1).to_string(),
+    }
+}
+
+fn place_json(dest: &katna_pdf_cos::Destination) -> String {
+    match dest.top {
+        Some(top) => format!("{{\"page\":{},\"top\":{}}}", dest.page + 1, num(top)),
+        None => format!("{{\"page\":{}}}", dest.page + 1),
+    }
+}
+
+/// Lists the outline, or writes it anew.
+fn bookmarks(args: &[String], json: bool) -> Done {
+    use katna_pdf_cos::OutlineItem;
+    let args = Args::parse(args)?;
+    let [file] = args.words()?;
+    let doc = open(file)?;
+    let count = doc.pages().len();
+    let Some(out) = args.option("-o") else {
+        fn list(items: &[OutlineItem], depth: usize, out: &mut String) {
+            for item in items {
+                let to = item.dest.as_ref().map(show_place).unwrap_or_default();
+                let _ = writeln!(out, "{}{}\t{to}", "  ".repeat(depth), item.title);
+                list(&item.children, depth + 1, out);
+            }
+        }
+        fn list_json(items: &[OutlineItem]) -> String {
+            let items: Vec<String> = items
+                .iter()
+                .map(|i| {
+                    format!(
+                        "{{\"title\":{},\"to\":{},\"open\":{},\"children\":{}}}",
+                        string(&i.title),
+                        i.dest.as_ref().map_or("null".into(), place_json),
+                        i.open,
+                        list_json(&i.children)
+                    )
+                })
+                .collect();
+            format!("[{}]", items.join(","))
+        }
+        let items = doc.outline();
+        if json {
+            return Ok(format!("{{\"bookmarks\":{}}}\n", list_json(&items)));
+        }
+        let mut out = String::new();
+        list(&items, 0, &mut out);
+        return Ok(out);
+    };
+    let mut items = if args.flag("--clear") {
+        Vec::new()
+    } else if let Some(from) = args.option("--from") {
+        let text = std::fs::read_to_string(from).map_err(|e| failed(format!("{from}: {e}")))?;
+        // Each line under the one it is indented beneath.
+        let mut items: Vec<OutlineItem> = Vec::new();
+        for (n, line) in text.lines().enumerate() {
+            if line.trim().is_empty() {
+                continue;
+            }
+            let depth = (line.len() - line.trim_start_matches(' ').len()) / 2;
+            let (title, to) = line
+                .trim_start()
+                .split_once('\t')
+                .unwrap_or((line.trim(), ""));
+            let item = OutlineItem {
+                title: title.trim().to_owned(),
+                dest: match to.trim() {
+                    "" => None,
+                    to => Some(place(to, count)?),
+                },
+                open: false,
+                children: Vec::new(),
+            };
+            let mut list = &mut items;
+            for _ in 0..depth {
+                if list.is_empty() {
+                    return Err(Failure::Usage(format!(
+                        "{from}:{}: indented with nothing above it",
+                        n + 1
+                    )));
+                }
+                list = &mut list.last_mut().expect("not empty").children;
+            }
+            list.push(item);
+        }
+        items
+    } else {
+        doc.outline()
+    };
+    for add in args.all("--add") {
+        let (to, title) = add
+            .split_once(':')
+            .ok_or_else(|| Failure::Usage(format!("--add {add}: PAGE[@TOP]:TITLE")))?;
+        items.push(OutlineItem {
+            title: title.to_owned(),
+            dest: Some(place(to, count)?),
+            open: false,
+            children: Vec::new(),
+        });
+    }
+    let bytes = doc
+        .set_outline(&items)
+        .map_err(|e| failed(format!("{file}: {e}")))?;
+    let out = PathBuf::from(out);
+    write(&out, &bytes)?;
+    Ok(wrote(&[(out, count)], json))
+}
+
+/// Lists the links, or takes some out and adds others.
+fn links(args: &[String], json: bool) -> Done {
+    use katna_pdf_cos::{Link, LinkTarget};
+    let args = Args::parse(args)?;
+    let [file] = args.words()?;
+    let doc = open(file)?;
+    let count = doc.pages().len();
+    let Some(out) = args.option("-o") else {
+        let pages = match args.option("--pages") {
+            Some(spec) => ranges::parse(spec, count).map_err(failed)?,
+            None => (0..count).collect(),
+        };
+        let all = doc.links();
+        let mut out = String::new();
+        let mut items = Vec::new();
+        for page in pages {
+            for (i, link) in all[page].iter().enumerate() {
+                let rect = link.rect.map(num).join(",");
+                let id = format!("{}:{}", page + 1, i + 1);
+                match &link.target {
+                    LinkTarget::Page(d) if json => items.push(format!(
+                        "{{\"link\":\"{id}\",\"rect\":[{rect}],\"to\":{}}}",
+                        place_json(d)
+                    )),
+                    LinkTarget::Uri(u) if json => items.push(format!(
+                        "{{\"link\":\"{id}\",\"rect\":[{rect}],\"uri\":{}}}",
+                        string(u)
+                    )),
+                    LinkTarget::Page(d) => {
+                        let _ = writeln!(out, "{id:<8} {rect:<24} page {}", show_place(d));
+                    }
+                    LinkTarget::Uri(u) => {
+                        let _ = writeln!(out, "{id:<8} {rect:<24} {u}");
+                    }
+                }
+            }
+        }
+        if json {
+            out = format!("{{\"links\":[{}]}}\n", items.join(","));
+        }
+        return Ok(out);
+    };
+    // Changes by page: links out, links in.
+    let mut changes: std::collections::BTreeMap<usize, (Vec<usize>, Vec<Link>)> =
+        std::collections::BTreeMap::new();
+    for id in args.all("--remove") {
+        let bad = || Failure::Usage(format!("--remove {id}: PAGE:LINK, as `links` numbers them"));
+        let (page, n) = id.split_once(':').ok_or_else(bad)?;
+        let page = place(page, count).map_err(|_| bad())?.page;
+        let n = n
+            .trim()
+            .parse::<usize>()
+            .ok()
+            .filter(|&n| n > 0)
+            .ok_or_else(bad)?;
+        changes.entry(page).or_default().0.push(n - 1);
+    }
+    for add in args.all("--add") {
+        let bad = || Failure::Usage(format!("--add {add}: PAGE:L,B,R,T:TO"));
+        let mut parts = add.splitn(3, ':');
+        let (Some(page), Some(rect), Some(to)) = (parts.next(), parts.next(), parts.next()) else {
+            return Err(bad());
+        };
+        let page = place(page, count).map_err(|_| bad())?.page;
+        let rect = parse_rect(rect).map_err(|_| bad())?;
+        let to = to.trim();
+        let target = if to.contains("://") || to.starts_with("mailto:") {
+            LinkTarget::Uri(to.to_owned())
+        } else {
+            LinkTarget::Page(place(to, count)?)
+        };
+        changes
+            .entry(page)
+            .or_default()
+            .1
+            .push(Link { rect, target });
+    }
+    if changes.is_empty() {
+        return Err(Failure::Usage(
+            "say what to change with --remove or --add".into(),
+        ));
+    }
+    let mut bytes = std::fs::read(file).map_err(|e| failed(format!("{file}: {e}")))?;
+    let mut doc = doc;
+    for (page, (remove, add)) in changes {
+        bytes = doc
+            .change_links(page, &remove, &add)
+            .map_err(|e| failed(format!("{file}: {e}")))?;
+        doc = Document::load(bytes.clone()).map_err(|e| failed(format!("{file}: {e}")))?;
+    }
+    let out = PathBuf::from(out);
+    write(&out, &bytes)?;
+    Ok(wrote(&[(out, count)], json))
+}
+
+/// Lists the named destinations, or sets and takes out some.
+fn dests(args: &[String], json: bool) -> Done {
+    let args = Args::parse(args)?;
+    let [file] = args.words()?;
+    let doc = open(file)?;
+    let count = doc.pages().len();
+    let mut names = doc.named_destinations();
+    let Some(out) = args.option("-o") else {
+        if json {
+            let items: Vec<String> = names
+                .iter()
+                .map(|(n, d)| format!("{{\"name\":{},\"to\":{}}}", string(n), place_json(d)))
+                .collect();
+            return Ok(format!("{{\"dests\":[{}]}}\n", items.join(",")));
+        }
+        let mut out = String::new();
+        for (name, dest) in &names {
+            let _ = writeln!(out, "{name}\t{}", show_place(dest));
+        }
+        return Ok(out);
+    };
+    for name in args.all("--remove") {
+        let before = names.len();
+        names.retain(|(n, _)| n != name);
+        if names.len() == before {
+            return Err(failed(format!("{file}: no destination named {name}")));
+        }
+    }
+    for set in args.all("--set") {
+        let (name, to) = set
+            .rsplit_once('=')
+            .ok_or_else(|| Failure::Usage(format!("--set {set}: NAME=PAGE[@TOP]")))?;
+        let dest = place(to, count)?;
+        match names.iter_mut().find(|(n, _)| n == name) {
+            Some(entry) => entry.1 = dest,
+            None => names.push((name.to_owned(), dest)),
+        }
+    }
+    let bytes = doc
+        .set_named_destinations(&names)
+        .map_err(|e| failed(format!("{file}: {e}")))?;
+    let out = PathBuf::from(out);
+    write(&out, &bytes)?;
+    Ok(wrote(&[(out, count)], json))
 }
 
 /// Moves and resizes a picture or shape, or takes it out of its page.

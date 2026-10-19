@@ -166,6 +166,15 @@ impl Viewer {
             )
             .on_click(cx.listener(|this, _, _, cx| this.toggle_designing(cx))),
         );
+        row = row.child(
+            button(
+                Adding::ALL.len() + 4,
+                "link",
+                "link-tool",
+                self.linking.is_some(),
+            )
+            .on_click(cx.listener(|this, _, _, cx| this.toggle_linking(cx))),
+        );
         row = row.child(separator(th));
         for (i, ink) in INKS.into_iter().enumerate() {
             let on = self.ink == i;
@@ -211,6 +220,7 @@ impl Viewer {
         self.adding = adding;
         if adding.is_some() {
             self.redacting = None;
+            self.linking = None;
             self.designing = None;
         }
         self.placing = None;

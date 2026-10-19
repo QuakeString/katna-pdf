@@ -36,6 +36,15 @@ const ICONS: &[(&str, &[u8])] = &[
     ),
     ("icons/to-back.svg", include_bytes!("../icons/to-back.svg")),
     (
+        "icons/bookmark-plus.svg",
+        include_bytes!("../icons/bookmark-plus.svg"),
+    ),
+    ("icons/indent.svg", include_bytes!("../icons/indent.svg")),
+    ("icons/outdent.svg", include_bytes!("../icons/outdent.svg")),
+    ("icons/place.svg", include_bytes!("../icons/place.svg")),
+    ("icons/link.svg", include_bytes!("../icons/link.svg")),
+    ("icons/rename.svg", include_bytes!("../icons/rename.svg")),
+    (
         "icons/rotate-cw.svg",
         include_bytes!("../icons/rotate-cw.svg"),
     ),
