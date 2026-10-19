@@ -31,6 +31,9 @@ allow = [
     "bzip2-1.0.6",
     "CDLA-Permissive-2.0",
     "0BSD",
+    # jpeg-encoder: its tables come from libjpeg; GPL-compatible, credited
+    # in README.md.
+    "IJG",
 ]
 
 [licenses.private]

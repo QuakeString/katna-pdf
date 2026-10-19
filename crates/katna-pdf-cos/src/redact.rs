@@ -1209,7 +1209,7 @@ fn black_out(
 
 /// The decoded samples of JPEG `data` and how many components each
 /// pixel has: one (grey) or three (colour); none for others.
-fn jpeg(data: &[u8]) -> Option<(Vec<u8>, usize)> {
+pub(crate) fn jpeg(data: &[u8]) -> Option<(Vec<u8>, usize)> {
     use zune_core::bytestream::ZCursor;
     use zune_core::colorspace::ColorSpace;
     use zune_core::options::DecoderOptions;

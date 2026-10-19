@@ -87,6 +87,9 @@ library-rename-keys = Use { $keys }
 library-rename-go = Rename { $count }
 library-renamed = Renamed { $count }.
 library-cancel = Cancel
+library-compress = Make smaller, pages kept as they are
+library-compressed = Made { $count } smaller.
+library-compress-saved = { $size } saved.
 library-copy = Copy to a folder
 library-copy-to = Copy into this folder
 library-copied = Copied { $count }.
@@ -337,6 +340,14 @@ properties-password-on = This file is locked with a password.
 properties-unlock = Take the password off
 properties-password-owner = This file is locked; taking the password off needs its owner's password.
 properties-lock-failed = The password could not be changed: { $error }
+properties-size = Size
+properties-size-now = { $size }. Making it smaller keeps its pages as they are; pictures are brought down to 150 dpi only if you ask.
+properties-shrink = Make smaller
+properties-shrink-pictures = Smaller pictures too
+properties-shrinking = Making the file smaller…
+properties-shrunk = Made smaller: { $before } → { $after }. Save to keep it.
+properties-shrink-none = This file is already as small as it can be made.
+properties-shrink-failed = The file could not be made smaller: { $error }
 
 ## Find in the document
 search-placeholder = Find in the document

@@ -78,7 +78,7 @@ pub struct PageObject {
 
 /// A page's content and operators, read.
 pub(crate) struct Content {
-    content: Vec<u8>,
+    pub(crate) content: Vec<u8>,
     pub(crate) ops: Vec<Op>,
 }
 

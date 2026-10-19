@@ -42,3 +42,8 @@ On Linux, install `libxkbcommon-dev libxkbcommon-x11-dev libfontconfig-dev libfr
 cargo run -p katna-pdf -- file.pdf
 cargo run --release -p katna-pdf-bench -- file.pdf   # open and draw times
 ```
+
+## Credits
+
+This software is based in part on the work of the Independent JPEG Group
+(through the `jpeg-encoder` crate, used when pictures are made smaller).

@@ -23,6 +23,17 @@ pub enum FilterError {
 
 /// Decodes `data` by the filters in `dict`.
 pub fn decode(dict: &Dict, data: &[u8]) -> Result<Vec<u8>, FilterError> {
+    decode_as(dict, data, false)
+}
+
+/// As [`decode`], but a Flate stream cut short or damaged is an error
+/// rather than what could be read of it: for writing a stream again,
+/// where readers that recover more of it would lose what they found.
+pub(crate) fn decode_whole(dict: &Dict, data: &[u8]) -> Result<Vec<u8>, FilterError> {
+    decode_as(dict, data, true)
+}
+
+fn decode_as(dict: &Dict, data: &[u8], whole: bool) -> Result<Vec<u8>, FilterError> {
     let filters: Vec<&[u8]> = match dict.get("Filter") {
         None => return Ok(data.to_vec()),
         Some(Object::Name(n)) => vec![n.as_bytes()],
@@ -38,7 +49,7 @@ pub fn decode(dict: &Dict, data: &[u8]) -> Result<Vec<u8>, FilterError> {
     for (i, f) in filters.iter().enumerate() {
         out = match *f {
             b"FlateDecode" | b"Fl" => {
-                let raw = inflate(&out)?;
+                let raw = inflate(&out, whole)?;
                 predict(params.get(i).copied().flatten(), raw)?
             }
             b"LZWDecode" | b"LZW" => {
@@ -197,7 +208,10 @@ fn lzw(data: &[u8], early: bool) -> Result<Vec<u8>, FilterError> {
 
 /// zlib, falling back to raw deflate; a truncated stream keeps what was
 /// decoded, as other readers do.
-fn inflate(data: &[u8]) -> Result<Vec<u8>, FilterError> {
+fn inflate(data: &[u8], whole: bool) -> Result<Vec<u8>, FilterError> {
+    if whole {
+        return inflate_whole(data);
+    }
     fn run(reader: impl std::io::Read) -> (Vec<u8>, bool) {
         let mut out = Vec::new();
         let ok = reader.take(MAX_DECODED + 1).read_to_end(&mut out).is_ok();
@@ -212,10 +226,36 @@ fn inflate(data: &[u8]) -> Result<Vec<u8>, FilterError> {
     if out.len() as u64 > MAX_DECODED {
         return Err(FilterError::TooLarge);
     }
-    if !ok && out.is_empty() {
+    if !ok && (out.is_empty() || whole) {
         return Err(FilterError::Corrupt);
     }
     Ok(out)
+}
+
+/// A zlib stream inflated to its proper end, its checksum right.
+fn inflate_whole(data: &[u8]) -> Result<Vec<u8>, FilterError> {
+    let mut z = flate2::Decompress::new(true);
+    let mut out = Vec::with_capacity(data.len() * 4);
+    loop {
+        if out.len() == out.capacity() {
+            out.reserve(out.len().max(64 * 1024));
+        }
+        let read = z.total_in() as usize;
+        let status = z
+            .decompress_vec(&data[read..], &mut out, flate2::FlushDecompress::None)
+            .map_err(|_| FilterError::Corrupt)?;
+        if out.len() as u64 > MAX_DECODED {
+            return Err(FilterError::TooLarge);
+        }
+        match status {
+            flate2::Status::StreamEnd => return Ok(out),
+            // No progress with all the input read: cut short.
+            _ if z.total_in() as usize == read && out.len() < out.capacity() => {
+                return Err(FilterError::Corrupt);
+            }
+            _ => {}
+        }
+    }
 }
 
 /// Undoes a PNG (`/Predictor` ≥ 10) or TIFF (2) predictor.

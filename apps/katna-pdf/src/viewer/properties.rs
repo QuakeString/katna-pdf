@@ -3,14 +3,15 @@
 //! The document's properties (docs/PLAN.md §4.3, "metadata editor"):
 //! a card, opened from the file's name in the toolbar or with Ctrl+D,
 //! to change its title, author, subject and keywords, showing what made
-//! it and when (`katna_pdf_cos::meta`), and to put a password on it or
-//! take one off (`katna_pdf_cos::lock`, AES-256).
+//! it and when (`katna_pdf_cos::meta`), to put a password on it or
+//! take one off (`katna_pdf_cos::lock`, AES-256), and to make it smaller
+//! (`katna_pdf_cos::optimize`).
 
 use std::sync::Arc;
 
 use gpui::{AnyElement, Context, Entity, Subscription, div, prelude::*};
 
-use katna_pdf_cos::{Metadata, Permissions};
+use katna_pdf_cos::{Metadata, Optimize, Permissions};
 use katna_ui::px;
 use katna_ui::text_input::{InputEvent, TextInput};
 use katna_ui::tokens::{radius, space, text};
@@ -26,6 +27,8 @@ pub(super) struct Properties {
     /// Whether the file has a password, and whether it was opened with
     /// its owner's (so it may be taken off), once read.
     locked: Option<(bool, bool)>,
+    /// How large the file is, in bytes, once read.
+    size: Option<u64>,
     fields: [Entity<TextInput>; 4],
     /// A new password to put on.
     password: Entity<TextInput>,
@@ -81,6 +84,7 @@ impl Viewer {
         self.properties = Some(Properties {
             read: None,
             locked: None,
+            size: None,
             fields,
             password,
             _fields: subs,
@@ -95,17 +99,19 @@ impl Viewer {
                         Some(bytes) => bytes.to_vec(),
                         None => std::fs::read(&path).ok()?,
                     };
+                    let size = bytes.len() as u64;
                     super::cos(bytes, key.as_deref())
                         .ok()
-                        .map(|d| (d.metadata(), (d.is_encrypted(), d.opened_as_owner())))
+                        .map(|d| (d.metadata(), (d.is_encrypted(), d.opened_as_owner()), size))
                 })
                 .await;
             this.update(cx, |this, cx| {
                 let Some(properties) = this.properties.as_mut() else {
                     return;
                 };
-                let (meta, locked) = meta.unwrap_or_default();
+                let (meta, locked, size) = meta.unwrap_or_default();
                 properties.locked = Some(locked);
+                properties.size = Some(size);
                 let values = [&meta.title, &meta.author, &meta.subject, &meta.keywords];
                 for (field, value) in properties.fields.iter().zip(values) {
                     let value = value.clone().unwrap_or_default();
@@ -187,6 +193,62 @@ impl Viewer {
             |doc| doc.without_lock().map_err(|e| e.to_string()),
             cx,
         );
+    }
+
+    /// Writes the file again as small as `how` allows, and says how much
+    /// smaller it came out; it is not saved until it is.
+    fn shrink(&mut self, how: Optimize, cx: &mut Context<Self>) {
+        self.properties = None;
+        let (Some(path), Content::Ready(_)) = (self.path.clone(), &self.content) else {
+            return;
+        };
+        let current = self.unsaved();
+        let key = self.key.clone();
+        self.notice = Some(t("properties-shrinking", &[]));
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let done = cx
+                .background_executor()
+                .spawn(async move {
+                    let bytes = match current {
+                        Some(bytes) => bytes.to_vec(),
+                        None => std::fs::read(&path).map_err(|e| e.to_string())?,
+                    };
+                    let before = bytes.len() as u64;
+                    let doc = super::cos(bytes, key.as_deref()).map_err(|e| e.to_string())?;
+                    let done = doc.optimize(&how).map_err(|e| e.to_string())?;
+                    Ok::<_, String>((before, done.bytes))
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                match done {
+                    Ok((before, bytes)) if (bytes.len() as u64) < before => {
+                        let after = bytes.len() as u64;
+                        let pages = (0..this.page_count()).collect();
+                        this.change_document(
+                            pages,
+                            "properties-shrink-failed",
+                            move |_| Ok(bytes),
+                            cx,
+                        );
+                        this.notice = Some(t(
+                            "properties-shrunk",
+                            &[
+                                ("before", &crate::library::size_text(before)),
+                                ("after", &crate::library::size_text(after)),
+                            ],
+                        ));
+                    }
+                    Ok(_) => this.notice = Some(t("properties-shrink-none", &[])),
+                    Err(error) => {
+                        this.notice = Some(t("properties-shrink-failed", &[("error", &error)]))
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// The properties card, while it is open.
@@ -327,6 +389,47 @@ impl Viewer {
                 ),
                 (true, false) => card.child(label("properties-password-owner")),
             };
+        }
+        if let Some(size) = properties.size {
+            card = card
+                .child(
+                    div()
+                        .pt(px(space::S2))
+                        .text_size(px(text::BODY))
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .text_color(th.text)
+                        .child(t("properties-size", &[])),
+                )
+                .child(div().text_size(px(text::SMALL)).text_color(th.dim).child(t(
+                    "properties-size-now",
+                    &[("size", &crate::library::size_text(size))],
+                )))
+                .child(
+                    div()
+                        .flex()
+                        .flex_wrap()
+                        .gap(px(space::S2))
+                        .child(
+                            widgets::outlined_button(
+                                "properties-shrink",
+                                t("properties-shrink", &[]),
+                                &th.katna,
+                            )
+                            .on_click(
+                                cx.listener(|this, _, _, cx| this.shrink(Optimize::LOSSLESS, cx)),
+                            ),
+                        )
+                        .child(
+                            widgets::outlined_button(
+                                "properties-shrink-pictures",
+                                t("properties-shrink-pictures", &[]),
+                                &th.katna,
+                            )
+                            .on_click(
+                                cx.listener(|this, _, _, cx| this.shrink(Optimize::MEDIUM, cx)),
+                            ),
+                        ),
+                );
         }
         card = card.child(
             div()
