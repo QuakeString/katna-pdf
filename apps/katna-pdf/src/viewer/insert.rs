@@ -221,6 +221,7 @@ impl Viewer {
         if adding.is_some() {
             self.redacting = None;
             self.linking = None;
+            self.numbering = None;
             self.designing = None;
         }
         self.placing = None;

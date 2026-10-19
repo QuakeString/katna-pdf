@@ -90,6 +90,7 @@ impl Viewer {
         self.properties = None;
         self.redacting = None;
         self.designing = None;
+        self.numbering = None;
         let accent = gpui::rgba(self.theme.katna.accent).into();
         let target = cx.new(|cx| {
             let mut input = TextInput::new(t("link-target", &[]), cx);

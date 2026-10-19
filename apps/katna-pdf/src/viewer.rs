@@ -41,6 +41,7 @@ mod design;
 mod insert;
 mod linking;
 mod marks;
+mod numbering;
 mod objects;
 mod organizer;
 mod properties;
@@ -289,6 +290,10 @@ pub struct Viewer {
     contents: Option<Contents>,
     /// The bookmark being renamed.
     renaming: Option<bookmarks::Renaming>,
+    /// How the file numbers its pages, when not plainly.
+    label_ranges: Vec<katna_pdf_cos::LabelRange>,
+    /// The page numbers card, while open.
+    numbering: Option<numbering::Numbering>,
     /// The form, once read, if the file has fields to fill in.
     form: Option<Form>,
     /// Each page's links, once read.
@@ -439,6 +444,8 @@ impl Viewer {
             revision: 0,
             contents: None,
             renaming: None,
+            label_ranges: Vec::new(),
+            numbering: None,
             form: None,
             links: None,
             texts: None,
@@ -561,6 +568,8 @@ impl Viewer {
         self.content = Content::Opening(name.clone());
         self.contents = None;
         self.renaming = None;
+        self.label_ranges.clear();
+        self.numbering = None;
         self.form = None;
         self.links = None;
         self.texts = None;
@@ -688,7 +697,7 @@ impl Viewer {
         let key = self.key.clone();
         let again = path.clone();
         cx.spawn(async move |this, cx| {
-            let (outline, show, links, form, annots, signatures, signable) = cx
+            let (outline, show, links, form, annots, signatures, signable, ranges) = cx
                 .background_executor()
                 .spawn(async move {
                     let Some(doc) = std::fs::read(&path)
@@ -703,6 +712,7 @@ impl Viewer {
                             Vec::new(),
                             Vec::new(),
                             sign::Signable::default(),
+                            Vec::new(),
                         );
                     };
                     let show = doc
@@ -710,11 +720,14 @@ impl Viewer {
                         .is_some_and(|c| c.name("PageMode") == Some(b"UseOutlines"));
                     let (outline, links, fields) = (doc.outline(), doc.links(), doc.form());
                     let annots = doc.annotations();
+                    let ranges = doc.page_label_ranges();
                     let signatures = sign::check(&doc);
                     let signable = sign::signable(&doc);
                     // The object layer's copy is kept only for a form.
                     let form = (!fields.is_empty()).then(|| (Arc::new(doc), fields));
-                    (outline, show, links, form, annots, signatures, signable)
+                    (
+                        outline, show, links, form, annots, signatures, signable, ranges,
+                    )
                 })
                 .await;
             this.update(cx, |this, cx| {
@@ -740,6 +753,7 @@ impl Viewer {
                     this.tab = PaneTab::Contents;
                 }
                 this.contents = Some(Contents::new(outline));
+                this.set_label_ranges(ranges);
                 cx.notify();
             })
             .ok();
@@ -1310,7 +1324,7 @@ impl Viewer {
         let current = page == self.current_page();
         let picked = self.picked.contains(&page);
         let accent = th.katna.accent;
-        let label = (page + 1).to_string();
+        let label = self.page_label(page);
         div()
             .id(("thumb", page))
             .w_full()
@@ -2195,6 +2209,7 @@ impl Viewer {
         let (outline, links, fields) = (cos.outline(), cos.links(), cos.form());
         self.contents = Some(Contents::new(outline));
         self.renaming = None;
+        self.set_label_ranges(cos.page_label_ranges());
         self.links = links.iter().any(|l| !l.is_empty()).then(|| Arc::new(links));
         self.annots = Some(Arc::new(cos.annotations()));
         self.signatures = Some(Arc::new(sign::check(&cos)));
@@ -2797,18 +2812,36 @@ impl Viewer {
                 )
             });
         if self.page_count() > 0 {
-            let page = (self.current_page() + 1).to_string();
+            let current = self.current_page();
+            let page = (current + 1).to_string();
             let count = self.page_count().to_string();
+            let shown = if self.label_ranges.is_empty() {
+                t("page-of", &[("page", &page), ("count", &count)])
+            } else {
+                t(
+                    "page-of-labelled",
+                    &[
+                        ("label", &self.page_label(current)),
+                        ("page", &page),
+                        ("count", &count),
+                    ],
+                )
+            };
             bar = bar
                 .child(
                     div()
+                        .id("page-numbers")
                         .text_size(px(text::SMALL))
                         .text_color(th.dim)
                         .px(px(space::S3))
                         .py(px(space::S2))
                         .rounded(px(radius::XS))
                         .bg(th.field)
-                        .child(t("page-of", &[("page", &page), ("count", &count)])),
+                        .cursor_pointer()
+                        .hover(move |s| s.bg(th.hover))
+                        .tip(t("numbering-tip", &[]), &th.katna)
+                        .on_click(cx.listener(|this, _, _, cx| this.toggle_numbering(cx)))
+                        .child(shown),
                 )
                 .child(separator(th))
                 .child(icon_button(
@@ -3137,6 +3170,7 @@ impl Render for Viewer {
         let marks_card = self.marks_card(cx);
         let redact_card = self.redact_card(cx);
         let link_card = self.link_card(window, cx);
+        let numbering_card = self.numbering_card(cx);
         let design_card = self.design_card(cx);
         let properties_card = self.properties_card(cx);
         let find_bar = self.find_bar(cx);
@@ -3333,6 +3367,7 @@ impl Render for Viewer {
                             .children(marks_card)
                             .children(redact_card)
                             .children(link_card)
+                            .children(numbering_card)
                             .children(design_card)
                             .children(properties_card),
                     ),

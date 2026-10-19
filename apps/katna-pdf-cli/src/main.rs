@@ -167,6 +167,11 @@ usage: katna-pdf-cli COMMAND [--json] ...
   dests FILE [-o OUT [--set NAME=PAGE[@TOP]]... [--remove NAME]...]
                                   the named destinations (places links and other
                                   files go to by name); with -o some set or taken out
+  labels FILE [-o OUT (--range FROM:STYLE[:PREFIX[:START]]... | --clear)]
+                                  each page's label (the number the document gives
+                                  it, such as i, ii, 1, 2); with -o the pages numbered
+                                  in ranges from page FROM: STYLE 1, i, I, a, A or
+                                  none, after PREFIX, counting from START
   annots FILE                     the annotations, page by page
   xfdf-export FILE -o OUT.xfdf    the annotations as XFDF
   xfdf-import FILE XFDF -o OUT    the annotations of XFDF added to the PDF
@@ -204,6 +209,7 @@ fn main() -> ExitCode {
         "bookmarks" => bookmarks(rest, json),
         "links" => links(rest, json),
         "dests" => dests(rest, json),
+        "labels" => labels(rest, json),
         "object" => object(rest, json),
         "ltv" => ltv(rest, json),
         "tokens" => tokens(rest, json),
@@ -346,6 +352,7 @@ impl<'a> Args<'a> {
                     | "--detect"
                     | "--format"
                     | "--from"
+                    | "--range"
             ) {
                 let Some(value) = it.next() else {
                     return Err(Failure::Usage(format!("{a} needs a value")));
@@ -1766,6 +1773,71 @@ fn links(args: &[String], json: bool) -> Done {
             .map_err(|e| failed(format!("{file}: {e}")))?;
         doc = Document::load(bytes.clone()).map_err(|e| failed(format!("{file}: {e}")))?;
     }
+    let out = PathBuf::from(out);
+    write(&out, &bytes)?;
+    Ok(wrote(&[(out, count)], json))
+}
+
+/// Lists each page's label, or numbers the pages anew.
+fn labels(args: &[String], json: bool) -> Done {
+    use katna_pdf_cos::{LabelRange, LabelStyle};
+    let args = Args::parse(args)?;
+    let [file] = args.words()?;
+    let doc = open(file)?;
+    let count = doc.pages().len();
+    let Some(out) = args.option("-o") else {
+        let labels = doc
+            .page_labels()
+            .unwrap_or_else(|| (1..=count).map(|n| n.to_string()).collect());
+        if json {
+            let items: Vec<String> = labels.iter().map(|l| string(l)).collect();
+            return Ok(format!("{{\"labels\":[{}]}}\n", items.join(",")));
+        }
+        let mut out = String::new();
+        for (i, label) in labels.iter().enumerate() {
+            let _ = writeln!(out, "{:<6} {label}", i + 1);
+        }
+        return Ok(out);
+    };
+    let mut ranges = Vec::new();
+    if !args.flag("--clear") {
+        for spec in args.all("--range") {
+            let bad = || Failure::Usage(format!("--range {spec}: FROM:STYLE[:PREFIX[:START]]"));
+            let mut parts = spec.splitn(4, ':');
+            let (Some(from), Some(style)) = (parts.next(), parts.next()) else {
+                return Err(bad());
+            };
+            let start = place(from, count)?.page;
+            let style = match style {
+                "1" => LabelStyle::Decimal,
+                "i" => LabelStyle::LowerRoman,
+                "I" => LabelStyle::UpperRoman,
+                "a" => LabelStyle::LowerLetters,
+                "A" => LabelStyle::UpperLetters,
+                "none" => LabelStyle::None,
+                _ => return Err(bad()),
+            };
+            let prefix = parts.next().unwrap_or("").to_owned();
+            let first = match parts.next() {
+                None | Some("") => 1,
+                Some(n) => n.parse::<u32>().ok().filter(|&n| n >= 1).ok_or_else(bad)?,
+            };
+            ranges.push(LabelRange {
+                start,
+                style,
+                prefix,
+                first,
+            });
+        }
+        if ranges.is_empty() {
+            return Err(Failure::Usage(
+                "say how to number with --range, or --clear".into(),
+            ));
+        }
+    }
+    let bytes = doc
+        .set_page_labels(&ranges)
+        .map_err(|e| failed(format!("{file}: {e}")))?;
     let out = PathBuf::from(out);
     write(&out, &bytes)?;
     Ok(wrote(&[(out, count)], json))

@@ -13,6 +13,32 @@ recent-title = Recent
 
 ## The toolbar over the pages
 page-of = { $page } / { $count }
+page-of-labelled = { $label } ({ $page } / { $count })
+numbering-tip = Page numbers: number pages i, ii, then 1, 2, 3
+numbering-title = Page numbers
+numbering-hint = Number pages the way the book does, in ranges: i, ii for the front matter, then 1, 2, 3, or A-1, A-2 for an appendix.
+numbering-from = Page
+numbering-from-label = From
+numbering-style = Style
+numbering-style-tip = Click for the next style
+numbering-prefix = Like A-
+numbering-prefix-label = Before the number
+numbering-first = 1
+numbering-first-label = Start at
+numbering-decimal = 1, 2, 3
+numbering-lower-roman = i, ii, iii
+numbering-upper-roman = I, II, III
+numbering-lower-letters = a, b, c
+numbering-upper-letters = A, B, C
+numbering-none = No number
+numbering-remove = Remove this range
+numbering-add = Add range
+numbering-preview = Pages will be called { $labels }
+numbering-cancel = Cancel
+numbering-apply = Number pages
+numbering-bad-page = Each range starts on a page from 1 to { $count }.
+numbering-bad-first = Start at needs a whole number, 1 or more.
+numbering-failed = Couldn't number the pages: { $error }
 zoom-in = Zoom in (Ctrl+=)
 zoom-out = Zoom out (Ctrl+-)
 zoom-fit-width = Fit width (Ctrl+1)

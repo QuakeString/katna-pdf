@@ -58,6 +58,7 @@ impl Viewer {
         self.adding = None;
         self.redacting = None;
         self.linking = None;
+        self.numbering = None;
         self.designing = None;
         self.placing = None;
         self.picked_object = None;
@@ -81,6 +82,7 @@ impl Viewer {
         self.adding = None;
         self.redacting = None;
         self.linking = None;
+        self.numbering = None;
         self.designing = None;
         self.placing = None;
         self.picked_object = None;
