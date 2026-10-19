@@ -34,6 +34,27 @@ Server = https://github.com/QuakeString/katna-pdf/releases/download/arch-latest
 
 To build the package yourself: `cd packaging/arch && makepkg -si`.
 
+## Install on other Linux systems
+
+CI also builds a `.deb`, an `.rpm`, an AppImage and a plain tarball on
+every push to `main`, tries each on its own system, and puts them on the
+[`linux-latest`](https://github.com/QuakeString/katna-pdf/releases/tag/linux-latest)
+pre-release. They are x86_64 only and need glibc 2.35 or later.
+
+- Ubuntu 22.04+ and Debian 12+: download `katna-pdf-x86_64.deb`, then
+  `sudo apt install ./katna-pdf-x86_64.deb`.
+- Fedora: download `katna-pdf-x86_64.rpm`, then
+  `sudo dnf install ./katna-pdf-x86_64.rpm`.
+- Anywhere else: `chmod +x Katna-PDF-x86_64.AppImage` and run it, or
+  unpack `katna-pdf-linux-x86_64.tar.gz` and run its `install.sh`.
+
+## Install on Windows
+
+[`windows-latest`](https://github.com/QuakeString/katna-pdf/releases/tag/windows-latest)
+holds `KatnaPDF-windows-x86_64.zip`, built from `main`: unpack it anywhere
+and run `katna-pdf.exe`. It is not signed yet, so SmartScreen asks the
+first time (More info, then Run anyway).
+
 ## Build
 
 On Linux, install `libxkbcommon-dev libxkbcommon-x11-dev libfontconfig-dev libfreetype-dev libwayland-dev libx11-xcb-dev` (Debian/Ubuntu names), then:

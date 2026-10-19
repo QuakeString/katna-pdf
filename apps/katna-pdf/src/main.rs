@@ -5,6 +5,10 @@
 //! in the desktop's light or dark mode. One app runs per person; opening
 //! a file again hands it to the running window (`instance.rs`).
 
+// No console window on Windows (the render workers it starts talk over
+// pipes, which a windowed program still has).
+#![cfg_attr(all(windows, not(test)), windows_subsystem = "windows")]
+
 mod annotate;
 mod assets;
 mod contents;

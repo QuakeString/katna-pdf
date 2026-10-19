@@ -1,0 +1,285 @@
+name: Linux packages
+
+# Builds Katna PDF for Ubuntu and Debian (.deb), Fedora (.rpm), any
+# distribution (AppImage) and as a plain tarball, installs each on its
+# own system and opens a PDF with it there (ci/linux-package-test.sh).
+# On main, once CI passed, the files replace those on the `linux-latest`
+# pre-release. Arch has its own package (arch-package.yml).
+on:
+  push:
+    branches: [main]
+    paths:
+      - "**"
+      - "!docs/**"
+      - "!bakeoff/**"
+      - "!parity/**"
+  pull_request:
+    paths:
+      - "packaging/**"
+      - "ci/linux-package-test.sh"
+      - ".github/workflows/linux-packages.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: linux-packages-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  # One build for every package, on an older glibc (Ubuntu 22.04's 2.35)
+  # so it runs on older systems too.
+  build:
+    runs-on: ubuntu-latest
+    container: ubuntu:22.04
+    timeout-minutes: 120
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Install build tools
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            build-essential ca-certificates curl git pkg-config \
+            libxkbcommon-dev libxkbcommon-x11-dev libfontconfig-dev libfreetype-dev \
+            libxcb1-dev libwayland-dev libx11-xcb-dev
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          # The version counts the commits.
+          fetch-depth: 0
+      - name: Install Rust
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          "$HOME/.cargo/bin/rustup" toolchain install
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          key: linux-packages
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - id: version
+        run: echo "version=$(packaging/linux/version.sh)" >> "$GITHUB_OUTPUT"
+      - name: Build
+        run: |
+          cargo build --locked --release --package katna-pdf --package katna-pdf-cli
+          ls -l target/release/katna-pdf target/release/katna-pdf-cli
+      - name: Make the tarball and the .deb
+        run: |
+          packaging/linux/make-tarball.sh target/release out
+          packaging/deb/make-deb.sh out/katna-pdf-linux-x86_64.tar.gz \
+            "${{ steps.version.outputs.version }}" out
+          # The same .deb under a name that does not change, for a link
+          # that always downloads the newest.
+          mv out/katna-pdf_*_amd64.deb out/katna-pdf-x86_64.deb
+          ls -l out
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: linux-built
+          path: out/
+          if-no-files-found: error
+
+  # The tarball's install.sh, on Debian.
+  tarball:
+    needs: build
+    runs-on: ubuntu-latest
+    container: debian:trixie
+    steps:
+      - name: Install a desktop's libraries and the test tools
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            imagemagick x11-utils xvfb libxkbcommon-x11-0 libfontconfig1 libfreetype6 \
+            libwayland-client0 libvulkan1 mesa-vulkan-drivers libegl1 libegl-mesa0 \
+            fonts-dejavu-core procps
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: linux-built
+      - name: Install it for a user and try it
+        run: |
+          useradd --create-home tester
+          cp katna-pdf-linux-x86_64.tar.gz /home/tester/
+          cp -r ci packaging /home/tester/
+          chown -R tester: /home/tester
+          runuser -u tester -- sh -euc '
+            cd ~
+            tar xzf katna-pdf-linux-x86_64.tar.gz
+            katna-pdf-linux-x86_64/install.sh
+            PATH=$HOME/.local/bin:$PATH ci/linux-package-test.sh ~/tarball-debian.png
+            katna-pdf-linux-x86_64/install.sh --uninstall
+            test ! -e ~/.local/bin/katna-pdf
+          '
+          mkdir shots && cp /home/tester/tarball-debian.png shots/
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: screenshot-tarball
+          path: shots/
+
+  # The .deb, installed with apt on the oldest Ubuntu it is for.
+  deb:
+    needs: build
+    runs-on: ubuntu-latest
+    container: ubuntu:22.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: linux-built
+      - name: Install it and try it
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            ./katna-pdf-x86_64.deb imagemagick x11-utils xvfb mesa-vulkan-drivers \
+            libegl-mesa0 fonts-dejavu-core
+          if ldd /usr/bin/katna-pdf | grep 'not found'; then exit 1; fi
+          dpkg -L katna-pdf
+          mkdir shots
+          ci/linux-package-test.sh shots/deb-ubuntu.png
+          apt-get remove -y katna-pdf
+          test ! -e /usr/bin/katna-pdf
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: screenshot-deb
+          path: shots/
+
+  # The .rpm, made from the tarball and installed with dnf on Fedora.
+  rpm:
+    needs: build
+    runs-on: ubuntu-latest
+    container: fedora:latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: linux-built
+      - name: Make the .rpm
+        run: |
+          dnf install -y rpm-build
+          rpmbuild -bb --define "_sourcedir $PWD" \
+            --define "pkgversion ${{ needs.build.outputs.version }}" \
+            packaging/fedora/katna-pdf.spec
+          mkdir out
+          cp ~/rpmbuild/RPMS/x86_64/katna-pdf-*.rpm out/katna-pdf-x86_64.rpm
+          rpm -qlp out/katna-pdf-x86_64.rpm
+      - name: Install it and try it
+        run: |
+          dnf install -y ./out/katna-pdf-x86_64.rpm ImageMagick xorg-x11-server-Xvfb \
+            xorg-x11-utils mesa-vulkan-drivers mesa-libEGL dejavu-sans-fonts
+          if ldd /usr/bin/katna-pdf | grep 'not found'; then exit 1; fi
+          mkdir shots
+          ci/linux-package-test.sh shots/rpm-fedora.png
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: rpm
+          path: out/katna-pdf-x86_64.rpm
+          if-no-files-found: error
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: screenshot-rpm
+          path: shots/
+
+  # The AppImage, made from the tarball and run on Ubuntu with FUSE, as
+  # on a desktop.
+  appimage:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: linux-built
+      - name: Install appimagetool and the test tools
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            libfuse2t64 desktop-file-utils imagemagick x11-utils xvfb \
+            libxkbcommon-x11-0 libvulkan1 mesa-vulkan-drivers
+          curl -fsSL -o appimagetool \
+            https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x appimagetool
+          sudo mv appimagetool /usr/local/bin/
+      - name: Make the AppImage
+        run: |
+          tar xzf katna-pdf-linux-x86_64.tar.gz
+          packaging/appimage/make-appimage.sh katna-pdf-linux-x86_64/bin out
+          ls -l out
+      - name: Try it
+        run: |
+          app=$PWD/out/Katna-PDF-x86_64.AppImage
+          mkdir shots
+          KATNA_PDF="$app" KATNA_PDF_CLI="$app katna-pdf-cli" \
+            ci/linux-package-test.sh shots/appimage-ubuntu.png
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: appimage
+          path: out/Katna-PDF-x86_64.AppImage
+          if-no-files-found: error
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: screenshot-appimage
+          path: shots/
+
+  publish:
+    needs: [build, tarball, deb, rpm, appimage]
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+    concurrency:
+      group: linux-packages-release
+      cancel-in-progress: false
+    steps:
+      # Only a commit whose CI passed is published.
+      - name: Wait for CI on this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          for attempt in $(seq 120); do
+            result=$(gh api "repos/$GH_REPO/actions/workflows/ci.yml/runs?head_sha=$GITHUB_SHA&event=push" \
+              --jq '[.workflow_runs[] | "\(.status) \(.conclusion)"] | first // "none"')
+            echo "CI on $GITHUB_SHA: $result"
+            case "$result" in
+              "completed success") exit 0 ;;
+              "completed cancelled" | "completed skipped") exit 0 ;;
+              completed*) echo "CI did not pass; not publishing"; exit 1 ;;
+            esac
+            sleep 60
+          done
+          echo "CI did not finish in two hours; not publishing"
+          exit 1
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: linux-built
+          path: out
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: rpm
+          path: out
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: appimage
+          path: out
+      - name: Publish to the linux-latest pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          ls -l out
+          notes="The newest build of main (${{ needs.build.outputs.version }}) for Linux.
+          Ubuntu 22.04+ and Debian 12+: \`sudo apt install ./katna-pdf-x86_64.deb\`.
+          Fedora: \`sudo dnf install ./katna-pdf-x86_64.rpm\`.
+          Anywhere: make Katna-PDF-x86_64.AppImage executable and run it, or
+          unpack katna-pdf-linux-x86_64.tar.gz and run its install.sh.
+          Arch Linux has its own package on the arch-latest pre-release."
+          if gh release view linux-latest > /dev/null 2>&1; then
+            gh api -X PATCH "repos/$GH_REPO/git/refs/tags/linux-latest" \
+              -f sha="$GITHUB_SHA" -F force=true > /dev/null
+            gh release edit linux-latest --notes "$notes"
+          else
+            gh release create linux-latest --prerelease --target "$GITHUB_SHA" \
+              --title "Katna PDF for Linux (latest)" --notes "$notes"
+          fi
+          gh release upload linux-latest out/* --clobber

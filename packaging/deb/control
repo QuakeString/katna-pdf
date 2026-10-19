@@ -1,0 +1,18 @@
+Package: katna-pdf
+Version: @VERSION@
+Architecture: amd64
+Maintainer: Mozammel <5375918+QuakeString@users.noreply.github.com>
+Installed-Size: @SIZE@
+Depends: libc6 (>= 2.35), libgcc-s1, libxkbcommon0, libxkbcommon-x11-0, libxcb1, libfontconfig1, libfreetype6, libwayland-client0, libvulkan1, libegl1
+Recommends: mesa-vulkan-drivers, xdg-desktop-portal
+Suggests: speech-dispatcher, espeak-ng, opensc, pcscd
+Section: text
+Priority: optional
+Homepage: https://github.com/QuakeString/katna-pdf
+Description: Fast PDF reader, editor and signer
+ Katna PDF reads, edits, fills, signs and organizes PDF files, and opens
+ large technical drawings quickly. It signs with certificate files and
+ USB tokens (PAdES), and keeps a library of your PDFs. This package
+ holds the app and katna-pdf-cli, its command-line tool.
+ .
+ Built from the main branch.

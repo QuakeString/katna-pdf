@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: CC0-1.0 -->
+<!-- Katna PDF's entry in Discover and GNOME Software (AppStream). Every
+     Linux package installs it in share/metainfo; check it with
+     `appstreamcli validate`. -->
+<component type="desktop-application">
+  <id>in.invenia.katna.Pdf</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+
+  <name>Katna PDF</name>
+  <summary>Read, edit, sign and organize PDF files</summary>
+  <developer id="in.invenia">
+    <name>Mozammel</name>
+  </developer>
+
+  <description>
+    <p>
+      Katna PDF opens PDF files quickly, even large technical drawings, and
+      edits, fills, signs and organizes them, in the Katna family beside
+      Katna Mail. It is a personal project at an early stage, so keep
+      copies of files that matter.
+    </p>
+    <ul>
+      <li>Fast reading, with night and sepia page colours, find, bookmarks and a presentation mode</li>
+      <li>Edit the text and pictures already on a page, add new ones, and redact for real</li>
+      <li>Fill and design forms, with totals and formats done for you</li>
+      <li>Sign with certificate files or USB tokens, timestamps and long-term validation (PAdES)</li>
+      <li>Compare two versions, measure drawings to scale, and have pages read aloud</li>
+      <li>A library of your PDFs with tags, stars and search through every page</li>
+    </ul>
+  </description>
+
+  <launchable type="desktop-id">in.invenia.katna.Pdf.desktop</launchable>
+  <icon type="stock">in.invenia.katna.Pdf</icon>
+
+  <categories>
+    <category>Office</category>
+    <category>Viewer</category>
+  </categories>
+  <keywords>
+    <keyword>pdf</keyword>
+    <keyword>document</keyword>
+    <keyword>reader</keyword>
+    <keyword>editor</keyword>
+    <keyword>sign</keyword>
+    <keyword>drawing</keyword>
+  </keywords>
+
+  <url type="homepage">https://github.com/QuakeString/katna-pdf</url>
+  <url type="bugtracker">https://github.com/QuakeString/katna-pdf/issues</url>
+  <url type="vcs-browser">https://github.com/QuakeString/katna-pdf</url>
+
+  <provides>
+    <binary>katna-pdf</binary>
+    <binary>katna-pdf-cli</binary>
+    <mediatype>application/pdf</mediatype>
+  </provides>
+
+  <requires>
+    <display_length compare="ge">360</display_length>
+  </requires>
+  <supports>
+    <control>pointing</control>
+    <control>keyboard</control>
+  </supports>
+
+  <content_rating type="oars-1.1"/>
+</component>
