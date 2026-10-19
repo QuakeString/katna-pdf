@@ -15,6 +15,8 @@ katna-pdf-library.workspace = true
 notify.workspace = true
 katna-pdf-sign.workspace = true
 katna-core.workspace = true
+katna-dbus.workspace = true
+futures-lite.workspace = true
 jiff = { version = "0.2.37", default-features = false, features = ["std", "tz-system", "tzdb-zoneinfo", "tzdb-bundle-always"] }
 katna-ui.workspace = true
 gpui.workspace = true
@@ -29,7 +31,6 @@ ashpd.workspace = true
 # KDE's global menu (`menu.rs`).
 [target.'cfg(target_os = "linux")'.dependencies]
 katna-platform.workspace = true
-futures-lite.workspace = true
 zbus.workspace = true
 
 [lints]
