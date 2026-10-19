@@ -108,6 +108,10 @@ const ICONS: &[(&str, &[u8])] = &[
         include_bytes!("../icons/chevron-up.svg"),
     ),
     (
+        "icons/chevron-left.svg",
+        include_bytes!("../icons/chevron-left.svg"),
+    ),
+    (
         "icons/chevron-right.svg",
         include_bytes!("../icons/chevron-right.svg"),
     ),
