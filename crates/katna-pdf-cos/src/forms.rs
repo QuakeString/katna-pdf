@@ -143,12 +143,18 @@ impl Document {
                                 _ => continue,
                             }
                         };
-                        let ap = self.text_appearance(
-                            [&target, &dict, &form],
-                            widget,
-                            &shown,
-                            multiline,
-                        );
+                        let ap = match &field.kind {
+                            FieldKind::Choice {
+                                options,
+                                combo: false,
+                            } => crate::design::list_box(widget.rect, options, Some(text)),
+                            _ => self.text_appearance(
+                                [&target, &dict, &form],
+                                widget,
+                                &shown,
+                                multiline,
+                            ),
+                        };
                         let ap = Dict(vec![(Name::new("N"), Object::Ref(update.add(ap)))]);
                         if widget.id == field.id {
                             dict.set("AP", ap);
@@ -420,7 +426,7 @@ impl FieldReader<'_> {
             return;
         };
         let value = match (&kind, &here.value) {
-            (_, Some(Object::String { bytes, .. })) => Some(text_string(bytes)),
+            (_, Some(Object::String { bytes, .. })) => Some(crate::outline::text_value(bytes)),
             (_, Some(Object::Name(name))) if name.as_bytes() != b"Off" => {
                 Some(String::from_utf8_lossy(name.as_bytes()).into_owned())
             }

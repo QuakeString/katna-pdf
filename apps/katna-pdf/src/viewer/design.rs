@@ -7,6 +7,7 @@
 //! in the order Tab goes through them (`katna_pdf_cos::design`).
 
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
 use gpui::{AnyElement, Context, Entity, Subscription, div, prelude::*};
 use katna_pdf_cos::{Field, FieldEdit, FieldKind, FieldSpec, FormDesign, NewField, Object, Ref};
@@ -942,14 +943,139 @@ impl Viewer {
                 );
             }
         }
-        card = card.child(div().pt(px(space::S2)).flex().justify_end().child(
-            widgets::outlined_button("form-done", t("form-done", &[]), &th.katna).on_click(
-                cx.listener(|this, _, _, cx| {
-                    this.designing = None;
-                    cx.notify();
-                }),
-            ),
-        ));
+        card = card.child(
+            div()
+                .pt(px(space::S2))
+                .flex()
+                .items_center()
+                .gap(px(space::S1))
+                .child(
+                    widgets::icon_button("form-import", "upload", 18.0, &th.katna)
+                        .tip(t("form-import", &[]), &th.katna)
+                        .on_click(cx.listener(|this, _, _, cx| this.import_form_data(cx))),
+                )
+                .child(
+                    widgets::icon_button("form-export", "download", 18.0, &th.katna)
+                        .tip(t("form-export", &[]), &th.katna)
+                        .on_click(cx.listener(|this, _, _, cx| this.export_form_data(cx))),
+                )
+                .child(div().flex_1())
+                .child(
+                    widgets::outlined_button("form-done", t("form-done", &[]), &th.katna).on_click(
+                        cx.listener(|this, _, _, cx| {
+                            this.designing = None;
+                            cx.notify();
+                        }),
+                    ),
+                ),
+        );
         Some(card.into_any_element())
+    }
+
+    /// Asks where to save the form's data, as JSON (or CSV, when the name
+    /// given ends so), and saves it there.
+    fn export_form_data(&mut self, cx: &mut Context<Self>) {
+        let Some(path) = self.path.clone() else {
+            return;
+        };
+        let folder = path.parent().map(Path::to_path_buf).unwrap_or_default();
+        let stem = path
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let chosen = cx.prompt_for_new_path(&folder, Some(&format!("{stem}.json")));
+        let current = self.unsaved();
+        let key = self.key.clone();
+        cx.spawn(async move |this, cx| {
+            let Ok(Ok(Some(target))) = chosen.await else {
+                return;
+            };
+            let written = cx
+                .background_executor()
+                .spawn(async move {
+                    let bytes = match current {
+                        Some(bytes) => bytes.to_vec(),
+                        None => std::fs::read(&path).map_err(|e| e.to_string())?,
+                    };
+                    let data = super::cos(bytes, key.as_deref())?.form_data();
+                    let csv = target
+                        .extension()
+                        .is_some_and(|e| e.eq_ignore_ascii_case("csv"));
+                    let text = if csv {
+                        katna_pdf_cos::data_to_csv(&data)
+                    } else {
+                        katna_pdf_cos::data_to_json(&data)
+                    };
+                    std::fs::write(&target, text).map_err(|e| e.to_string())?;
+                    Ok::<_, String>(target)
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                this.notice = Some(match written {
+                    Ok(target) => t("form-exported", &[("name", &super::file_name(&target))]),
+                    Err(error) => t("form-failed", &[("error", &error)]),
+                });
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Asks for a JSON or CSV file of form data and fills the form in
+    /// from it.
+    fn import_form_data(&mut self, cx: &mut Context<Self>) {
+        let chosen = cx.prompt_for_paths(gpui::PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: None,
+        });
+        cx.spawn(async move |this, cx| {
+            let Ok(Ok(Some(paths))) = chosen.await else {
+                return;
+            };
+            let Some(file) = paths.into_iter().next() else {
+                return;
+            };
+            this.update(cx, |this, cx| this.fill_from(file, cx)).ok();
+        })
+        .detach();
+    }
+
+    /// Fills the form in from the JSON or CSV file `file`.
+    pub(super) fn fill_from(&mut self, file: PathBuf, cx: &mut Context<Self>) {
+        let pages = self
+            .designing
+            .as_ref()
+            .map(|d| {
+                let mut pages: Vec<usize> = d
+                    .fields
+                    .iter()
+                    .flat_map(|f| f.widgets.iter().map(|w| w.page))
+                    .collect();
+                pages.sort_unstable();
+                pages.dedup();
+                pages
+            })
+            .unwrap_or_default();
+        self.change_document(
+            pages,
+            "form-failed",
+            move |doc| {
+                let text = std::fs::read_to_string(&file).map_err(|e| e.to_string())?;
+                let csv = file
+                    .extension()
+                    .is_some_and(|e| e.eq_ignore_ascii_case("csv"));
+                let data = if csv {
+                    katna_pdf_cos::data_from_csv(&text)
+                } else {
+                    katna_pdf_cos::data_from_json(&text)
+                }
+                .map_err(|e| e.to_string())?;
+                doc.fill_data(&data).map_err(|e| e.to_string())
+            },
+            cx,
+        );
     }
 }

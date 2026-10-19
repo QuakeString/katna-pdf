@@ -995,7 +995,7 @@ fn button(rect: [f32; 4], caption: &str) -> Object {
 
 /// A list box: its options a line each from the top, the chosen one
 /// marked.
-fn list_box(rect: [f32; 4], options: &[String], chosen: Option<&str>) -> Object {
+pub(crate) fn list_box(rect: [f32; 4], options: &[String], chosen: Option<&str>) -> Object {
     let (w, h) = (rect[2] - rect[0], rect[3] - rect[1]);
     let size = 10.0_f32.min(h - 2.0).max(4.0);
     let line = size * 1.15;

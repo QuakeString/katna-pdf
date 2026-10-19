@@ -248,7 +248,18 @@ impl<'a> OutlineReader<'a> {
 /// A text string (§7.9.2.2): UTF-16BE or UTF-8 after a byte-order mark,
 /// otherwise PDFDocEncoding.
 pub fn text_string(bytes: &[u8]) -> String {
-    let text = if let Some(rest) = bytes.strip_prefix(&[0xfe, 0xff]) {
+    // Titles sometimes carry line breaks or other control characters.
+    text_value(bytes)
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect::<String>()
+        .trim()
+        .to_owned()
+}
+
+/// A text string as it is, line breaks kept: a form field's value.
+pub(crate) fn text_value(bytes: &[u8]) -> String {
+    if let Some(rest) = bytes.strip_prefix(&[0xfe, 0xff]) {
         let units: Vec<u16> = rest
             .as_chunks::<2>()
             .0
@@ -260,13 +271,9 @@ pub fn text_string(bytes: &[u8]) -> String {
         String::from_utf8_lossy(rest).into_owned()
     } else {
         bytes.iter().map(|&b| pdf_doc_char(b)).collect()
-    };
-    // Titles sometimes carry line breaks or other control characters.
-    text.chars()
-        .map(|c| if c.is_control() { ' ' } else { c })
-        .collect::<String>()
-        .trim()
-        .to_owned()
+    }
+    .replace("\r\n", "\n")
+    .replace('\r', "\n")
 }
 
 /// PDFDocEncoding (Annex D.2): Latin-1, apart from 0x18–0x1F and
