@@ -1023,3 +1023,45 @@ fn flat_form_fields_are_found() {
     let (_, text) = run(&["form-data", s(&out), "--csv"]);
     assert_eq!(text.trim(), "Name,City\r\n,");
 }
+
+#[test]
+fn form_data_goes_out_as_xfdf_and_fdf() {
+    let d = dir("form-xfdf");
+    let file = d.join("blank.pdf");
+    std::fs::write(&file, katna_pdf_cos::text_pdf("Form", &[])).unwrap();
+    let form = d.join("form.pdf");
+    let (code, text) = run(&[
+        "form",
+        s(&file),
+        "-o",
+        s(&form),
+        "--add",
+        "text:1:100,700,300,720:Name",
+        "--add",
+        "check:1:100,660,114,674:Agree",
+    ]);
+    assert_eq!(code, 0, "{text}");
+    let filled = d.join("filled.pdf");
+    let (code, text) = run(&[
+        "fill",
+        s(&form),
+        "-o",
+        s(&filled),
+        "--set",
+        "Name=Asha",
+        "--set",
+        "Agree=yes",
+    ]);
+    assert_eq!(code, 0, "{text}");
+    for ext in ["xfdf", "fdf"] {
+        let data = d.join(format!("data.{ext}"));
+        let (code, text) = run(&["form-data", s(&filled), "-o", s(&data)]);
+        assert_eq!(code, 0, "{text}");
+        assert!(text.contains("(2 fields)"), "{text}");
+        let out = d.join(format!("out-{ext}.pdf"));
+        let (code, text) = run(&["fill", s(&form), "-o", s(&out), "--data", s(&data)]);
+        assert_eq!(code, 0, "{text}");
+        let (_, text) = run(&["form-data", s(&out), "--csv"]);
+        assert_eq!(text.trim(), "Name,Agree\r\nAsha,Yes", "{ext}");
+    }
+}

@@ -2,11 +2,14 @@
 
 //! A form's data on its own (docs/PLAN.md §4.3, "import and export form
 //! data"): each field's value by its full name, as JSON (one flat
-//! object) or CSV (a row of names and a row of values), and filled back
-//! in from either. A check box is on with its own "on" state, `true` or
+//! object), CSV (a row of names and a row of values), XFDF or FDF (the
+//! files Acrobat writes, fields nested by their names' parts), and filled
+//! back in from any of them. A check box is on with its own "on" state, `true` or
 //! `yes`, and off with `false`, `no`, `Off` or nothing; a radio group
 //! takes the name of the button to turn on.
 
+use crate::object::{Dict, Object};
+use crate::parse::Parser;
 use crate::{Document, FieldKind, FieldValue, UpdateError};
 
 /// Why form data could not be read or filled in.
@@ -112,6 +115,295 @@ impl Document {
         }
         self.fill(&changes).map_err(FormDataError::Update)
     }
+}
+
+impl Document {
+    /// The form's data as FDF, for the PDF named `file`: check boxes and
+    /// radio groups by their state's name, other fields as text.
+    pub fn form_fdf(&self, file: &str) -> Vec<u8> {
+        let states: std::collections::HashSet<String> = self
+            .form()
+            .into_iter()
+            .filter(|f| matches!(f.kind, FieldKind::CheckBox | FieldKind::Radio))
+            .map(|f| f.name)
+            .collect();
+        fn fields(
+            nodes: &[Node],
+            path: &str,
+            states: &std::collections::HashSet<String>,
+        ) -> Object {
+            Object::Array(
+                nodes
+                    .iter()
+                    .map(|node| {
+                        let full = if path.is_empty() {
+                            node.name.clone()
+                        } else {
+                            format!("{path}.{}", node.name)
+                        };
+                        let mut d = Dict::new();
+                        d.set("T", crate::forms::text_object(&node.name));
+                        if let Some(value) = &node.value {
+                            d.set(
+                                "V",
+                                if states.contains(&full) {
+                                    Object::Name(crate::object::Name(value.as_bytes().to_vec()))
+                                } else {
+                                    crate::forms::text_object(value)
+                                },
+                            );
+                        }
+                        if !node.kids.is_empty() {
+                            d.set("Kids", fields(&node.kids, &full, states));
+                        }
+                        Object::Dict(d)
+                    })
+                    .collect(),
+            )
+        }
+        let mut fdf = Dict::new();
+        fdf.set("F", crate::forms::text_object(file));
+        fdf.set("Fields", fields(&tree(&self.form_data()), "", &states));
+        let mut root = Dict::new();
+        root.set("FDF", Object::Dict(fdf));
+        let mut out = b"%FDF-1.2\n%\xe2\xe3\xcf\xd3\n1 0 obj\n".to_vec();
+        crate::write_object(&mut out, &Object::Dict(root));
+        out.extend_from_slice(b"\nendobj\ntrailer\n<< /Root 1 0 R >>\n%%EOF\n");
+        out
+    }
+}
+
+/// What a form data file is, by its name's extension.
+fn kind_of(name: &str) -> &'static str {
+    let ext = name.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
+    match ext.as_str() {
+        "csv" => "csv",
+        "xfdf" | "xml" => "xfdf",
+        "fdf" => "fdf",
+        _ => "json",
+    }
+}
+
+/// Form data from a file named `name`: FDF, XFDF, CSV or JSON, told
+/// apart by what it starts with and else by its name's extension.
+pub fn read_data(name: &str, bytes: &[u8]) -> Result<Vec<(String, String)>, FormDataError> {
+    if bytes.starts_with(b"%FDF") {
+        return data_from_fdf(bytes);
+    }
+    let text = String::from_utf8_lossy(bytes);
+    let start = text.trim_start_matches('\u{feff}').trim_start();
+    if start.starts_with('<') {
+        return data_from_xfdf(&text);
+    }
+    if start.starts_with('{') {
+        return data_from_json(&text);
+    }
+    match kind_of(name) {
+        "json" => data_from_json(&text),
+        _ => data_from_csv(&text),
+    }
+}
+
+impl Document {
+    /// The form's data as a file named `name` (FDF, XFDF, CSV, else
+    /// JSON, by its extension), for this PDF named `pdf`.
+    pub fn write_data(&self, name: &str, pdf: &str) -> Vec<u8> {
+        let data = self.form_data();
+        match kind_of(name) {
+            "csv" => data_to_csv(&data).into_bytes(),
+            "xfdf" => data_to_xfdf(&data, pdf).into_bytes(),
+            "fdf" => self.form_fdf(pdf),
+            _ => data_to_json(&data).into_bytes(),
+        }
+    }
+}
+
+/// A part of fields' names, with the value of the field it names (if
+/// one does) and the parts under it.
+struct Node {
+    name: String,
+    value: Option<String>,
+    kids: Vec<Node>,
+}
+
+/// `data`'s full names as a tree of their parts, in order.
+fn tree(data: &[(String, String)]) -> Vec<Node> {
+    let mut top: Vec<Node> = Vec::new();
+    for (name, value) in data {
+        let mut level = &mut top;
+        let parts: Vec<&str> = name.split('.').collect();
+        for (i, part) in parts.iter().enumerate() {
+            let at = match level.iter().position(|n| n.name == *part) {
+                Some(at) => at,
+                None => {
+                    level.push(Node {
+                        name: (*part).to_owned(),
+                        value: None,
+                        kids: Vec::new(),
+                    });
+                    level.len() - 1
+                }
+            };
+            if i + 1 == parts.len() {
+                level[at].value = Some(value.clone());
+            }
+            level = &mut level[at].kids;
+        }
+    }
+    top
+}
+
+/// `data` as XFDF, for the PDF named `file`.
+pub fn data_to_xfdf(data: &[(String, String)], file: &str) -> String {
+    fn write(out: &mut String, nodes: &[Node], depth: usize) {
+        for node in nodes {
+            let pad = "  ".repeat(depth);
+            out.push_str(&format!(
+                "{pad}<field name=\"{}\">\n",
+                crate::xfdf::escape(&node.name)
+            ));
+            if let Some(value) = &node.value {
+                out.push_str(&format!(
+                    "{pad}  <value>{}</value>\n",
+                    crate::xfdf::escape(value)
+                ));
+            }
+            write(out, &node.kids, depth + 1);
+            out.push_str(&format!("{pad}</field>\n"));
+        }
+    }
+    let mut out = String::from(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<xfdf xmlns=\"http://ns.adobe.com/xfdf/\" xml:space=\"preserve\">\n<fields>\n",
+    );
+    write(&mut out, &tree(data), 1);
+    out.push_str(&format!(
+        "</fields>\n<f href=\"{}\"/>\n</xfdf>\n",
+        crate::xfdf::escape(file)
+    ));
+    out
+}
+
+/// Names and values from XFDF's `<fields>`: each `<field>` with a
+/// `<value>`, its full name made from the fields it is in.
+pub fn data_from_xfdf(xml: &str) -> Result<Vec<(String, String)>, FormDataError> {
+    let elements = crate::xfdf::parse(xml);
+    if !elements.iter().any(|e| e.name == "xfdf") {
+        return Err(FormDataError::Syntax("the file is not XFDF".into()));
+    }
+    let full = |mut at: usize| {
+        let mut parts = Vec::new();
+        loop {
+            let e = &elements[at];
+            if e.name == "field" {
+                parts.push(e.attrs.get("name").cloned().unwrap_or_default());
+            }
+            match e.parent {
+                Some(p) => at = p,
+                None => break,
+            }
+        }
+        parts.reverse();
+        parts.join(".")
+    };
+    let mut out: Vec<(String, String)> = Vec::new();
+    for e in &elements {
+        let Some(parent) = e.parent.filter(|&p| elements[p].name == "field") else {
+            continue;
+        };
+        if e.name != "value" && e.name != "value-richtext" {
+            continue;
+        }
+        let name = full(parent);
+        // A list's several values: the first is kept.
+        if out.iter().any(|(n, _)| *n == name) {
+            continue;
+        }
+        out.push((name, e.text.clone()));
+    }
+    Ok(out)
+}
+
+/// Names and values from an FDF file's fields.
+pub fn data_from_fdf(bytes: &[u8]) -> Result<Vec<(String, String)>, FormDataError> {
+    let bad = || FormDataError::Syntax("the file is not FDF".into());
+    if !bytes.starts_with(b"%FDF") {
+        return Err(bad());
+    }
+    // Every object, by number, for fields kept in objects of their own.
+    let mut objects = std::collections::HashMap::new();
+    let mut p = Parser::new(bytes, 0);
+    while p.pos < bytes.len() {
+        let start = p.pos;
+        if let Some(r) = p.object_header() {
+            if let Some(obj) = p.indirect_body(&|_| None) {
+                objects.insert(r, obj);
+            }
+        } else {
+            p.pos = start + 1;
+        }
+    }
+    let resolve = |o: &Object| match o {
+        Object::Ref(r) => objects.get(r).cloned().unwrap_or(Object::Null),
+        o => o.clone(),
+    };
+    let fdf = objects
+        .values()
+        .find_map(|o| match o {
+            Object::Dict(d) => match d.get("FDF").map(resolve) {
+                Some(Object::Dict(f)) => Some(f),
+                _ => None,
+            },
+            _ => None,
+        })
+        .ok_or_else(bad)?;
+    let mut out = Vec::new();
+    fn walk(
+        fields: &Object,
+        path: &str,
+        resolve: &dyn Fn(&Object) -> Object,
+        out: &mut Vec<(String, String)>,
+        depth: usize,
+    ) {
+        let Object::Array(fields) = resolve(fields) else {
+            return;
+        };
+        if depth > 32 {
+            return;
+        }
+        for field in &fields {
+            let Object::Dict(d) = resolve(field) else {
+                continue;
+            };
+            let part = match d.get("T").map(resolve) {
+                Some(Object::String { bytes, .. }) => crate::outline::text_value(&bytes),
+                _ => String::new(),
+            };
+            let full = match (path.is_empty(), part.is_empty()) {
+                (true, _) => part,
+                (false, true) => path.to_owned(),
+                (false, false) => format!("{path}.{part}"),
+            };
+            let value = match d.get("V").map(resolve) {
+                Some(Object::String { bytes, .. }) => Some(crate::outline::text_value(&bytes)),
+                Some(Object::Name(n)) => Some(String::from_utf8_lossy(n.as_bytes()).into_owned()),
+                Some(Object::Array(a)) => a.first().and_then(|v| match resolve(v) {
+                    Object::String { bytes, .. } => Some(crate::outline::text_value(&bytes)),
+                    _ => None,
+                }),
+                _ => None,
+            };
+            if let Some(value) = value {
+                out.push((full.clone(), value));
+            }
+            if let Some(kids) = d.get("Kids") {
+                walk(kids, &full, resolve, out, depth + 1);
+            }
+        }
+    }
+    if let Some(fields) = fdf.get("Fields") {
+        walk(fields, "", &resolve, &mut out, 0);
+    }
+    Ok(out)
 }
 
 /// `data` as one flat JSON object.

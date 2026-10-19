@@ -457,3 +457,63 @@ fn totals_add_up_and_formats_show() {
     let total = again.form_data();
     assert_eq!(total.iter().find(|(n, _)| n == "Total").unwrap().1, "1200");
 }
+
+#[test]
+fn form_data_goes_through_xfdf_and_fdf() {
+    let doc = designed(
+        &blank(1),
+        &FormDesign {
+            add: every_kind(),
+            ..FormDesign::default()
+        },
+    );
+    let data = [
+        ("Name".to_string(), "आशा राव\n(Pune)".to_string()),
+        ("Agree".into(), "Yes".into()),
+        ("Answer".into(), "No".into()),
+        ("Cities".into(), "Kolkata".into()),
+    ];
+    let filled = Document::load(doc.fill_data(&data).unwrap()).unwrap();
+    let want = filled.form_data();
+    for name in ["out.xfdf", "out.fdf", "out.csv", "out.json"] {
+        let bytes = filled.write_data(name, "form.pdf");
+        let back = katna_pdf_cos::read_data(name, &bytes).unwrap();
+        assert_eq!(back, want, "{name}");
+        let again = Document::load(doc.fill_data(&back).unwrap()).unwrap();
+        assert_eq!(again.form_data(), want, "{name}");
+    }
+    // Check boxes and radio groups are names in FDF.
+    let fdf = String::from_utf8_lossy(&filled.write_data("x.fdf", "form.pdf")).into_owned();
+    assert!(fdf.contains("/V /No"), "{fdf}");
+
+    // Nested fields, as Acrobat writes them.
+    let xfdf = r#"<?xml version="1.0" encoding="UTF-8"?>
+<xfdf xmlns="http://ns.adobe.com/xfdf/"><fields>
+<field name="Applicant"><field name="Name"><value>Asha &amp; Ravi</value></field>
+<field name="City"><value>Pune</value></field></field>
+<field name="Empty"/>
+</fields></xfdf>"#;
+    assert_eq!(
+        katna_pdf_cos::data_from_xfdf(xfdf).unwrap(),
+        [
+            ("Applicant.Name".to_string(), "Asha & Ravi".to_string()),
+            ("Applicant.City".into(), "Pune".into())
+        ]
+    );
+    let nested = katna_pdf_cos::data_to_xfdf(
+        &[
+            ("Applicant.Name".into(), "A".into()),
+            ("Applicant.City".into(), "B".into()),
+        ],
+        "f.pdf",
+    );
+    assert_eq!(nested.matches("<field name=\"Applicant\">").count(), 1);
+    let fdf = b"%FDF-1.2\n1 0 obj\n<< /FDF << /Fields [ << /T (Applicant) /Kids [ << /T (Name) /V (Asha) >> 2 0 R ] >> ] >> >>\nendobj\n2 0 obj\n<< /T (City) /V <FEFF092A0941> >>\nendobj\ntrailer\n<< /Root 1 0 R >>\n%%EOF\n";
+    assert_eq!(
+        katna_pdf_cos::data_from_fdf(fdf).unwrap(),
+        [
+            ("Applicant.Name".to_string(), "Asha".to_string()),
+            ("Applicant.City".into(), "पु".into())
+        ]
+    );
+}

@@ -1151,8 +1151,8 @@ impl Viewer {
         Some(card.into_any_element())
     }
 
-    /// Asks where to save the form's data, as JSON (or CSV, when the name
-    /// given ends so), and saves it there.
+    /// Asks where to save the form's data, as JSON (or CSV, XFDF or FDF,
+    /// when the name given ends so), and saves it there.
     fn export_form_data(&mut self, cx: &mut Context<Self>) {
         let Some(path) = self.path.clone() else {
             return;
@@ -1163,6 +1163,7 @@ impl Viewer {
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_default();
         let chosen = cx.prompt_for_new_path(&folder, Some(&format!("{stem}.json")));
+        let pdf = super::file_name(&path);
         let current = self.unsaved();
         let key = self.key.clone();
         cx.spawn(async move |this, cx| {
@@ -1176,15 +1177,8 @@ impl Viewer {
                         Some(bytes) => bytes.to_vec(),
                         None => std::fs::read(&path).map_err(|e| e.to_string())?,
                     };
-                    let data = super::cos(bytes, key.as_deref())?.form_data();
-                    let csv = target
-                        .extension()
-                        .is_some_and(|e| e.eq_ignore_ascii_case("csv"));
-                    let text = if csv {
-                        katna_pdf_cos::data_to_csv(&data)
-                    } else {
-                        katna_pdf_cos::data_to_json(&data)
-                    };
+                    let doc = super::cos(bytes, key.as_deref())?;
+                    let text = doc.write_data(&target.to_string_lossy(), &pdf);
                     std::fs::write(&target, text).map_err(|e| e.to_string())?;
                     Ok::<_, String>(target)
                 })
@@ -1201,7 +1195,8 @@ impl Viewer {
         .detach();
     }
 
-    /// Asks for a JSON or CSV file of form data and fills the form in
+    /// Asks for a file of form data (JSON, CSV, XFDF or FDF) and fills
+    /// the form in
     /// from it.
     fn import_form_data(&mut self, cx: &mut Context<Self>) {
         let chosen = cx.prompt_for_paths(gpui::PathPromptOptions {
@@ -1222,7 +1217,7 @@ impl Viewer {
         .detach();
     }
 
-    /// Fills the form in from the JSON or CSV file `file`.
+    /// Fills the form in from the form data file `file`.
     pub(super) fn fill_from(&mut self, file: PathBuf, cx: &mut Context<Self>) {
         let pages = self
             .designing
@@ -1242,16 +1237,9 @@ impl Viewer {
             pages,
             "form-design-failed",
             move |doc| {
-                let text = std::fs::read_to_string(&file).map_err(|e| e.to_string())?;
-                let csv = file
-                    .extension()
-                    .is_some_and(|e| e.eq_ignore_ascii_case("csv"));
-                let data = if csv {
-                    katna_pdf_cos::data_from_csv(&text)
-                } else {
-                    katna_pdf_cos::data_from_json(&text)
-                }
-                .map_err(|e| e.to_string())?;
+                let bytes = std::fs::read(&file).map_err(|e| e.to_string())?;
+                let data = katna_pdf_cos::read_data(&file.to_string_lossy(), &bytes)
+                    .map_err(|e| e.to_string())?;
                 doc.fill_data(&data).map_err(|e| e.to_string())
             },
             cx,

@@ -114,10 +114,13 @@ usage: katna-pdf-cli COMMAND [--json] ...
                                   rules to write on, empty boxes, rows of letter
                                   boxes, squares to tick), named from the words
                                   beside them
-  form-data FILE [--csv]          each field's value by its full name, as one JSON
-                                  object (or CSV: names, then values)
-  fill FILE -o OUT [--data DATA.json|DATA.csv] [--set NAME=VALUE]...
-                                  the form filled in from form-data's JSON or CSV,
+  form-data FILE [--csv] [-o OUT.json|.csv|.xfdf|.fdf]
+                                  each field's value by its full name, as one JSON
+                                  object (or CSV: names, then values); with -o saved
+                                  as JSON, CSV, XFDF or FDF by OUT's extension
+  fill FILE -o OUT [--data DATA.json|.csv|.xfdf|.fdf] [--set NAME=VALUE]...
+                                  the form filled in from form data (JSON, CSV, or
+                                  Acrobat's XFDF or FDF),
                                   or values given one by one (a check box: yes or
                                   no; a radio group: the button's choice)
   add-field FILE -o OUT --rect L,B,R,T [--page N] [--name NAME]
@@ -171,7 +174,7 @@ fn main() -> ExitCode {
         "verify" => verify(rest, json),
         "add-field" => add_field(rest, json),
         "form" => form(rest, json),
-        "form-data" => form_data(rest),
+        "form-data" => form_data(rest, json),
         "fill" => fill(rest, json),
         "insert" => insert(rest, json),
         "stamp" => stamp(rest, json),
@@ -1831,11 +1834,30 @@ fn form(args: &[String], json: bool) -> Done {
     Ok(wrote(&[(out, count)], json))
 }
 
-/// Prints the form's data as JSON, or CSV.
-fn form_data(args: &[String]) -> Done {
+/// Prints the form's data as JSON or CSV, or saves it as any kind
+/// form data comes in (by `-o`'s extension).
+fn form_data(args: &[String], json: bool) -> Done {
     let args = Args::parse(args)?;
     let [file] = args.words()?;
-    let data = open(file)?.form_data();
+    let doc = open(file)?;
+    if args.option("-o").is_some() {
+        let out = args.output()?;
+        let pdf = Path::new(file)
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        write(&out, &doc.write_data(&out.to_string_lossy(), &pdf))?;
+        let count = doc.form_data().len();
+        return Ok(if json {
+            format!(
+                "{{\"written\":[{{\"file\":{},\"fields\":{count}}}]}}\n",
+                string(&out.display().to_string())
+            )
+        } else {
+            format!("{} ({count} fields)\n", out.display())
+        });
+    }
+    let data = doc.form_data();
     Ok(if args.flag("--csv") {
         katna_pdf_cos::data_to_csv(&data)
     } else {
@@ -1851,12 +1873,11 @@ fn fill(args: &[String], json: bool) -> Done {
     let doc = open(file)?;
     let mut data = Vec::new();
     if let Some(path) = args.option("--data") {
-        let text = std::fs::read_to_string(path).map_err(|e| failed(format!("{path}: {e}")))?;
-        let csv = args.flag("--csv") || path.to_ascii_lowercase().ends_with(".csv");
-        let read = if csv {
-            katna_pdf_cos::data_from_csv(&text)
+        let bytes = std::fs::read(path).map_err(|e| failed(format!("{path}: {e}")))?;
+        let read = if args.flag("--csv") {
+            katna_pdf_cos::data_from_csv(&String::from_utf8_lossy(&bytes))
         } else {
-            katna_pdf_cos::data_from_json(&text)
+            katna_pdf_cos::read_data(path, &bytes)
         };
         data = read.map_err(|e| failed(format!("{path}: {e}")))?;
     }

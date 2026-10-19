@@ -53,7 +53,10 @@ pub use document::{Document, Entry, LoadError, XrefKind};
 pub use dss::Dss;
 pub use edit::{EditError, TextBlock, TextRun};
 pub use filter::{FilterError, decode};
-pub use formdata::{FormDataError, data_from_csv, data_from_json, data_to_csv, data_to_json};
+pub use formdata::{
+    FormDataError, data_from_csv, data_from_fdf, data_from_json, data_from_xfdf, data_to_csv,
+    data_to_json, data_to_xfdf, read_data,
+};
 pub use forms::{Field, FieldKind, FieldValue, Widget};
 pub use insert::{Image, Insert, ShapeKind};
 pub use links::{Link, LinkTarget};
