@@ -165,7 +165,7 @@ jobs:
       - name: Install it and try it
         run: |
           dnf install -y ./out/katna-pdf-x86_64.rpm ImageMagick xorg-x11-server-Xvfb \
-            xorg-x11-utils mesa-vulkan-drivers mesa-libEGL dejavu-sans-fonts
+            xwininfo mesa-vulkan-drivers mesa-libEGL dejavu-sans-fonts
           if ldd /usr/bin/katna-pdf | grep 'not found'; then exit 1; fi
           mkdir shots
           ci/linux-package-test.sh shots/rpm-fedora.png
