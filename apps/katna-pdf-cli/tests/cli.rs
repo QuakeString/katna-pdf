@@ -565,3 +565,56 @@ fn a_paragraph_is_changed_and_wrapped() {
         "{out}"
     );
 }
+
+#[test]
+fn text_and_shapes_are_drawn_into_a_page() {
+    let d = dir("insert");
+    let file = d.join("note.pdf");
+    std::fs::write(
+        &file,
+        katna_pdf_cos::text_pdf("Note", &["  Hello".to_string()]),
+    )
+    .unwrap();
+    let with_text = d.join("text.pdf");
+    let (code, out) = run(&[
+        "insert",
+        s(&file),
+        "-o",
+        s(&with_text),
+        "--text",
+        "Paid\\nThank you",
+        "--at",
+        "72,300",
+        "--font",
+        "Times-Roman",
+        "--colour",
+        "#cc0000",
+    ]);
+    assert_eq!(code, 0, "{out}");
+    let (_, out) = run(&["text", s(&with_text)]);
+    assert!(out.contains("Times-Roman 12pt: Paid"), "{out}");
+    assert!(out.contains("Times-Roman 12pt: Thank you"), "{out}");
+    let with_shape = d.join("shape.pdf");
+    let (code, out) = run(&[
+        "insert",
+        s(&with_text),
+        "-o",
+        s(&with_shape),
+        "--shape",
+        "ellipse",
+        "--rect",
+        "60,280,200,320",
+    ]);
+    assert_eq!(code, 0, "{out}");
+    let (code, _) = run(&[
+        "insert",
+        s(&file),
+        "-o",
+        s(&with_shape),
+        "--shape",
+        "circle",
+        "--rect",
+        "0,0,1,1",
+    ]);
+    assert_ne!(code, 0);
+}

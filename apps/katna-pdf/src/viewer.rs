@@ -35,6 +35,7 @@ use katna_ui::{ScrollBar, px, unpx};
 
 mod annots;
 mod crop;
+mod insert;
 mod organizer;
 mod sign;
 mod textedit;
@@ -81,6 +82,7 @@ actions!(
         Annotate,
         Organize,
         Sign,
+        PastePicture,
         Quit
     ]
 );
@@ -123,6 +125,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("down", ScrollDown, Some(READING)),
         KeyBinding::new("up", ScrollUp, Some(READING)),
         KeyBinding::new("ctrl-c", CopyText, Some(READING)),
+        KeyBinding::new("ctrl-v", PastePicture, Some(READING)),
         KeyBinding::new("delete", DeleteAnnotation, Some(READING)),
         KeyBinding::new("escape", PutToolDown, Some(READING)),
         KeyBinding::new("ctrl-f", Find, None),
@@ -303,6 +306,11 @@ pub struct Viewer {
     text_editing: bool,
     runs: textedit::Runs,
     typing: Option<textedit::Typing>,
+    /// The tool for adding to pages in hand, the shape being dragged out
+    /// with it, and the colour picked (`insert::INKS`).
+    adding: Option<insert::Adding>,
+    placing: Option<annots::Draft>,
+    ink: usize,
     tool: Option<Tool>,
     colour: usize,
     /// Each page's annotations, once read.
@@ -412,6 +420,9 @@ impl Viewer {
             text_editing: false,
             runs: Default::default(),
             typing: None,
+            adding: None,
+            placing: None,
+            ink: 0,
             tool: None,
             colour: 0,
             annots: None,
@@ -510,6 +521,8 @@ impl Viewer {
         self.cropping = false;
         self.text_editing = false;
         self.typing = None;
+        self.adding = None;
+        self.placing = None;
         self.forget_runs();
         self.signatures = None;
         self.signable = Arc::default();
@@ -998,6 +1011,7 @@ impl Viewer {
         self.finish_typing(true, cx);
         window.focus(&self.focus, cx);
         if self.sign_press(event.position, cx)
+            || self.insert_press(event.position, window, cx)
             || self.text_edit_press(cx)
             || self.crop_press(event.position, cx)
             || self.annot_press(event.position, cx)
@@ -1013,7 +1027,7 @@ impl Viewer {
     }
 
     fn drag(&mut self, event: &gpui::MouseMoveEvent, cx: &mut Context<Self>) {
-        if self.annot_drag(event.position, cx) {
+        if self.insert_drag(event.position, cx) || self.annot_drag(event.position, cx) {
             return;
         }
         let spot = self.spot_at(event.position, cx);
@@ -1031,7 +1045,11 @@ impl Viewer {
 
     fn release_pointer(&mut self, cx: &mut Context<Self>) {
         self.selecting = false;
-        if self.sign_release(cx) || self.crop_release(cx) || self.annot_release(cx) {
+        if self.sign_release(cx)
+            || self.crop_release(cx)
+            || self.insert_release(cx)
+            || self.annot_release(cx)
+        {
             return;
         }
         // A click without a drag selects nothing.
@@ -2995,7 +3013,7 @@ impl Render for Viewer {
         self.open_comment_now(window, cx);
         self.focus_signing(window, cx);
         let pane = self.pane(window, cx);
-        let tools = self.tools_row(cx);
+        let tools = self.tools_row(cx).or_else(|| self.edit_row(cx));
         let signatures_line = self.signatures_line(cx);
         let signing_card = self.signing_card(cx);
         let find_bar = self.find_bar(cx);
@@ -3119,9 +3137,14 @@ impl Render for Viewer {
             .on_action(cx.listener(|this, _: &Annotate, _, cx| this.toggle_tools(cx)))
             .on_action(cx.listener(|this, _: &Organize, _, cx| this.toggle_organizer(cx)))
             .on_action(cx.listener(|this, _: &Sign, _, cx| this.toggle_signing(cx)))
+            .on_action(cx.listener(|this, _: &PastePicture, _, cx| {
+                this.paste_picture(cx);
+            }))
             .on_action(cx.listener(|this, _: &PutToolDown, _, cx| {
                 if this.signing.is_some() {
                     this.toggle_signing(cx);
+                } else if this.text_editing && this.adding.is_some() {
+                    this.pick_adding(None, cx);
                 } else if this.text_editing {
                     this.toggle_text_edit(cx);
                 } else if this.cropping {

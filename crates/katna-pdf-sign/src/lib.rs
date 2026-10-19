@@ -241,6 +241,81 @@ pub fn picture(bytes: &[u8]) -> Result<katna_pdf_cos::Picture, String> {
     })
 }
 
+/// Widest a picture put on a page is kept, in pixels, when it is not a
+/// JPEG kept as it is.
+const PAGE_PICTURE_WIDTH: u32 = 2400;
+
+/// A PNG, JPEG or other picture file `bytes` to put on a page: a JPEG in
+/// gray or colour as it is, anything else as pixels, made smaller when
+/// very large. (Here as this crate already reads pictures, for signature
+/// pictures.)
+pub fn page_image(bytes: &[u8]) -> Result<katna_pdf_cos::Image, String> {
+    if let Some((width, height, components)) = jpeg_size(bytes)
+        && matches!(components, 1 | 3)
+    {
+        return Ok(katna_pdf_cos::Image::Jpeg {
+            data: bytes.to_vec(),
+            width,
+            height,
+            components,
+        });
+    }
+    let image = image::load_from_memory(bytes).map_err(|e| e.to_string())?;
+    let image = if image.width() > PAGE_PICTURE_WIDTH {
+        image.resize(
+            PAGE_PICTURE_WIDTH,
+            u32::MAX,
+            image::imageops::FilterType::Triangle,
+        )
+    } else {
+        image
+    };
+    let rgba = image.to_rgba8();
+    let (width, height) = rgba.dimensions();
+    let mut rgb = Vec::with_capacity((width * height * 3) as usize);
+    let mut alpha = Vec::with_capacity((width * height) as usize);
+    for p in rgba.pixels() {
+        rgb.extend_from_slice(&p.0[..3]);
+        alpha.push(p.0[3]);
+    }
+    let see_through = alpha.iter().any(|&a| a < 255);
+    Ok(katna_pdf_cos::Image::Pixels(katna_pdf_cos::Picture {
+        width,
+        height,
+        rgb,
+        alpha: see_through.then_some(alpha),
+    }))
+}
+
+/// A JPEG's width, height and number of components, from its frame
+/// header.
+fn jpeg_size(bytes: &[u8]) -> Option<(u32, u32, u8)> {
+    if !bytes.starts_with(&[0xFF, 0xD8]) {
+        return None;
+    }
+    let mut i = 2;
+    while i + 4 <= bytes.len() {
+        if bytes[i] != 0xFF {
+            return None;
+        }
+        let marker = bytes[i + 1];
+        if marker == 0xFF {
+            i += 1;
+            continue;
+        }
+        let len = usize::from(u16::from_be_bytes([bytes[i + 2], bytes[i + 3]]));
+        // Start of frame: every SOFn but DHT, JPG and DAC.
+        if (0xC0..=0xCF).contains(&marker) && !matches!(marker, 0xC4 | 0xC8 | 0xCC) {
+            let f = bytes.get(i + 4..i + 10)?;
+            let height = u32::from(u16::from_be_bytes([f[1], f[2]]));
+            let width = u32::from(u16::from_be_bytes([f[3], f[4]]));
+            return (width > 0 && height > 0).then_some((width, height, f[5]));
+        }
+        i += 2 + len;
+    }
+    None
+}
+
 /// Lines for a visible signature: who signed, when, and why.
 pub fn appearance_lines(signer: &dyn Signer, date: &str, reason: Option<&str>) -> Vec<String> {
     let name = common_name(&signer.certificate().tbs_certificate.subject);

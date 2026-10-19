@@ -775,7 +775,7 @@ fn appearance(
 
 /// `picture` as an image XObject, its see-through parts as a soft mask
 /// of its own.
-fn image_stream(update: &mut Update, picture: &Picture) -> Stream {
+pub(crate) fn image_stream(update: &mut Update, picture: &Picture) -> Stream {
     let image = |data: &[u8], gray: bool| {
         let (filter, data) = match deflate(data) {
             Some(packed) => (Some(Object::name("FlateDecode")), packed),

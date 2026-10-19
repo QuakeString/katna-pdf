@@ -60,6 +60,7 @@ const ICONS: &[(&str, &[u8])] = &[
         "icons/text-edit.svg",
         include_bytes!("../icons/text-edit.svg"),
     ),
+    ("icons/image.svg", include_bytes!("../icons/image.svg")),
     (
         "icons/format-text.svg",
         include_bytes!("../icons/format-text.svg"),
