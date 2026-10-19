@@ -194,6 +194,7 @@ impl Viewer {
         self.properties = None;
         self.redacting = None;
         self.linking = None;
+        self.numbering = None;
         let accent = gpui::rgba(self.theme.katna.accent).into();
         let input = |placeholder: &str, cx: &mut Context<Self>| {
             let placeholder = t(placeholder, &[]);

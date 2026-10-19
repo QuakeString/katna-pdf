@@ -47,7 +47,8 @@ cargo run --release -p katna-pdf-bench -- file.pdf
   Rust from the calls Acrobat's form tools write (`calc.rs`), the
   fields a flat form asks for found from its blanks, boxes, grid cells
   and squares to tick (`detect.rs`), the outline, links and named
-  destinations changed (`nav.rs`), and
+  destinations changed (`nav.rs`), page labels read and written
+  (`labels.rs`), and
   page lists as people write them (`ranges.rs`). No GPUI, no C.
 - `crates/katna-pdf-sign` — signing and checking signatures, pure
   Rust: certificate files (`p12.rs`), CMS / PAdES B-B (`cms.rs`),
@@ -66,7 +67,7 @@ cargo run --release -p katna-pdf-bench -- file.pdf
   data (PAdES B-LT DSS) its `dss.rs`.
 - `apps/katna-pdf` — the app window.
 - `apps/katna-pdf-cli` — the command line: info, merge, split, pages,
-  rotate, crop, sign (and certify), add-field, ltv, tokens, token-check, verify (with `--report` as a PDF), text and edit-text (`--blocks` / `--block` for paragraphs), insert, stamp, redact, form (with `--detect`), form-data and fill, meta, lock and unlock, objects and object, bookmarks, links and dests, annotations and XFDF; `--json` for scripts and agents.
+  rotate, crop, sign (and certify), add-field, ltv, tokens, token-check, verify (with `--report` as a PDF), text and edit-text (`--blocks` / `--block` for paragraphs), insert, stamp, redact, form (with `--detect`), form-data and fill, meta, lock and unlock, objects and object, bookmarks, links, dests and labels, annotations and XFDF; `--json` for scripts and agents.
 - `tools/katna-pdf-cos-check` — runs katna-pdf-cos over a folder of PDFs
   (loads, page counts against hayro, update round trips).
 - `vendor/hayro`, `vendor/hayro-interpret` — hayro with our patches

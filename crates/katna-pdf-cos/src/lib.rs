@@ -23,6 +23,7 @@ mod fonts;
 mod formdata;
 mod forms;
 mod insert;
+mod labels;
 mod links;
 mod lock;
 mod mdp;
@@ -60,6 +61,7 @@ pub use formdata::{
 };
 pub use forms::{Field, FieldKind, FieldValue, Widget};
 pub use insert::{Image, Insert, ShapeKind};
+pub use labels::{LabelRange, LabelStyle, labels_of};
 pub use links::{Link, LinkTarget};
 pub use lock::LockError;
 pub use mdp::{Allowed, Change, Lock};

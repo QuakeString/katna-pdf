@@ -1187,3 +1187,45 @@ fn bookmarks_links_and_names_are_listed_and_changed() {
     assert_eq!(code, 0);
     assert_eq!(run(&["dests", s(&one)]).1, "intro\t1\n");
 }
+
+#[test]
+fn pages_are_numbered_in_ranges() {
+    let d = dir("labels");
+    let file = d.join("five.pdf");
+    std::fs::write(&file, pdf(5)).unwrap();
+    assert_eq!(
+        run(&["labels", s(&file), "--json"]).1,
+        "{\"labels\":[\"1\",\"2\",\"3\",\"4\",\"5\"]}\n"
+    );
+    let numbered = d.join("numbered.pdf");
+    let (code, out) = run(&[
+        "labels",
+        s(&file),
+        "-o",
+        s(&numbered),
+        "--range",
+        "1:i",
+        "--range",
+        "3:1",
+        "--range",
+        "5:A:Annex :2",
+    ]);
+    assert_eq!(code, 0, "{out}");
+    assert_eq!(
+        run(&["labels", s(&numbered)]).1,
+        "1      i\n2      ii\n3      1\n4      2\n5      Annex B\n"
+    );
+    let plain = d.join("plain.pdf");
+    assert_eq!(
+        run(&["labels", s(&numbered), "-o", s(&plain), "--clear"]).0,
+        0
+    );
+    assert_eq!(
+        run(&["labels", s(&plain)]).1,
+        "1      1\n2      2\n3      3\n4      4\n5      5\n"
+    );
+    assert_eq!(
+        run(&["labels", s(&file), "-o", s(&plain), "--range", "1:x"]).0,
+        2
+    );
+}
