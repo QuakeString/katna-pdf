@@ -12,12 +12,15 @@ use std::fmt::Write as _;
 
 use crate::document::Document;
 use crate::forms::{literal, text_object};
+use crate::measure::Scale;
 use crate::object::{Dict, Name, Object, Ref, Stream};
 use crate::outline::text_string;
 use crate::write::UpdateError;
 
 /// A note's icon, in points.
 pub const NOTE_SIZE: f32 = 20.0;
+/// The size of a measurement's value written beside it.
+const LABEL_SIZE: f32 = 9.0;
 
 /// How text markup marks its text.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -100,6 +103,9 @@ pub struct Annotation {
     /// Its name, unique in the file (`/NM`); empty for one not yet
     /// written, which is given one.
     pub name: String,
+    /// For a line or shape that measures: the scale it measures in. Its
+    /// comment is the length or area, shown beside it.
+    pub measure: Option<Scale>,
 }
 
 impl Annotation {
@@ -118,6 +124,7 @@ impl Annotation {
             modified: None,
             reply_to: None,
             name: String::new(),
+            measure: None,
         };
         a.rect = a.bounds();
         a
@@ -153,7 +160,45 @@ impl Annotation {
             AnnotKind::Line { arrow: true, .. } => self.width * 0.5 + arrow_size(self.width),
             _ => self.width * 0.5 + 1.0,
         };
-        [b[0] - grow, b[1] - grow, b[2] + grow, b[3] + grow]
+        let b = [b[0] - grow, b[1] - grow, b[2] + grow, b[3] + grow];
+        match self.label_box() {
+            Some(l) => [
+                b[0].min(l[0]),
+                b[1].min(l[1]),
+                b[2].max(l[2]),
+                b[3].max(l[3]),
+            ],
+            None => b,
+        }
+    }
+
+    /// Where a measurement's value is written: a box in page space, its
+    /// text at [`LABEL_SIZE`] points.
+    fn label_box(&self) -> Option<[f32; 4]> {
+        if self.measure.is_none() || self.contents.is_empty() {
+            return None;
+        }
+        let at = match &self.kind {
+            AnnotKind::Line { from, to, .. } => lerp(*from, *to, 0.5),
+            AnnotKind::PolyLine(points) => *points.get(points.len() / 2)?,
+            AnnotKind::Polygon(points) if !points.is_empty() => {
+                let n = points.len() as f32;
+                let sum = points
+                    .iter()
+                    .fold([0.0, 0.0], |s, p| [s[0] + p[0], s[1] + p[1]]);
+                [sum[0] / n, sum[1] / n]
+            }
+            _ => return None,
+        };
+        // Helvetica's figures are about 0.56 em wide.
+        let w = self.contents.chars().count() as f32 * LABEL_SIZE * 0.56 + 4.0;
+        let h = LABEL_SIZE + 4.0;
+        // Above the line, centred; in the middle of a shape.
+        let bottom = match self.kind {
+            AnnotKind::Polygon(_) => at[1] - h / 2.0,
+            _ => at[1] + self.width,
+        };
+        Some([at[0] - w / 2.0, bottom, at[0] + w / 2.0, bottom + h])
     }
 }
 
@@ -301,6 +346,12 @@ impl Document {
             modified: text("M"),
             reply_to: d.get("IRT").and_then(Object::as_ref),
             name: text("NM").unwrap_or_default(),
+            measure: match &kind {
+                AnnotKind::Line { .. } | AnnotKind::Polygon(_) | AnnotKind::PolyLine(_) => {
+                    d.get("Measure").and_then(|m| self.read_scale(m))
+                }
+                _ => None,
+            },
             kind,
         })
     }
@@ -590,6 +641,28 @@ fn write_dict(dict: &mut Dict, a: &Annotation, page: Ref) {
         }
         AnnotKind::Other(_) => {}
     }
+    match (&a.measure, &a.kind) {
+        (Some(scale), AnnotKind::Line { .. } | AnnotKind::Polygon(_) | AnnotKind::PolyLine(_)) => {
+            dict.set(
+                "IT",
+                Object::name(match a.kind {
+                    AnnotKind::Line { .. } => "LineDimension",
+                    AnnotKind::Polygon(_) => "PolygonDimension",
+                    _ => "PolyLineDimension",
+                }),
+            );
+            dict.set("Measure", scale.dict());
+            if let AnnotKind::Line { .. } = a.kind {
+                // The length is shown on the line.
+                dict.set("Cap", true);
+            }
+        }
+        _ => {
+            for key in ["IT", "Measure", "Cap"] {
+                dict.remove(key);
+            }
+        }
+    }
 }
 
 /// The appearance stream: a form drawn in page space, its box the
@@ -790,6 +863,20 @@ fn appearance(a: &Annotation) -> Object {
             );
         }
         AnnotKind::Other(_) => {}
+    }
+    if let Some([x0, y0, x1, y1]) = a.label_box() {
+        font = true;
+        // On white, so it reads over the drawing.
+        let _ = writeln!(
+            c,
+            "q 1 1 1 rg {x0:.2} {y0:.2} {:.2} {:.2} re f BT /Helv {LABEL_SIZE:.1} Tf {fill} \
+             {:.2} {:.2} Td {} Tj ET Q",
+            x1 - x0,
+            y1 - y0,
+            x0 + 2.0,
+            y0 + 2.0 + LABEL_SIZE * 0.2,
+            literal(&a.contents)
+        );
     }
     let mut resources = Dict::new();
     if a.opacity < 1.0 || multiply {

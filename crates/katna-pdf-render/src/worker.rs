@@ -157,6 +157,27 @@ impl Document for RemoteDocument {
         }
     }
 
+    fn segments(&self, page: usize) -> Vec<crate::measure::Segment> {
+        let mut m = Message::new(SEGMENTS);
+        m.u64(self.id).u32(page as u32);
+        match self.ask(page, &m.0) {
+            Ok(answer) => answer
+                .map(|(_, blob)| {
+                    blob.as_chunks::<16>()
+                        .0
+                        .iter()
+                        .map(|c| {
+                            let f =
+                                |i: usize| f32::from_le_bytes([c[i], c[i + 1], c[i + 2], c[i + 3]]);
+                            [f(0), f(4), f(8), f(12)]
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
+            Err(()) => self.local.segments(page),
+        }
+    }
+
     fn page_transform(&self, page: usize) -> Option<[f64; 6]> {
         self.local.page_transform(page)
     }
@@ -169,6 +190,7 @@ const RENDER: u8 = 3;
 const REGION: u8 = 4;
 const PICTURES: u8 = 5;
 const TEXT: u8 = 6;
+const SEGMENTS: u8 = 7;
 // Answers.
 const FAILED: u8 = 0;
 const OK: u8 = 1;
@@ -463,6 +485,17 @@ fn answer(docs: &mut Vec<(u64, Arc<dyn Document>)>, request: &[u8], blob: Vec<u8
                     m.f32(v);
                 }
             }
+        }
+        SEGMENTS => {
+            // Many, so in the blob, four little-endian floats each.
+            let segments = doc.segments(page);
+            let mut blob = Vec::with_capacity(segments.len() * 16);
+            for s in segments {
+                for v in s {
+                    blob.extend_from_slice(&v.to_le_bytes());
+                }
+            }
+            return (m.0, blob);
         }
         _ => return failed(),
     }

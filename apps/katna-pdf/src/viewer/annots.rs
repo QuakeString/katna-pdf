@@ -55,6 +55,10 @@ impl Viewer {
         self.tool = (self.tool != Some(tool)).then_some(tool);
         self.cropping = false;
         self.draft = None;
+        self.measuring = None;
+        if tool.measures() {
+            self.start_measuring(cx);
+        }
         // Marking text that is already selected marks it now.
         if let Some(style) = tool.markup()
             && self.tool.is_some()
@@ -67,6 +71,11 @@ impl Viewer {
 
     /// Puts the tool down, or lets go of the annotation chosen.
     pub(super) fn cancel_tool(&mut self, cx: &mut Context<Self>) {
+        // A measurement being drawn goes first; the tool stays in hand.
+        if self.measuring.take().is_some() {
+            cx.notify();
+            return;
+        }
         let put_down = self.draft.take().is_some() | self.tool.take().is_some();
         if !put_down {
             self.choose(None, cx);
@@ -98,7 +107,7 @@ impl Viewer {
             } else {
                 th.katna.text_dim
             };
-            if i == 4 || i == 6 {
+            if i == 4 || i == 6 || i == 12 {
                 row = row.child(separator(th));
             }
             row = row.child(
@@ -893,7 +902,7 @@ impl Viewer {
 }
 
 /// Who annotations are by: the name the person logged in with.
-fn author() -> String {
+pub(super) fn author() -> String {
     std::env::var("USER")
         .or_else(|_| std::env::var("USERNAME"))
         .unwrap_or_default()

@@ -250,6 +250,24 @@ impl Document for HayroDocument {
         device.text
     }
 
+    fn segments(&self, page: usize) -> Vec<crate::measure::Segment> {
+        let (Some((w, h)), Some(pdf_page)) = (self.page_size(page), self.pdf.pages().get(page))
+        else {
+            return Vec::new();
+        };
+        let cache = InterpreterCache::new();
+        let mut context = Context::new(
+            pdf_page.initial_transform(true).to_kurbo(),
+            Rect::new(0.0, 0.0, f64::from(w), f64::from(h)),
+            &cache,
+            pdf_page.xref(),
+            InterpreterSettings::default(),
+        );
+        let mut device = crate::measure::LineDevice::default();
+        interpret_page(pdf_page, &mut context, &mut device);
+        device.segments
+    }
+
     fn page_transform(&self, page: usize) -> Option<[f64; 6]> {
         let pdf_page = self.pdf.pages().get(page)?;
         Some(pdf_page.initial_transform(true).to_kurbo().as_coeffs())
