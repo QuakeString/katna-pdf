@@ -6,6 +6,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::{Arc, Mutex, OnceLock};
 
+use crate::crypt::{Crypt, Permissions, UnlockError};
 use crate::filter::decode;
 use crate::object::{Dict, Object, Ref};
 use crate::parse::{Parser, find, is_white, rfind};
@@ -73,6 +74,8 @@ pub struct Document {
     scanned: OnceLock<HashMap<u32, (usize, u16)>>,
     /// Decoded object streams.
     object_streams: Mutex<HashMap<u32, Arc<StreamObjects>>>,
+    /// The key to a locked file, once opened.
+    crypt: Option<Crypt>,
 }
 
 impl std::fmt::Debug for Document {
@@ -97,11 +100,72 @@ impl Document {
             repaired: false,
             scanned: OnceLock::new(),
             object_streams: Mutex::new(HashMap::new()),
+            crypt: None,
         };
         if !doc.read_xref_chain() || !doc.catalog_ok() {
             doc.repair()?;
         }
+        // Most locked files open for anyone, their password empty.
+        if doc.is_encrypted() {
+            let _ = doc.unlock("");
+        }
         Ok(doc)
+    }
+
+    /// Opens a locked file with `password`, its owner's or its user's.
+    pub fn unlock(&mut self, password: &str) -> Result<(), UnlockError> {
+        let Some(encrypt) = self.trailer.get("Encrypt").cloned() else {
+            return Ok(());
+        };
+        let dict_ref = encrypt.as_ref();
+        let Object::Dict(mut dict) = self.resolve(&encrypt) else {
+            return Err(UnlockError::Unsupported);
+        };
+        // Its crypt filters may be objects of their own.
+        if let Object::Dict(filters) = self.resolve_key(&dict, "CF") {
+            let filters = filters
+                .iter()
+                .map(|(k, v)| (k.clone(), self.resolve(v)))
+                .collect();
+            dict.set("CF", Object::Dict(Dict(filters)));
+        }
+        let id = match self.trailer.get("ID").map(|i| self.resolve(i)) {
+            Some(Object::Array(a)) => match a.first() {
+                Some(Object::String { bytes, .. }) => bytes.clone(),
+                _ => Vec::new(),
+            },
+            _ => Vec::new(),
+        };
+        let crypt = Crypt::unlock(&dict, dict_ref, &id, password)?;
+        self.crypt = Some(crypt);
+        // Object streams read before were still locked.
+        if let Ok(mut cache) = self.object_streams.lock() {
+            cache.clear();
+        }
+        Ok(())
+    }
+
+    /// Whether the file is locked and not yet opened with its password.
+    pub fn is_locked(&self) -> bool {
+        self.is_encrypted() && self.crypt.is_none()
+    }
+
+    /// Whether the file was opened with its owner password, or has no lock
+    /// or no owner password: its lock may be changed or taken off.
+    pub fn opened_as_owner(&self) -> bool {
+        !self.is_encrypted() || self.crypt.as_ref().is_some_and(|c| c.owner)
+    }
+
+    /// What the file's lock allows whoever opened it.
+    pub fn permissions(&self) -> Permissions {
+        match &self.crypt {
+            Some(crypt) => crypt.permissions,
+            None => Permissions::ALL,
+        }
+    }
+
+    pub(crate) fn crypt(&self) -> Option<&Crypt> {
+        self.crypt.as_ref()
     }
 
     /// The file as loaded.
@@ -205,7 +269,7 @@ impl Document {
             let mut seen = HashSet::new();
             self.walk_pages(root, 0, &mut seen, &mut out);
         }
-        if out.is_empty() && !self.is_encrypted() {
+        if out.is_empty() && !self.is_locked() {
             out = self
                 .object_numbers()
                 .filter_map(|num| {
@@ -251,7 +315,11 @@ impl Document {
         if expect.is_some_and(|e| e.num != header.num) {
             return None;
         }
-        p.indirect_body(&|len| self.length(len))
+        let obj = p.indirect_body(&|len| self.length(len))?;
+        Some(match &self.crypt {
+            Some(crypt) => crypt.decrypt(header, obj),
+            None => obj,
+        })
     }
 
     fn length(&self, len: &Object) -> Option<usize> {

@@ -444,6 +444,7 @@ impl Viewer {
     /// background thread and shows the file written. Changes asked for
     /// while one is being written follow it.
     pub(super) fn change_annotations(&mut self, changes: AnnotChanges, cx: &mut Context<Self>) {
+        let key = self.key.clone();
         self.finish_typing(true, cx);
         if self.annotating {
             self.annots_waiting.put.extend(changes.put);
@@ -486,13 +487,13 @@ impl Viewer {
                         Some(bytes) => bytes.to_vec(),
                         None => std::fs::read(&path).map_err(|e| e.to_string())?,
                     };
-                    let base = katna_pdf_cos::Document::load(bytes).map_err(|e| e.to_string())?;
+                    let base = super::cos(bytes, key.as_deref()).map_err(|e| e.to_string())?;
                     let out = Arc::new(base.annotate(&changes).map_err(|e| e.to_string())?);
                     let doc = crate::engine::engine()
-                        .open(out.clone(), "")
+                        .open(out.clone(), key.as_deref().unwrap_or(""))
                         .map_err(|e| e.to_string())?;
                     let cos =
-                        katna_pdf_cos::Document::load(out.to_vec()).map_err(|e| e.to_string())?;
+                        super::cos(out.to_vec(), key.as_deref()).map_err(|e| e.to_string())?;
                     Ok::<_, String>((out, doc, cos))
                 })
                 .await;
@@ -714,6 +715,7 @@ impl Viewer {
     /// Asks for an XFDF file and adds its annotations to the file shown;
     /// ones already here (by name) are replaced.
     fn import_xfdf(&mut self, cx: &mut Context<Self>) {
+        let key = self.key.clone();
         let Some(path) = self.path.clone() else {
             return;
         };
@@ -741,7 +743,7 @@ impl Viewer {
                         Some(bytes) => bytes.to_vec(),
                         None => std::fs::read(&path).map_err(|e| e.to_string())?,
                     };
-                    let doc = katna_pdf_cos::Document::load(bytes).map_err(|e| e.to_string())?;
+                    let doc = super::cos(bytes, key.as_deref()).map_err(|e| e.to_string())?;
                     doc.xfdf_changes(&xml).map_err(|e| e.to_string())
                 })
                 .await;

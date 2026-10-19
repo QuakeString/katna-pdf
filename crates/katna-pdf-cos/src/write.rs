@@ -13,7 +13,7 @@ use crate::parse::{is_delim, is_white};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UpdateError {
-    /// Writing into an encrypted file needs its key (not in v0).
+    /// Writing into a locked file needs its password.
     Encrypted,
     /// The file's cross-reference data was broken; appending to it would
     /// leave a file other readers may not open. Save a full copy instead.
@@ -160,7 +160,7 @@ pub struct Update<'a> {
 impl Document {
     /// Starts an incremental update of this document.
     pub fn update(&self) -> Result<Update<'_>, UpdateError> {
-        if self.is_encrypted() {
+        if self.is_locked() {
             return Err(UpdateError::Encrypted);
         }
         if self.was_repaired() {
@@ -205,7 +205,14 @@ impl Update<'_> {
         for (&num, (generation, obj)) in &self.objects {
             offsets.insert(num, (out.len(), *generation));
             let _ = writeln!(out, "{num} {generation} obj");
-            write_object(&mut out, obj);
+            match self.doc.crypt() {
+                // A locked file's new objects are locked with its key.
+                Some(crypt) => write_object(
+                    &mut out,
+                    &crypt.encrypt(Ref::new(num, *generation), obj.clone()),
+                ),
+                None => write_object(&mut out, obj),
+            }
             out.extend_from_slice(b"\nendobj\n");
         }
         let mut trailer = self.trailer;

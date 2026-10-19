@@ -74,6 +74,9 @@ hmac = "0.12"
 des = "0.8"
 rc2 = "0.8"
 cbc = { version = "0.1", features = ["alloc"] }
+aes = "0.8"
+md-5 = "0.10"
+unicode-normalization = "0.1"
 rand_core = { version = "0.6", features = ["getrandom"] }
 
 [workspace.lints.rust]

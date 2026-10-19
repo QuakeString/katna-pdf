@@ -3,10 +3,14 @@
 //! The document's properties (docs/PLAN.md §4.3, "metadata editor"):
 //! a card, opened from the file's name in the toolbar or with Ctrl+D,
 //! to change its title, author, subject and keywords, showing what made
-//! it and when (`katna_pdf_cos::meta`).
+//! it and when (`katna_pdf_cos::meta`), and to put a password on it or
+//! take one off (`katna_pdf_cos::lock`, AES-256).
+
+use std::sync::Arc;
 
 use gpui::{AnyElement, Context, Entity, Subscription, div, prelude::*};
-use katna_pdf_cos::Metadata;
+
+use katna_pdf_cos::{Metadata, Permissions};
 use katna_ui::px;
 use katna_ui::text_input::{InputEvent, TextInput};
 use katna_ui::tokens::{radius, space, text};
@@ -19,7 +23,12 @@ use crate::text::t;
 pub(super) struct Properties {
     /// As the file says, once read.
     read: Option<Metadata>,
+    /// Whether the file has a password, and whether it was opened with
+    /// its owner's (so it may be taken off), once read.
+    locked: Option<(bool, bool)>,
     fields: [Entity<TextInput>; 4],
+    /// A new password to put on.
+    password: Entity<TextInput>,
     _fields: Vec<Subscription>,
 }
 
@@ -49,6 +58,12 @@ impl Viewer {
                 input
             })
         });
+        let password = cx.new(|cx| {
+            let mut input = TextInput::new(t("properties-password-new", &[]), cx);
+            input.set_accent(accent);
+            input.set_masked(true, cx);
+            input
+        });
         let subs = fields
             .iter()
             .map(|f| {
@@ -61,10 +76,13 @@ impl Viewer {
             .collect();
         self.properties = Some(Properties {
             read: None,
+            locked: None,
             fields,
+            password,
             _fields: subs,
         });
         let current = self.unsaved();
+        let key = self.key.clone();
         cx.spawn(async move |this, cx| {
             let meta = cx
                 .background_executor()
@@ -73,16 +91,17 @@ impl Viewer {
                         Some(bytes) => bytes.to_vec(),
                         None => std::fs::read(&path).ok()?,
                     };
-                    katna_pdf_cos::Document::load(bytes)
+                    super::cos(bytes, key.as_deref())
                         .ok()
-                        .map(|d| d.metadata())
+                        .map(|d| (d.metadata(), (d.is_encrypted(), d.opened_as_owner())))
                 })
                 .await;
             this.update(cx, |this, cx| {
                 let Some(properties) = this.properties.as_mut() else {
                     return;
                 };
-                let meta = meta.unwrap_or_default();
+                let (meta, locked) = meta.unwrap_or_default();
+                properties.locked = Some(locked);
                 let values = [&meta.title, &meta.author, &meta.subject, &meta.keywords];
                 for (field, value) in properties.fields.iter().zip(values) {
                     let value = value.clone().unwrap_or_default();
@@ -124,6 +143,44 @@ impl Viewer {
             Vec::new(),
             "properties-failed",
             move |doc| doc.set_metadata(&meta).map_err(|e| e.to_string()),
+            cx,
+        );
+    }
+
+    /// Puts the password typed on the file, its owner's too, so the same
+    /// password opens it fully.
+    fn lock_file(&mut self, cx: &mut Context<Self>) {
+        let Some(properties) = self.properties.as_ref() else {
+            return;
+        };
+        let password = properties.password.read(cx).text().to_owned();
+        if password.is_empty() {
+            return;
+        }
+        self.properties = None;
+        let pages = (0..self.page_count()).collect();
+        let after: Arc<str> = Arc::from(password.as_str());
+        self.change_document_keyed(
+            pages,
+            "properties-lock-failed",
+            Some(after),
+            move |doc| {
+                doc.lock(&password, &password, Permissions::ALL)
+                    .map_err(|e| e.to_string())
+            },
+            cx,
+        );
+    }
+
+    /// Takes the file's password off.
+    fn unlock_file(&mut self, cx: &mut Context<Self>) {
+        self.properties = None;
+        let pages = (0..self.page_count()).collect();
+        self.change_document_keyed(
+            pages,
+            "properties-lock-failed",
+            None,
+            |doc| doc.without_lock().map_err(|e| e.to_string()),
             cx,
         );
     }
@@ -217,6 +274,55 @@ impl Viewer {
                         ),
                 );
             }
+        }
+        if let Some((locked, owner)) = properties.locked {
+            card = card.child(
+                div()
+                    .pt(px(space::S2))
+                    .text_size(px(text::BODY))
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .text_color(th.text)
+                    .child(t("properties-password", &[])),
+            );
+            card = match (locked, owner) {
+                (false, _) => card.child(label("properties-password-none")).child(
+                    div()
+                        .flex()
+                        .gap(px(space::S2))
+                        .child(
+                            div()
+                                .flex_1()
+                                .h(px(36.0))
+                                .flex()
+                                .items_center()
+                                .px(px(space::S3))
+                                .rounded(px(radius::SM))
+                                .bg(th.field)
+                                .text_size(px(text::BODY))
+                                .text_color(th.text)
+                                .child(properties.password.clone()),
+                        )
+                        .child(
+                            widgets::outlined_button(
+                                "properties-lock",
+                                t("properties-lock", &[]),
+                                &th.katna,
+                            )
+                            .on_click(cx.listener(|this, _, _, cx| this.lock_file(cx))),
+                        ),
+                ),
+                (true, true) => card.child(label("properties-password-on")).child(
+                    div().flex().child(
+                        widgets::outlined_button(
+                            "properties-unlock",
+                            t("properties-unlock", &[]),
+                            &th.katna,
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| this.unlock_file(cx))),
+                    ),
+                ),
+                (true, false) => card.child(label("properties-password-owner")),
+            };
         }
         card = card.child(
             div()

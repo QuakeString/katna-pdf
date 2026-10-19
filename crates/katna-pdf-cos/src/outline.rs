@@ -36,10 +36,10 @@ pub struct Destination {
 }
 
 impl Document {
-    /// The outline, or nothing if the file has none. Encrypted files'
-    /// titles cannot be read yet, so they have none either.
+    /// The outline, or nothing if the file has none, or is locked and not
+    /// opened with its password.
     pub fn outline(&self) -> Vec<OutlineItem> {
-        if self.is_encrypted() {
+        if self.is_locked() {
             return Vec::new();
         }
         let Some(catalog) = self.catalog() else {

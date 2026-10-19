@@ -90,6 +90,14 @@ properties-pages = Pages
 properties-cancel = Cancel
 properties-keep = Keep
 properties-failed = The properties could not be changed: { $error }
+properties-password = Password
+properties-password-none = Anyone can open this file. A password locks it (AES-256); the same password opens it and takes it off.
+properties-password-new = New password
+properties-lock = Lock
+properties-password-on = This file is locked with a password.
+properties-unlock = Take the password off
+properties-password-owner = This file is locked; taking the password off needs its owner's password.
+properties-lock-failed = The password could not be changed: { $error }
 
 ## Find in the document
 search-placeholder = Find in the document
