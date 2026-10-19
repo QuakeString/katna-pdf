@@ -70,7 +70,7 @@ cargo run --release -p katna-pdf-bench -- file.pdf
   rotate, crop, sign (and certify), add-field, ltv, tokens, token-check, verify (with `--report` as a PDF), text and edit-text (`--blocks` / `--block` for paragraphs), insert, stamp, background, redact, form (with `--detect`), form-data and fill, meta, lock and unlock, objects and object, bookmarks, links, dests and labels, annotations and XFDF; `--json` for scripts and agents.
 - `tools/katna-pdf-cos-check` — runs katna-pdf-cos over a folder of PDFs
   (loads, page counts against hayro, update round trips).
-- `vendor/hayro`, `vendor/hayro-interpret` — hayro with our patches
+- `vendor/hayro`, `vendor/hayro-interpret`, `vendor/hayro-syntax` — hayro with our patches
   (`KATNA.md` in each).
 - `bakeoff/` — the engine bake-off, outside the workspace; `bakeoff/ocr/`
   the OCR bake-off (results in its README).

@@ -592,7 +592,7 @@ impl XRef {
 
                 let stream = self.get_with::<Stream<'_>>(obj_stream_id, &ctx)?;
                 let data = repr.data.get_with(obj_stream_id, &ctx)?;
-                let object_stream = ObjectStream::new(stream, data, &ctx)?;
+                let object_stream = ObjectStream::cached(obj_stream_id, stream, data, &repr.data, &ctx)?;
                 object_stream.get(index)
             }
         }
@@ -1037,11 +1037,29 @@ fn get_decryptor(trailer_dict: &Dict<'_>, password: &[u8]) -> Result<Decryptor, 
 struct ObjectStream<'a> {
     data: &'a [u8],
     ctx: ReaderContext<'a>,
-    offsets: Vec<(u32, usize)>,
+    offsets: Arc<Vec<(u32, usize)>>,
 }
 
 impl<'a> ObjectStream<'a> {
     fn new(inner: Stream<'_>, data: &'a [u8], ctx: &ReaderContext<'a>) -> Option<Self> {
+        let offsets = Arc::new(Self::offsets(&inner, data)?);
+        Some(Self::with_offsets(data, offsets, ctx))
+    }
+
+    // Katna PDF: the table is read once per stream, not once per object
+    // taken from it (vendor/hayro-syntax/KATNA.md).
+    fn cached(
+        id: ObjectIdentifier,
+        inner: Stream<'_>,
+        data: &'a [u8],
+        cache: &Data,
+        ctx: &ReaderContext<'a>,
+    ) -> Option<Self> {
+        let offsets = cache.offsets_with(id, || Self::offsets(&inner, data))?;
+        Some(Self::with_offsets(data, offsets, ctx))
+    }
+
+    fn offsets(inner: &Stream<'_>, data: &[u8]) -> Option<Vec<(u32, usize)>> {
         let num_objects = inner.dict().get::<usize>(N)?;
         let first_offset = inner.dict().get::<usize>(FIRST)?;
 
@@ -1057,11 +1075,18 @@ impl<'a> ObjectStream<'a> {
             let relative_offset = r.read_without_context::<usize>()?;
             offsets.push((obj_num, first_offset + relative_offset));
         }
+        Some(offsets)
+    }
 
+    fn with_offsets(
+        data: &'a [u8],
+        offsets: Arc<Vec<(u32, usize)>>,
+        ctx: &ReaderContext<'a>,
+    ) -> Self {
         let mut ctx = ctx.clone();
         ctx.set_in_object_stream(true);
 
-        Some(Self { data, ctx, offsets })
+        Self { data, ctx, offsets }
     }
 
     fn get<T>(&self, index: u32) -> Option<T>

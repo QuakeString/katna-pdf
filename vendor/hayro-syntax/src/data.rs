@@ -66,6 +66,9 @@ pub(crate) struct Data {
     // 32 segments are more than enough as we can't have more objects than this.
     decoded: SegmentList<Vec<u8>, 32>,
     map: Mutex<FxHashMap<ObjectIdentifier, usize>>,
+    // Katna PDF: each object stream's table of object numbers and offsets,
+    // read once (vendor/hayro-syntax/KATNA.md).
+    offsets: Mutex<FxHashMap<ObjectIdentifier, Arc<Vec<(u32, usize)>>>>,
 }
 
 impl Debug for Data {
@@ -81,12 +84,27 @@ impl Data {
             data,
             decoded: SegmentList::new(),
             map: Mutex::new(FxHashMap::default()),
+            offsets: Mutex::new(FxHashMap::default()),
         }
     }
 
     /// Get access to the original data of the PDF.
     pub(crate) fn get(&self) -> &PdfData {
         &self.data
+    }
+
+    /// The table of object stream `id`, read by `read` the first time.
+    pub(crate) fn offsets_with(
+        &self,
+        id: ObjectIdentifier,
+        read: impl FnOnce() -> Option<Vec<(u32, usize)>>,
+    ) -> Option<Arc<Vec<(u32, usize)>>> {
+        if let Some(offsets) = self.offsets.get().get(&id) {
+            return Some(offsets.clone());
+        }
+        let offsets = Arc::new(read()?);
+        self.offsets.get().insert(id, offsets.clone());
+        Some(offsets)
     }
 
     /// Get access to the data of a decoded object stream.

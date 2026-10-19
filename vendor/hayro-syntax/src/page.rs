@@ -1,6 +1,7 @@
 //! Reading the pages of a PDF document.
 
 use crate::content::{TypedIter, UntypedIter};
+use crate::filter::Filter;
 use crate::object::Array;
 use crate::object::Dict;
 use crate::object::Name;
@@ -255,6 +256,19 @@ impl<'a> Page<'a> {
     /// Return the decoded content stream of the page.
     pub fn page_stream(&self) -> Option<&[u8]> {
         let convert_single = |s: Stream<'_>| {
+            // Katna PDF: content is never a picture, and decoding a giant one
+            // as content took half a minute (vendor/hayro-syntax/KATNA.md).
+            if s.filters().iter().any(|f| {
+                matches!(
+                    f,
+                    Filter::CcittFaxDecode
+                        | Filter::Jbig2Decode
+                        | Filter::DctDecode
+                        | Filter::JpxDecode
+                )
+            }) {
+                return None;
+            }
             let data = s.decoded().ok()?;
             Some(data.to_vec())
         };

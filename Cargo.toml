@@ -102,7 +102,7 @@ strip = true
 # layout). Cargo applies patches only from the top-level workspace, so we
 # repeat Katna's [patch.crates-io] here, from the same commit as katna-ui.
 [patch.crates-io]
-# hayro with Katna PDF's fixes; vendor/hayro/KATNA.md lists them.
+# hayro with Katna PDF's fixes; each crate's KATNA.md lists them.
 hayro = { path = "vendor/hayro" }
 hayro-interpret = { path = "vendor/hayro-interpret" }
 hayro-syntax = { path = "vendor/hayro-syntax" }
