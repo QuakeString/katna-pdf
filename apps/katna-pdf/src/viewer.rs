@@ -36,6 +36,7 @@ use katna_ui::{ScrollBar, px, unpx};
 mod annots;
 mod crop;
 mod insert;
+mod objects;
 mod organizer;
 mod sign;
 mod textedit;
@@ -311,6 +312,9 @@ pub struct Viewer {
     adding: Option<insert::Adding>,
     placing: Option<annots::Draft>,
     ink: usize,
+    /// The picture or shape picked with Edit text on, and its drag.
+    picked_object: Option<objects::Picked>,
+    moving: Option<objects::Moving>,
     tool: Option<Tool>,
     colour: usize,
     /// Each page's annotations, once read.
@@ -423,6 +427,8 @@ impl Viewer {
             adding: None,
             placing: None,
             ink: 0,
+            picked_object: None,
+            moving: None,
             tool: None,
             colour: 0,
             annots: None,
@@ -523,6 +529,8 @@ impl Viewer {
         self.typing = None;
         self.adding = None;
         self.placing = None;
+        self.picked_object = None;
+        self.moving = None;
         self.forget_runs();
         self.signatures = None;
         self.signable = Arc::default();
@@ -1012,6 +1020,7 @@ impl Viewer {
         window.focus(&self.focus, cx);
         if self.sign_press(event.position, cx)
             || self.insert_press(event.position, window, cx)
+            || self.object_press(event.position, cx)
             || self.text_edit_press(cx)
             || self.crop_press(event.position, cx)
             || self.annot_press(event.position, cx)
@@ -1027,7 +1036,10 @@ impl Viewer {
     }
 
     fn drag(&mut self, event: &gpui::MouseMoveEvent, cx: &mut Context<Self>) {
-        if self.insert_drag(event.position, cx) || self.annot_drag(event.position, cx) {
+        if self.insert_drag(event.position, cx)
+            || self.object_drag(event.position, cx)
+            || self.annot_drag(event.position, cx)
+        {
             return;
         }
         let spot = self.spot_at(event.position, cx);
@@ -1048,6 +1060,7 @@ impl Viewer {
         if self.sign_release(cx)
             || self.crop_release(cx)
             || self.insert_release(cx)
+            || self.object_release(cx)
             || self.annot_release(cx)
         {
             return;
@@ -3133,7 +3146,11 @@ impl Render for Viewer {
             .on_action(cx.listener(|this, _: &ToggleNight, _, cx| this.toggle_night(cx)))
             .on_action(cx.listener(|this, _: &Find, window, cx| this.open_search(window, cx)))
             .on_action(cx.listener(|this, _: &CopyText, _, cx| this.copy_text(cx)))
-            .on_action(cx.listener(|this, _: &DeleteAnnotation, _, cx| this.delete_chosen(cx)))
+            .on_action(cx.listener(|this, _: &DeleteAnnotation, _, cx| {
+                if !this.delete_picked_object(cx) {
+                    this.delete_chosen(cx);
+                }
+            }))
             .on_action(cx.listener(|this, _: &Annotate, _, cx| this.toggle_tools(cx)))
             .on_action(cx.listener(|this, _: &Organize, _, cx| this.toggle_organizer(cx)))
             .on_action(cx.listener(|this, _: &Sign, _, cx| this.toggle_signing(cx)))

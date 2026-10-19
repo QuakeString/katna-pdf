@@ -171,6 +171,9 @@ impl Viewer {
                     ),
             );
         }
+        if let Some(inspector) = self.inspector(cx) {
+            row = row.child(separator(th)).child(inspector);
+        }
         Some(row.into_any_element())
     }
 
@@ -178,6 +181,8 @@ impl Viewer {
         self.finish_text_edit(true, cx);
         self.adding = adding;
         self.placing = None;
+        self.picked_object = None;
+        self.moving = None;
         cx.notify();
     }
 
