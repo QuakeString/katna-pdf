@@ -10,6 +10,7 @@
 pub mod compare;
 mod grid;
 mod hayro_engine;
+pub mod measure;
 pub mod recolor;
 pub mod scene;
 pub mod text;
@@ -146,6 +147,12 @@ pub trait Document: Send + Sync {
     /// the page's top left.
     fn text(&self, _page: usize) -> text::PageText {
         text::PageText::default()
+    }
+
+    /// The straight pieces of the lines page `page` draws, in points
+    /// from its top left, for measuring tools to snap to.
+    fn segments(&self, _page: usize) -> Vec<measure::Segment> {
+        Vec::new()
     }
 
     /// The transform from page `page`'s user space, as the file counts

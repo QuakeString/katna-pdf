@@ -42,6 +42,7 @@ mod design;
 mod insert;
 mod linking;
 mod marks;
+mod measure;
 mod numbering;
 mod objects;
 mod organizer;
@@ -308,6 +309,12 @@ pub struct Viewer {
     start_page: Option<usize>,
     /// Files to sign with this one, once it is open.
     sign_after: Option<Vec<PathBuf>>,
+    /// A measurement being drawn.
+    measuring: Option<measure::Measuring>,
+    /// What the measuring tools know of the file.
+    measures: measure::Measures,
+    /// Puts the keys in the scale field on the next frame.
+    focus_calibrating: bool,
     /// Comparing with another version of the file.
     comparing: Option<compare::Comparing>,
     /// The file to compare with once this one opens.
@@ -469,6 +476,9 @@ impl Viewer {
             label_ranges: Vec::new(),
             start_page: None,
             sign_after: None,
+            measuring: None,
+            measures: Default::default(),
+            focus_calibrating: false,
             comparing: None,
             compare_after: None,
             compare_count: 0,
@@ -637,6 +647,8 @@ impl Viewer {
         self.annotating = false;
         self.annots_waiting = Default::default();
         self.stop_comparing(cx);
+        self.measuring = None;
+        self.measures = Default::default();
         if let Some(bar) = self.search.as_mut() {
             bar.generation.fetch_add(1, Ordering::Relaxed);
             bar.found = Found::default();
@@ -1123,7 +1135,8 @@ impl Viewer {
         // A press outside the field being typed in ends the typing.
         self.finish_typing(true, cx);
         window.focus(&self.focus, cx);
-        if self.sign_press(event.position, cx)
+        if self.measure_press(event, cx)
+            || self.sign_press(event.position, cx)
             || self.design_press(event.position, cx)
             || self.redact_press(event.position, cx)
             || self.link_press(event.position, cx)
@@ -1144,7 +1157,8 @@ impl Viewer {
     }
 
     fn drag(&mut self, event: &gpui::MouseMoveEvent, cx: &mut Context<Self>) {
-        if self.design_drag(event.position, cx)
+        if self.measure_move(event.position, cx)
+            || self.design_drag(event.position, cx)
             || self.redact_drag(event.position, cx)
             || self.link_drag(event.position, cx)
             || self.insert_drag(event.position, cx)
@@ -1168,7 +1182,8 @@ impl Viewer {
 
     fn release_pointer(&mut self, cx: &mut Context<Self>) {
         self.selecting = false;
-        if self.sign_release(cx)
+        if self.measure_release(cx)
+            || self.sign_release(cx)
             || self.crop_release(cx)
             || self.design_release(cx)
             || self.redact_release(cx)
@@ -2653,6 +2668,7 @@ impl Viewer {
         };
         let mut overlays = self.annot_overlays(page, transform);
         overlays.extend(self.crop_overlay(page));
+        overlays.extend(self.measure_overlay(page));
         overlays.extend(self.sign_overlay(page, cx));
         overlays.extend(self.text_edit_overlay(page, transform, cx));
         // Matches on this page, the current one stronger, and the
@@ -3267,8 +3283,10 @@ impl Render for Viewer {
         }
         self.open_comment_now(window, cx);
         self.focus_signing(window, cx);
+        self.focus_calibrating(window, cx);
         let pane = self.pane(window, cx);
         let tools = self.tools_row(cx).or_else(|| self.edit_row(cx));
+        let measure_bar = self.measure_bar(cx);
         let signatures_line = self.signatures_line(cx);
         let signing_card = self.signing_card(cx);
         let marks_card = self.marks_card(cx);
@@ -3457,6 +3475,7 @@ impl Render for Viewer {
                     .flex_col()
                     .child(self.toolbar(cx))
                     .children(tools)
+                    .children(measure_bar)
                     .children(find_bar)
                     .children(signatures_line)
                     .children(notice)

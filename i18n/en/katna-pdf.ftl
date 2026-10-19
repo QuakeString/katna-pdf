@@ -422,6 +422,24 @@ tool-ellipse = Ellipse
 tool-line = Line
 tool-arrow = Arrow
 tool-stamp = Stamp
+tool-distance = Measure a distance
+tool-perimeter = Measure along lines
+tool-area = Measure an area
+
+## Measuring
+
+measure-how-distance = Drag, or click both ends.
+measure-how-perimeter = Click each point; double-click to finish.
+measure-how-area = Click each corner; click the first again to finish.
+measure-scale-paper = Scale: 1 pt = { $scale } (paper)
+measure-scale-file = Scale: 1 pt = { $scale } (from the drawing)
+measure-scale-set = Scale: 1 pt = { $scale } (set by you)
+measure-at = x { $x }, y { $y }
+measure-set-scale = Set scale…
+measure-unset-scale = Use the file's scale
+measure-last-is = The last distance is
+measure-real-length = 5 m
+measure-real-length-bad = “{ $text }” is not a length. Type a number and a unit, such as 5 m.
 tool-colour = Colour for what is added, and for the shape picked
 annot-shape = Shape
 annot-other = Annotation

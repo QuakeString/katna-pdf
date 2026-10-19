@@ -22,10 +22,16 @@ pub enum Tool {
     Line,
     Arrow,
     Stamp,
+    /// Measures the length of a line.
+    Distance,
+    /// Measures the length along several lines.
+    Perimeter,
+    /// Measures the area of a shape and its perimeter.
+    Area,
 }
 
 impl Tool {
-    pub const ALL: [Tool; 12] = [
+    pub const ALL: [Tool; 15] = [
         Tool::Highlight,
         Tool::Underline,
         Tool::StrikeOut,
@@ -38,6 +44,9 @@ impl Tool {
         Tool::Line,
         Tool::Arrow,
         Tool::Stamp,
+        Tool::Distance,
+        Tool::Perimeter,
+        Tool::Area,
     ];
 
     pub fn icon(self) -> &'static str {
@@ -54,6 +63,9 @@ impl Tool {
             Tool::Line => "shape-line",
             Tool::Arrow => "shape-arrow",
             Tool::Stamp => "stamp",
+            Tool::Distance => "ruler",
+            Tool::Perimeter => "measure-perimeter",
+            Tool::Area => "measure-area",
         }
     }
 
@@ -72,6 +84,9 @@ impl Tool {
             Tool::Line => "tool-line",
             Tool::Arrow => "tool-arrow",
             Tool::Stamp => "tool-stamp",
+            Tool::Distance => "tool-distance",
+            Tool::Perimeter => "tool-perimeter",
+            Tool::Area => "tool-area",
         }
     }
 
@@ -84,6 +99,11 @@ impl Tool {
             Tool::Squiggly => Some(MarkupStyle::Squiggly),
             _ => None,
         }
+    }
+
+    /// Whether it measures.
+    pub fn measures(self) -> bool {
+        matches!(self, Tool::Distance | Tool::Perimeter | Tool::Area)
     }
 }
 
@@ -201,6 +221,8 @@ pub fn drawn(tool: Tool, page: usize, path: &[[f32; 2]], inv: Inverse) -> Option
     };
     let kind = match tool {
         Tool::Highlight | Tool::Underline | Tool::StrikeOut | Tool::Squiggly => return None,
+        // Measuring has its own pointer handling (`viewer::measure`).
+        Tool::Distance | Tool::Perimeter | Tool::Area => return None,
         Tool::Note => AnnotKind::Note,
         Tool::FreeText => AnnotKind::FreeText { size: TEXT_SIZE },
         Tool::Ink => AnnotKind::Ink(vec![path.iter().map(|p| inv.map(*p)).collect()]),

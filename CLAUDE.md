@@ -23,6 +23,8 @@ cargo run --release -p katna-pdf-bench -- file.pdf
   `compare.rs` finds what changed between two versions (words lined up
   across pages, then pages drawn small for changed pictures and
   drawings) and draws the red and blue overlay;
+  `measure.rs` keeps the lines a page draws for measuring tools to
+  snap to (ends, middles, crossings);
   `worker.rs` draws in worker processes (the app runs itself with
   `--render-worker`; `KATNA_PDF_IN_PROCESS=1` draws in the app). No GPUI.
 - `crates/katna-pdf-cos` — our own PDF object layer: parsing, xref and
@@ -36,7 +38,9 @@ cargo run --release -p katna-pdf-bench -- file.pdf
   fading, recolouring, swapping and deleting the pictures and shapes
   already there (`objects.rs`), headers,
   footers, watermarks, Bates numbers and backgrounds on many pages (`stamp.rs`), the
-  document's properties in `/Info` and XMP (`meta.rs`), opening
+  document's properties in `/Info` and XMP (`meta.rs`), the scale a
+  drawing is measured in (`measure.rs`, from a page's `/VP`; measurement
+  annotations carry theirs), opening
   password-locked files (`crypt.rs`: RC4, AES-128 and AES-256, an empty
   password tried first; updates to them stay locked) and putting an
   AES-256 password on or taking it off (`lock.rs`), true redaction

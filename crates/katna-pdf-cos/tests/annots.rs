@@ -295,3 +295,45 @@ fn annotations_go_to_xfdf_and_back() {
     assert_eq!(replaced(&two().xfdf_changes(&xml).unwrap()), 0);
     assert!(katna_pdf_cos::from_xfdf("<html/>").is_err());
 }
+
+#[test]
+fn measurements_keep_their_scale() {
+    let doc = Document::load(file(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Count 1 /Kids [3 0 R] >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] \
+           /VP [<< /Type /Viewport /BBox [0 0 600 800] /Measure << /Type /Measure \
+           /Subtype /RL /R (1 in = 10 ft) /X [<< /U (ft) /C 0.13889 >>] >> >>] >>",
+    ]))
+    .unwrap();
+    let scale = doc.page_scale(0).unwrap();
+    assert_eq!(scale.unit, "ft");
+    assert_eq!(scale.length(72.0), "10 ft");
+    let mut a = Annotation::new(
+        0,
+        AnnotKind::Line {
+            from: [100.0, 100.0],
+            to: [172.0, 100.0],
+            arrow: false,
+        },
+    );
+    a.contents = scale.length(72.0);
+    a.measure = Some(scale.clone());
+    a.rect = a.bounds();
+    // The value's box is in the annotation's.
+    assert!(a.rect[3] > 110.0);
+    let out = doc
+        .annotate(&AnnotChanges {
+            put: vec![a],
+            remove: vec![],
+        })
+        .unwrap();
+    let again = Document::load(out).unwrap();
+    let read = &again.annotations()[0][0];
+    assert_eq!(read.measure.as_ref().map(|s| s.unit.as_str()), Some("ft"));
+    assert_eq!(read.contents, "10 ft");
+    let Some(Object::Dict(dict)) = again.get(read.id.unwrap()) else {
+        panic!();
+    };
+    assert_eq!(dict.name("IT"), Some(&b"LineDimension"[..]));
+}
