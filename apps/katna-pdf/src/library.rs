@@ -120,6 +120,9 @@ pub struct LibraryView {
     scanning: Option<(usize, usize)>,
     /// Asked to scan again while scanning.
     scan_again: bool,
+    /// The folders were read since the app started: showing the library
+    /// again does not read them again (the watcher catches changes).
+    scanned: bool,
     /// What the last scan could not read, to say so.
     failed: usize,
     /// The document last clicked, where a Shift-click range starts.
@@ -239,6 +242,7 @@ impl LibraryView {
             no_cover: Default::default(),
             scanning: None,
             scan_again: false,
+            scanned: false,
             failed: 0,
             selected: None,
             chosen: Vec::new(),
@@ -269,11 +273,15 @@ impl LibraryView {
         self.theme = theme;
     }
 
-    /// The library is shown: its folders are read again.
+    /// The library is shown. The first time, its folders are read;
+    /// later, what is kept shows at once, covers and all, and the
+    /// folders' watcher reads what changes.
     pub fn shown(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         window.focus(&self.search.focus_handle(cx), cx);
         self.reload(cx);
-        self.scan(cx);
+        if !std::mem::replace(&mut self.scanned, true) {
+            self.scan(cx);
+        }
         self.load_drives(cx);
         self.load_mail(cx);
     }
@@ -372,10 +380,16 @@ impl LibraryView {
                         Progress::Done(result) => {
                             this.scanning = None;
                             this.failed = result.as_ref().map_or(0, |r| r.failed.len());
-                            // Covers of changed files are read again.
-                            this.no_cover.clear();
-                            let old: Vec<_> = this.covers.drain().map(|(_, c)| c).collect();
-                            this.released.extend(old);
+                            // Covers of changed files are read again; when
+                            // nothing changed, those kept stay.
+                            let changed = result
+                                .as_ref()
+                                .map_or(true, |r| r.added + r.updated + r.moved > 0);
+                            if changed {
+                                this.no_cover.clear();
+                                let old: Vec<_> = this.covers.drain().map(|(_, c)| c).collect();
+                                this.released.extend(old);
+                            }
                             this.reload(cx);
                             if std::mem::take(&mut this.scan_again) {
                                 this.scan(cx);
