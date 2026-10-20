@@ -250,7 +250,9 @@ impl Tabs {
             .flex()
             .flex_shrink_0()
             .gap(px(space::S1))
-            .pb(px(space::S2))
+            .p(px(space::S1))
+            .border_b_1()
+            .border_color(th.line)
             .overflow_x_scroll()
             .children(self.tabs.iter().enumerate().map(|(i, tab)| {
                 let active = i == self.active;
@@ -361,7 +363,6 @@ impl Render for Tabs {
             .flex()
             .flex_col()
             .bg(th.page)
-            .p(px(space::S3))
             .font_family(".SystemUIFont")
             .map(|d| match &self.library {
                 Some((library, _)) if self.in_library => d.child(library.clone()),

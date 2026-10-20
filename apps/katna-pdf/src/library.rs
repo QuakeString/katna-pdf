@@ -1073,7 +1073,6 @@ impl Render for LibraryView {
             .flex_1()
             .min_h_0()
             .flex()
-            .gap(px(space::S3))
             .child(self.side(cx))
             .child(self.main(cx))
             .text_color(th.text)
@@ -1091,8 +1090,9 @@ impl LibraryView {
             .flex_col()
             .py(px(space::S2))
             .pr(px(space::S2))
-            .rounded(px(radius::MD))
             .bg(th.card)
+            .border_r_1()
+            .border_color(th.line)
             .overflow_y_scroll();
         let counts = [
             (
@@ -1513,7 +1513,6 @@ impl LibraryView {
             .min_w_0()
             .flex()
             .flex_col()
-            .rounded(px(radius::MD))
             .bg(th.card)
             .overflow_hidden()
             .child(header)
