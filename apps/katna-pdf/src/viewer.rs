@@ -2402,14 +2402,16 @@ impl Viewer {
         };
         let mine = self.form.as_ref().map_or(0, |f| f.generation);
         let revision = self.revision;
+        let written = path.clone();
         cx.spawn(async move |this, cx| {
             let saved = cx
                 .background_executor()
                 .spawn(async move {
-                    save_over(&path, &bytes).map_err(|e| e.to_string())?;
+                    save_over(&written, &bytes).map_err(|e| e.to_string())?;
                     cos(bytes.to_vec(), key.as_deref()).map_err(|e| e.to_string())
                 })
                 .await;
+            let mut back = false;
             this.update(cx, |this, cx| {
                 match saved {
                     Ok(source) => {
@@ -2422,9 +2424,48 @@ impl Viewer {
                             this.edited = None;
                         }
                         this.notice = None;
+                        back = true;
                     }
                     Err(error) => this.notice = Some(t("save-failed", &[("error", &error)])),
                 }
+                cx.notify();
+            })
+            .ok();
+            if back && let Some(origin) = crate::drives::origin(&path) {
+                this.update(cx, |this, cx| this.save_to_drive(path, origin, cx))
+                    .ok();
+            }
+        })
+        .detach();
+    }
+
+    /// Sends a file opened from a drive back there once it is saved
+    /// here: the drive file gets the new contents and keeps its name,
+    /// folder and sharing. The notice says how it went.
+    fn save_to_drive(
+        &mut self,
+        path: PathBuf,
+        origin: crate::drives::Origin,
+        cx: &mut Context<Self>,
+    ) {
+        self.notice = Some(t("drive-saving", &[]));
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let done = cx
+                .background_executor()
+                .spawn(async move {
+                    let drive = crate::drives::drive_name(origin.account);
+                    (crate::drives::save_back(&origin, &path), drive)
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                let notice = match done {
+                    (Ok(()), drive) => t("drive-saved", &[("drive", &drive)]),
+                    (Err(error), drive) => {
+                        t("drive-save-failed", &[("drive", &drive), ("error", &error)])
+                    }
+                };
+                this.notice = Some(notice);
                 cx.notify();
             })
             .ok();
