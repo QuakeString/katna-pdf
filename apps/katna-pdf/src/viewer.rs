@@ -3558,10 +3558,7 @@ impl Render for Viewer {
             .min_w_0()
             .flex()
             .overflow_hidden()
-            .rounded(px(radius::SM))
             .bg(th.card)
-            .border_1()
-            .border_color(th.line)
             .children(pane)
             .child(
                 div()
