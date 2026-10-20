@@ -93,6 +93,10 @@ jobs:
           # The same package under a name that does not change, for a
           # one-off download.
           cp "packaging/arch/$pkg" out/katna-pdf-git-x86_64.pkg.tar.zst
+          # For Katna PDF's own update check.
+          version=${pkg#katna-pdf-git-}
+          version=${version%-*-x86_64.pkg.tar.zst}
+          packaging/update-manifest.sh "$version" out out/katna-pdf-git-x86_64.pkg.tar.zst
           cd out
           repo-add katna-pdf.db.tar.gz "$pkg"
           # Release assets cannot be symlinks.
@@ -143,7 +147,9 @@ jobs:
             gh release create arch-latest --prerelease --target "$GITHUB_SHA" \
               --title "Katna PDF for Arch Linux (latest)" --notes "$notes"
           fi
-          gh release upload arch-latest out/* --clobber
+          # The update manifest last, once the files it describes are up.
+          (cd out && ls | grep -vxF katna-pdf-update.txt | xargs gh release upload arch-latest --clobber)
+          gh release upload arch-latest out/katna-pdf-update.txt --clobber
           # Keep only this build's versioned package.
           pkg=$(cd out && ls katna-pdf-git-*.pkg.tar.zst | grep -vxF katna-pdf-git-x86_64.pkg.tar.zst)
           gh release view arch-latest --json assets --jq '.assets[].name' |

@@ -94,6 +94,11 @@ cargo run --release -p katna-pdf-bench -- file.pdf
   `espeak-ng`, or PowerShell's voice on Windows.
   F5 presents (`viewer/present.rs`): full screen, the pages' own
   transitions and timings from cos `present.rs`.
+  `update.rs` looks for a newer build on the package's own release
+  (`katna-pdf-update.txt`, from `packaging/update-manifest.sh`) and, for
+  the Arch package (pkexec and `packaging/arch/katna-pdf-update-helper`),
+  the AppImage and Setup's Windows install, downloads, checks and installs
+  it; builds without `KATNA_PDF_VERSION` never look.
 - `apps/katna-pdf-cli` — the command line: info, merge, split, pages,
   rotate, crop, sign (and certify), add-field, ltv, tokens, token-check, verify (with `--report` as a PDF), text and edit-text (`--blocks` / `--block` for paragraphs), insert, stamp, background, redact, compress, compare (with `--overlay` as a PNG), form (with `--detect`), form-data and fill, meta, lock and unlock, objects and object, bookmarks, links, dests and labels, annotations and XFDF, and library; `--json` for scripts and agents.
 - `tools/katna-pdf-cos-check` — runs katna-pdf-cos over a folder of PDFs

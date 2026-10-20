@@ -61,6 +61,10 @@ jobs:
       - id: version
         run: echo "version=$(packaging/linux/version.sh)" >> "$GITHUB_OUTPUT"
       - name: Build
+        env:
+          # The version the app reports and compares updates with.
+          KATNA_PDF_VERSION: ${{ steps.version.outputs.version }}
+          KATNA_VERSION: ${{ steps.version.outputs.version }}
         run: |
           cargo build --locked --release --package katna-pdf --package katna-pdf-cli
           ls -l target/release/katna-pdf target/release/katna-pdf-cli
@@ -250,6 +254,10 @@ jobs:
           done
           echo "CI did not finish in two hours; not publishing"
           exit 1
+      # For packaging/update-manifest.sh.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          sparse-checkout: packaging
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: linux-built
@@ -282,4 +290,9 @@ jobs:
             gh release create linux-latest --prerelease --target "$GITHUB_SHA" \
               --title "Katna PDF for Linux (latest)" --notes "$notes"
           fi
+          # For Katna PDF's own update check, uploaded last, once the
+          # files it describes are up.
+          packaging/update-manifest.sh "${{ needs.build.outputs.version }}" . \
+            out/Katna-PDF-x86_64.AppImage
           gh release upload linux-latest out/* --clobber
+          gh release upload linux-latest katna-pdf-update.txt --clobber

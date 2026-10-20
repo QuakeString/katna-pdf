@@ -32,5 +32,9 @@ mod tests {
         assert!(desktop.lines().any(|l| l == format!("Icon={id}")));
         assert!(desktop.lines().any(|l| l == format!("StartupWMClass={id}")));
         assert!(packaging.join(format!("icons/{id}.svg")).is_file());
+        let policy = std::fs::read_to_string(packaging.join(format!("polkit/{id}.update.policy")))
+            .expect("the update's polkit action is named after the app ID");
+        assert!(policy.contains(&format!("<action id=\"{id}.update\">")));
+        assert!(policy.contains(crate::update::ARCH_HELPER));
     }
 }

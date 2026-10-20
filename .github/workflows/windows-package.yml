@@ -41,7 +41,12 @@ jobs:
           key: windows-package
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Build
-        run: cargo build --locked --release --package katna-pdf --package katna-pdf-cli
+        shell: bash
+        run: |
+          # The version the app reports and compares updates with.
+          export KATNA_PDF_VERSION=$(packaging/linux/version.sh)
+          export KATNA_VERSION=$KATNA_PDF_VERSION
+          cargo build --locked --release --package katna-pdf --package katna-pdf-cli
       - name: Make the zip
         shell: bash
         run: |
@@ -61,6 +66,9 @@ jobs:
           export KATNA_PDF_VERSION=$(packaging/linux/version.sh)
           cargo build --locked --release --package katna-pdf-setup
           cp target/release/katna-pdf-setup.exe out/KatnaPDFSetup-x86_64.exe
+          # For Katna PDF's own update check.
+          packaging/update-manifest.sh "$KATNA_PDF_VERSION" out \
+            out/KatnaPDFSetup-x86_64.exe out/KatnaPDF-windows-x86_64.zip
           ls -l out
       - name: Try it
         shell: bash
@@ -114,6 +122,7 @@ jobs:
           path: |
             out/KatnaPDF-windows-x86_64.zip
             out/KatnaPDFSetup-x86_64.exe
+            out/katna-pdf-update.txt
           if-no-files-found: error
 
   publish:
@@ -169,4 +178,6 @@ jobs:
             gh release create windows-latest --prerelease --target "$GITHUB_SHA" \
               --title "Katna PDF for Windows (latest)" --notes "$notes"
           fi
-          gh release upload windows-latest out/* --clobber
+          # The update manifest last, once the files it describes are up.
+          gh release upload windows-latest out/KatnaPDF-windows-x86_64.zip out/KatnaPDFSetup-x86_64.exe --clobber
+          gh release upload windows-latest out/katna-pdf-update.txt --clobber

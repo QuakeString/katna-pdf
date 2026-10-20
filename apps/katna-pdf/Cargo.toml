@@ -25,6 +25,9 @@ gpui.workspace = true
 gpui-platform.workspace = true
 image.workspace = true
 async-channel.workspace = true
+# Updates (`update.rs`).
+ureq.workspace = true
+sha2.workspace = true
 
 # The desktop's print dialog: Linux only.
 [target.'cfg(not(windows))'.dependencies]

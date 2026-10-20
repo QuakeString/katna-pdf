@@ -40,6 +40,7 @@ optdepends=(
   'pcsclite: the smart card service USB tokens need (enable pcscd.socket)'
   'speech-dispatcher: reading aloud (Ctrl+Shift+Y)'
   'espeak-ng: reading aloud without Speech Dispatcher'
+  'polkit: installing updates from inside Katna PDF'
 )
 provides=('katna-pdf')
 conflicts=('katna-pdf')
@@ -65,6 +66,8 @@ build() {
   export RUSTUP_TOOLCHAIN=stable
   # CI builds in a cached directory outside the clone.
   export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-target}"
+  # The version the app reports and compares updates with.
+  export KATNA_PDF_VERSION="$pkgver" KATNA_VERSION="$pkgver"
   cargo build --frozen --release --package katna-pdf --package katna-pdf-cli
 }
 
@@ -76,5 +79,8 @@ package() {
   install -Dm644 -t "$pkgdir/usr/share/applications" packaging/desktop/*.desktop
   install -Dm644 -t "$pkgdir/usr/share/icons/hicolor/scalable/apps" packaging/icons/*.svg
   install -Dm644 -t "$pkgdir/usr/share/metainfo" packaging/metainfo/*.metainfo.xml
+  # Updates from inside the app (apps/katna-pdf/src/update.rs).
+  install -Dm755 packaging/arch/katna-pdf-update-helper "$pkgdir/usr/lib/katna-pdf/katna-pdf-update-helper"
+  install -Dm644 -t "$pkgdir/usr/share/polkit-1/actions" packaging/polkit/*.policy
   install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 }
