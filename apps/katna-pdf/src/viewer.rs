@@ -2356,7 +2356,7 @@ impl Viewer {
 
     /// Whether the file shown has changes not saved: a form filled in or
     /// pages changed.
-    fn dirty(&self) -> bool {
+    pub fn dirty(&self) -> bool {
         self.edited.is_some() || self.form.as_ref().is_some_and(Form::dirty)
     }
 

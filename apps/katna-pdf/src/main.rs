@@ -32,6 +32,7 @@ mod tabs;
 mod text;
 mod theme;
 mod thumbnails;
+mod update;
 mod viewer;
 
 use std::path::PathBuf;

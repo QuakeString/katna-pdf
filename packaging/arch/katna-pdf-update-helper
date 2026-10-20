@@ -1,0 +1,57 @@
+#!/bin/bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Installs the update of Katna PDF that Katna PDF downloaded and checked
+# (apps/katna-pdf/src/update.rs). Katna PDF runs it through pkexec, so the
+# system asks for the password first (packaging/polkit/*.policy):
+#
+#   pkexec /usr/lib/katna-pdf/katna-pdf-update-helper <package file> <sha256>
+#
+# It runs as root, so it trusts nothing about the file or the caller: it
+# copies it where only root can write, checks that copy against the
+# SHA-256 Katna PDF checked the download with, then that it is Katna PDF's
+# own package and newer than the one installed (never a downgrade), and
+# only then hands it to pacman.
+#
+# Exit codes: 0 installed; 2 wrong arguments; 3 not the checked file, not
+# Katna PDF's package, or not newer; 4 pacman failed (another update
+# running, a dependency missing).
+
+set -euo pipefail
+export LC_ALL=C
+PATH=/usr/bin
+
+readonly PACKAGE=katna-pdf-git
+
+fail() {
+    echo "katna-pdf-update-helper: $2" >&2
+    exit "$1"
+}
+
+[[ $# -eq 2 ]] || fail 2 "usage: katna-pdf-update-helper <package file> <sha256>"
+source=$1
+want=$2
+[[ $want =~ ^[0-9a-f]{64}$ ]] || fail 2 "not a SHA-256: $want"
+[[ -f $source && ! -L $source ]] || fail 2 "not a file: $source"
+[[ $source == *.pkg.tar.zst ]] || fail 2 "not a package file: $source"
+
+work=$(mktemp -d)
+trap 'rm -rf -- "$work"' EXIT
+package=$work/$PACKAGE-update.pkg.tar.zst
+cp -- "$source" "$package"
+
+got=$(sha256sum -- "$package")
+got=${got%% *}
+[[ $got == "$want" ]] || fail 3 "$source is not the update Katna PDF checked"
+
+name=$(pacman -Qp -- "$package" 2>/dev/null) || fail 3 "$source is not a package"
+version=${name#* }
+name=${name%% *}
+[[ $name == "$PACKAGE" ]] || fail 3 "$source is $name, not $PACKAGE"
+
+installed=$(pacman -Q -- "$PACKAGE" 2>/dev/null) || fail 3 "$PACKAGE is not installed"
+installed=${installed#* }
+(( $(vercmp "$version" "$installed") > 0 )) ||
+    fail 3 "$source is $PACKAGE $version, not newer than $installed"
+
+pacman -U --noconfirm -- "$package" || fail 4 "pacman could not install the update"

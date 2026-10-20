@@ -18,6 +18,7 @@ use katna_ui::tokens::{radius, space, text};
 use crate::library::{LibraryEvent, LibraryView};
 use crate::text::t;
 use crate::theme::Theme;
+use crate::update::{self, InstallError, Offer, Seen};
 use crate::viewer::{CloseTab, NextTab, Open, PreviousTab, ShowLibrary, Viewer, ViewerEvent};
 
 /// A tab is never wider than this, so many still fit on one line.
@@ -38,7 +39,20 @@ pub struct Tabs {
     library: Option<(Entity<LibraryView>, Subscription)>,
     /// The library is shown instead of the documents.
     in_library: bool,
+    /// A newer Katna PDF, and how far installing it got (`update.rs`).
+    update: Option<(Offer, UpdateStep)>,
     _appearance: Subscription,
+}
+
+/// Where an update offered stands.
+#[derive(Debug, Clone, PartialEq)]
+enum UpdateStep {
+    Offered,
+    Downloading(f32),
+    Installing,
+    /// Files have changes not saved: they are saved or closed first.
+    Unsaved,
+    Failed(String),
 }
 
 impl Tabs {
@@ -58,11 +72,204 @@ impl Tabs {
             theme: Theme::for_appearance(window.appearance()),
             library: None,
             in_library: false,
+            update: None,
             _appearance: appearance,
         };
         this.push(None, window, cx);
         this.open_files(files, window, cx);
+        this.watch_updates(cx);
         this
+    }
+
+    /// Looks for a newer Katna PDF a little after starting, then every so
+    /// often, at most once in [`update::EVERY`] across runs.
+    fn watch_updates(&mut self, cx: &mut Context<Self>) {
+        if !update::enabled() {
+            return;
+        }
+        cx.spawn(async move |this, cx| {
+            let mut wait = std::time::Duration::from_secs(20);
+            loop {
+                cx.background_executor().timer(wait).await;
+                wait = std::time::Duration::from_secs(60 * 60);
+                let mut seen = Seen::load();
+                if !seen.due() {
+                    continue;
+                }
+                let found = cx.background_spawn(async { update::check() }).await;
+                seen.mark_checked();
+                seen.save();
+                let offer = match found {
+                    Ok(Some(offer)) if seen.skipped.as_ref() != Some(&offer.version) => offer,
+                    Ok(_) => continue,
+                    Err(err) => {
+                        eprintln!("katna-pdf: looking for updates: {err}");
+                        continue;
+                    }
+                };
+                let gone = this
+                    .update(cx, |this, cx| {
+                        if this
+                            .update
+                            .as_ref()
+                            .is_none_or(|(_, step)| *step == UpdateStep::Offered)
+                        {
+                            this.update = Some((offer, UpdateStep::Offered));
+                            cx.notify();
+                        }
+                    })
+                    .is_err();
+                if gone {
+                    break;
+                }
+            }
+        })
+        .detach();
+    }
+
+    /// Sets the update offered aside until a newer one comes.
+    fn skip_update(&mut self, cx: &mut Context<Self>) {
+        if let Some((offer, _)) = self.update.take() {
+            let mut seen = Seen::load();
+            seen.skipped = Some(offer.version);
+            seen.save();
+        }
+        cx.notify();
+    }
+
+    /// Downloads, checks and installs the update offered, then starts
+    /// the new Katna PDF with the files open now.
+    fn install_update(&mut self, cx: &mut Context<Self>) {
+        let Some((offer, step)) = &mut self.update else {
+            return;
+        };
+        if self.tabs.iter().any(|tab| tab.viewer.read(cx).dirty()) {
+            *step = UpdateStep::Unsaved;
+            cx.notify();
+            return;
+        }
+        let Some(dir) = update::download_dir() else {
+            return;
+        };
+        *step = UpdateStep::Downloading(0.0);
+        let offer = offer.clone();
+        let files: Vec<PathBuf> = self
+            .tabs
+            .iter()
+            .filter_map(|tab| tab.viewer.read(cx).path().map(Path::to_path_buf))
+            .collect();
+        // Each step as it comes; `None` once installed, to quit.
+        let (sender, progress) = async_channel::unbounded::<Option<UpdateStep>>();
+        cx.background_spawn(async move {
+            let report = |share: f32| {
+                let _ = sender.try_send(Some(UpdateStep::Downloading(share)));
+            };
+            let last = match update::download(&offer, &dir, &report) {
+                Ok(file) => {
+                    let _ = sender.try_send(Some(UpdateStep::Installing));
+                    match update::install(&offer, &file).and_then(|()| {
+                        update::restart(&offer.package, &files)
+                            .map_err(|e| InstallError::Failed(e.to_string()))
+                    }) {
+                        Ok(()) => None,
+                        Err(InstallError::Cancelled) => Some(UpdateStep::Offered),
+                        Err(InstallError::Failed(err)) => Some(UpdateStep::Failed(err)),
+                    }
+                }
+                Err(err) => Some(UpdateStep::Failed(err)),
+            };
+            let _ = sender.try_send(last);
+        })
+        .detach();
+        cx.spawn(async move |this, cx| {
+            while let Ok(step) = progress.recv().await {
+                let Some(step) = step else {
+                    cx.update(|cx| cx.quit());
+                    break;
+                };
+                let gone = this
+                    .update(cx, |this, cx| {
+                        if let Some((_, current)) = &mut this.update {
+                            *current = step;
+                            cx.notify();
+                        }
+                    })
+                    .is_err();
+                if gone {
+                    break;
+                }
+            }
+        })
+        .detach();
+        cx.notify();
+    }
+
+    /// The line at the top that offers a newer Katna PDF.
+    fn update_bar(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
+        let (offer, step) = self.update.as_ref()?;
+        let th = self.theme;
+        let installs = offer.file.is_some();
+        let message = match step {
+            UpdateStep::Offered if installs => t("update-ready", &[]),
+            UpdateStep::Offered => t("update-out", &[]),
+            UpdateStep::Downloading(share) => t(
+                "update-downloading",
+                &[("percent", &format!("{:.0}", share * 100.0))],
+            ),
+            UpdateStep::Installing => t("update-installing", &[]),
+            UpdateStep::Unsaved => t("update-unsaved", &[]),
+            UpdateStep::Failed(err) => t("update-failed", &[("error", err)]),
+        };
+        let busy = matches!(step, UpdateStep::Downloading(_) | UpdateStep::Installing);
+        let page = offer.package.page();
+        let action = (!busy).then(|| {
+            if installs {
+                let label = match step {
+                    UpdateStep::Failed(_) | UpdateStep::Unsaved => t("update-retry", &[]),
+                    _ => t("update-install", &[]),
+                };
+                katna_ui::widgets::filled_button("update-install", label, &th.katna)
+                    .on_click(cx.listener(|this, _, _, cx| this.install_update(cx)))
+            } else {
+                katna_ui::widgets::filled_button(
+                    "update-download",
+                    t("update-download", &[]),
+                    &th.katna,
+                )
+                .on_click(cx.listener(move |_, _, _, cx| cx.open_url(&page)))
+            }
+        });
+        let later = (!busy).then(|| {
+            katna_ui::widgets::button(
+                "update-later",
+                katna_ui::widgets::ButtonStyle::Text,
+                &th.katna,
+            )
+            .child(t("update-later", &[]))
+            .on_click(cx.listener(|this, _, _, cx| this.skip_update(cx)))
+        });
+        Some(
+            div()
+                .id("update-bar")
+                .flex_shrink_0()
+                .flex()
+                .items_center()
+                .gap(px(space::S2))
+                .px(px(space::S3))
+                .py(px(space::S1))
+                .border_b_1()
+                .border_color(th.line)
+                .bg(th.card)
+                .text_size(px(text::SMALL))
+                .text_color(if matches!(step, UpdateStep::Failed(_)) {
+                    th.error
+                } else {
+                    th.text
+                })
+                .child(div().flex_1().min_w_0().child(message))
+                .children(later)
+                .children(action),
+        )
     }
 
     /// Opens each of `files`, and shows the last.
@@ -364,6 +571,7 @@ impl Render for Tabs {
             .flex_col()
             .bg(th.page)
             .font_family(".SystemUIFont")
+            .children(self.update_bar(cx))
             .map(|d| match &self.library {
                 Some((library, _)) if self.in_library => d.child(library.clone()),
                 _ => d

@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<!--
+  Installing an update from Katna PDF (apps/katna-pdf/src/update.rs):
+  pkexec runs the Arch package's update helper as root after the
+  system's password prompt. The helper installs only the update Katna
+  PDF downloaded and checked. The action's ID is the app ID and
+  ".update" (apps/katna-pdf/src/ids.rs checks it).
+-->
+<!DOCTYPE policyconfig PUBLIC "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<policyconfig>
+  <vendor>Katna</vendor>
+  <vendor_url>https://katna.invenia.in</vendor_url>
+  <icon_name>in.invenia.katna.Pdf</icon_name>
+  <action id="in.invenia.katna.Pdf.update">
+    <description>Install an update of Katna PDF</description>
+    <message>Katna PDF needs your password to install its update.</message>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/lib/katna-pdf/katna-pdf-update-helper</annotate>
+  </action>
+</policyconfig>

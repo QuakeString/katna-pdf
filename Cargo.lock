@@ -3740,6 +3740,8 @@ dependencies = [
  "katna-ui",
  "mail-parser",
  "notify",
+ "sha2",
+ "ureq",
  "winresource",
  "zbus",
 ]
