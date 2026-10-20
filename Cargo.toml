@@ -22,13 +22,13 @@ katna-pdf-library = { path = "crates/katna-pdf-library" }
 # Katna's shared UI crates, at a pinned commit of the Katna repository
 # (docs/PLAN.md §2.2). Move the pin deliberately, together with the
 # [patch.crates-io] entries below.
-katna-core = { git = "https://github.com/QuakeString/katna", rev = "a201ec5c904a7da7f174f3da066a7dc9a9b78387" }
-katna-ui = { git = "https://github.com/QuakeString/katna", rev = "a201ec5c904a7da7f174f3da066a7dc9a9b78387" }
-katna-platform = { git = "https://github.com/QuakeString/katna", rev = "a201ec5c904a7da7f174f3da066a7dc9a9b78387" }
+katna-core = { git = "https://github.com/QuakeString/katna", rev = "097ee0fa49ee03ae9f80dc7630716821321e24c4" }
+katna-ui = { git = "https://github.com/QuakeString/katna", rev = "097ee0fa49ee03ae9f80dc7630716821321e24c4" }
+katna-platform = { git = "https://github.com/QuakeString/katna", rev = "097ee0fa49ee03ae9f80dc7630716821321e24c4" }
 # The Katna daemon's D-Bus API: cloud drives of Katna Mail's accounts.
-katna-dbus = { git = "https://github.com/QuakeString/katna", rev = "a201ec5c904a7da7f174f3da066a7dc9a9b78387" }
+katna-dbus = { git = "https://github.com/QuakeString/katna", rev = "097ee0fa49ee03ae9f80dc7630716821321e24c4" }
 # Katna Mail's store, read-only: the PDFs attached to mail.
-katna-store = { git = "https://github.com/QuakeString/katna", rev = "a201ec5c904a7da7f174f3da066a7dc9a9b78387" }
+katna-store = { git = "https://github.com/QuakeString/katna", rev = "097ee0fa49ee03ae9f80dc7630716821321e24c4" }
 
 # GPUI as Katna builds it: the same versions, patched from Katna's vendor/.
 gpui = { package = "gpui-pre", version = "=0.3.6" }
@@ -119,7 +119,7 @@ strip = true
 hayro = { path = "vendor/hayro" }
 hayro-interpret = { path = "vendor/hayro-interpret" }
 hayro-syntax = { path = "vendor/hayro-syntax" }
-gpui-pre = { git = "https://github.com/QuakeString/katna", rev = "a201ec5c904a7da7f174f3da066a7dc9a9b78387" }
-gpui-pre-linux = { git = "https://github.com/QuakeString/katna", rev = "a201ec5c904a7da7f174f3da066a7dc9a9b78387" }
-gpui-pre-wgpu = { git = "https://github.com/QuakeString/katna", rev = "a201ec5c904a7da7f174f3da066a7dc9a9b78387" }
-gpui-pre-windows = { git = "https://github.com/QuakeString/katna", rev = "a201ec5c904a7da7f174f3da066a7dc9a9b78387" }
+gpui-pre = { git = "https://github.com/QuakeString/katna", rev = "097ee0fa49ee03ae9f80dc7630716821321e24c4" }
+gpui-pre-linux = { git = "https://github.com/QuakeString/katna", rev = "097ee0fa49ee03ae9f80dc7630716821321e24c4" }
+gpui-pre-wgpu = { git = "https://github.com/QuakeString/katna", rev = "097ee0fa49ee03ae9f80dc7630716821321e24c4" }
+gpui-pre-windows = { git = "https://github.com/QuakeString/katna", rev = "097ee0fa49ee03ae9f80dc7630716821321e24c4" }

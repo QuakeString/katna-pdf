@@ -87,7 +87,8 @@ cargo run --release -p katna-pdf-bench -- file.pdf
   D-Bus (`katna-dbus`) for the Google Drive and OneDrive of accounts signed
   in to Katna Mail, and `mail.rs` reads Katna Mail's store (`katna-store`,
   read-only) for PDFs attached to mail; the library browses and opens both
-  (`library/drive.rs`, `library/mail.rs`). `katna-pdf --compare OLDER NEWER`
+  (`library/drive.rs`, `library/mail.rs`); Ctrl+S on a PDF opened from a
+  drive also saves it back there (`CloudReplace`). `katna-pdf --compare OLDER NEWER`
   opens a comparison (`viewer/compare.rs`). `speech.rs` reads aloud
   (Ctrl+Shift+Y, `viewer/speak.rs`) through Speech Dispatcher's socket,
   `espeak-ng`, or PowerShell's voice on Windows.
