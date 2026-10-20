@@ -45,6 +45,18 @@ use katna_ui::scale::desktop_px;
 
 use crate::text::t;
 
+/// Keeps crash reports with the Katna family's, in Katna's crash folder
+/// (`katna_core::crash`): a panic leaves a scrubbed report there, which
+/// Katna Mail lists, and its "Save crash reports on this computer" switch
+/// covers Katna PDF too. Native crashes are collected from
+/// `systemd-coredump` by Katna Mail, which keeps the one record of what
+/// it has looked at. Nothing is sent anywhere.
+fn crash_reports() {
+    if let Ok(paths) = katna_core::Paths::from_env() {
+        katna_core::crash::install("katna-pdf", &paths);
+    }
+}
+
 fn main() -> ExitCode {
     if std::env::args_os()
         .nth(1)
@@ -55,6 +67,7 @@ fn main() -> ExitCode {
             Err(_) => ExitCode::FAILURE,
         };
     }
+    crash_reports();
     let mut files: Vec<PathBuf> = Vec::new();
     // `--compare OLDER NEWER`: NEWER opened and compared with OLDER.
     let mut compare: Option<PathBuf> = None;
