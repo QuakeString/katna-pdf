@@ -386,6 +386,14 @@ pub struct Viewer {
     /// dragged out now.
     selection: Option<Selection>,
     selecting: bool,
+    /// The hand tool: dragging moves the pages instead of selecting text.
+    hand: bool,
+    /// Where the pointer was as the pages are dragged along (the hand
+    /// tool, or the middle button).
+    panning: Option<gpui::Point<gpui::Pixels>>,
+    /// How far the pages are scrolled sideways, in GPUI pixels, when
+    /// zoomed wider than the view.
+    pan_x: f32,
     /// Pages whose text is being read for the pointer.
     reading_text: std::collections::HashSet<usize>,
     /// Where each page shown was laid out last frame, in the window.
@@ -535,6 +543,9 @@ impl Viewer {
             close_warned: None,
             selection: None,
             selecting: false,
+            hand: false,
+            panning: None,
+            pan_x: 0.0,
             reading_text: Default::default(),
             page_bounds: Rc::default(),
             view_size: Rc::default(),
@@ -1190,6 +1201,12 @@ impl Viewer {
         {
             return;
         }
+        if self.hand {
+            self.selection = None;
+            self.panning = Some(event.position);
+            cx.notify();
+            return;
+        }
         self.selection = self.spot_at(event.position, cx).map(|spot| Selection {
             anchor: spot,
             head: spot,
@@ -1199,6 +1216,20 @@ impl Viewer {
     }
 
     fn drag(&mut self, event: &gpui::MouseMoveEvent, cx: &mut Context<Self>) {
+        if let Some(last) = self.panning {
+            if event.pressed_button.is_none() {
+                self.panning = None;
+                cx.notify();
+                return;
+            }
+            let dx = f32::from(event.position.x - last.x);
+            let dy = f32::from(event.position.y - last.y);
+            self.panning = Some(event.position);
+            self.pan_by(-dx, cx);
+            self.list.scroll_by(desktop_px(-dy));
+            cx.notify();
+            return;
+        }
         if self.measure_move(event.position, cx)
             || self.design_drag(event.position, cx)
             || self.redact_drag(event.position, cx)
@@ -1223,6 +1254,9 @@ impl Viewer {
     }
 
     fn release_pointer(&mut self, cx: &mut Context<Self>) {
+        if self.panning.take().is_some() {
+            cx.notify();
+        }
         self.selecting = false;
         if self.measure_release(cx)
             || self.sign_release(cx)
@@ -1809,6 +1843,53 @@ impl Viewer {
         let now = self.shown / POINT;
         let zoom = (now * 1.1_f32.powf(lines)).clamp(STEPS[0], STEPS[STEPS.len() - 1]);
         self.set_zoom(Zoom::Fixed(zoom), cx);
+    }
+
+    /// A touchpad pinch zooms smoothly; `delta` 0.1 is 10% bigger.
+    fn pinch_zoom(&mut self, delta: f32, cx: &mut Context<Self>) {
+        if delta == 0.0 || !delta.is_finite() {
+            return;
+        }
+        let now = self.shown / POINT;
+        let zoom = (now * (1.0 + delta)).clamp(STEPS[0], STEPS[STEPS.len() - 1]);
+        self.set_zoom(Zoom::Fixed(zoom), cx);
+    }
+
+    /// The widest row of pages at this zoom, with its margins, and the
+    /// view's width, in GPUI pixels.
+    fn row_and_view(&self) -> Option<(f32, f32)> {
+        let Content::Ready(opened) = &self.content else {
+            return None;
+        };
+        let view = f32::from(self.view_size.get()?.width);
+        let columns = (self.spread.columns() * if self.side_by_side() { 2 } else { 1 }) as f32;
+        let row = opened.widest * columns * self.shown
+            + (GAP * (columns - 1.0) + 2.0 * MARGIN) * katna_ui::scale::scale();
+        Some((row, view))
+    }
+
+    /// How far the pages may scroll sideways: none while they fit.
+    fn max_pan(&self) -> f32 {
+        self.row_and_view()
+            .map_or(0.0, |(row, view)| (row - view).max(0.0))
+    }
+
+    /// Scrolls the pages sideways by `dx` GPUI pixels, within the row;
+    /// whether they moved.
+    fn pan_by(&mut self, dx: f32, cx: &mut Context<Self>) -> bool {
+        let x = (self.pan_x + dx).clamp(0.0, self.max_pan());
+        if (x - self.pan_x).abs() < 0.01 {
+            return false;
+        }
+        self.pan_x = x;
+        cx.notify();
+        true
+    }
+
+    fn set_hand(&mut self, hand: bool, cx: &mut Context<Self>) {
+        self.hand = hand;
+        self.selection = None;
+        cx.notify();
     }
 
     fn set_zoom(&mut self, zoom: Zoom, cx: &mut Context<Self>) {
@@ -2852,16 +2933,28 @@ impl Viewer {
                     .collect::<Vec<_>>()
             })
             .collect();
-        div()
-            .w_full()
+        // Wider than the view, the row is laid out whole and moved
+        // sideways by how far the pages are scrolled.
+        let wide = self.row_and_view().filter(|(row, view)| row > view);
+        let row = div()
+            .map(|d| match wide {
+                Some((row, _)) => d
+                    .flex_none()
+                    .w(desktop_px(row))
+                    .relative()
+                    .left(desktop_px(-self.pan_x)),
+                None => d.w_full(),
+            })
             .flex()
             .justify_center()
             .items_start()
             .gap(px(GAP))
             .pt(px(if row == 0 { space::S5 } else { GAP / 2.0 }))
             .pb(px(if last { space::S5 } else { GAP / 2.0 }))
-            .children(pages)
-            .into_any_element()
+            .children(pages);
+        // The list lays each row out on its own, where an offset on the
+        // row itself is not applied: it goes on a row inside one.
+        div().w_full().child(row).into_any_element()
     }
 
     fn toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -2895,6 +2988,28 @@ impl Viewer {
                 th,
                 cx.listener(|this, _, window, cx| this.open_search(window, cx)),
             ));
+            for (hand, id, icon, tip) in [
+                (false, "pointer-select", "pointer", "pointer-select"),
+                (true, "pointer-hand", "hand", "pointer-hand"),
+            ] {
+                let on = self.hand == hand;
+                bar = bar.child(
+                    widgets::icon_button_colored(
+                        id,
+                        icon,
+                        18.0,
+                        if on {
+                            th.katna.accent
+                        } else {
+                            th.katna.text_dim
+                        },
+                        &th.katna,
+                    )
+                    .when(on, |b| b.bg(th.field))
+                    .tip(t(tip, &[]), &th.katna)
+                    .on_click(cx.listener(move |this, _, _, cx| this.set_hand(hand, cx))),
+                );
+            }
             bar = bar.child(
                 widgets::icon_button_colored(
                     "organize",
@@ -3358,21 +3473,28 @@ impl Render for Viewer {
             0.0
         };
         let card_width = unpx(window.viewport_size().width) * katna_ui::scale::scale()
-            - (2.0 * space::S3 + pane_width) * katna_ui::scale::scale();
+            - pane_width * katna_ui::scale::scale();
         // The pages' view: as laid out last frame, or the window less the
         // toolbar at first.
         let view_height = self.view_size.get().map_or_else(
             || {
                 unpx(window.viewport_size().height) * katna_ui::scale::scale()
-                    - (2.0 * space::S3 + 48.0) * katna_ui::scale::scale()
+                    - 48.0 * katna_ui::scale::scale()
             },
             |size| unpx(size.height) * katna_ui::scale::scale(),
         );
         let shown = self.points_to_pixels(card_width, view_height);
         if (shown / self.shown - 1.0).abs() > 0.001 {
+            // The middle of the view stays where it was, sideways.
+            let half = self
+                .view_size
+                .get()
+                .map_or(0.0, |v| f32::from(v.width) / 2.0);
+            self.pan_x = (self.pan_x + half) * shown / self.shown - half;
             self.shown = shown;
             self.list.remeasure();
         }
+        self.pan_x = self.pan_x.clamp(0.0, self.max_pan());
         self.open_comment_now(window, cx);
         self.focus_signing(window, cx);
         self.focus_calibrating(window, cx);
@@ -3438,6 +3560,23 @@ impl Render for Viewer {
                         gpui::MouseButton::Left,
                         cx.listener(|this, event, window, cx| this.press(event, window, cx)),
                     )
+                    .on_mouse_down(
+                        gpui::MouseButton::Middle,
+                        cx.listener(|this, event: &gpui::MouseDownEvent, _, cx| {
+                            this.panning = Some(event.position);
+                            cx.notify();
+                        }),
+                    )
+                    .on_mouse_up(
+                        gpui::MouseButton::Middle,
+                        cx.listener(|this, _, _, cx| this.release_pointer(cx)),
+                    )
+                    .when(self.panning.is_some(), |d| {
+                        d.cursor(gpui::CursorStyle::ClosedHand)
+                    })
+                    .when(self.hand && self.panning.is_none(), |d| {
+                        d.cursor(gpui::CursorStyle::OpenHand)
+                    })
                     .on_mouse_move(cx.listener(|this, event, _, cx| this.drag(event, cx)))
                     .child({
                         // Notes the view's size, and zooms with Ctrl and
@@ -3450,17 +3589,56 @@ impl Render for Viewer {
                                 bounds
                             },
                             move |_, bounds, window, _| {
+                                let wheel = weak.clone();
                                 window.on_mouse_event(
                                     move |event: &gpui::ScrollWheelEvent, phase, _, cx| {
+                                        if phase != gpui::DispatchPhase::Capture
+                                            || !bounds.contains(&event.position)
+                                        {
+                                            return;
+                                        }
+                                        if event.modifiers.control {
+                                            cx.stop_propagation();
+                                            wheel
+                                                .update(cx, |this, cx| {
+                                                    this.wheel_zoom(event.delta, cx)
+                                                })
+                                                .ok();
+                                            return;
+                                        }
+                                        // Sideways: a tilted wheel, a
+                                        // touchpad, or Shift and the wheel.
+                                        let (mut dx, dy) = match event.delta {
+                                            gpui::ScrollDelta::Lines(l) => (l.x * 48.0, l.y * 48.0),
+                                            gpui::ScrollDelta::Pixels(p) => {
+                                                (f32::from(p.x), f32::from(p.y))
+                                            }
+                                        };
+                                        let sideways = event.modifiers.shift && dx == 0.0;
+                                        if sideways {
+                                            dx = dy;
+                                        }
+                                        if dx == 0.0 {
+                                            return;
+                                        }
+                                        if sideways || dy == 0.0 {
+                                            cx.stop_propagation();
+                                        }
+                                        wheel.update(cx, |this, cx| this.pan_by(-dx, cx)).ok();
+                                    },
+                                );
+                                let pinch = weak.clone();
+                                window.on_mouse_event(
+                                    move |event: &gpui::PinchEvent, phase, _, cx| {
                                         if phase == gpui::DispatchPhase::Capture
-                                            && event.modifiers.control
                                             && bounds.contains(&event.position)
                                         {
                                             cx.stop_propagation();
-                                            weak.update(cx, |this, cx| {
-                                                this.wheel_zoom(event.delta, cx)
-                                            })
-                                            .ok();
+                                            pinch
+                                                .update(cx, |this, cx| {
+                                                    this.pinch_zoom(event.delta, cx)
+                                                })
+                                                .ok();
                                         }
                                     },
                                 );
