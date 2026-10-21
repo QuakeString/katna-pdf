@@ -173,6 +173,8 @@ struct Piece {
     word_spacing: f64,
     /// Horizontal scaling (`Tz`), as a factor.
     stretch: f64,
+    /// The fill colour it is shown in, as RGB from 0 to 1.
+    fill: [f64; 3],
 }
 
 #[derive(Clone)]
@@ -186,6 +188,7 @@ struct State {
     size: f64,
     rise: f64,
     render: i64,
+    fill: [f64; 3],
 }
 
 /// A page's content, its fonts and its text, read.
@@ -315,19 +318,24 @@ impl Document {
         let mut new: Vec<String> = Vec::new();
         // Lines kept as they were, while the text still starts with them.
         let mut rest = text.as_str();
+        // The last line kept goes on into the text after it.
+        let mut soft = false;
         while let Some(run) = old.get(new.len()) {
             match rest.strip_prefix(run.text.as_str()) {
                 Some(after) if after.is_empty() || after.starts_with([' ', '\n']) => {
                     new.push(run.text.clone());
+                    soft = after.starts_with(' ');
                     rest = after.get(1..).unwrap_or("");
                 }
                 _ => break,
             }
         }
-        // The rest, wrapped.
+        // The rest, wrapped; words go on the end of the last line kept
+        // while they fit, as they would in a word processor.
         if !rest.is_empty() {
+            let mut carried = if soft { new.pop() } else { None };
             for para in rest.split('\n') {
-                let mut line = String::new();
+                let mut line = carried.take().unwrap_or_default();
                 for word in para.split(' ').filter(|w| !w.is_empty()) {
                     let j = new.len();
                     let longer = if line.is_empty() {
@@ -752,6 +760,7 @@ impl Page {
             size: 0.0,
             rise: 0.0,
             render: 0,
+            fill: [0.0; 3],
         };
         let mut stack = Vec::new();
         let mut tm = IDENTITY;
@@ -780,6 +789,14 @@ impl Page {
                 b"Tz" => state.scale = n(0) / 100.0,
                 b"TL" => state.leading = n(0),
                 b"Ts" => state.rise = n(0),
+                b"g" | b"rg" | b"k" | b"sc" | b"scn" => {
+                    let numbers: Vec<f64> =
+                        op.operands.iter().filter_map(Object::as_number).collect();
+                    if let Some(fill) = colour(&numbers) {
+                        state.fill = fill;
+                    }
+                }
+                b"cs" => state.fill = [0.0; 3],
                 b"Tr" => state.render = op.operands.first().and_then(Object::as_int).unwrap_or(0),
                 b"Tf" => {
                     state.font = op
@@ -930,6 +947,7 @@ impl Page {
                 char_spacing: state.char_spacing,
                 word_spacing: state.word_spacing,
                 stretch: state.scale,
+                fill: state.fill,
             });
         }
         advance
@@ -1021,6 +1039,17 @@ fn runs(page: &Page) -> Vec<TextRun> {
     out
 }
 
+/// A fill colour set by `g`, `rg`, `k` or `sc`, as RGB: one number a
+/// grey, three RGB and four CMYK; other spaces' are left as they were.
+fn colour(n: &[f64]) -> Option<[f64; 3]> {
+    match *n {
+        [g] => Some([g; 3]),
+        [r, g, b] => Some([r, g, b]),
+        [c, m, y, k] => Some([c, m, y].map(|v| (1.0 - v) * (1.0 - k))),
+        _ => None,
+    }
+}
+
 /// A paragraph: lines one under another in the same font and size.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TextBlock {
@@ -1033,6 +1062,11 @@ pub struct TextBlock {
     pub size: f32,
     /// Where it is, as `TextRun::rect`.
     pub rect: [f32; 4],
+    /// The colour its first line is shown in, as RGB.
+    pub colour: [u8; 3],
+    /// From one line's baseline to the next's, in points: 1.2 times the
+    /// size for a line alone.
+    pub leading: f32,
 }
 
 /// Where a line is, in the text space of its paragraph's first: where
@@ -1123,6 +1157,12 @@ fn blocks(page: &Page, runs: &[TextRun]) -> Vec<TextBlock> {
         });
         match (joined, out.last_mut()) {
             (Some(here), Some(block)) => {
+                if let [first] = places[..] {
+                    // Text space to the page's, along the lines' height.
+                    let p0 = &page.pieces[runs[block.runs[0]].ops[0]];
+                    let scale = f64::from(block.size) / p0.size.abs().max(1e-9);
+                    block.leading = ((first.y - here.y) * scale) as f32;
+                }
                 places.push(here);
                 block.runs.push(i);
                 block.rect = [
@@ -1146,6 +1186,8 @@ fn blocks(page: &Page, runs: &[TextRun]) -> Vec<TextBlock> {
                     font: run.font.clone(),
                     size: run.size,
                     rect: run.rect,
+                    leading: 1.2 * run.size,
+                    colour: p.fill.map(|c| (c.clamp(0.0, 1.0) * 255.0).round() as u8),
                 });
             }
         }

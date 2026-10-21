@@ -2839,7 +2839,7 @@ impl Viewer {
         overlays.extend(self.crop_overlay(page));
         overlays.extend(self.measure_overlay(page));
         overlays.extend(self.sign_overlay(page, cx));
-        overlays.extend(self.text_edit_overlay(page, transform, cx));
+        overlays.extend(self.text_edit_overlay(page, transform, w, window, cx));
         // Matches on this page, the current one stronger, and the
         // selected text.
         let accent = self.theme.katna.accent & 0xffff_ff00;

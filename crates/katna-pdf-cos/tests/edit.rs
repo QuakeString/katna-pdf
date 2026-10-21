@@ -268,6 +268,26 @@ fn a_paragraph_rewraps_to_its_width() {
 }
 
 #[test]
+fn words_put_at_the_end_go_on_the_last_line_while_they_fit() {
+    let doc = page(PARAGRAPH, "/F1 5 0 R", &[HELVETICA]);
+    let text = "Katna reads the lines of a paragraph as one block of text to edit. And more \
+                words after it.";
+    let out = Document::load(doc.edit_block(0, &[0, 1, 2], text).unwrap()).unwrap();
+    let got = lines(&out);
+    assert!(got[2].0.starts_with("to edit. And"), "{got:?}");
+    assert_eq!(out.text_blocks(0)[0].text, text);
+}
+
+#[test]
+fn a_paragraph_has_its_colour_and_line_spacing() {
+    let doc = page(&format!("0 0 1 rg {PARAGRAPH}"), "/F1 5 0 R", &[HELVETICA]);
+    let blocks = doc.text_blocks(0);
+    assert_eq!(blocks[0].colour, [0, 0, 255]);
+    assert!((blocks[0].leading - 14.0).abs() < 0.01, "{blocks:?}");
+    assert!((blocks[1].leading - 14.4).abs() < 0.01, "{blocks:?}");
+}
+
+#[test]
 fn a_shorter_paragraph_empties_lines() {
     let doc = page(PARAGRAPH, "/F1 5 0 R", &[HELVETICA]);
     let out = Document::load(doc.edit_block(0, &[0, 1, 2], "Short now.").unwrap()).unwrap();
