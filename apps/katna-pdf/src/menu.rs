@@ -12,10 +12,10 @@ use katna_platform::dbusmenu::{Menu, MenuItem};
 use crate::tabs::Tabs;
 use crate::text::t;
 use crate::viewer::{
-    ActualSize, AddBookmark, Annotate, CloseTab, Compare, CopyText, Find, FindNext, FindPrevious,
-    FitPage, FitWidth, NextPage, NextSpread, NextTab, Open, Organize, Present, PreviousPage,
-    PreviousTab, Print, Properties, Quit, ReadAloud, ReopenSession, Save, ShowLibrary, Sign,
-    ToggleContents, ToggleNight, ZoomIn, ZoomOut,
+    ActualSize, AddBookmark, Annotate, CloseTab, Compare, CopyText, Export, Find, FindNext,
+    FindPrevious, FitPage, FitWidth, NextPage, NextSpread, NextTab, Open, Organize, Present,
+    PreviousPage, PreviousTab, Print, Properties, Quit, ReadAloud, ReopenSession, Save,
+    ShowLibrary, Sign, ToggleContents, ToggleNight, ZoomIn, ZoomOut,
 };
 
 /// The menus, their items, and each item's keys.
@@ -32,6 +32,7 @@ fn items() -> Vec<MenuItem> {
                 item("menu-reopen-session", &[]),
                 item("menu-save", &ctrl("S")),
                 item("menu-print", &ctrl("P")),
+                item("menu-export", &["Control", "Shift", "E"]),
                 item("menu-properties", &ctrl("D")),
                 item("menu-compare", &["Control", "Shift", "D"]),
                 item("menu-library", &ctrl("L")),
@@ -92,6 +93,7 @@ fn action(id: &str) -> Option<Box<dyn Action>> {
         "menu-reopen-session" => Box::new(ReopenSession),
         "menu-save" => Box::new(Save),
         "menu-print" => Box::new(Print),
+        "menu-export" => Box::new(Export),
         "menu-properties" => Box::new(Properties),
         "menu-compare" => Box::new(Compare),
         "menu-library" => Box::new(ShowLibrary),
