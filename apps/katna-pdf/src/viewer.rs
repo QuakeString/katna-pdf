@@ -512,6 +512,8 @@ pub struct Viewer {
     /// A reply being typed, and which comments the list shows.
     reply: Option<comments::Reply>,
     comment_filter: comments::CommentFilter,
+    /// Whether the form's fields are tinted so they can be found.
+    highlight_fields: bool,
     /// The stamp the stamp tool puts on, and the ones typed in.
     stamp: String,
     custom_stamps: Vec<String>,
@@ -662,6 +664,7 @@ impl Viewer {
             comment: None,
             reply: None,
             comment_filter: Default::default(),
+            highlight_fields: true,
             stamp: "Approved".into(),
             custom_stamps: stamps::load_custom(),
             stamp_input: None,
@@ -3024,7 +3027,7 @@ impl Viewer {
                                 }))
                                 .into_any_element();
                         }
-                        area.bg(gpui::rgba(tint | 0x14))
+                        area.when(self.highlight_fields, |a| a.bg(gpui::rgba(tint | 0x14)))
                             .hover(move |s| s.bg(gpui::rgba(tint | 0x33)))
                             .cursor_pointer()
                             .on_click(cx.listener(move |this, _, window, cx| {

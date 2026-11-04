@@ -49,7 +49,10 @@ cargo run --release -p katna-pdf-bench -- file.pdf
   again whole with only the objects it still uses),
   designing forms (`design.rs`: fields of every kind added with their
   own appearances, changed, moved, copied to other pages, taken out and
-  put in Tab order), form data in and out as JSON, CSV, XFDF and FDF
+  put in Tab order; each field's border, background and text as a
+  `Look`, comb fields, limits), a form reset to its defaults
+  (`reset_values`), fields and comments drawn into the pages for good
+  (`flatten.rs`), form data in and out as JSON, CSV, XFDF and FDF
   (`formdata.rs`), totals and number, date and percent formats done in
   Rust from the calls Acrobat's form tools write (`calc.rs`), the
   fields a flat form asks for found from its blanks, boxes, grid cells
@@ -100,7 +103,7 @@ cargo run --release -p katna-pdf-bench -- file.pdf
   the AppImage and Setup's Windows install, downloads, checks and installs
   it; builds without `KATNA_PDF_VERSION` never look.
 - `apps/katna-pdf-cli` — the command line: info, merge, split, pages,
-  rotate, crop, sign (and certify), add-field, ltv, tokens, token-check, verify (with `--report` as a PDF), text and edit-text (`--blocks` / `--block` for paragraphs), insert, stamp, background, redact, compress, compare (with `--overlay` as a PNG), form (with `--detect`), form-data and fill, meta, lock and unlock, objects and object, bookmarks, links, dests and labels, annotations and XFDF, and library; `--json` for scripts and agents.
+  rotate, crop, sign (and certify), add-field, ltv, tokens, token-check, verify (with `--report` as a PDF), text and edit-text (`--blocks` / `--block` for paragraphs), insert, stamp, background, redact, compress, compare (with `--overlay` as a PNG), form (with `--detect`, looks, comb and limits), form-data, fill (and `--reset`), flatten, meta, lock and unlock, objects and object, bookmarks, links, dests and labels, annotations and XFDF, and library; `--json` for scripts and agents.
 - `tools/katna-pdf-cos-check` — runs katna-pdf-cos over a folder of PDFs
   (loads, page counts against hayro, update round trips).
 - `vendor/hayro`, `vendor/hayro-interpret`, `vendor/hayro-syntax` — hayro with our patches

@@ -15,7 +15,7 @@ use katna_pdf_cos::{Metadata, Optimize, Permissions};
 use katna_ui::px;
 use katna_ui::text_input::{InputEvent, TextInput};
 use katna_ui::tokens::{radius, space, text};
-use katna_ui::widgets;
+use katna_ui::widgets::{self, Tip};
 
 use super::{Content, Viewer};
 use crate::text::t;
@@ -429,6 +429,113 @@ impl Viewer {
                                 cx.listener(|this, _, _, cx| this.shrink(Optimize::MEDIUM, cx)),
                             ),
                         ),
+                );
+        }
+        // The form, and the comments: tinted, reset, and drawn in for good.
+        let fields = self.form.as_ref().map_or(0, |f| f.fields.len());
+        if fields > 0 {
+            let count = fields.to_string();
+            card = card
+                .child(
+                    div()
+                        .pt(px(space::S2))
+                        .text_size(px(text::BODY))
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .text_color(th.text)
+                        .child(t("properties-form", &[])),
+                )
+                .child(
+                    div()
+                        .text_size(px(text::SMALL))
+                        .text_color(th.dim)
+                        .child(t("properties-form-fields", &[("count", &count)])),
+                )
+                .child(
+                    div()
+                        .id("form-highlight")
+                        .flex()
+                        .items_center()
+                        .gap(px(space::S2))
+                        .cursor_pointer()
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.highlight_fields = !this.highlight_fields;
+                            cx.notify();
+                        }))
+                        .child(super::sign::check_box(self.highlight_fields, th))
+                        .child(
+                            div()
+                                .text_size(px(text::BODY))
+                                .text_color(th.text)
+                                .child(t("form-highlight", &[])),
+                        ),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .flex_wrap()
+                        .gap(px(space::S2))
+                        .child(
+                            widgets::outlined_button("form-reset", t("form-reset", &[]), &th.katna)
+                                .on_click(cx.listener(|this, _, _, cx| this.reset_form(cx))),
+                        )
+                        .child(
+                            widgets::outlined_button(
+                                "form-flatten",
+                                t("form-flatten", &[]),
+                                &th.katna,
+                            )
+                            .tip(t("form-flatten-tip", &[]), &th.katna)
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.flatten(
+                                    katna_pdf_cos::Flatten {
+                                        forms: true,
+                                        comments: false,
+                                    },
+                                    cx,
+                                )
+                            })),
+                        ),
+                );
+        }
+        let comments = self
+            .annots
+            .as_ref()
+            .map_or(0, |a| a.iter().map(Vec::len).sum::<usize>());
+        if comments > 0 {
+            let count = comments.to_string();
+            card = card
+                .child(
+                    div()
+                        .pt(px(space::S2))
+                        .text_size(px(text::BODY))
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .text_color(th.text)
+                        .child(t("properties-comments", &[])),
+                )
+                .child(
+                    div()
+                        .text_size(px(text::SMALL))
+                        .text_color(th.dim)
+                        .child(t("properties-comments-count", &[("count", &count)])),
+                )
+                .child(
+                    div().flex().child(
+                        widgets::outlined_button(
+                            "comments-flatten",
+                            t("comments-flatten", &[]),
+                            &th.katna,
+                        )
+                        .tip(t("comments-flatten-tip", &[]), &th.katna)
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.flatten(
+                                katna_pdf_cos::Flatten {
+                                    forms: false,
+                                    comments: true,
+                                },
+                                cx,
+                            )
+                        })),
+                    ),
                 );
         }
         card = card.child(

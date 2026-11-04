@@ -118,7 +118,10 @@ usage: katna-pdf-cli COMMAND [--json] ...
        [--rename NAME=NEW]... [--move NAME:L,B,R,T]... [--copy NAME:PAGES]...
        [--remove NAME]... [--order PAGE:NAME,NAME,...]...
        [--total NAME=SUM:FIELD,FIELD,...]... [--format NAME=FORMAT]...
-       [--detect PAGES|all]
+       [--border NAME=STYLE[:WIDTH]]... [--border-colour NAME=#RRGGBB|none]...
+       [--background NAME=#RRGGBB|none]... [--font NAME=SIZE[:#RRGGBB]]...
+       [--max-len NAME=N|none]... [--comb NAME]... [--password NAME]...
+       [--no-scroll NAME]... [--caption NAME=TEXT]... [--detect PAGES|all]
                                   the form designed: fields added (KIND text, multiline,
                                   password, check, radio=CHOICE, combo=A;B;C,
                                   list=A;B;C, button=CAPTION or signature; radio
@@ -129,7 +132,14 @@ usage: katna-pdf-cli COMMAND [--json] ...
                                   max of other fields, worked out as the form is
                                   filled) and a format (number:DECIMALS[:CURRENCY],
                                   percent:DECIMALS, date:PATTERN such as dd/mm/yyyy,
-                                  phone, or none) given; --detect adds the fields a
+                                  phone, or none) given; how a field is drawn set
+                                  (border STYLE solid, dashed, beveled, inset or
+                                  underline, its WIDTH in points and colour, the
+                                  background, the text's SIZE (0 fits the field)
+                                  and colour), the most letters a text field takes,
+                                  a letter to each box (--comb), letters hidden as
+                                  typed, no scrolling past the box, a button's
+                                  caption; --detect adds the fields a
                                   flat form's pages ask for (blanks of underscores,
                                   rules to write on, empty boxes, rows of letter
                                   boxes, squares to tick), named from the words
@@ -138,11 +148,17 @@ usage: katna-pdf-cli COMMAND [--json] ...
                                   each field's value by its full name, as one JSON
                                   object (or CSV: names, then values); with -o saved
                                   as JSON, CSV, XFDF or FDF by OUT's extension
-  fill FILE -o OUT [--data DATA.json|.csv|.xfdf|.fdf] [--set NAME=VALUE]...
+  fill FILE -o OUT ([--data DATA.json|.csv|.xfdf|.fdf] [--set NAME=VALUE]... | --reset)
                                   the form filled in from form data (JSON, CSV, or
                                   Acrobat's XFDF or FDF),
                                   or values given one by one (a check box: yes or
-                                  no; a radio group: the button's choice)
+                                  no; a radio group: the button's choice); --reset
+                                  puts every field back to what it started as
+  flatten FILE -o OUT [--forms] [--comments]
+                                  the form's fields and the comments drawn into the
+                                  pages as they are and taken out, so they can no
+                                  longer be filled in or changed (both unless one
+                                  is named)
   add-field FILE -o OUT --rect L,B,R,T [--page N] [--name NAME]
                                   an empty signature field, for someone to sign later
   ltv FILE -o OUT [--trust PATH] [--tsa URL]
@@ -252,6 +268,7 @@ fn main() -> ExitCode {
         "redact" => redact(rest, json),
         "unlock" => unlock(rest, json),
         "compress" => compress(rest, json),
+        "flatten" => flatten(rest, json),
         "compare" => compare(rest, json),
         "objects" => objects(rest, json),
         "bookmarks" => bookmarks(rest, json),
@@ -412,6 +429,13 @@ impl<'a> Args<'a> {
                     | "--stamp"
                     | "--note"
                     | "--overlay"
+                    | "--border"
+                    | "--border-colour"
+                    | "--max-len"
+                    | "--comb"
+                    | "--background"
+                    | "--no-scroll"
+                    | "--caption"
             ) {
                 let Some(value) = it.next() else {
                     return Err(Failure::Usage(format!("{a} needs a value")));
@@ -435,6 +459,9 @@ impl<'a> Args<'a> {
                 "--clear",
                 "--stretch",
                 "--as-text",
+                "--reset",
+                "--forms",
+                "--comments",
             ]
             .contains(&a.as_str())
             {
@@ -2253,6 +2280,7 @@ fn form(args: &[String], json: bool) -> Done {
             multiline,
             password,
             max_len: None,
+            comb: false,
         };
         let kind = match kind {
             "text" => text(false, false),
@@ -2283,6 +2311,7 @@ fn form(args: &[String], json: bool) -> Done {
             read_only: false,
             value: None,
             scripts: katna_pdf_cos::Scripts::default(),
+            look: katna_pdf_cos::Look::default(),
         });
     }
     if let Some(spec) = args.option("--detect") {
@@ -2335,6 +2364,7 @@ fn form(args: &[String], json: bool) -> Done {
                 read_only: false,
                 value: None,
                 scripts: katna_pdf_cos::Scripts::default(),
+                look: katna_pdf_cos::Look::default(),
             };
             how(&mut spec, &mut edits[at]);
             Ok(())
@@ -2433,6 +2463,148 @@ fn form(args: &[String], json: bool) -> Done {
             let mut scripts = scripts_of(e);
             scripts.format = format.clone();
             e.scripts = Some(scripts);
+        })?;
+    }
+    // How fields are drawn: a change starts from the look the field has.
+    let look_of = |e: &FieldEdit| {
+        e.look.clone().unwrap_or_else(|| {
+            fields
+                .iter()
+                .find(|f| f.id == e.field)
+                .map(|f| doc.field_look(f))
+                .unwrap_or_default()
+        })
+    };
+    let colour_or_none = |flag: &str, c: &str| -> Result<Option<[f32; 3]>, Failure> {
+        if c == "none" {
+            return Ok(None);
+        }
+        let hex = c.trim_start_matches('#');
+        let v = (hex.len() == 6)
+            .then(|| u32::from_str_radix(hex, 16).ok())
+            .flatten()
+            .ok_or_else(|| Failure::Usage(format!("{flag} {c}: #RRGGBB or none")))?;
+        Ok(Some(
+            [(v >> 16) & 255, (v >> 8) & 255, v & 255].map(|n| n as f32 / 255.0),
+        ))
+    };
+    type LookChange = Box<dyn Fn(&mut katna_pdf_cos::Look)>;
+    let mut looks: Vec<(String, LookChange)> = Vec::new();
+    for item in args.all("--border") {
+        let bad = || Failure::Usage(format!("--border {item}: NAME=STYLE[:WIDTH]"));
+        let (name, how) = item.split_once('=').ok_or_else(bad)?;
+        let (style, width) = how.split_once(':').unwrap_or((how, ""));
+        let border = match style {
+            "solid" => katna_pdf_cos::Border::Solid,
+            "dashed" => katna_pdf_cos::Border::Dashed,
+            "beveled" | "raised" => katna_pdf_cos::Border::Beveled,
+            "inset" | "sunken" => katna_pdf_cos::Border::Inset,
+            "underline" => katna_pdf_cos::Border::Underline,
+            _ => return Err(bad()),
+        };
+        let width = if width.is_empty() {
+            None
+        } else {
+            Some(width.parse::<f32>().map_err(|_| bad())?)
+        };
+        looks.push((
+            name.to_owned(),
+            Box::new(move |l| {
+                l.border = border;
+                if let Some(w) = width {
+                    l.width = w;
+                }
+                if l.border_colour.is_none() {
+                    l.border_colour = Some([0.45; 3]);
+                }
+            }),
+        ));
+    }
+    for item in args.all("--border-colour") {
+        let (name, c) = item
+            .split_once('=')
+            .ok_or_else(|| Failure::Usage(format!("--border-colour {item}: NAME=#RRGGBB|none")))?;
+        let colour = colour_or_none("--border-colour", c)?;
+        looks.push((name.to_owned(), Box::new(move |l| l.border_colour = colour)));
+    }
+    for item in args.all("--background") {
+        let (name, c) = item
+            .split_once('=')
+            .ok_or_else(|| Failure::Usage(format!("--background {item}: NAME=#RRGGBB|none")))?;
+        let colour = colour_or_none("--background", c)?;
+        looks.push((name.to_owned(), Box::new(move |l| l.fill = colour)));
+    }
+    for item in args.all("--font") {
+        let bad = || Failure::Usage(format!("--font {item}: NAME=SIZE[:#RRGGBB]"));
+        let (name, how) = item.split_once('=').ok_or_else(bad)?;
+        let (size, colour) = how.split_once(':').unwrap_or((how, ""));
+        let size = size.parse::<f32>().map_err(|_| bad())?;
+        let colour = if colour.is_empty() {
+            None
+        } else {
+            colour_or_none("--font", colour)?
+        };
+        looks.push((
+            name.to_owned(),
+            Box::new(move |l| {
+                l.text_size = size;
+                if let Some(c) = colour {
+                    l.text_colour = c;
+                }
+            }),
+        ));
+    }
+    for (name, how) in &looks {
+        change(name, &|s, e| {
+            how(&mut s.look);
+            let mut look = look_of(e);
+            how(&mut look);
+            e.look = Some(look);
+        })?;
+    }
+    for item in args.all("--max-len") {
+        let bad = || Failure::Usage(format!("--max-len {item}: NAME=N|none"));
+        let (name, n) = item.split_once('=').ok_or_else(bad)?;
+        let max = if n == "none" {
+            None
+        } else {
+            Some(n.parse::<usize>().map_err(|_| bad())?)
+        };
+        change(name, &|s, e| {
+            if let NewField::Text { max_len, .. } = &mut s.kind {
+                *max_len = max;
+            }
+            e.max_len = Some(max);
+        })?;
+    }
+    for name in args.all("--comb") {
+        change(name, &|s, e| {
+            if let NewField::Text { comb, .. } = &mut s.kind {
+                *comb = true;
+            }
+            e.comb = Some(true);
+        })?;
+    }
+    for name in args.all("--password") {
+        change(name, &|s, e| {
+            if let NewField::Text { password, .. } = &mut s.kind {
+                *password = true;
+            }
+            e.password = Some(true);
+        })?;
+    }
+    for name in args.all("--no-scroll") {
+        change(name, &|_, e| e.scroll = Some(false))?;
+    }
+    for item in args.all("--caption") {
+        let (name, text) = item
+            .split_once('=')
+            .ok_or_else(|| Failure::Usage(format!("--caption {item}: NAME=TEXT")))?;
+        change(name, &|s, e| {
+            if let NewField::PushButton { caption } = &mut s.kind {
+                *caption = text.to_owned();
+            }
+            e.caption = Some(text.to_owned());
         })?;
     }
     for rename in args.all("--rename") {
@@ -2543,11 +2715,35 @@ fn fill(args: &[String], json: bool) -> Done {
             .ok_or_else(|| Failure::Usage(format!("--set {set}: NAME=VALUE")))?;
         data.push((name.to_owned(), value.to_owned()));
     }
-    if data.is_empty() {
-        return Err(Failure::Usage("give values with --data or --set".into()));
-    }
+    let bytes = if args.flag("--reset") {
+        doc.fill(&doc.reset_values())
+            .map_err(|e| failed(format!("{file}: {e}")))?
+    } else {
+        if data.is_empty() {
+            return Err(Failure::Usage(
+                "give values with --data or --set, or --reset".into(),
+            ));
+        }
+        doc.fill_data(&data)
+            .map_err(|e| failed(format!("{file}: {e}")))?
+    };
+    write(&out, &bytes)?;
+    Ok(wrote(&[(out, doc.pages().len())], json))
+}
+
+/// Draws the form's fields and the comments into the pages for good.
+fn flatten(args: &[String], json: bool) -> Done {
+    let args = Args::parse(args)?;
+    let [file] = args.words()?;
+    let out = args.output()?;
+    let doc = open(file)?;
+    let (forms, comments) = (args.flag("--forms"), args.flag("--comments"));
+    let what = katna_pdf_cos::Flatten {
+        forms: forms || !comments,
+        comments: comments || !forms,
+    };
     let bytes = doc
-        .fill_data(&data)
+        .flatten(what)
         .map_err(|e| failed(format!("{file}: {e}")))?;
     write(&out, &bytes)?;
     Ok(wrote(&[(out, doc.pages().len())], json))

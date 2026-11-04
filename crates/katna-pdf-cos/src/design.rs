@@ -12,7 +12,8 @@ use std::collections::HashMap;
 use crate::calc::{Scripts, script_text};
 use crate::fonts::{stand_in, win_ansi_code, win_ansi_width};
 use crate::forms::{
-    COMBO, EDIT, MULTILINE, PASSWORD, PUSH_BUTTON, RADIO, READ_ONLY, REQUIRED, literal, text_object,
+    Border, COMB, COMBO, DO_NOT_SCROLL, EDIT, Look, MULTILINE, PASSWORD, PUSH_BUTTON, RADIO,
+    READ_ONLY, REQUIRED, border_content, inset, literal, text_object,
 };
 use crate::{
     Dict, Document, Field, FieldKind, Name, Object, Ref, Stream, Update, UpdateError, Widget,
@@ -22,8 +23,7 @@ use crate::{
 const NO_TOGGLE_OFF: i64 = 1 << 14;
 /// Shown and printed.
 const PRINT: i64 = 4;
-/// The border new fields get, and a pushed button's face.
-const BORDER: f32 = 0.45;
+/// A new push button's face.
 const FACE: f32 = 0.85;
 
 /// A field to add.
@@ -33,6 +33,8 @@ pub enum NewField {
         multiline: bool,
         password: bool,
         max_len: Option<usize>,
+        /// A letter to each of `max_len` cells.
+        comb: bool,
     },
     CheckBox,
     /// One button of a radio group, standing for `choice`; buttons with
@@ -72,6 +74,8 @@ pub struct FieldSpec {
     /// A total worked out from other fields, and how the value is shown
     /// (a number, an amount, a date).
     pub scripts: Scripts,
+    /// Its border, background and text.
+    pub look: Look,
 }
 
 /// Changes to a field; `None` leaves that part as it is.
@@ -86,10 +90,22 @@ pub struct FieldEdit {
     pub read_only: Option<bool>,
     /// A text field's many lines.
     pub multiline: Option<bool>,
+    /// A text field's letters hidden as it is typed.
+    pub password: Option<bool>,
+    /// A text field's letters in cells, one each, up to `max_len`.
+    pub comb: Option<bool>,
+    /// The most letters a text field takes; `Some(None)` for no limit.
+    pub max_len: Option<Option<usize>>,
+    /// Whether a text field scrolls to take more than fits.
+    pub scroll: Option<bool>,
+    /// A push button's caption.
+    pub caption: Option<String>,
     /// A combo or list's choices.
     pub options: Option<Vec<String>>,
     /// Its total and format, in place of those it has.
     pub scripts: Option<Scripts>,
+    /// Its border, background and text, on every place it is shown.
+    pub look: Option<Look>,
 }
 
 impl FieldEdit {
@@ -101,8 +117,14 @@ impl FieldEdit {
             required: None,
             read_only: None,
             multiline: None,
+            password: None,
+            comb: None,
+            max_len: None,
+            scroll: None,
+            caption: None,
             options: None,
             scripts: None,
+            look: None,
         }
     }
 }
@@ -195,7 +217,7 @@ impl Document {
                 rect: normal(rect),
                 ..w.clone()
             };
-            d.redraw(f, &moved);
+            d.redraw(f, &moved, false);
         }
 
         for (id, to) in &design.copy {
@@ -299,8 +321,8 @@ impl Document {
                         }
                         _ => {}
                     }
-                    if !matches!(spec.kind, NewField::Signature | NewField::PushButton { .. }) {
-                        fd.set("DA", text_object("/Helv 0 Tf 0 g"));
+                    if !matches!(spec.kind, NewField::Signature) {
+                        fd.set("DA", text_object(&da_of(&spec.look)));
                     }
                     let value = match (&spec.kind, &spec.value) {
                         (_, None) => None,
@@ -630,14 +652,14 @@ impl Designer<'_> {
             None => {}
         }
         let mut flags = self.resolve(dict.get("Ff")).as_int().unwrap_or(0);
+        let text = matches!(f.kind, FieldKind::Text { .. });
         for (on, bit) in [
             (edit.required, REQUIRED),
             (edit.read_only, READ_ONLY),
-            (
-                edit.multiline
-                    .filter(|_| matches!(f.kind, FieldKind::Text { .. })),
-                MULTILINE,
-            ),
+            (edit.multiline.filter(|_| text), MULTILINE),
+            (edit.password.filter(|_| text), PASSWORD),
+            (edit.comb.filter(|_| text), COMB),
+            (edit.scroll.map(|s| !s).filter(|_| text), DO_NOT_SCROLL),
         ] {
             match on {
                 Some(true) => flags |= bit,
@@ -657,42 +679,126 @@ impl Designer<'_> {
                 combo: *combo,
             };
         }
-        if let (
-            Some(multiline),
-            FieldKind::Text {
-                password, max_len, ..
-            },
-        ) = (edit.multiline, &f.kind)
+        if let FieldKind::Text {
+            multiline,
+            password,
+            max_len,
+            comb,
+        } = &f.kind
         {
+            let max_len = match edit.max_len {
+                Some(n) => n,
+                None => *max_len,
+            };
+            match max_len {
+                Some(n) => dict.set("MaxLen", Object::Int(n as i64)),
+                None => {
+                    dict.remove("MaxLen");
+                }
+            }
             kind = FieldKind::Text {
-                multiline,
-                password: *password,
-                max_len: *max_len,
+                multiline: edit.multiline.unwrap_or(*multiline),
+                password: edit.password.unwrap_or(*password),
+                max_len,
+                comb: edit.comb.unwrap_or(*comb),
             };
         }
         if let Some(scripts) = &edit.scripts {
             self.set_scripts(f.id, &mut dict, scripts);
         }
+        if let Some(look) = &edit.look {
+            if !matches!(f.kind, FieldKind::Signature) {
+                dict.set("DA", text_object(&da_of(look)));
+            }
+            for w in &f.widgets {
+                let mut target = if w.id == f.id {
+                    dict.clone()
+                } else {
+                    self.dict(w.id)
+                };
+                let mut mk = match self.resolve(target.get("MK")) {
+                    Object::Dict(mk) => mk,
+                    _ => Dict::new(),
+                };
+                let (bc, bg) = colours_of(look);
+                mk.set("BC", bc);
+                mk.set("BG", bg);
+                target.set("MK", Object::Dict(mk));
+                target.set("BS", bs_of(look));
+                if w.id == f.id {
+                    dict = target;
+                } else {
+                    self.up.replace(w.id, Object::Dict(target));
+                }
+            }
+        }
+        if let (Some(caption), FieldKind::PushButton) = (&edit.caption, &f.kind) {
+            for w in &f.widgets {
+                let mut target = if w.id == f.id {
+                    dict.clone()
+                } else {
+                    self.dict(w.id)
+                };
+                let mut mk = match self.resolve(target.get("MK")) {
+                    Object::Dict(mk) => mk,
+                    _ => Dict::new(),
+                };
+                mk.set("CA", text_object(caption));
+                target.set("MK", Object::Dict(mk));
+                if w.id == f.id {
+                    dict = target;
+                } else {
+                    self.up.replace(w.id, Object::Dict(target));
+                }
+            }
+        }
         self.up.replace(f.id, Object::Dict(dict));
         let changed = Field { kind, ..f.clone() };
+        let all = edit.look.is_some();
         for w in &f.widgets {
-            self.redraw(&changed, w);
+            self.redraw(&changed, w, all);
         }
         Ok(())
     }
 
     /// Draws widget `w` of field `f` again: text, choices and buttons,
-    /// whose look depends on their size. Others keep theirs, which is
-    /// stretched to the new place.
-    fn redraw(&mut self, f: &Field, w: &Widget) {
-        if !matches!(
-            f.kind,
-            FieldKind::Text { .. } | FieldKind::Choice { .. } | FieldKind::PushButton
-        ) {
-            return;
-        }
+    /// whose look depends on their size, and with `all` check boxes,
+    /// radio buttons and signature fields too (their look changed).
+    /// Otherwise those keep theirs, which is stretched to the new place.
+    fn redraw(&mut self, f: &Field, w: &Widget, all: bool) {
         let mut widget = self.dict(w.id);
         let field = self.dict(f.id);
+        let form = self.form();
+        let look = self.doc.look([&widget, &field, &form]);
+        if matches!(f.kind, FieldKind::CheckBox | FieldKind::Radio) {
+            if !all {
+                return;
+            }
+            let round = matches!(f.kind, FieldKind::Radio);
+            let mark = if round { "l" } else { "4" };
+            let state = w.on.clone().unwrap_or_else(|| "Yes".into());
+            let on = self.up.add(toggle(w.rect, Some(mark), round, &look));
+            let off = self.up.add(toggle(w.rect, None, round, &look));
+            let mut states = Dict::new();
+            states.set(&state, Object::Ref(on));
+            states.set("Off", Object::Ref(off));
+            let mut ap = Dict::new();
+            ap.set("N", Object::Dict(states));
+            widget.set("AP", Object::Dict(ap));
+            self.up.replace(w.id, Object::Dict(widget));
+            return;
+        }
+        if matches!(f.kind, FieldKind::Signature) {
+            if !all || f.value.is_some() {
+                return;
+            }
+            let r = self.up.add(frame(w.rect, "", &look));
+            let mut ap = Dict::new();
+            ap.set("N", Object::Ref(r));
+            widget.set("AP", Object::Dict(ap));
+            self.up.replace(w.id, Object::Dict(widget));
+            return;
+        }
         let caption = match self.resolve(widget.get("MK")) {
             Object::Dict(mk) => match self.resolve(mk.get("CA")) {
                 Object::String { bytes, .. } => crate::text_string(&bytes),
@@ -706,18 +812,25 @@ impl Designer<'_> {
             }
             _ => f.value.clone().unwrap_or_default(),
         };
-        let form = self.form();
         let normal = match &f.kind {
-            FieldKind::Text { multiline, .. } => {
+            FieldKind::Text {
+                multiline,
+                comb,
+                max_len,
+                password,
+            } => {
+                let cells = max_len.filter(|_| *comb && !*multiline && !*password);
                 self.doc
-                    .text_appearance([&widget, &field, &form], w, &shown, *multiline)
+                    .text_appearance([&widget, &field, &form], w, &shown, *multiline, cells)
             }
             FieldKind::Choice { combo: true, .. } => {
                 self.doc
-                    .text_appearance([&widget, &field, &form], w, &shown, false)
+                    .text_appearance([&widget, &field, &form], w, &shown, false, None)
             }
-            FieldKind::Choice { options, .. } => list_box(w.rect, options, f.value.as_deref()),
-            _ => button(w.rect, &caption),
+            FieldKind::Choice { options, .. } => {
+                list_box(w.rect, options, f.value.as_deref(), &look)
+            }
+            _ => button(w.rect, &caption, &look),
         };
         let r = self.up.add(normal);
         let mut ap = match self.resolve(widget.get("AP")) {
@@ -739,8 +852,17 @@ impl Designer<'_> {
         w.set("Rect", reals(&rect));
         w.set("F", Object::Int(PRINT));
         w.set("P", Object::Ref(page));
+        let mut look = spec.look.clone();
+        if let NewField::PushButton { .. } = spec.kind
+            && look.fill.is_none()
+        {
+            look.fill = Some([FACE; 3]);
+        }
         let mut mk = Dict::new();
-        mk.set("BC", Object::Array(vec![Object::Real(f64::from(BORDER))]));
+        let (bc, bg) = colours_of(&look);
+        mk.set("BC", bc);
+        mk.set("BG", bg);
+        w.set("BS", bs_of(&look));
         let on = spec.value.is_some();
         let ap = match &spec.kind {
             NewField::CheckBox | NewField::Radio { .. } => {
@@ -749,8 +871,8 @@ impl Designer<'_> {
                     _ => ("Yes".to_string(), "4", false),
                 };
                 mk.set("CA", text_object(mark));
-                let yes = self.up.add(toggle(rect, Some(mark), round));
-                let off = self.up.add(toggle(rect, None, round));
+                let yes = self.up.add(toggle(rect, Some(mark), round, &look));
+                let off = self.up.add(toggle(rect, None, round, &look));
                 w.set("AS", Object::name(if on { &state } else { "Off" }));
                 let mut states = Dict::new();
                 states.set(&state, Object::Ref(yes));
@@ -766,16 +888,15 @@ impl Designer<'_> {
                 };
                 let stream = match kind {
                     NewField::PushButton { caption } => {
-                        mk.set("BG", Object::Array(vec![Object::Real(f64::from(FACE))]));
                         mk.set("CA", text_object(caption));
-                        button(rect, caption)
+                        button(rect, caption, &look)
                     }
                     NewField::Choice {
                         options,
                         combo: false,
                         ..
-                    } => list_box(rect, options, spec.value.as_deref()),
-                    NewField::Signature => frame(rect, ""),
+                    } => list_box(rect, options, spec.value.as_deref(), &look),
+                    NewField::Signature => frame(rect, "", &look),
                     _ => {
                         let widget = Widget {
                             id: Ref::new(0, 0),
@@ -785,19 +906,28 @@ impl Designer<'_> {
                         };
                         let mut here = Dict::new();
                         here.set("MK", Object::Dict(mk.clone()));
+                        here.set("BS", bs_of(&look));
+                        let mut fd = Dict::new();
+                        fd.set("DA", text_object(&da_of(&look)));
                         let form = self.form();
-                        let multiline = matches!(
-                            kind,
+                        let (multiline, cells) = match kind {
                             NewField::Text {
-                                multiline: true,
-                                ..
-                            }
-                        );
+                                multiline,
+                                comb,
+                                max_len,
+                                password,
+                            } => (
+                                *multiline,
+                                max_len.filter(|_| *comb && !*multiline && !*password),
+                            ),
+                            _ => (false, None),
+                        };
                         self.doc.text_appearance(
-                            [&here, &Dict::new(), &form],
+                            [&here, &fd, &form],
                             &widget,
                             &shown,
                             multiline,
+                            cells,
                         )
                     }
                 };
@@ -871,8 +1001,13 @@ fn flags(kind: &NewField) -> i64 {
         NewField::Text {
             multiline,
             password,
+            comb,
             ..
-        } => (if *multiline { MULTILINE } else { 0 }) | if *password { PASSWORD } else { 0 },
+        } => {
+            (if *multiline { MULTILINE } else { 0 })
+                | (if *password { PASSWORD } else { 0 })
+                | if *comb { COMB } else { 0 }
+        }
         NewField::Radio { .. } => RADIO | NO_TOGGLE_OFF,
         NewField::PushButton { .. } => PUSH_BUTTON,
         NewField::Choice {
@@ -944,21 +1079,53 @@ fn xobject(rect: [f32; 4], content: String) -> Object {
     })
 }
 
-/// The box's border, behind `inside`.
-fn frame(rect: [f32; 4], inside: &str) -> Object {
+/// The default appearance string (`/DA`) for `look`.
+fn da_of(look: &Look) -> String {
+    let [r, g, b] = look.text_colour;
+    format!("/Helv {} Tf {r:.3} {g:.3} {b:.3} rg", num(look.text_size))
+}
+
+/// `look`'s border and background colours for `/MK`: empty arrays for
+/// none.
+fn colours_of(look: &Look) -> (Object, Object) {
+    let array = |c: Option<[f32; 3]>| {
+        Object::Array(
+            c.into_iter()
+                .flatten()
+                .map(|v| Object::Real(f64::from(v)))
+                .collect(),
+        )
+    };
+    (array(look.border_colour), array(look.fill))
+}
+
+/// `look`'s border style for `/BS`.
+fn bs_of(look: &Look) -> Object {
+    let mut bs = Dict::new();
+    bs.set("W", Object::Real(f64::from(look.width)));
+    bs.set("S", Object::name(look.border.name()));
+    if look.border == Border::Dashed {
+        bs.set("D", Object::Array(vec![Object::Int(3)]));
+    }
+    Object::Dict(bs)
+}
+
+fn num(v: f32) -> String {
+    if v.fract() == 0.0 {
+        format!("{}", v as i64)
+    } else {
+        format!("{v:.2}")
+    }
+}
+
+/// The box's border and background, behind `inside`.
+fn frame(rect: [f32; 4], inside: &str, look: &Look) -> Object {
     let (w, h) = (rect[2] - rect[0], rect[3] - rect[1]);
-    xobject(
-        rect,
-        format!(
-            "q {BORDER} G 1 w 0.5 0.5 {:.2} {:.2} re S Q\n{inside}",
-            (w - 1.0).max(0.0),
-            (h - 1.0).max(0.0)
-        ),
-    )
+    xobject(rect, format!("{}{inside}", border_content(w, h, look)))
 }
 
 /// How wide `text` is in Helvetica at `size`.
-fn text_width(text: &str, size: f32) -> f32 {
+pub(crate) fn text_width(text: &str, size: f32) -> f32 {
     let (_, metrics) = stand_in("Helvetica");
     let units: f64 = text
         .chars()
@@ -968,28 +1135,48 @@ fn text_width(text: &str, size: f32) -> f32 {
 }
 
 /// A check box or radio button, `mark` drawn when it is on.
-fn toggle(rect: [f32; 4], mark: Option<&str>, round: bool) -> Object {
+fn toggle(rect: [f32; 4], mark: Option<&str>, round: bool, look: &Look) -> Object {
     let (w, h) = (rect[2] - rect[0], rect[3] - rect[1]);
     let mut content = String::new();
+    let [tr, tg, tb] = look.text_colour;
+    let ink = format!("{tr:.3} {tg:.3} {tb:.3}");
     if round {
         let (cx, cy) = (w / 2.0, h / 2.0);
-        let r = (w.min(h) / 2.0 - 0.5).max(0.5);
-        content.push_str(&format!("q {BORDER} G 1 w {} S Q\n", circle(cx, cy, r)));
+        let wd = if look.border_colour.is_some() {
+            look.width
+        } else {
+            0.0
+        };
+        let r = (w.min(h) / 2.0 - wd / 2.0).max(0.5);
+        if let Some(fill) = look.fill {
+            let [fr, fg, fb] = fill;
+            content.push_str(&format!(
+                "q {fr:.3} {fg:.3} {fb:.3} rg {} f Q\n",
+                circle(cx, cy, r)
+            ));
+        }
+        if let Some([br, bg, bb]) = look.border_colour.filter(|_| wd > 0.0) {
+            let dash = if look.border == Border::Dashed {
+                "[3] 0 d "
+            } else {
+                ""
+            };
+            content.push_str(&format!(
+                "q {br:.3} {bg:.3} {bb:.3} RG {wd:.2} w {dash}{} S Q\n",
+                circle(cx, cy, r)
+            ));
+        }
         if mark.is_some() {
-            content.push_str(&format!("q 0 g {} f Q\n", circle(cx, cy, r * 0.45)));
+            content.push_str(&format!("q {ink} rg {} f Q\n", circle(cx, cy, r * 0.45)));
         }
     } else {
-        content.push_str(&format!(
-            "q {BORDER} G 1 w 0.5 0.5 {:.2} {:.2} re S Q\n",
-            (w - 1.0).max(0.0),
-            (h - 1.0).max(0.0)
-        ));
+        content.push_str(&border_content(w, h, look));
         if mark.is_some() {
             // Drawn as a path rather than ZapfDingbats' check, which not
             // every system has a font for.
             let line = (w.min(h) * 0.12).max(1.0);
             content.push_str(&format!(
-                "q 0 G {line:.2} w 1 J 1 j {:.2} {:.2} m {:.2} {:.2} l {:.2} {:.2} l S Q\n",
+                "q {ink} RG {line:.2} w 1 J 1 j {:.2} {:.2} m {:.2} {:.2} l {:.2} {:.2} l S Q\n",
                 w * 0.22,
                 h * 0.52,
                 w * 0.42,
@@ -1031,22 +1218,32 @@ fn circle(cx: f32, cy: f32, r: f32) -> String {
     )
 }
 
-/// A push button: a grey face with `caption` in the middle.
-fn button(rect: [f32; 4], caption: &str) -> Object {
+/// A push button: its face (grey unless `look` says) with `caption` in
+/// the middle.
+fn button(rect: [f32; 4], caption: &str, look: &Look) -> Object {
     let (w, h) = (rect[2] - rect[0], rect[3] - rect[1]);
-    let mut size = (h * 0.6).clamp(4.0, 12.0);
+    let pad = inset(look);
+    let mut size = if look.text_size > 0.0 {
+        look.text_size
+    } else {
+        (h * 0.6).clamp(4.0, 12.0)
+    };
     let wide = text_width(caption, size);
-    if wide > w - 4.0 && wide > 0.0 {
-        size = (size * (w - 4.0) / wide).max(4.0);
+    if wide > w - 2.0 * pad && wide > 0.0 {
+        size = (size * (w - 2.0 * pad) / wide).max(4.0);
     }
     let x = (w - text_width(caption, size)) / 2.0;
     let y = (h - size * 0.7) / 2.0;
+    let [r, g, b] = look.text_colour;
+    let face = Look {
+        fill: look.fill.or(Some([FACE; 3])),
+        ..look.clone()
+    };
     xobject(
         rect,
         format!(
-            "q {FACE} g 0 0 {w:.2} {h:.2} re f Q\nq {BORDER} G 1 w 0.5 0.5 {:.2} {:.2} re S Q\nq BT /Helv {size:.2} Tf 0 g {x:.2} {y:.2} Td {} Tj ET Q\n",
-            (w - 1.0).max(0.0),
-            (h - 1.0).max(0.0),
+            "{}q BT /Helv {size:.2} Tf {r:.3} {g:.3} {b:.3} rg {x:.2} {y:.2} Td {} Tj ET Q\n",
+            border_content(w, h, &face),
             literal(caption)
         ),
     )
@@ -1054,31 +1251,43 @@ fn button(rect: [f32; 4], caption: &str) -> Object {
 
 /// A list box: its options a line each from the top, the chosen one
 /// marked.
-pub(crate) fn list_box(rect: [f32; 4], options: &[String], chosen: Option<&str>) -> Object {
+pub(crate) fn list_box(
+    rect: [f32; 4],
+    options: &[String],
+    chosen: Option<&str>,
+    look: &Look,
+) -> Object {
     let (w, h) = (rect[2] - rect[0], rect[3] - rect[1]);
-    let size = 10.0_f32.min(h - 2.0).max(4.0);
+    let pad = inset(look);
+    let size = if look.text_size > 0.0 {
+        look.text_size
+    } else {
+        10.0_f32.min(h - 2.0).max(4.0)
+    };
     let line = size * 1.15;
+    let [r, g, b] = look.text_colour;
+    let ink = format!("{r:.3} {g:.3} {b:.3} rg");
     let mut content = format!(
-        "q {BORDER} G 1 w 0.5 0.5 {:.2} {:.2} re S Q\n/Tx BMC q 1 1 {:.2} {:.2} re W n\n",
-        (w - 1.0).max(0.0),
-        (h - 1.0).max(0.0),
-        (w - 2.0).max(0.0),
-        (h - 2.0).max(0.0)
+        "{}/Tx BMC q {pad:.2} {pad:.2} {:.2} {:.2} re W n\n",
+        border_content(w, h, look),
+        (w - 2.0 * pad).max(0.0),
+        (h - 2.0 * pad).max(0.0)
     );
-    let mut top = h - 1.0;
+    let mut top = h - pad;
     for option in options {
         if top < line * 0.5 {
             break;
         }
         if chosen == Some(option.as_str()) {
             content.push_str(&format!(
-                "q 0.6 0.75 0.95 rg 1 {:.2} {:.2} {line:.2} re f Q\n",
+                "q 0.6 0.75 0.95 rg {pad:.2} {:.2} {:.2} {line:.2} re f Q\n",
                 top - line,
-                w - 2.0
+                w - 2.0 * pad
             ));
         }
         content.push_str(&format!(
-            "BT /Helv {size:.2} Tf 0 g 3 {:.2} Td {} Tj ET\n",
+            "BT /Helv {size:.2} Tf {ink} {:.2} {:.2} Td {} Tj ET\n",
+            pad + 2.0,
             top - size,
             literal(option)
         ));

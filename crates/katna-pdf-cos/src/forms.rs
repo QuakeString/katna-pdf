@@ -22,6 +22,8 @@ pub(crate) const RADIO: i64 = 1 << 15;
 pub(crate) const PUSH_BUTTON: i64 = 1 << 16;
 pub(crate) const COMBO: i64 = 1 << 17;
 pub(crate) const EDIT: i64 = 1 << 18;
+pub(crate) const DO_NOT_SCROLL: i64 = 1 << 23;
+pub(crate) const COMB: i64 = 1 << 24;
 
 /// One field of the form.
 #[derive(Debug, Clone, PartialEq)]
@@ -50,6 +52,9 @@ pub enum FieldKind {
         multiline: bool,
         password: bool,
         max_len: Option<usize>,
+        /// One letter to each of `max_len` cells, like a form's row of
+        /// boxes.
+        comb: bool,
     },
     CheckBox,
     Radio,
@@ -70,6 +75,162 @@ pub struct Widget {
     pub rect: [f32; 4],
     /// For a check box or radio button, the name of its "on" state.
     pub on: Option<String>,
+}
+
+/// How a field is drawn: its border, background and text.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Look {
+    pub border: Border,
+    /// The border's width in points.
+    pub width: f32,
+    /// The border's colour, or none for no border.
+    pub border_colour: Option<[f32; 3]>,
+    /// The background, or none for see-through.
+    pub fill: Option<[f32; 3]>,
+    pub text_colour: [f32; 3],
+    /// The text's size in points; 0 for one that fits the field.
+    pub text_size: f32,
+}
+
+/// The grey new fields' borders are drawn in.
+pub(crate) const BORDER_GREY: f32 = 0.45;
+
+impl Default for Look {
+    fn default() -> Self {
+        Look {
+            border: Border::Solid,
+            width: 1.0,
+            border_colour: Some([BORDER_GREY; 3]),
+            fill: None,
+            text_colour: [0.0; 3],
+            text_size: 0.0,
+        }
+    }
+}
+
+/// A border's style (`/BS /S`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Border {
+    Solid,
+    Dashed,
+    /// Raised, with a light top left and a dark bottom right inside.
+    Beveled,
+    /// Sunken, with a dark top left and a lighter bottom right inside.
+    Inset,
+    /// A line along the bottom only.
+    Underline,
+}
+
+impl Border {
+    pub const ALL: [Border; 5] = [
+        Border::Solid,
+        Border::Dashed,
+        Border::Beveled,
+        Border::Inset,
+        Border::Underline,
+    ];
+
+    /// Its name in the file (`/S`).
+    pub fn name(self) -> &'static str {
+        match self {
+            Border::Solid => "S",
+            Border::Dashed => "D",
+            Border::Beveled => "B",
+            Border::Inset => "I",
+            Border::Underline => "U",
+        }
+    }
+
+    pub fn from_name(name: &[u8]) -> Option<Border> {
+        Some(match name {
+            b"S" => Border::Solid,
+            b"D" => Border::Dashed,
+            b"B" => Border::Beveled,
+            b"I" => Border::Inset,
+            b"U" => Border::Underline,
+            _ => return None,
+        })
+    }
+}
+
+/// A colour array (1, 3 or 4 numbers) as red, green and blue.
+pub(crate) fn rgb_of(parts: &[f64]) -> Option<[f32; 3]> {
+    Some(match *parts {
+        [g] => [g as f32; 3],
+        [r, g, b] => [r as f32, g as f32, b as f32],
+        [c, m, y, k] => [
+            ((1.0 - c) * (1.0 - k)) as f32,
+            ((1.0 - m) * (1.0 - k)) as f32,
+            ((1.0 - y) * (1.0 - k)) as f32,
+        ],
+        _ => return None,
+    })
+}
+
+fn num3([r, g, b]: [f32; 3], op: &str) -> String {
+    format!("{r:.3} {g:.3} {b:.3} {op}")
+}
+
+/// The background and border `look` asks for, drawn into a box `w` by
+/// `h`.
+pub(crate) fn border_content(w: f32, h: f32, look: &Look) -> String {
+    let mut c = String::new();
+    if let Some(fill) = look.fill {
+        c.push_str(&format!(
+            "q {} 0 0 {w:.2} {h:.2} re f Q\n",
+            num3(fill, "rg")
+        ));
+    }
+    let wd = look.width;
+    let Some(colour) = look.border_colour.filter(|_| wd > 0.0) else {
+        return c;
+    };
+    let stroke = num3(colour, "RG");
+    let half = wd / 2.0;
+    match look.border {
+        Border::Underline => c.push_str(&format!(
+            "q {stroke} {wd:.2} w 0 {half:.2} m {w:.2} {half:.2} l S Q\n"
+        )),
+        style => {
+            let dash = if style == Border::Dashed {
+                "[3] 0 d "
+            } else {
+                ""
+            };
+            c.push_str(&format!(
+                "q {stroke} {wd:.2} w {dash}{half:.2} {half:.2} {:.2} {:.2} re S Q\n",
+                (w - wd).max(0.0),
+                (h - wd).max(0.0)
+            ));
+        }
+    }
+    let (top_left, bottom_right) = match look.border {
+        Border::Beveled => ("1 g", "0.5 g"),
+        Border::Inset => ("0.5 g", "0.75 g"),
+        _ => return c,
+    };
+    let (w1, h1, w2, h2) = (w - wd, h - wd, w - 2.0 * wd, h - 2.0 * wd);
+    let d = 2.0 * wd;
+    c.push_str(&format!(
+        "q {top_left} {wd:.2} {wd:.2} m {wd:.2} {h1:.2} l {w1:.2} {h1:.2} l {w2:.2} {h2:.2} l {d:.2} {h2:.2} l {d:.2} {d:.2} l h f Q\n"
+    ));
+    c.push_str(&format!(
+        "q {bottom_right} {w1:.2} {h1:.2} m {w1:.2} {wd:.2} l {wd:.2} {wd:.2} l {d:.2} {d:.2} l {w2:.2} {d:.2} l {w2:.2} {h2:.2} l h f Q\n"
+    ));
+    c
+}
+
+/// How far in from the edge a look's text and marks start.
+pub(crate) fn inset(look: &Look) -> f32 {
+    let wd = if look.border_colour.is_some() {
+        look.width
+    } else {
+        0.0
+    };
+    match look.border {
+        Border::Beveled | Border::Inset => 2.0 * wd + 1.0,
+        _ => wd + 1.0,
+    }
 }
 
 /// A value to put in a field.
@@ -140,6 +301,15 @@ impl Document {
                             ..
                         }
                     );
+                    let comb = match field.kind {
+                        FieldKind::Text {
+                            comb: true,
+                            max_len: Some(n),
+                            multiline: false,
+                            password: false,
+                        } => Some(n),
+                        _ => None,
+                    };
                     for widget in &field.widgets {
                         let mut target = if widget.id == field.id {
                             dict.clone()
@@ -153,12 +323,18 @@ impl Document {
                             FieldKind::Choice {
                                 options,
                                 combo: false,
-                            } => crate::design::list_box(widget.rect, options, Some(text)),
+                            } => crate::design::list_box(
+                                widget.rect,
+                                options,
+                                Some(text),
+                                &self.look([&target, &dict, &form]),
+                            ),
                             _ => self.text_appearance(
                                 [&target, &dict, &form],
                                 widget,
                                 &shown,
                                 multiline,
+                                comb,
                             ),
                         };
                         let ap = Dict(vec![(Name::new("N"), Object::Ref(update.add(ap)))]);
@@ -191,6 +367,112 @@ impl Document {
             update.replace(field.id, Object::Dict(dict));
         }
         Ok(update.finish())
+    }
+
+    /// Every field's value as the form started: its default (`/DV`), or
+    /// nothing. [`Document::fill`] with these resets the form.
+    pub fn reset_values(&self) -> Vec<(Ref, FieldValue)> {
+        self.form()
+            .into_iter()
+            .filter_map(|f| {
+                let default = self.inherited(f.id, "DV");
+                Some(match f.kind {
+                    FieldKind::PushButton | FieldKind::Signature => return None,
+                    FieldKind::CheckBox | FieldKind::Radio => (
+                        f.id,
+                        FieldValue::State(match default {
+                            Some(Object::Name(n)) if n.as_bytes() != b"Off" => {
+                                Some(String::from_utf8_lossy(n.as_bytes()).into_owned())
+                            }
+                            _ => None,
+                        }),
+                    ),
+                    _ => (
+                        f.id,
+                        FieldValue::Text(match default {
+                            Some(Object::String { bytes, .. }) => {
+                                crate::outline::text_value(&bytes)
+                            }
+                            _ => String::new(),
+                        }),
+                    ),
+                })
+            })
+            .collect()
+    }
+
+    /// `key` of field `id`, or of the nearest field above it that has it.
+    fn inherited(&self, id: Ref, key: &str) -> Option<Object> {
+        let mut at = id;
+        for _ in 0..MAX_DEPTH {
+            let Some(Object::Dict(dict)) = self.get(at) else {
+                return None;
+            };
+            if let Some(v) = dict.get(key) {
+                return Some(self.resolve(v));
+            }
+            at = dict.get("Parent").and_then(Object::as_ref)?;
+        }
+        None
+    }
+
+    /// How field `field` is drawn, from its first widget.
+    pub fn field_look(&self, field: &Field) -> Look {
+        let widget = field
+            .widgets
+            .first()
+            .and_then(|w| self.get(w.id))
+            .and_then(|o| o.as_dict().cloned())
+            .unwrap_or_default();
+        let dict = self
+            .get(field.id)
+            .and_then(|o| o.as_dict().cloned())
+            .unwrap_or_default();
+        let form = self.acro_form().unwrap_or_default();
+        self.look([&widget, &dict, &form])
+    }
+
+    /// The look a widget's `/MK`, `/BS` and `/DA` (its own, its field's
+    /// or the form's) ask for.
+    pub(crate) fn look(&self, [widget, field, form]: [&Dict; 3]) -> Look {
+        let mut look = Look::default();
+        if let Object::Dict(mk) = self.resolve_key(widget, "MK") {
+            look.border_colour = self.colour_parts(&mk, "BC").and_then(|p| rgb_of(&p));
+            look.fill = self.colour_parts(&mk, "BG").and_then(|p| rgb_of(&p));
+        } else {
+            look.border_colour = None;
+        }
+        if let Object::Dict(bs) = self.resolve_key(widget, "BS") {
+            if let Some(w) = self.resolve_key(&bs, "W").as_number() {
+                look.width = w as f32;
+            }
+            if let Some(style) = bs.name("S").and_then(Border::from_name) {
+                look.border = style;
+            }
+        }
+        if let Some(da) = self.default_appearance([widget, field, form]) {
+            let (_, size, colour) = parse_da(&da);
+            look.text_size = size;
+            let parts: Vec<f64> = colour
+                .split_whitespace()
+                .filter_map(|t| t.parse().ok())
+                .collect();
+            if let Some(rgb) = rgb_of(&parts) {
+                look.text_colour = rgb;
+            }
+        }
+        look
+    }
+
+    fn default_appearance(&self, dicts: [&Dict; 3]) -> Option<String> {
+        dicts
+            .map(|d| d.get("DA"))
+            .into_iter()
+            .flatten()
+            .find_map(|da| match self.resolve(da) {
+                Object::String { bytes, .. } => Some(String::from_utf8_lossy(&bytes).into_owned()),
+                _ => None,
+            })
     }
 
     /// `changes` with the fields worked out from others (totals and the
@@ -267,65 +549,75 @@ impl Document {
         widget: &Widget,
         text: &str,
         multiline: bool,
+        comb: Option<usize>,
     ) -> Object {
         let [x0, y0, x1, y1] = widget.rect;
         let (w, h) = ((x1 - x0).max(1.0), (y1 - y0).max(1.0));
-        let da = [widget_dict, field_dict, form]
-            .map(|d| d.get("DA"))
-            .into_iter()
-            .flatten()
-            .find_map(|da| match self.resolve(da) {
-                Object::String { bytes, .. } => Some(String::from_utf8_lossy(&bytes).into_owned()),
-                _ => None,
-            })
+        let da = self
+            .default_appearance([widget_dict, field_dict, form])
             .unwrap_or_else(|| "/Helv 0 Tf 0 g".into());
         let (font, size, colour) = parse_da(&da);
+        let look = self.look([widget_dict, field_dict, form]);
+        let pad = inset(&look);
         let size = if size > 0.0 {
             size
         } else if multiline {
             12.0_f32.min(h)
         } else {
-            (h * 0.7).clamp(4.0, 12.0)
+            ((h - 2.0 * pad + 2.0) * 0.7).clamp(4.0, 12.0)
         };
-        // The background and border the widget asks for (`/MK`).
-        let mut content = String::new();
-        if let Object::Dict(mk) = self.resolve_key(widget_dict, "MK") {
-            if let Some(fill) = self.colour(&mk, "BG", false) {
-                content.push_str(&format!("q {fill} 0 0 {w:.2} {h:.2} re f Q\n"));
+        // The background and border the widget asks for (`/MK`, `/BS`).
+        let mut content = border_content(w, h, &look);
+        if let Some(cells) = comb.filter(|n| *n > 0) {
+            // A letter to each cell, lines between the cells.
+            let cell = w / cells as f32;
+            if let Some(line) = look.border_colour.filter(|_| look.width > 0.0) {
+                let wd = look.width;
+                content.push_str(&format!("q {} {wd:.2} w\n", num3(line, "RG")));
+                for i in 1..cells {
+                    let x = cell * i as f32;
+                    content.push_str(&format!("{x:.2} {wd:.2} m {x:.2} {:.2} l\n", h - wd));
+                }
+                content.push_str("S Q\n");
             }
-            if let Some(stroke) = self.colour(&mk, "BC", true) {
+            content.push_str(&format!("/Tx BMC q BT /{font} {size:.2} Tf {colour}\n"));
+            let y = (h - size * 0.78) / 2.0;
+            for (i, ch) in text.chars().take(cells).enumerate() {
+                let glyph = ch.to_string();
+                let x = cell * i as f32 + (cell - crate::design::text_width(&glyph, size)) / 2.0;
                 content.push_str(&format!(
-                    "q {stroke} 1 w 0.5 0.5 {:.2} {:.2} re S Q\n",
-                    w - 1.0,
-                    h - 1.0
+                    "1 0 0 1 {x:.2} {y:.2} Tm {} Tj\n",
+                    literal(&glyph)
                 ));
             }
-        }
-        content.push_str(&format!(
-            "/Tx BMC q 1 1 {:.2} {:.2} re W n BT /{font} {size:.2} Tf {colour}\n",
-            w - 2.0,
-            h - 2.0
-        ));
-        let lines: Vec<&str> = if multiline {
-            text.lines().collect()
+            content.push_str("ET Q EMC\n");
         } else {
-            vec![text.lines().next().unwrap_or("")]
-        };
-        let leading = size * 1.15;
-        let first = if multiline {
-            h - 2.0 - size
-        } else {
-            (h - size * 0.78) / 2.0
-        };
-        content.push_str(&format!("2 {first:.2} Td {leading:.2} TL\n"));
-        for (i, line) in lines.iter().enumerate() {
-            if i > 0 {
-                content.push_str("T* ");
+            content.push_str(&format!(
+                "/Tx BMC q {pad:.2} {pad:.2} {:.2} {:.2} re W n BT /{font} {size:.2} Tf {colour}\n",
+                (w - 2.0 * pad).max(0.0),
+                (h - 2.0 * pad).max(0.0)
+            ));
+            let lines: Vec<&str> = if multiline {
+                text.lines().collect()
+            } else {
+                vec![text.lines().next().unwrap_or("")]
+            };
+            let leading = size * 1.15;
+            let first = if multiline {
+                h - pad - 1.0 - size
+            } else {
+                (h - size * 0.78) / 2.0
+            };
+            content.push_str(&format!("{:.2} {first:.2} Td {leading:.2} TL\n", pad + 1.0));
+            for (i, line) in lines.iter().enumerate() {
+                if i > 0 {
+                    content.push_str("T* ");
+                }
+                content.push_str(&literal(line));
+                content.push_str(" Tj\n");
             }
-            content.push_str(&literal(line));
-            content.push_str(" Tj\n");
+            content.push_str("ET Q EMC\n");
         }
-        content.push_str("ET Q EMC\n");
         // The form's default resources hold the font named in `/DA`;
         // Helvetica is added when they do not.
         let mut resources = match self.resolve_key(form, "DR") {
@@ -371,27 +663,17 @@ impl Document {
 }
 
 impl Document {
-    /// A colour array in `dict` (1, 3 or 4 numbers) as the operator
-    /// that sets it, for filling or `stroke`.
-    pub(crate) fn colour(&self, dict: &Dict, key: &str, stroke: bool) -> Option<String> {
+    /// The numbers of a colour array in `dict`; none for an empty one
+    /// (which means no colour) or none at all.
+    pub(crate) fn colour_parts(&self, dict: &Dict, key: &str) -> Option<Vec<f64>> {
         let Object::Array(parts) = self.resolve_key(dict, key) else {
             return None;
         };
-        let parts: Vec<String> = parts
+        let parts: Vec<f64> = parts
             .iter()
             .filter_map(|p| self.resolve(p).as_number())
-            .map(|n| format!("{n:.3}"))
             .collect();
-        let op = match (parts.len(), stroke) {
-            (1, false) => "g",
-            (1, true) => "G",
-            (3, false) => "rg",
-            (3, true) => "RG",
-            (4, false) => "k",
-            (4, true) => "K",
-            _ => return None,
-        };
-        Some(format!("{} {op}", parts.join(" ")))
+        (!parts.is_empty()).then_some(parts)
     }
 }
 
@@ -473,7 +755,9 @@ impl FieldReader<'_> {
             return;
         };
         let value = match (&kind, &here.value) {
-            (_, Some(Object::String { bytes, .. })) => Some(crate::outline::text_value(bytes)),
+            (_, Some(Object::String { bytes, .. })) => {
+                Some(crate::outline::text_value(bytes)).filter(|t| !t.is_empty())
+            }
             (_, Some(Object::Name(name))) if name.as_bytes() != b"Off" => {
                 Some(String::from_utf8_lossy(name.as_bytes()).into_owned())
             }
@@ -539,6 +823,7 @@ fn kind_of(field: &Inherited) -> Option<FieldKind> {
             multiline: flags & MULTILINE != 0,
             password: flags & PASSWORD != 0,
             max_len: field.max_len.and_then(|m| usize::try_from(m).ok()),
+            comb: flags & COMB != 0,
         },
         b"Btn" if flags & PUSH_BUTTON != 0 => FieldKind::PushButton,
         b"Btn" if flags & RADIO != 0 => FieldKind::Radio,

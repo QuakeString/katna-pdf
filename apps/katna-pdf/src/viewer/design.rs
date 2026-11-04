@@ -11,8 +11,8 @@ use std::path::{Path, PathBuf};
 
 use gpui::{AnyElement, Context, Entity, Subscription, div, prelude::*};
 use katna_pdf_cos::{
-    CalcOp, Calculation, Field, FieldEdit, FieldKind, FieldSpec, FormDesign, Format, NewField,
-    Object, Ref, Scripts,
+    Border, CalcOp, Calculation, Field, FieldEdit, FieldKind, FieldSpec, Flatten, FormDesign,
+    Format, Look, NewField, Object, Ref, Scripts,
 };
 use katna_ui::px;
 use katna_ui::scale::desktop_px;
@@ -23,7 +23,40 @@ use katna_ui::widgets::{self, Tip};
 use super::annots::Draft;
 use super::sign::check_box;
 use super::{Content, Viewer};
+use crate::annotate::COLOURS;
 use crate::text::t;
+
+/// The date pattern a field gets when it is first shown as a date.
+const DATE_PATTERN: &str = "dd/mm/yyyy";
+
+/// The sizes of text to pick from; 0 is one that fits the field.
+const TEXT_SIZES: [f32; 5] = [0.0, 8.0, 10.0, 12.0, 14.0];
+/// The border widths to pick from.
+const WIDTHS: [f32; 3] = [1.0, 2.0, 3.0];
+/// The backgrounds to pick from: white, cream, light blue, light grey.
+const FILLS: [[f32; 3]; 4] = [
+    [1.0, 1.0, 1.0],
+    [1.0, 0.98, 0.85],
+    [0.88, 0.94, 1.0],
+    [0.92, 0.92, 0.92],
+];
+/// The border and text colours to pick from: grey, then the comment
+/// colours.
+fn inks() -> [[f32; 3]; 7] {
+    let mut out = [[0.45; 3]; 7];
+    out[1..].copy_from_slice(&COLOURS);
+    out
+}
+
+fn border_label(border: Border) -> &'static str {
+    match border {
+        Border::Solid => "form-border-solid",
+        Border::Dashed => "form-border-dashed",
+        Border::Beveled => "form-border-beveled",
+        Border::Inset => "form-border-inset",
+        Border::Underline => "form-border-underline",
+    }
+}
 
 /// A drag shorter than this, in points, is a click.
 const CLICK: f32 = 3.0;
@@ -93,6 +126,9 @@ pub(super) struct Designing {
     fields: Vec<Field>,
     order: HashMap<usize, Vec<Ref>>,
     scripts: HashMap<Ref, Scripts>,
+    /// How each field is drawn, and buttons' captions.
+    looks: HashMap<Ref, Look>,
+    captions: HashMap<Ref, String>,
     /// The kind of field (an index into [`KINDS`]) to drag out next.
     adding: Option<usize>,
     drawing: Option<Draft>,
@@ -106,6 +142,11 @@ pub(super) struct Designing {
     options: Entity<TextInput>,
     /// The fields a total adds up, by name.
     total: Entity<TextInput>,
+    /// The most letters a text field takes, a button's caption, and how
+    /// a date is written.
+    max_len: Entity<TextInput>,
+    caption: Entity<TextInput>,
+    pattern: Entity<TextInput>,
     _inputs: Vec<Subscription>,
 }
 
@@ -145,6 +186,8 @@ pub(super) struct FormRead {
     fields: Vec<Field>,
     order: HashMap<usize, Vec<Ref>>,
     scripts: HashMap<Ref, Scripts>,
+    looks: HashMap<Ref, Look>,
+    captions: HashMap<Ref, String>,
 }
 
 /// The fields of `doc`, each page's widgets in their order, and the
@@ -175,10 +218,30 @@ pub(super) fn read_form(doc: &katna_pdf_cos::Document) -> FormRead {
         }
     }
     let scripts = doc.form_scripts(&fields);
+    let looks = fields.iter().map(|f| (f.id, doc.field_look(f))).collect();
+    let captions = fields
+        .iter()
+        .filter(|f| f.kind == FieldKind::PushButton)
+        .filter_map(|f| {
+            let w = f.widgets.first()?;
+            let Some(Object::Dict(widget)) = doc.get(w.id) else {
+                return None;
+            };
+            let Object::Dict(mk) = doc.resolve_key(&widget, "MK") else {
+                return None;
+            };
+            match doc.resolve_key(&mk, "CA") {
+                Object::String { bytes, .. } => Some((f.id, katna_pdf_cos::text_string(&bytes))),
+                _ => None,
+            }
+        })
+        .collect();
     FormRead {
         fields,
         order,
         scripts,
+        looks,
+        captions,
     }
 }
 
@@ -208,7 +271,10 @@ impl Viewer {
         let tip = input("form-tip", cx);
         let options = input("form-options", cx);
         let total = input("form-total-hint", cx);
-        let inputs = [&name, &tip, &options, &total]
+        let max_len = input("form-max-len-hint", cx);
+        let caption = input("form-caption", cx);
+        let pattern = input("form-date-pattern-hint", cx);
+        let inputs = [&name, &tip, &options, &total, &max_len, &caption, &pattern]
             .into_iter()
             .map(|i| {
                 cx.subscribe(i, |this, _, event, cx| {
@@ -224,12 +290,16 @@ impl Viewer {
                 fields: Vec::new(),
                 order: HashMap::new(),
                 scripts: HashMap::new(),
+                looks: HashMap::new(),
+                captions: HashMap::new(),
             },
         };
         self.designing = Some(Designing {
             fields: read.fields,
             order: read.order,
             scripts: read.scripts,
+            looks: read.looks,
+            captions: read.captions,
             adding: None,
             drawing: None,
             chosen: None,
@@ -239,6 +309,9 @@ impl Viewer {
             tip,
             options,
             total,
+            max_len,
+            caption,
+            pattern,
             _inputs: inputs,
         });
         // Fields nobody can fill (buttons, signatures) are only read when
@@ -273,6 +346,8 @@ impl Viewer {
                     designing.fields = read.fields;
                     designing.order = read.order;
                     designing.scripts = read.scripts;
+                    designing.looks = read.looks;
+                    designing.captions = read.captions;
                     cx.notify();
                 }
             })
@@ -290,6 +365,8 @@ impl Viewer {
         designing.fields = read.fields;
         designing.order = read.order;
         designing.scripts = read.scripts;
+        designing.looks = read.looks;
+        designing.captions = read.captions;
         if let Some(name) = designing.choose_next.take() {
             designing.chosen = designing
                 .fields
@@ -329,11 +406,31 @@ impl Viewer {
             Some(Calculation::Simple { fields, .. }) => fields.join(", "),
             None => String::new(),
         };
+        let max_len = match field.map(|f| &f.kind) {
+            Some(FieldKind::Text {
+                max_len: Some(n), ..
+            }) => n.to_string(),
+            _ => String::new(),
+        };
+        let caption = field
+            .and_then(|f| designing.captions.get(&f.id))
+            .cloned()
+            .unwrap_or_default();
+        let pattern = match field
+            .and_then(|f| designing.scripts.get(&f.id))
+            .and_then(|s| s.format.as_ref())
+        {
+            Some(Format::Date(pattern)) => pattern.clone(),
+            _ => DATE_PATTERN.to_owned(),
+        };
         for (input, value) in [
             (designing.name.clone(), name),
             (designing.tip.clone(), tip),
             (designing.options.clone(), options),
             (designing.total.clone(), total),
+            (designing.max_len.clone(), max_len),
+            (designing.caption.clone(), caption),
+            (designing.pattern.clone(), pattern),
         ] {
             input.update(cx, |i, cx| i.set_text(value, cx));
         }
@@ -538,6 +635,7 @@ impl Viewer {
                 multiline: kind == 1,
                 password: false,
                 max_len: None,
+                comb: false,
             },
             2 => NewField::CheckBox,
             3 => NewField::Radio { choice },
@@ -562,6 +660,7 @@ impl Viewer {
                 read_only: false,
                 value: None,
                 scripts: katna_pdf_cos::Scripts::default(),
+                look: Look::default(),
             }],
             ..FormDesign::default()
         };
@@ -644,14 +743,92 @@ impl Viewer {
                 },
                 fields: adds,
             });
-            if scripts.calculate != was {
+            let pattern = designing.pattern.read(cx).text().trim().to_owned();
+            if let Some(Format::Date(was)) = &scripts.format
+                && !pattern.is_empty()
+                && *was != pattern
+            {
+                scripts.format = Some(Format::Date(pattern));
+            }
+            if scripts.calculate != was
+                || edit.scripts.is_none()
+                    && scripts.format
+                        != designing
+                            .scripts
+                            .get(&field.id)
+                            .and_then(|s| s.format.clone())
+            {
                 edit.scripts = Some(scripts);
+            }
+            let typed = designing.max_len.read(cx).text().trim().to_owned();
+            let max_len = typed.parse::<usize>().ok().filter(|n| *n > 0);
+            if let FieldKind::Text { max_len: was, .. } = field.kind
+                && (typed.is_empty() || max_len.is_some())
+                && max_len != was
+            {
+                edit.max_len = Some(max_len);
+            }
+        }
+        if field.kind == FieldKind::PushButton {
+            let caption = designing.caption.read(cx).text().trim().to_owned();
+            if designing
+                .captions
+                .get(&field.id)
+                .cloned()
+                .unwrap_or_default()
+                != caption
+            {
+                edit.caption = Some(caption);
             }
         }
         if edit == FieldEdit::new(field.id) {
             return;
         }
         self.edit_field(&field, edit, cx);
+    }
+
+    /// Changes how the field chosen is drawn.
+    fn set_look(&mut self, change: impl FnOnce(&mut Look), cx: &mut Context<Self>) {
+        let Some(field) = self.chosen_field().cloned() else {
+            return;
+        };
+        let Some(designing) = self.designing.as_ref() else {
+            return;
+        };
+        let mut look = designing.looks.get(&field.id).cloned().unwrap_or_default();
+        let was = look.clone();
+        change(&mut look);
+        if look == was {
+            return;
+        }
+        let mut edit = FieldEdit::new(field.id);
+        edit.look = Some(look);
+        self.edit_field(&field, edit, cx);
+    }
+
+    /// Puts the form's fields back to what they started as.
+    pub(super) fn reset_form(&mut self, cx: &mut Context<Self>) {
+        self.properties = None;
+        let pages = (0..self.page_count()).collect();
+        self.change_document(
+            pages,
+            "form-failed",
+            |doc| doc.fill(&doc.reset_values()).map_err(|e| e.to_string()),
+            cx,
+        );
+    }
+
+    /// Draws the form's fields, or the comments, into the pages for good.
+    pub(super) fn flatten(&mut self, what: Flatten, cx: &mut Context<Self>) {
+        self.properties = None;
+        self.designing = None;
+        let pages = (0..self.page_count()).collect();
+        self.change_document(
+            pages,
+            "flatten-failed",
+            move |doc| doc.flatten(what).map_err(|e| e.to_string()),
+            cx,
+        );
     }
 
     /// Shows the field chosen as format `shown` (an index into
@@ -668,7 +845,13 @@ impl Viewer {
             .get(&field.id)
             .cloned()
             .unwrap_or_default();
-        let format = shown_format(shown);
+        let mut format = shown_format(shown);
+        if let Some(Format::Date(pattern)) = &mut format {
+            let typed = designing.pattern.read(cx).text().trim().to_owned();
+            if !typed.is_empty() {
+                *pattern = typed;
+            }
+        }
         if scripts.format == format {
             return;
         }
@@ -696,8 +879,18 @@ impl Viewer {
             0 => edit.required = Some(!field.required),
             1 => edit.read_only = Some(!field.read_only),
             _ => {
-                if let FieldKind::Text { multiline, .. } = field.kind {
-                    edit.multiline = Some(!multiline);
+                if let FieldKind::Text {
+                    multiline,
+                    password,
+                    comb,
+                    ..
+                } = field.kind
+                {
+                    match flag {
+                        2 => edit.multiline = Some(!multiline),
+                        3 => edit.password = Some(!password),
+                        _ => edit.comb = Some(!comb),
+                    }
                 }
             }
         }
@@ -1007,11 +1200,27 @@ impl Viewer {
                     .child(label("form-options"))
                     .child(input(designing.options.clone()));
             }
+            if field.kind == FieldKind::PushButton {
+                card = card
+                    .child(label("form-caption"))
+                    .child(input(designing.caption.clone()));
+            }
             card = card
                 .child(toggle(0, field.required, "form-required"))
                 .child(toggle(1, field.read_only, "form-read-only"));
-            if let FieldKind::Text { multiline, .. } = field.kind {
-                card = card.child(toggle(2, multiline, "form-multiline"));
+            if let FieldKind::Text {
+                multiline,
+                password,
+                comb,
+                ..
+            } = field.kind
+            {
+                card = card
+                    .child(toggle(2, multiline, "form-multiline"))
+                    .child(toggle(3, password, "form-password"))
+                    .child(toggle(4, comb, "form-comb"))
+                    .child(label("form-max-len"))
+                    .child(input(designing.max_len.clone()));
                 let scripts = designing.scripts.get(&field.id);
                 let now = scripts.and_then(|s| s.format.as_ref());
                 let mut shown = div().flex().flex_wrap().gap(px(space::S1));
@@ -1021,11 +1230,130 @@ impl Viewer {
                             .on_click(cx.listener(move |this, _, _, cx| this.set_shown(i, cx))),
                     );
                 }
+                card = card.child(label("form-shown")).child(shown);
+                if matches!(now, Some(Format::Date(_))) {
+                    card = card
+                        .child(label("form-date-pattern"))
+                        .child(input(designing.pattern.clone()));
+                }
                 card = card
-                    .child(label("form-shown"))
-                    .child(shown)
                     .child(label("form-total"))
                     .child(input(designing.total.clone()));
+            }
+            // How it is drawn.
+            let look = designing.looks.get(&field.id).cloned().unwrap_or_default();
+            let dot = |id: (&'static str, usize), colour: [f32; 3], on: bool| {
+                let [r, g, b] = colour.map(|c| (c * 255.0).round() as u32);
+                div()
+                    .id(id)
+                    .size(px(22.0))
+                    .rounded(px(radius::FULL))
+                    .border_2()
+                    .border_color(if on {
+                        gpui::rgba(th.katna.accent).into()
+                    } else {
+                        th.line
+                    })
+                    .bg(gpui::rgb(r << 16 | g << 8 | b))
+                    .cursor_pointer()
+            };
+            let mut borders = div().flex().flex_wrap().gap(px(space::S1));
+            for (i, border) in Border::ALL.into_iter().enumerate() {
+                let on = look.border == border && look.border_colour.is_some();
+                borders = borders.child(
+                    chip(("form-border", i), on, t(border_label(border), &[])).on_click(
+                        cx.listener(move |this, _, _, cx| {
+                            this.set_look(
+                                |l| {
+                                    l.border = border;
+                                    if l.border_colour.is_none() {
+                                        l.border_colour = Some([0.45; 3]);
+                                    }
+                                },
+                                cx,
+                            )
+                        }),
+                    ),
+                );
+            }
+            borders = borders.child(
+                chip(
+                    ("form-border", Border::ALL.len()),
+                    look.border_colour.is_none(),
+                    t("form-none", &[]),
+                )
+                .on_click(
+                    cx.listener(|this, _, _, cx| this.set_look(|l| l.border_colour = None, cx)),
+                ),
+            );
+            let mut widths = div().flex().flex_wrap().items_center().gap(px(space::S1));
+            for (i, width) in WIDTHS.into_iter().enumerate() {
+                widths = widths.child(
+                    chip(("form-width", i), look.width == width, format!("{width}")).on_click(
+                        cx.listener(move |this, _, _, cx| this.set_look(|l| l.width = width, cx)),
+                    ),
+                );
+            }
+            for (i, colour) in inks().into_iter().enumerate() {
+                widths = widths.child(
+                    dot(
+                        ("form-border-colour", i),
+                        colour,
+                        look.border_colour == Some(colour),
+                    )
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.set_look(|l| l.border_colour = Some(colour), cx)
+                    })),
+                );
+            }
+            let mut fills = div().flex().flex_wrap().items_center().gap(px(space::S1));
+            fills = fills.child(
+                chip(("form-fill", 0), look.fill.is_none(), t("form-none", &[]))
+                    .on_click(cx.listener(|this, _, _, cx| this.set_look(|l| l.fill = None, cx))),
+            );
+            for (i, colour) in FILLS.into_iter().enumerate() {
+                fills = fills.child(
+                    dot(("form-fill-colour", i), colour, look.fill == Some(colour)).on_click(
+                        cx.listener(move |this, _, _, cx| {
+                            this.set_look(|l| l.fill = Some(colour), cx)
+                        }),
+                    ),
+                );
+            }
+            let mut texts = div().flex().flex_wrap().items_center().gap(px(space::S1));
+            if !matches!(field.kind, FieldKind::Signature) {
+                for (i, size) in TEXT_SIZES.into_iter().enumerate() {
+                    let name = if size == 0.0 {
+                        t("form-text-auto", &[])
+                    } else {
+                        format!("{size}")
+                    };
+                    texts = texts.child(
+                        chip(("form-text-size", i), look.text_size == size, name).on_click(
+                            cx.listener(move |this, _, _, cx| {
+                                this.set_look(|l| l.text_size = size, cx)
+                            }),
+                        ),
+                    );
+                }
+                for (i, colour) in inks().into_iter().enumerate() {
+                    texts = texts.child(
+                        dot(("form-text-colour", i), colour, look.text_colour == colour).on_click(
+                            cx.listener(move |this, _, _, cx| {
+                                this.set_look(|l| l.text_colour = colour, cx)
+                            }),
+                        ),
+                    );
+                }
+            }
+            card = card
+                .child(label("form-border"))
+                .child(borders)
+                .child(widths)
+                .child(label("form-fill"))
+                .child(fills);
+            if !matches!(field.kind, FieldKind::Signature) {
+                card = card.child(label("form-text")).child(texts);
             }
             card = card.child(
                 div()

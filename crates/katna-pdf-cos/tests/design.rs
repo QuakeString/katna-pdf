@@ -27,6 +27,7 @@ fn spec(page: usize, y: f32, name: &str, kind: NewField) -> FieldSpec {
         read_only: false,
         value: None,
         scripts: katna_pdf_cos::Scripts::default(),
+        look: katna_pdf_cos::Look::default(),
     }
 }
 
@@ -39,6 +40,7 @@ fn every_kind() -> Vec<FieldSpec> {
             multiline: false,
             password: false,
             max_len: Some(40),
+            comb: false,
         },
     );
     name.tooltip = "Your full name".into();
@@ -275,6 +277,7 @@ fn fields_are_copied_to_other_pages_and_ordered() {
         multiline: false,
         password: false,
         max_len: None,
+        comb: false,
     };
     let doc = designed(
         &doc,
@@ -402,6 +405,7 @@ fn totals_add_up_and_formats_show() {
         multiline: false,
         password: false,
         max_len: None,
+        comb: false,
     };
     let amount = Format::Number {
         decimals: 2,
@@ -516,4 +520,181 @@ fn form_data_goes_through_xfdf_and_fdf() {
             ("Applicant.City".into(), "पु".into())
         ]
     );
+}
+
+#[test]
+fn looks_comb_and_limits_are_written_and_drawn() {
+    use katna_pdf_cos::{Border, Look};
+    let mut boxed = spec(
+        0,
+        700.0,
+        "PAN",
+        NewField::Text {
+            multiline: false,
+            password: false,
+            max_len: Some(10),
+            comb: true,
+        },
+    );
+    boxed.look = Look {
+        border: Border::Dashed,
+        width: 2.0,
+        border_colour: Some([0.0, 0.0, 1.0]),
+        fill: Some([1.0, 1.0, 0.8]),
+        text_colour: [0.5, 0.0, 0.0],
+        text_size: 11.0,
+    };
+    boxed.value = Some("ABCDE1234F".into());
+    let mut agree = spec(0, 660.0, "Agree", NewField::CheckBox);
+    agree.rect = [100.0, 660.0, 114.0, 674.0];
+    agree.look.border = Border::Beveled;
+    let doc = designed(
+        &blank(1),
+        &FormDesign {
+            add: vec![
+                boxed,
+                agree,
+                spec(
+                    0,
+                    620.0,
+                    "Secret",
+                    NewField::Text {
+                        multiline: false,
+                        password: false,
+                        max_len: None,
+                        comb: false,
+                    },
+                ),
+            ],
+            ..FormDesign::default()
+        },
+    );
+    let form = doc.form();
+    let pan = &form[0];
+    assert_eq!(
+        pan.kind,
+        FieldKind::Text {
+            multiline: false,
+            password: false,
+            max_len: Some(10),
+            comb: true
+        }
+    );
+    let look = doc.field_look(pan);
+    assert_eq!(look.border, Border::Dashed);
+    assert_eq!(look.width, 2.0);
+    assert_eq!(look.border_colour, Some([0.0, 0.0, 1.0]));
+    assert_eq!(look.fill, Some([1.0, 1.0, 0.8]));
+    assert_eq!(look.text_colour, [0.5, 0.0, 0.0]);
+    assert_eq!(look.text_size, 11.0);
+    let drawn = appearance(&doc, pan.widgets[0].id);
+    // Dashed, blue, with the cells' lines and a letter each.
+    assert!(drawn.contains("[3] 0 d"), "{drawn}");
+    assert!(drawn.contains("0.000 0.000 1.000 RG"), "{drawn}");
+    assert_eq!(drawn.matches(" Tj").count(), 10, "{drawn}");
+    assert!(drawn.contains("(A) Tj"), "{drawn}");
+    assert_eq!(doc.field_look(&form[1]).border, Border::Beveled);
+    let Some(Object::Dict(w)) = doc.get(form[1].widgets[0].id) else {
+        panic!()
+    };
+    let Object::Dict(ap) = doc.resolve(w.get("AP").unwrap()) else {
+        panic!()
+    };
+    let Object::Dict(states) = doc.resolve(ap.get("N").unwrap()) else {
+        panic!()
+    };
+    let Object::Stream(off) = doc.resolve(states.get("Off").unwrap()) else {
+        panic!()
+    };
+    let off =
+        String::from_utf8_lossy(&katna_pdf_cos::decode(&off.dict, &off.data).unwrap()).into_owned();
+    assert!(off.contains("1 g"), "{off}");
+    // A look given later lands on the widget and is drawn; a text field
+    // becomes a password with a limit, and a comb gives up its cells.
+    let secret = &form[2];
+    let mut edit = FieldEdit::new(secret.id);
+    edit.password = Some(true);
+    edit.max_len = Some(Some(6));
+    edit.look = Some(Look {
+        border: Border::Underline,
+        border_colour: Some([0.0; 3]),
+        ..Look::default()
+    });
+    let mut plain = FieldEdit::new(pan.id);
+    plain.comb = Some(false);
+    plain.max_len = Some(None);
+    let doc = designed(
+        &doc,
+        &FormDesign {
+            edit: vec![edit, plain],
+            ..FormDesign::default()
+        },
+    );
+    let form = doc.form();
+    assert_eq!(
+        form[2].kind,
+        FieldKind::Text {
+            multiline: false,
+            password: true,
+            max_len: Some(6),
+            comb: false
+        }
+    );
+    assert_eq!(doc.field_look(&form[2]).border, Border::Underline);
+    let drawn = appearance(&doc, form[2].widgets[0].id);
+    assert!(drawn.contains(" m ") && drawn.contains(" l S Q"), "{drawn}");
+    assert!(!drawn.contains(" re S"), "{drawn}");
+    assert_eq!(
+        form[0].kind,
+        FieldKind::Text {
+            multiline: false,
+            password: false,
+            max_len: None,
+            comb: false
+        }
+    );
+    let drawn = appearance(&doc, form[0].widgets[0].id);
+    assert!(drawn.contains("(ABCDE1234F) Tj"), "{drawn}");
+}
+
+#[test]
+fn a_form_is_reset_to_its_defaults() {
+    let mut name = spec(
+        0,
+        700.0,
+        "Name",
+        NewField::Text {
+            multiline: false,
+            password: false,
+            max_len: None,
+            comb: false,
+        },
+    );
+    name.value = Some("Mozammel".into());
+    let mut agree = spec(0, 660.0, "Agree", NewField::CheckBox);
+    agree.rect = [100.0, 660.0, 114.0, 674.0];
+    let doc = designed(
+        &blank(1),
+        &FormDesign {
+            add: vec![name, agree],
+            ..FormDesign::default()
+        },
+    );
+    let form = doc.form();
+    let filled = Document::load(
+        doc.fill(&[
+            (form[0].id, FieldValue::Text("Someone".into())),
+            (form[1].id, FieldValue::State(Some("Yes".into()))),
+        ])
+        .unwrap(),
+    )
+    .unwrap();
+    let form = filled.form();
+    assert_eq!(form[0].value.as_deref(), Some("Someone"));
+    assert_eq!(form[1].value.as_deref(), Some("Yes"));
+    let reset = Document::load(filled.fill(&filled.reset_values()).unwrap()).unwrap();
+    let form = reset.form();
+    // New fields have no default, so the text goes; the box is off.
+    assert_eq!(form[0].value, None);
+    assert_eq!(form[1].value, None);
 }

@@ -169,6 +169,7 @@ impl Document {
                     multiline: false,
                     password: false,
                     max_len: Some(row.len()),
+                    comb: true,
                 };
                 found.push((rect, field, None));
             } else {
@@ -322,6 +323,7 @@ impl Document {
                     read_only: false,
                     value: None,
                     scripts: Scripts::default(),
+                    look: crate::forms::Look::default(),
                 }
             })
             .collect()
@@ -441,6 +443,7 @@ fn text_field(rect: Rect) -> NewField {
         multiline: rect[3] - rect[1] > 36.0,
         password: false,
         max_len: None,
+        comb: false,
     }
 }
 
