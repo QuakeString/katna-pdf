@@ -3102,8 +3102,12 @@ impl Viewer {
         div().w_full().child(row).into_any_element()
     }
 
-    fn toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    /// The bar of tools, `width` points wide: when that is too little for
+    /// every button, the ones with keys of their own (fit to width and
+    /// page, facing pages, print) are left out rather than cut off.
+    fn toolbar(&self, width: f32, cx: &mut Context<Self>) -> impl IntoElement {
         let th = self.theme;
+        let crowded = width < 1080.0;
         let mut bar = div()
             .h(px(48.0))
             .flex_shrink_0()
@@ -3235,6 +3239,55 @@ impl Viewer {
                 th,
                 cx.listener(|_, _, _, cx| cx.emit(ViewerEvent::ChooseFiles)),
             ))
+            // Save, undo and redo keep their places whether or not there
+            // is anything to do, so the bar does not shift about: dim
+            // when there is not.
+            .when(matches!(self.content, Content::Ready(_)), |bar| {
+                let step = |id: &'static str,
+                            icon: &'static str,
+                            tip: &'static str,
+                            idle: &'static str,
+                            on: bool| {
+                    let tint = if on { th.katna.text } else { th.katna.text_dim };
+                    widgets::icon_button_colored(id, icon, 18.0, tint, &th.katna)
+                        .tip(t(if on { tip } else { idle }, &[]), &th.katna)
+                };
+                let dirty = self.dirty();
+                let tint = if dirty {
+                    th.katna.accent >> 8
+                } else {
+                    th.katna.text_dim
+                };
+                bar.child(
+                    widgets::icon_button_colored("save", "save", 18.0, tint, &th.katna)
+                        .tip(
+                            t(if dirty { "save-tip" } else { "save-clean-tip" }, &[]),
+                            &th.katna,
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| this.save(cx))),
+                )
+                .child(
+                    step(
+                        "undo",
+                        "undo",
+                        "undo-tip",
+                        "undo-none-tip",
+                        !self.undo.is_empty(),
+                    )
+                    .on_click(cx.listener(|this, _, _, cx| this.undo(cx))),
+                )
+                .child(
+                    step(
+                        "redo",
+                        "redo",
+                        "redo-tip",
+                        "redo-none-tip",
+                        !self.redo.is_empty(),
+                    )
+                    .on_click(cx.listener(|this, _, _, cx| this.redo(cx))),
+                )
+                .child(separator(th))
+            })
             .child(
                 // A few letters at least when the bar is crowded.
                 div().flex_1().min_w(px(72.0)).flex().child(
@@ -3258,29 +3311,7 @@ impl Viewer {
                         })
                         .child(title),
                 ),
-            )
-            .when(!self.undo.is_empty() || !self.redo.is_empty(), |bar| {
-                let step = |id: &'static str, icon: &'static str, tip: &'static str, on: bool| {
-                    let tint = if on { th.katna.text } else { th.katna.text_dim };
-                    widgets::icon_button_colored(id, icon, 18.0, tint, &th.katna)
-                        .tip(t(tip, &[]), &th.katna)
-                };
-                bar.child(
-                    step("undo", "undo", "undo-tip", !self.undo.is_empty())
-                        .on_click(cx.listener(|this, _, _, cx| this.undo(cx))),
-                )
-                .child(
-                    step("redo", "redo", "redo-tip", !self.redo.is_empty())
-                        .on_click(cx.listener(|this, _, _, cx| this.redo(cx))),
-                )
-            })
-            .when(self.dirty(), |bar| {
-                bar.child(
-                    widgets::filled_button("save", t("save", &[]), &th.katna)
-                        .tip(t("save-tip", &[]), &th.katna)
-                        .on_click(cx.listener(|this, _, _, cx| this.save(cx))),
-                )
-            });
+            );
         if self.page_count() > 0 {
             let current = self.current_page();
             let page = (current + 1).to_string();
@@ -3344,42 +3375,44 @@ impl Viewer {
                     th,
                     cx.listener(|this, _, _, cx| this.step_zoom(true, cx)),
                 ))
-                .child(icon_button(
-                    "fit-width",
-                    "fit-width",
-                    t("zoom-fit-width", &[]),
-                    th,
-                    cx.listener(|this, _, _, cx| this.set_zoom(Zoom::FitWidth, cx)),
-                ))
-                .child(icon_button(
-                    "fit-page",
-                    "fit-page",
-                    t("zoom-fit-page", &[]),
-                    th,
-                    cx.listener(|this, _, _, cx| this.set_zoom(Zoom::FitPage, cx)),
-                ))
-                .child(icon_button(
-                    "spread",
-                    "spread",
-                    t(
-                        match self.spread {
-                            Spread::Single => "spread-single",
-                            Spread::Facing => "spread-facing",
-                            Spread::Book => "spread-book",
-                        },
-                        &[],
-                    ),
-                    th,
-                    cx.listener(|this, _, _, cx| this.next_spread(cx)),
-                ))
-                .child(separator(th))
-                .child(icon_button(
-                    "print",
-                    "print",
-                    t("print", &[]),
-                    th,
-                    cx.listener(|this, _, _, cx| this.print(cx)),
-                ))
+                .when(!crowded, |bar| {
+                    bar.child(icon_button(
+                        "fit-width",
+                        "fit-width",
+                        t("zoom-fit-width", &[]),
+                        th,
+                        cx.listener(|this, _, _, cx| this.set_zoom(Zoom::FitWidth, cx)),
+                    ))
+                    .child(icon_button(
+                        "fit-page",
+                        "fit-page",
+                        t("zoom-fit-page", &[]),
+                        th,
+                        cx.listener(|this, _, _, cx| this.set_zoom(Zoom::FitPage, cx)),
+                    ))
+                    .child(icon_button(
+                        "spread",
+                        "spread",
+                        t(
+                            match self.spread {
+                                Spread::Single => "spread-single",
+                                Spread::Facing => "spread-facing",
+                                Spread::Book => "spread-book",
+                            },
+                            &[],
+                        ),
+                        th,
+                        cx.listener(|this, _, _, cx| this.next_spread(cx)),
+                    ))
+                    .child(separator(th))
+                    .child(icon_button(
+                        "print",
+                        "print",
+                        t("print", &[]),
+                        th,
+                        cx.listener(|this, _, _, cx| this.print(cx)),
+                    ))
+                })
                 .child(
                     div()
                         .relative()
@@ -3952,7 +3985,7 @@ impl Render for Viewer {
                     .min_h_0()
                     .flex()
                     .flex_col()
-                    .child(self.toolbar(cx))
+                    .child(self.toolbar(card_width / katna_ui::scale::scale(), cx))
                     .children(tools)
                     .children(object_row)
                     .children(measure_bar)
