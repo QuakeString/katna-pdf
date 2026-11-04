@@ -39,6 +39,8 @@ gpui-platform = { package = "gpui-pre-platform", version = "=0.3.6", features = 
 # add PDFium or MuPDF behind the same trait).
 hayro = "0.8.0"
 image = { version = "0.25", default-features = false }
+# Installed fonts, for text put in a file in a new face (app `viewer/fonts.rs`).
+fontdb = "0.23"
 # Requests from later launches to the running app (already in GPUI's tree).
 async-channel = "2.5"
 futures-lite = "2.6"

@@ -39,6 +39,7 @@ mod compare;
 mod crop;
 mod datepick;
 mod design;
+mod fonts;
 mod insert;
 mod linking;
 mod marks;
@@ -517,6 +518,8 @@ pub struct Viewer {
     /// Whether the page colours menu is open, and when a press outside
     /// last closed it (a press on its button closes it, not again open).
     colors_menu: bool,
+    /// Whether the list of fonts is open under the text inspector.
+    font_menu: Option<textedit::FontMenu>,
     colors_menu_closed: Option<std::time::Instant>,
     _appearance: Subscription,
 }
@@ -640,6 +643,7 @@ impl Viewer {
             colors: None,
             last_colors: PageColors::Night,
             colors_menu: false,
+            font_menu: None,
             colors_menu_closed: None,
             _appearance: appearance,
         };

@@ -18,6 +18,7 @@ mod mac_roman;
 mod metrics;
 mod standard;
 mod symbol;
+pub(crate) mod truetype;
 mod win_ansi;
 mod zapf_dings;
 
@@ -143,6 +144,11 @@ impl Font {
                     }
                 }
             }
+        }
+        // A font this put in lists every glyph it holds in its ToUnicode,
+        // whatever the page uses so far.
+        if cid_font.get("KatnaGlyphs").is_some() {
+            self.subset = false;
         }
         if let Object::Dict(descriptor) = doc.resolve_key(&cid_font, "FontDescriptor") {
             self.missing_from(doc, &descriptor);

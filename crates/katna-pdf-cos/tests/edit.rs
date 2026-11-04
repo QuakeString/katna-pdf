@@ -374,3 +374,65 @@ fn lines_lined_up_on_the_right_stay_so() {
         assert!((run.rect[2] - 400.0).abs() < 0.05, "{runs:?}");
     }
 }
+
+#[test]
+fn a_paragraph_changes_font() {
+    use katna_pdf_cos::NewFont;
+    let doc = page(PARAGRAPH, "/F1 5 0 R", &[HELVETICA]);
+    let text = doc.text_blocks(0)[0].text.clone();
+    // To a standard font: bold, the lines laid out again (wider), the
+    // text the same, what follows untouched.
+    let bold = NewFont::Standard("Helvetica-Bold".into());
+    let out = Document::load(doc.refont_block(0, &[0, 1, 2], &text, &bold).unwrap()).unwrap();
+    let blocks = out.text_blocks(0);
+    assert_eq!(blocks[0].font, "Helvetica-Bold", "{}", content(&out));
+    assert_eq!(blocks[0].text, text, "{}", content(&out));
+    assert_eq!(blocks[1].font, "Helvetica");
+    let got = lines(&out);
+    assert_eq!(got.last().unwrap(), &("Apart".into(), 600.0));
+    assert!(
+        content(&out).contains("/KatnaF1 12 Tf"),
+        "{}",
+        content(&out)
+    );
+    // Bold is wider, so the words wrap again within the old width: no
+    // line runs past where the widest did.
+    let right = doc.text_blocks(0)[0].rect[2];
+    let runs = out.text_runs(0);
+    assert_ne!(runs[1].text, "paragraph as one block of text", "{runs:?}");
+    for run in &runs[..runs.len() - 1] {
+        assert!(run.rect[2] <= right + 0.5, "{right} {runs:?}");
+    }
+
+    // To an installed TrueType font, embedded: its glyphs by number,
+    // read back as the same text.
+    let Ok(data) = std::fs::read("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf") else {
+        eprintln!("DejaVu Sans not installed; skipped");
+        return;
+    };
+    let dejavu = NewFont::TrueType { data, face: 0 };
+    let out = Document::load(doc.refont_block(0, &[0, 1, 2], &text, &dejavu).unwrap()).unwrap();
+    let blocks = out.text_blocks(0);
+    assert_eq!(blocks[0].font, "DejaVuSans", "{}", content(&out));
+    assert_eq!(blocks[0].text, text, "{}", content(&out));
+    assert_eq!(blocks[1].font, "Helvetica");
+    // Smaller than the whole font file, which is near 750 KB.
+    assert!(out.bytes().len() < 150_000, "{}", out.bytes().len());
+    // More typing in it, with a letter the paragraph did not have yet,
+    // stays in it.
+    let more = format!("{text} Quiz!");
+    let again = Document::load(out.edit_block(0, &[0, 1, 2], &more).unwrap()).unwrap();
+    let blocks = again.text_blocks(0);
+    assert_eq!(blocks[0].text, more, "{}", content(&again));
+    assert_eq!(blocks[0].font, "DejaVuSans");
+    assert!(!content(&again).contains("/KatnaF"), "{}", content(&again));
+    // A font with no TrueType outlines is refused.
+    let bad = NewFont::TrueType {
+        data: b"OTTO not a font".to_vec(),
+        face: 0,
+    };
+    assert!(matches!(
+        doc.refont_block(0, &[0, 1, 2], &text, &bad),
+        Err(katna_pdf_cos::EditError::NotTrueType)
+    ));
+}
