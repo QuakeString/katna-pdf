@@ -18,7 +18,8 @@ use katna_ui::px;
 use katna_ui::scale::desktop_px;
 use katna_ui::text_area::TextArea;
 use katna_ui::text_input::InputEvent;
-use katna_ui::tokens::radius;
+use katna_ui::tokens::{radius, space, text};
+use katna_ui::widgets::{self, Tip};
 
 use super::{Content, Viewer};
 use crate::text::t;
@@ -30,14 +31,36 @@ pub(super) struct Runs {
     pages: HashMap<usize, Arc<Vec<TextBlock>>>,
     pub(super) objects: HashMap<usize, Arc<Vec<PageObject>>>,
     reading: HashSet<usize>,
-    /// A paragraph clicked while the one before it was being written
-    /// into the file: its page and a point in it, in the page's space,
-    /// to open once the page's paragraphs are read again.
-    next: Option<(usize, [f32; 2])>,
+    /// A paragraph clicked or dragged while the one before it was being
+    /// written into the file: its page and a point in it, in the page's
+    /// space, to open or move once the page's paragraphs are read again.
+    next: Option<(usize, [f32; 2], Next)>,
     /// Bumped when the file changes, so runs read from the old one are
     /// dropped.
     generation: u64,
 }
+
+/// What to do with a paragraph once its page is read again.
+#[derive(Clone, Copy)]
+enum Next {
+    Edit,
+    /// Move it by so much in the page's own space.
+    Move([f32; 2]),
+    /// Show it at a size, in a colour, each where given.
+    Style(Option<f32>, Option<[f32; 3]>),
+}
+
+/// A paragraph being dragged: from a place to a place on the page shown,
+/// in points.
+pub(super) struct TextMoving {
+    page: usize,
+    block: usize,
+    from: [f32; 2],
+    to: [f32; 2],
+}
+
+/// A drag shorter than this, in points shown, is a click.
+const CLICK: f32 = 3.0;
 
 /// The paragraph being typed in, or new text.
 pub(super) struct Typing {
@@ -139,11 +162,28 @@ pub(super) enum Target {
     New([f32; 2]),
 }
 
+impl TextMoving {
+    fn dragged(&self) -> bool {
+        (self.to[0] - self.from[0]).hypot(self.to[1] - self.from[1]) >= CLICK
+    }
+}
+
+impl Typing {
+    /// The paragraph being typed in, if not new text.
+    fn block(&self) -> Option<usize> {
+        match self.target {
+            Target::Block(i) => Some(i),
+            Target::New(_) => None,
+        }
+    }
+}
+
 impl Viewer {
     /// Turns Edit text on or off; other tools are put down.
     pub(super) fn toggle_text_edit(&mut self, cx: &mut Context<Self>) {
         self.finish_text_edit(true, cx);
         self.runs.next = None;
+        self.text_moving = None;
         self.text_editing = !self.text_editing;
         self.adding = None;
         self.redacting = None;
@@ -169,6 +209,7 @@ impl Viewer {
     pub(super) fn leave_text_edit(&mut self, cx: &mut Context<Self>) {
         self.finish_text_edit(true, cx);
         self.runs.next = None;
+        self.text_moving = None;
         self.text_editing = false;
         self.adding = None;
         self.redacting = None;
@@ -265,7 +306,7 @@ impl Viewer {
             .map(|b| b.text.clone())
         else {
             // The file is being changed: open it once read again.
-            self.runs.next = clicked;
+            self.runs.next = clicked.map(|(p, at)| (p, at, Next::Edit));
             return;
         };
         self.start_typing(page, Target::Block(block), text, window, cx);
@@ -466,16 +507,23 @@ impl Viewer {
             self.read_runs(page, cx);
             return Vec::new();
         };
-        if let Some((_, [x, y])) = self.runs.next.filter(|(p, _)| *p == page) {
+        if let Some((_, [x, y], next)) = self.runs.next.filter(|(p, _, _)| *p == page) {
             self.runs.next = None;
             if let Some(i) = blocks.iter().position(|b| {
                 (b.rect[0]..=b.rect[2]).contains(&x) && (b.rect[1]..=b.rect[3]).contains(&y)
             }) {
-                cx.defer_in(window, move |this, window, cx| {
-                    this.start_text_edit(page, i, window, cx)
+                cx.defer_in(window, move |this, window, cx| match next {
+                    Next::Edit => this.start_text_edit(page, i, window, cx),
+                    Next::Move(by) => this.move_text(page, i, by, cx),
+                    Next::Style(size, colour) => this.style_text(page, i, size, colour, cx),
                 });
             }
         }
+        let dragging = self
+            .text_moving
+            .as_ref()
+            .filter(|m| m.page == page && m.dragged())
+            .map(|m| (m.block, [m.to[0] - m.from[0], m.to[1] - m.from[1]]));
         let shown = self.shown;
         let accent = self.theme.katna.accent & 0xffff_ff00;
         // With a tool for adding in hand, the paragraphs are not boxes to
@@ -499,7 +547,8 @@ impl Viewer {
                     .as_ref()
                     .filter(|t| t.page == page && t.target == Target::Block(i));
                 if let Some(typing) = typing {
-                    return self.typing_box(block, b, width * shown, typing);
+                    let by = dragging.filter(|(b, _)| *b == i).map(|(_, by)| by);
+                    return self.typing_box(block, b, width * shown, typing, by, cx);
                 }
                 // Outlined only under the pointer, on its own glyphs'
                 // area, so neighbours' boxes never cross.
@@ -511,16 +560,31 @@ impl Viewer {
                     .w(desktop_px(b[2] - b[0]))
                     .h(desktop_px(b[3] - b[1]))
                     .rounded(px(radius::XS / 2.0))
-                    .hover(move |s| {
-                        s.bg(gpui::rgba(accent | 0x14))
-                            .border_1()
-                            .border_color(gpui::rgba(accent | 0xaa))
+                    // Not lit under a paragraph being dragged over it.
+                    .when(dragging.is_none(), |d| {
+                        d.hover(move |s| {
+                            s.bg(gpui::rgba(accent | 0x14))
+                                .border_1()
+                                .border_color(gpui::rgba(accent | 0xaa))
+                        })
                     })
                     .cursor(gpui::CursorStyle::IBeam)
-                    .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.start_text_edit(page, i, window, cx)
-                    }))
+                    .when_some(dragging.filter(|(b, _)| *b == i), |d, (_, [dx, dy])| {
+                        // Dragged: its box goes along with the pointer.
+                        d.left(desktop_px(b[0] + dx * shown))
+                            .top(desktop_px(b[1] + dy * shown))
+                            .border_1()
+                            .border_color(gpui::rgba(accent | 0xcc))
+                            .bg(gpui::rgba(accent | 0x14))
+                            .cursor(gpui::CursorStyle::ClosedHand)
+                    })
+                    .on_mouse_down(
+                        gpui::MouseButton::Left,
+                        cx.listener(move |this, event: &gpui::MouseDownEvent, _, cx| {
+                            cx.stop_propagation();
+                            this.text_move_press(page, i, event.position, cx);
+                        }),
+                    )
                     .into_any_element()
             })
             .collect();
@@ -568,9 +632,13 @@ impl Viewer {
         b: [f32; 4],
         page_width: f32,
         typing: &Typing,
+        dragged: Option<[f32; 2]>,
+        cx: &mut Context<Self>,
     ) -> AnyElement {
         let shown = self.shown;
         let size = block.size * shown;
+        // Along with the pointer while dragged by its grip.
+        let [dx, dy] = dragged.map_or([0.0; 2], |[x, y]| [x * shown, y * shown]);
         let lead = if block.leading > block.size * 0.8 {
             block.leading * shown
         } else {
@@ -591,11 +659,36 @@ impl Viewer {
         let pad = 2.0;
         let [r, g, bl] = self.page_colors().pixel(block.colour);
         let look = &typing.look;
+        let (page, index) = (typing.page, typing.block().unwrap_or(0));
+        // A grip on its left edge, to drag the paragraph elsewhere.
+        let grip = 10.0;
+        let handle = div()
+            .id("text-grip")
+            .absolute()
+            .left(desktop_px(-grip - 1.0))
+            .top(desktop_px(-1.0))
+            .w(desktop_px(grip))
+            .h(desktop_px(lines * lead + 2.0 * pad))
+            .rounded_l(px(radius::XS / 2.0))
+            .bg(gpui::rgb(self.theme.katna.accent >> 8))
+            .cursor(if dragged.is_some() {
+                gpui::CursorStyle::ClosedHand
+            } else {
+                gpui::CursorStyle::OpenHand
+            })
+            .tip(t("text-grip", &[]), &self.theme.katna)
+            .on_mouse_down(
+                gpui::MouseButton::Left,
+                cx.listener(move |this, event: &gpui::MouseDownEvent, _, cx| {
+                    cx.stop_propagation();
+                    this.text_move_press(page, index, event.position, cx);
+                }),
+            );
         div()
             .id("text-typing")
             .absolute()
-            .left(desktop_px(b[0] - pad))
-            .top(desktop_px(top - pad))
+            .left(desktop_px(b[0] - pad + dx))
+            .top(desktop_px(top - pad + dy))
             .w(desktop_px(wide + 2.0 * pad))
             .min_h(desktop_px(lines * lead + 2.0 * pad))
             .p(desktop_px(pad - 1.0))
@@ -611,8 +704,266 @@ impl Viewer {
             .when(look.italic, |d| d.italic())
             .cursor(gpui::CursorStyle::IBeam)
             .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .child(handle)
             .child(typing.input.clone())
             .into_any_element()
+    }
+
+    /// A press on paragraph `block` of page `page`: a drag from here
+    /// moves it; let go without one, it opens for typing.
+    fn text_move_press(
+        &mut self,
+        page: usize,
+        block: usize,
+        position: gpui::Point<gpui::Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some((_, at)) = self.page_point(position) else {
+            return;
+        };
+        self.text_moving = Some(TextMoving {
+            page,
+            block,
+            from: at,
+            to: at,
+        });
+        cx.notify();
+    }
+
+    pub(super) fn text_move_drag(
+        &mut self,
+        position: gpui::Point<gpui::Pixels>,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(page) = self.text_moving.as_ref().map(|m| m.page) else {
+            return false;
+        };
+        let shown = desktop_px(self.shown);
+        if let Some(b) = self.page_bounds.borrow().get(&page).copied()
+            && let Some(moving) = self.text_moving.as_mut()
+        {
+            moving.to = [
+                (position.x - b.left()) / shown,
+                (position.y - b.top()) / shown,
+            ];
+        }
+        cx.notify();
+        true
+    }
+
+    /// The pointer let go on a dragged paragraph: it moves where it was
+    /// dragged to, or, after a click, opens for typing.
+    pub(super) fn text_move_release(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(moving) = self.text_moving.take() else {
+            return false;
+        };
+        cx.notify();
+        let (page, block) = (moving.page, moving.block);
+        if !moving.dragged() {
+            self.start_text_edit(page, block, window, cx);
+            return true;
+        }
+        let Some(inv) = self.inverse(page) else {
+            return true;
+        };
+        let [x0, y0] = inv.map(moving.from);
+        let [x1, y1] = inv.map(moving.to);
+        let by = [x1 - x0, y1 - y0];
+        // The paragraph being typed in is written first, then moved
+        // once the page is read again.
+        let typed = self
+            .typing
+            .as_ref()
+            .is_some_and(|t| t.page == page && t.target == Target::Block(block));
+        let at = self
+            .runs
+            .pages
+            .get(&page)
+            .and_then(|blocks| blocks.get(block))
+            .map(|b| [(b.rect[0] + b.rect[2]) / 2.0, (b.rect[1] + b.rect[3]) / 2.0]);
+        if typed {
+            self.finish_text_edit(true, cx);
+            if self.runs.pages.contains_key(&page) {
+                self.move_text(page, block, by, cx);
+            } else if let Some(at) = at {
+                self.runs.next = Some((page, at, Next::Move(by)));
+            }
+        } else {
+            self.move_text(page, block, by, cx);
+        }
+        true
+    }
+
+    /// Moves paragraph `block` of page `page` by `by` in the page's own
+    /// space, and opens it for typing where it lands.
+    fn move_text(&mut self, page: usize, block: usize, by: [f32; 2], cx: &mut Context<Self>) {
+        let Some((runs, at)) = self.block_runs(page, block) else {
+            return;
+        };
+        self.change_page(
+            page,
+            move |doc| {
+                doc.move_block(page, &runs, by[0], by[1])
+                    .map_err(|e| e.to_string())
+            },
+            cx,
+        );
+        self.runs.next = Some((page, [at[0] + by[0], at[1] + by[1]], Next::Edit));
+    }
+
+    /// Shows paragraph `block` of page `page` at `size` points and in
+    /// `colour`, each where given, and opens it for typing again.
+    fn style_text(
+        &mut self,
+        page: usize,
+        block: usize,
+        size: Option<f32>,
+        colour: Option<[f32; 3]>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some((runs, at)) = self.block_runs(page, block) else {
+            return;
+        };
+        self.change_page(
+            page,
+            move |doc| {
+                doc.style_block(page, &runs, size, colour)
+                    .map_err(|e| e.to_string())
+            },
+            cx,
+        );
+        self.runs.next = Some((page, at, Next::Edit));
+    }
+
+    /// Paragraph `block` of page `page`'s lines and middle, in the
+    /// page's own space.
+    fn block_runs(&self, page: usize, block: usize) -> Option<(Vec<usize>, [f32; 2])> {
+        let b = self.runs.pages.get(&page)?.get(block)?;
+        Some((
+            b.runs.clone(),
+            [(b.rect[0] + b.rect[2]) / 2.0, (b.rect[1] + b.rect[3]) / 2.0],
+        ))
+    }
+
+    /// The paragraph being typed in, and its page and index.
+    fn typed_block(&self) -> Option<(usize, usize, &TextBlock)> {
+        let typing = self.typing.as_ref()?;
+        let block = typing.block()?;
+        let b = self.runs.pages.get(&typing.page)?.get(block)?;
+        Some((typing.page, block, b))
+    }
+
+    /// Does `what` to the paragraph being typed in, once what was typed
+    /// is in the file: now, or once the page is read again.
+    fn restyle_typed(&mut self, what: Next, cx: &mut Context<Self>) {
+        let Some((page, block, b)) = self.typed_block() else {
+            return;
+        };
+        let at = [(b.rect[0] + b.rect[2]) / 2.0, (b.rect[1] + b.rect[3]) / 2.0];
+        self.finish_text_edit(true, cx);
+        if self.runs.pages.contains_key(&page) {
+            match what {
+                Next::Style(size, colour) => self.style_text(page, block, size, colour, cx),
+                Next::Move(by) => self.move_text(page, block, by, cx),
+                Next::Edit => {}
+            }
+        } else {
+            self.runs.next = Some((page, at, what));
+        }
+    }
+
+    /// The paragraph being typed in shown `by` points bigger (or
+    /// smaller).
+    pub(super) fn resize_typed(&mut self, by: f32, cx: &mut Context<Self>) {
+        let Some((_, _, b)) = self.typed_block() else {
+            return;
+        };
+        let size = (b.size + by).clamp(4.0, 144.0);
+        if (size - b.size).abs() > 0.01 {
+            self.restyle_typed(Next::Style(Some(size), None), cx);
+        }
+    }
+
+    /// The paragraph being typed in shown in `ink` (RGB, 0 to 1).
+    pub(super) fn colour_typed(&mut self, ink: [f32; 3], cx: &mut Context<Self>) {
+        if self.typed_block().is_some() {
+            self.restyle_typed(Next::Style(None, Some(ink)), cx);
+        }
+    }
+
+    /// The paragraph being typed in taken out of the page.
+    pub(super) fn delete_typed(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some((page, _, b)) = self.typed_block() else {
+            return false;
+        };
+        let runs = b.runs.clone();
+        self.typing = None;
+        self.change_page(
+            page,
+            move |doc| doc.edit_block(page, &runs, "").map_err(|e| e.to_string()),
+            cx,
+        );
+        true
+    }
+
+    /// The paragraph being typed in, in the row of tools: its font and
+    /// size, with buttons for bigger and smaller, and one to delete it.
+    pub(super) fn text_inspector(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let (_, _, block) = self.typed_block()?;
+        let th = self.theme;
+        let font = block
+            .font
+            .split_once('+')
+            .map_or(block.font.as_str(), |(_, n)| n);
+        let field = |wide: f32| {
+            div()
+                .h(px(28.0))
+                .px(px(space::S2))
+                .flex()
+                .items_center()
+                .rounded(px(radius::XS))
+                .bg(th.field)
+                .text_size(px(text::SMALL))
+                .when(wide > 0.0, |d| d.max_w(px(wide)).overflow_hidden())
+        };
+        let step = |id: &'static str, label: &'static str, tip: &'static str, by: f32| {
+            div()
+                .id(id)
+                .size(px(28.0))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(radius::XS))
+                .cursor_pointer()
+                .hover(move |s| s.bg(th.hover))
+                .text_size(px(text::SMALL))
+                .tip(t(tip, &[]), &th.katna)
+                .child(label)
+                .on_click(cx.listener(move |this, _, _, cx| this.resize_typed(by, cx)))
+        };
+        let row = div()
+            .flex()
+            .items_center()
+            .gap(px(space::S1))
+            .child(field(160.0).child(font.to_string()))
+            .child(step("text-smaller", "A−", "text-smaller", -1.0))
+            .child(field(0.0).child(t(
+                "text-size",
+                &[("size", &format!("{}", block.size.round()))],
+            )))
+            .child(step("text-bigger", "A+", "text-bigger", 1.0))
+            .child(
+                widgets::icon_button("text-delete", "trash", 18.0, &th.katna)
+                    .tip(t("text-delete", &[]), &th.katna)
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.delete_typed(cx);
+                    })),
+            );
+        Some(row.into_any_element())
     }
 
     /// A press on the pages while Edit text is on, outside the

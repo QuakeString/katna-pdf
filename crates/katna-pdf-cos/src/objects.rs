@@ -455,7 +455,11 @@ impl Document {
     }
 
     /// The file with page `page`'s content replaced by `content`.
-    fn write_page_content(&self, page: usize, content: &[u8]) -> Result<Vec<u8>, EditError> {
+    pub(crate) fn write_page_content(
+        &self,
+        page: usize,
+        content: &[u8],
+    ) -> Result<Vec<u8>, EditError> {
         let page_ref = *self.pages().get(page).ok_or(EditError::NoPage)?;
         let mut update = self.update()?;
         let stream = update.add(Object::Stream(crate::dss::compressed(content)));

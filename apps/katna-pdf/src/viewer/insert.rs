@@ -195,8 +195,10 @@ impl Viewer {
                     .tip(t("tool-colour", &[]), &th.katna)
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.ink = i;
-                        // A shape picked takes the colour.
+                        // A shape picked, or the paragraph being typed
+                        // in, takes the colour.
                         this.colour_picked(ink, cx);
+                        this.colour_typed(ink, cx);
                         cx.notify();
                     }))
                     .child(
@@ -209,7 +211,7 @@ impl Viewer {
                     ),
             );
         }
-        if let Some(inspector) = self.inspector(cx) {
+        if let Some(inspector) = self.inspector(cx).or_else(|| self.text_inspector(cx)) {
             row = row.child(separator(th)).child(inspector);
         }
         Some(row.into_any_element())
