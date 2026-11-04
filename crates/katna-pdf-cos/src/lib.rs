@@ -68,7 +68,7 @@ pub use crypt::{Permissions, UnlockError};
 pub use design::{FieldEdit, FieldSpec, FormDesign, FormError, NewField};
 pub use document::{Document, Entry, LoadError, XrefKind};
 pub use dss::Dss;
-pub use edit::{EditError, Layout, NewFont, TextAlign, TextBlock, TextRun};
+pub use edit::{EditError, Layout, NewFont, StandIn, TextAlign, TextBlock, TextRun};
 pub use export::{docx, pictures_pdf, plain_text};
 pub use filter::{FilterError, decode};
 pub use flatten::Flatten;

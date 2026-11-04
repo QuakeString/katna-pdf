@@ -578,3 +578,78 @@ fn a_paragraph_is_laid_out_again() {
         "{was} {runs:?}"
     );
 }
+
+#[test]
+fn letters_a_font_lacks_are_named_before_an_edit() {
+    let doc = page(
+        "BT /F1 20 Tf 72 700 Td (Hello) Tj ET",
+        "/F1 5 0 R",
+        &[
+            "<< /Type /Font /Subtype /Type1 /BaseFont /ABCDEF+Times-Bold /FirstChar 72 \
+             /LastChar 111 /Widths 6 0 R /FontDescriptor 7 0 R /Encoding /WinAnsiEncoding >>",
+            &format!(
+                "[{}]",
+                (72..=111).map(|_| "500").collect::<Vec<_>>().join(" ")
+            ),
+            "<< /Type /FontDescriptor /FontName /ABCDEF+Times-Bold /CharSet (/H/e/l/o) \
+             /FontFile3 8 0 R >>",
+            "<< /Length 0 >>\nstream\n\nendstream",
+        ],
+    );
+    let runs = doc.text_blocks(0)[0].runs.clone();
+    assert_eq!(doc.missing_glyphs(0, &runs, "Hello"), None);
+    let missing = doc.missing_glyphs(0, &runs, "Hello Ollie").unwrap();
+    assert_eq!(missing.font, "Times-Bold");
+    assert_eq!(missing.stand_in.as_deref(), Some("Times-Bold"));
+    assert_eq!(missing.chars, "Oi");
+    // A letter no font has is named with no stand-in.
+    let missing = doc.missing_glyphs(0, &runs, "Hello Ω").unwrap();
+    assert_eq!(missing.chars, "Ω");
+    assert_eq!(missing.stand_in, None);
+    // A standard font has everything WinAnsi does.
+    let plain = page(
+        "BT /F1 20 Tf 72 700 Td (Hello) Tj ET",
+        "/F1 5 0 R",
+        &[HELVETICA],
+    );
+    let runs = plain.text_blocks(0)[0].runs.clone();
+    assert_eq!(plain.missing_glyphs(0, &runs, "Hello Ollie ü"), None);
+}
+
+#[test]
+fn turned_paragraphs_are_read_and_changed() {
+    let doc = page(
+        "BT /F1 16 Tf 0 1 -1 0 500 200 Tm (Sideways text going up) Tj ET \
+         BT /F1 16 Tf 0 1 -1 0 520 200 Tm (a line before it) Tj ET \
+         BT /F1 12 Tf 1 0 0 1 72 700 Tm (Upright) Tj ET",
+        "/F1 5 0 R",
+        &[HELVETICA],
+    );
+    let blocks = doc.text_blocks(0);
+    let turned = blocks
+        .iter()
+        .find(|b| b.text.starts_with("Sideways"))
+        .unwrap();
+    assert_eq!(turned.angle, 90.0);
+    // Its lines run up the page: as long as its box is tall.
+    assert!((turned.width - (turned.rect[3] - turned.rect[1])).abs() < 1.0);
+    let upright = blocks.iter().find(|b| b.text == "Upright").unwrap();
+    assert_eq!(upright.angle, 0.0);
+    assert!((upright.width - (upright.rect[2] - upright.rect[0])).abs() < 0.01);
+    // A line alone, turned, grows up the page as far as a margin like
+    // its own, then wraps.
+    let long = "Sideways text going up the page and on and on and on and on and on and on \
+                and on and on and on and on and on and on and on and on and on and on";
+    let out = Document::load(doc.edit_block(0, &turned.runs, long).unwrap()).unwrap();
+    let blocks = out.text_blocks(0);
+    let turned = blocks
+        .iter()
+        .find(|b| b.text.starts_with("Sideways"))
+        .unwrap();
+    assert!(turned.runs.len() >= 2, "{}", turned.text);
+    assert_eq!(turned.angle, 90.0);
+    // Nothing went past the page's top (800), with a margin as wide as
+    // the 200 it starts from.
+    assert!(turned.rect[3] <= 601.0, "{:?}", turned.rect);
+    assert_eq!(turned.text.replace('\n', " "), long);
+}

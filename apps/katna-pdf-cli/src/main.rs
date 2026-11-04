@@ -4237,20 +4237,40 @@ fn edit_text(args: &[String], json: bool) -> Done {
             .ok()
             .and_then(|b| doc.text_blocks(page - 1).into_iter().nth(b.checked_sub(1)?))
             .ok_or_else(bad)?;
+        let missing = doc.missing_glyphs(page - 1, &block.runs, new);
         let bytes = doc.edit_block(page - 1, &block.runs, new).map_err(failed)?;
         write(&out, &bytes)?;
         return Ok(if json {
+            let stood_in = match &missing {
+                Some(m) => format!(
+                    ",\"stood_in\":{{\"font\":{},\"stand_in\":{},\"chars\":{}}}",
+                    string(&m.font),
+                    m.stand_in.as_deref().map_or("null".to_string(), string),
+                    string(&m.chars)
+                ),
+                None => String::new(),
+            };
             format!(
-                "{{\"written\":[{{\"file\":{},\"pages\":{count}}}],\"runs_changed\":{}}}\n",
+                "{{\"written\":[{{\"file\":{},\"pages\":{count}}}],\"runs_changed\":{}{stood_in}}}\n",
                 string(&out.display().to_string()),
                 block.runs.len()
             )
         } else {
-            format!(
+            let mut text = format!(
                 "{} (a paragraph of {} lines changed)\n",
                 out.display(),
                 block.runs.len()
-            )
+            );
+            if let Some(m) = &missing {
+                let _ = writeln!(
+                    text,
+                    "{} has no “{}”; {} stood in",
+                    m.font,
+                    m.chars,
+                    m.stand_in.as_deref().unwrap_or("no font here")
+                );
+            }
+            text
         });
     }
     match (args.option("--run"), args.option("--replace")) {

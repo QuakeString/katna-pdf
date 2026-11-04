@@ -73,6 +73,18 @@ pub enum EditError {
     Update(UpdateError),
 }
 
+/// Letters a paragraph's font lacks, and the standard font that stands
+/// in for them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StandIn {
+    /// The paragraph's own font.
+    pub font: String,
+    /// The standard font that shows `chars` instead; none when no font
+    /// has them either.
+    pub stand_in: Option<String>,
+    pub chars: String,
+}
+
 /// A font to show a paragraph in instead of its own.
 #[derive(Debug, Clone, PartialEq)]
 pub enum NewFont {
@@ -487,6 +499,48 @@ impl Document {
         self.edit_block_in(page, lines, text, None)
     }
 
+    /// The letters of `text` the paragraph of runs `lines` would show in
+    /// a standard font standing in, because its own font lacks them:
+    /// none when the font has them all (or is a standard font already).
+    pub fn missing_glyphs(&self, page: usize, lines: &[usize], text: &str) -> Option<StandIn> {
+        let read = self.read_page(page)?;
+        let all = runs(&read);
+        let top = all.get(*lines.first()?)?;
+        if top.stood_in {
+            return None;
+        }
+        let font = &read.pieces[top.ops[0]].font;
+        let letters = letters(&read, top, font);
+        let mut chars = String::new();
+        let stand_in = match segments(text, &letters.encoders, letters.space) {
+            Ok(segments) => {
+                for segment in segments {
+                    if let Segment::Standard(bytes) = segment {
+                        for b in bytes {
+                            if let Some(c) = crate::fonts::win_ansi_char(b)
+                                && c != ' '
+                                && !chars.contains(c)
+                            {
+                                chars.push(c);
+                            }
+                        }
+                    }
+                }
+                Some(letters.name.to_string())
+            }
+            Err(EditError::Unsupported(c)) => {
+                chars.push(c);
+                None
+            }
+            Err(_) => return None,
+        };
+        (!chars.is_empty()).then(|| StandIn {
+            font: top.font.clone(),
+            stand_in,
+            chars,
+        })
+    }
+
     /// The file with the paragraph of runs `lines` on page `page` shown
     /// in `font` instead of its own, its text `text` laid out again in
     /// it (wrapped to the paragraph's width as [`Document::edit_block`]
@@ -540,12 +594,24 @@ impl Document {
         if old.len() == 1 {
             // A line alone grows up to a margin as wide as its left one.
             right = match self.page_info(page) {
-                Some(info) if first.m[1].abs() < 1e-9 && first.m[2].abs() < 1e-9 => {
+                Some(info) => {
+                    // The page's edges along the line's direction, in
+                    // its text space: the line may grow to as far from
+                    // the far edge as it starts from the near one.
                     let crop = info.crop;
-                    let limit = (crop[2] - (top.rect[0] - crop[0])).max(top.rect[2]);
-                    right.max(apply(&inv, f64::from(limit), first.m[5]).0)
+                    let corners = [
+                        (crop[0], crop[1]),
+                        (crop[2], crop[1]),
+                        (crop[0], crop[3]),
+                        (crop[2], crop[3]),
+                    ]
+                    .map(|(x, y)| apply(&inv, f64::from(x), f64::from(y)).0);
+                    let near = corners.iter().copied().fold(f64::MAX, f64::min);
+                    let far = corners.iter().copied().fold(f64::MIN, f64::max);
+                    let limit = (far - (places[0].start - near)).max(right);
+                    right.max(limit)
                 }
-                _ => f64::INFINITY,
+                None => f64::INFINITY,
             };
         }
         let last = places[places.len() - 1];
@@ -1408,6 +1474,12 @@ pub struct TextBlock {
     pub char_spacing: f32,
     /// More between words, in points (`Tw`).
     pub word_spacing: f32,
+    /// How far its lines are turned from upright, in degrees
+    /// anticlockwise (90 reads up the page).
+    pub angle: f32,
+    /// How far its lines run, along their own direction, in points: the
+    /// width of `rect` when upright.
+    pub width: f32,
 }
 
 /// How a paragraph's lines line up.
@@ -1542,6 +1614,7 @@ fn blocks(page: &Page, runs: &[TextRun]) -> Vec<TextBlock> {
                     let size = size_of(page, runs, block);
                     block.text = joined_text(runs, block, &places, size);
                     block.align = align_of(&places, size).into();
+                    block.width = width_of(page, runs, block, &places);
                 }
                 let p = &page.pieces[run.ops[0]];
                 places = invert(&p.m)
@@ -1560,6 +1633,11 @@ fn blocks(page: &Page, runs: &[TextRun]) -> Vec<TextBlock> {
                         as f32,
                     word_spacing: (p.word_spacing * f64::from(run.size) / p.size.abs().max(1e-9))
                         as f32,
+                    angle: {
+                        let degrees = p.m[1].atan2(p.m[0]).to_degrees() as f32;
+                        if degrees.abs() < 0.05 { 0.0 } else { degrees }
+                    },
+                    width: run.rect[2] - run.rect[0],
                 });
             }
         }
@@ -1568,8 +1646,22 @@ fn blocks(page: &Page, runs: &[TextRun]) -> Vec<TextBlock> {
         let size = size_of(page, runs, block);
         block.text = joined_text(runs, block, &places, size);
         block.align = align_of(&places, size).into();
+        block.width = width_of(page, runs, block, &places);
     }
     out
+}
+
+/// How far a paragraph's lines run along their direction, in points.
+fn width_of(page: &Page, runs: &[TextRun], block: &TextBlock, places: &[Place]) -> f32 {
+    let p = &page.pieces[runs[block.runs[0]].ops[0]];
+    let scale = p.m[0].hypot(p.m[1]);
+    let start = places.iter().map(|p| p.start).fold(f64::MAX, f64::min);
+    let end = places.iter().map(|p| p.end).fold(f64::MIN, f64::max);
+    if start <= end {
+        ((end - start) * scale) as f32
+    } else {
+        block.rect[2] - block.rect[0]
+    }
 }
 
 #[derive(Clone, Copy, PartialEq)]

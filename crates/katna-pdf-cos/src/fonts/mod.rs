@@ -554,6 +554,11 @@ pub(crate) fn standard_as_differences() -> crate::object::Dict {
     dict
 }
 
+/// The character WinAnsi code `code` stands for.
+pub(crate) fn win_ansi_char(code: u8) -> Option<char> {
+    glyph_unicode(win_ansi::get(code)?)?.chars().next()
+}
+
 /// `c` in WinAnsi encoding, with its glyph name.
 pub(crate) fn win_ansi_code(c: char) -> Option<(u8, &'static str)> {
     let name = glyph_names::get_reverse(c)?;
