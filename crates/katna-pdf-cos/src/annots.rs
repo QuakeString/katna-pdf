@@ -71,6 +71,10 @@ pub enum AnnotKind {
     PolyLine(Vec<[f32; 2]>),
     /// A stamp: a word in a box filling the rectangle.
     Stamp(String),
+    /// A file kept in the document (`/FileAttachment`): its name, and
+    /// its bytes when it is being added (`None` once read; see
+    /// [`Document::attached_file`]).
+    FileAttachment { name: String, data: Option<Vec<u8>> },
     /// Something else (a file attachment, a sound, a caret...), by its
     /// subtype; read and removed, never written.
     Other(String),
@@ -100,6 +104,10 @@ pub struct Annotation {
     pub modified: Option<String>,
     /// The annotation this one replies to.
     pub reply_to: Option<Ref>,
+    /// The name (`/NM`) of the annotation this one replies to, when that
+    /// one is not in the file yet but added in the same change; the
+    /// reply is written pointing at it.
+    pub answers: Option<String>,
     /// Its name, unique in the file (`/NM`); empty for one not yet
     /// written, which is given one.
     pub name: String,
@@ -265,10 +273,49 @@ impl AnnotKind {
             AnnotKind::Line { .. } => "Line".into(),
             AnnotKind::Polygon(_) => "Polygon".into(),
             AnnotKind::PolyLine(_) => "Polyline".into(),
-            AnnotKind::Stamp(name) => format!("Stamp {name}"),
+            AnnotKind::Stamp(name) => format!("Stamp {}", stamp_label(name)),
+            AnnotKind::FileAttachment { name, .. } => format!("Attachment {name}"),
             AnnotKind::Other(subtype) => subtype.clone(),
         }
     }
+}
+
+/// The standard stamps, by the names the file gives them.
+pub const STAMPS: [&str; 14] = [
+    "Approved",
+    "NotApproved",
+    "Draft",
+    "Final",
+    "Confidential",
+    "ForComment",
+    "ForPublicRelease",
+    "NotForPublicRelease",
+    "Departmental",
+    "Experimental",
+    "Expired",
+    "AsIs",
+    "Sold",
+    "TopSecret",
+];
+
+/// The dynamic stamps: each shows who put it on and when, under its
+/// word, as Acrobat's do (the names Acrobat gives them).
+pub const DYNAMIC_STAMPS: [&str; 5] = [
+    "#DApproved",
+    "#DReviewed",
+    "#DReceived",
+    "#DRevised",
+    "#DConfidential",
+];
+
+/// The name of a stamp showing `text` as typed.
+pub fn custom_stamp(text: &str) -> String {
+    format!("#C{text}")
+}
+
+/// Whether the stamp named `name` shows who put it on and when.
+pub fn stamp_is_dynamic(name: &str) -> bool {
+    name.starts_with("#D")
 }
 
 impl Annotation {
@@ -286,6 +333,7 @@ impl Annotation {
             author: String::new(),
             modified: None,
             reply_to: None,
+            answers: None,
             name: String::new(),
             measure: None,
             callout: None,
@@ -421,7 +469,34 @@ impl Document {
             .collect()
     }
 
-    fn read_annotation(&self, page: usize, obj: &Object) -> Option<Annotation> {
+    /// The bytes of the file annotation `a` keeps.
+    pub fn attached_file(&self, a: &Annotation) -> Option<Vec<u8>> {
+        if let AnnotKind::FileAttachment {
+            data: Some(data), ..
+        } = &a.kind
+        {
+            return Some(data.clone());
+        }
+        let Some(Object::Dict(d)) = self.get(a.id?) else {
+            return None;
+        };
+        let Object::Dict(fs) = self.resolve_key(&d, "FS") else {
+            return None;
+        };
+        let Object::Dict(ef) = self.resolve_key(&fs, "EF") else {
+            return None;
+        };
+        let Object::Stream(f) = ["UF", "F"]
+            .into_iter()
+            .map(|key| self.resolve_key(&ef, key))
+            .find(|o| matches!(o, Object::Stream(_)))?
+        else {
+            return None;
+        };
+        crate::filter::decode(&f.dict, &f.data).ok()
+    }
+
+    pub(crate) fn read_annotation(&self, page: usize, obj: &Object) -> Option<Annotation> {
         let Object::Dict(d) = self.resolve(obj) else {
             return None;
         };
@@ -504,6 +579,19 @@ impl Document {
                 d.name("Name")
                     .map_or("Draft".into(), |n| String::from_utf8_lossy(n).into_owned()),
             ),
+            "FileAttachment" => AnnotKind::FileAttachment {
+                name: match self.resolve_key(&d, "FS") {
+                    Object::Dict(fs) => ["UF", "F"]
+                        .into_iter()
+                        .find_map(|key| match self.resolve_key(&fs, key) {
+                            Object::String { bytes, .. } => Some(text_string(&bytes)),
+                            _ => None,
+                        })
+                        .unwrap_or_default(),
+                    _ => String::new(),
+                },
+                data: None,
+            },
             _ => AnnotKind::Other(subtype),
         };
         let text = |key: &str| match self.resolve_key(&d, key) {
@@ -550,6 +638,7 @@ impl Document {
             author: text("T").unwrap_or_default(),
             modified: text("M"),
             reply_to: d.get("IRT").and_then(Object::as_ref),
+            answers: None,
             name: text("NM").unwrap_or_default(),
             measure: match &kind {
                 AnnotKind::Line { .. } | AnnotKind::Polygon(_) | AnnotKind::PolyLine(_) => {
@@ -633,13 +722,39 @@ impl Document {
             .filter_map(|a| Some((a.id?, a)))
             .collect();
         let date = pdf_date(std::time::SystemTime::now());
+        // New annotations get their numbers first, so replies added with
+        // what they answer can point at it; by name.
+        let mut new_ids: Vec<Option<Ref>> = vec![None; changes.put.len()];
+        let mut names: BTreeMap<&str, Ref> = existing
+            .values()
+            .filter(|a| !a.name.is_empty())
+            .filter_map(|a| Some((a.name.as_str(), a.id?)))
+            .collect();
+        for (i, a) in changes.put.iter().enumerate() {
+            if a.id.is_none()
+                && pages.get(a.page).is_some()
+                && !matches!(a.kind, AnnotKind::Other(_))
+            {
+                new_ids[i] = Some(update.add(Object::Null));
+            }
+            if let Some(id) = a.id.or(new_ids[i])
+                && !a.name.is_empty()
+            {
+                names.insert(a.name.as_str(), id);
+            }
+        }
         // Each page's list of annotations, as it will be.
         let mut lists: BTreeMap<usize, Vec<Object>> = BTreeMap::new();
-        for annot in &changes.put {
+        for (i, annot) in changes.put.iter().enumerate() {
             let Some(&page_ref) = pages.get(annot.page) else {
                 continue;
             };
             let mut annot = annot.clone();
+            if annot.reply_to.is_none()
+                && let Some(to) = annot.answers.as_deref().and_then(|n| names.get(n))
+            {
+                annot.reply_to = Some(*to);
+            }
             annot.modified = Some(date.clone());
             if !matches!(
                 annot.kind,
@@ -648,6 +763,7 @@ impl Document {
                     | AnnotKind::Square { .. }
                     | AnnotKind::Circle { .. }
                     | AnnotKind::Stamp(_)
+                    | AnnotKind::FileAttachment { .. }
             ) {
                 annot.rect = annot.bounds();
             }
@@ -669,6 +785,29 @@ impl Document {
                 continue;
             }
             write_dict(&mut dict, &annot, page_ref);
+            if let AnnotKind::FileAttachment {
+                name,
+                data: Some(data),
+            } = &annot.kind
+            {
+                // The file itself, as an embedded file stream in a file
+                // specification.
+                let mut params = Dict::new();
+                params.set("Size", data.len() as i64);
+                let mut ef_dict = Dict::new();
+                ef_dict.set("Type", Object::name("EmbeddedFile"));
+                ef_dict.set("Params", Object::Dict(params));
+                let ef = update.add(Object::Stream(Stream {
+                    dict: ef_dict,
+                    data: data.clone(),
+                }));
+                let mut fs = Dict::new();
+                fs.set("Type", Object::name("Filespec"));
+                fs.set("F", text_object(name));
+                fs.set("UF", text_object(name));
+                fs.set("EF", Dict(vec![(Name::new("F"), Object::Ref(ef))]));
+                dict.set("FS", Object::Dict(fs));
+            }
             let other = matches!(annot.kind, AnnotKind::Other(_));
             if !other && (!looks_same || dict.get("AP").is_none()) {
                 let ap = update.add(appearance(&annot));
@@ -692,7 +831,13 @@ impl Document {
                     }
                 }
                 None => {
-                    let id = update.add(Object::Dict(dict));
+                    let id = match new_ids[i] {
+                        Some(id) => {
+                            update.replace(id, Object::Dict(dict));
+                            id
+                        }
+                        None => update.add(Object::Dict(dict)),
+                    };
                     if let Some(l) = self.page_list(&mut lists, &pages, annot.page) {
                         l.push(Object::Ref(id));
                     }
@@ -737,7 +882,7 @@ impl Document {
 }
 
 /// `a`'s entries in its dictionary.
-fn write_dict(dict: &mut Dict, a: &Annotation, page: Ref) {
+pub(crate) fn write_dict(dict: &mut Dict, a: &Annotation, page: Ref) {
     let subtype = match &a.kind {
         AnnotKind::Markup(style, _) => style.subtype(),
         AnnotKind::Note => "Text",
@@ -749,6 +894,7 @@ fn write_dict(dict: &mut Dict, a: &Annotation, page: Ref) {
         AnnotKind::Polygon(_) => "Polygon",
         AnnotKind::PolyLine(_) => "PolyLine",
         AnnotKind::Stamp(_) => "Stamp",
+        AnnotKind::FileAttachment { .. } => "FileAttachment",
         AnnotKind::Other(_) => "",
     };
     dict.set("Type", Object::name("Annot"));
@@ -893,6 +1039,9 @@ fn write_dict(dict: &mut Dict, a: &Annotation, page: Ref) {
         AnnotKind::Stamp(name) => {
             dict.set("Name", Object::name(name));
         }
+        AnnotKind::FileAttachment { .. } => {
+            dict.set("Name", Object::name("Paperclip"));
+        }
         AnnotKind::Other(_) => {}
     }
     if a.cloudy && matches!(a.kind, AnnotKind::Polygon(_) | AnnotKind::Square { .. }) {
@@ -938,7 +1087,7 @@ fn write_dict(dict: &mut Dict, a: &Annotation, page: Ref) {
 
 /// The appearance stream: a form drawn in page space, its box the
 /// annotation's rectangle.
-fn appearance(a: &Annotation) -> Object {
+pub(crate) fn appearance(a: &Annotation) -> Object {
     let mut c = String::new();
     let [r, g, b] = a.colour;
     let fill = format!("{r:.3} {g:.3} {b:.3} rg");
@@ -1152,10 +1301,30 @@ fn appearance(a: &Annotation) -> Object {
             let [x0, y0, x1, y1] = a.rect;
             let (bw, bh) = (x1 - x0, y1 - y0);
             let label = stamp_label(name);
-            // Helvetica Bold capitals are about 0.72 em wide.
+            // A dynamic stamp says who put it on and when, under its word.
+            let under = stamp_is_dynamic(name).then(|| {
+                let date = a
+                    .modified
+                    .as_deref()
+                    .and_then(plain_date)
+                    .unwrap_or_default();
+                match (a.author.is_empty(), date.is_empty()) {
+                    (false, false) => format!("{}, {date}", a.author),
+                    (false, true) => a.author.clone(),
+                    _ => date,
+                }
+            });
+            let under = under.filter(|u| !u.is_empty());
+            let (word_h, word_y) = match &under {
+                Some(_) => (bh * 0.42, y0 + bh * 0.42),
+                None => (bh * 0.55, y0),
+            };
+            // Helvetica Bold capitals are about 0.72 em wide, mixed case
+            // about 0.66.
+            let em = if name.starts_with("#C") { 0.66 } else { 0.72 };
             let size =
-                (bh * 0.55).min((bw - 8.0).max(1.0) / (label.chars().count().max(1) as f32 * 0.72));
-            let tw = label.chars().count() as f32 * size * 0.72;
+                word_h.min((bw - 12.0).max(1.0) / (label.chars().count().max(1) as f32 * em));
+            let tw = label.chars().count() as f32 * size * em;
             let _ = writeln!(
                 c,
                 "{stroke} 2 w {:.2} {:.2} {:.2} {:.2} re S BT /HeBo {size:.2} Tf {fill} {:.2} {:.2} \
@@ -1165,8 +1334,40 @@ fn appearance(a: &Annotation) -> Object {
                 bw - 2.0,
                 bh - 2.0,
                 x0 + (bw - tw) / 2.0,
-                y0 + (bh - size * 0.72) / 2.0,
+                word_y + (bh - word_y + y0 - size * 0.72) / 2.0,
                 literal(&label)
+            );
+            if let Some(under) = under {
+                let size = (bh * 0.2)
+                    .min((bw - 8.0).max(1.0) / (under.chars().count().max(1) as f32 * 0.55));
+                let tw = under.chars().count() as f32 * size * 0.55;
+                let _ = writeln!(
+                    c,
+                    "BT /Helv {size:.2} Tf {fill} {:.2} {:.2} Td {} Tj ET",
+                    x0 + (bw - tw) / 2.0,
+                    y0 + (bh * 0.42 - size * 0.72) / 2.0,
+                    literal(&under)
+                );
+            }
+        }
+        AnnotKind::FileAttachment { .. } => {
+            // A paper clip at the top left.
+            let (x, top) = (a.rect[0], a.rect[3]);
+            let s = NOTE_SIZE / 20.0;
+            let at = |px: f32, py: f32| format!("{:.2} {:.2}", x + px * s, top - (20.0 - py) * s);
+            let _ = writeln!(
+                c,
+                "{stroke} 1.5 w 1 J 1 j {} m {} l {} {} {} c {} l {} {} {} c {} l S",
+                at(13.0, 17.0),
+                at(13.0, 6.0),
+                at(13.0, 2.0),
+                at(7.0, 2.0),
+                at(7.0, 6.0),
+                at(7.0, 14.0),
+                at(7.0, 17.0),
+                at(10.0, 17.0),
+                at(10.0, 14.0),
+                at(10.0, 7.0)
             );
         }
         AnnotKind::Other(_) => {}
@@ -1235,6 +1436,10 @@ fn appearance(a: &Annotation) -> Object {
 /// What a stamp says: its name, split before capitals and capitalised
 /// (`NotApproved` is "NOT APPROVED").
 pub fn stamp_label(name: &str) -> String {
+    if let Some(text) = name.strip_prefix("#C") {
+        return text.to_owned();
+    }
+    let name = name.strip_prefix("#D").unwrap_or(name);
     let mut out = String::new();
     for (i, ch) in name.chars().enumerate() {
         if i > 0 && ch.is_uppercase() {
