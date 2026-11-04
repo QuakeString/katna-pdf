@@ -278,29 +278,29 @@ pub(crate) fn page_dict(doc: &Document, page: Ref) -> Dict {
 /// afresh. Each document's objects are copied once, however often they
 /// are reached.
 #[derive(Default)]
-struct Copier {
+pub(crate) struct Copier {
     /// The new file's objects; object `n` is at `n - 1`.
     objects: Vec<Object>,
     /// (document, old reference) to its new number, or `None` for an
     /// object left out (pages not placed), which becomes `null`.
-    map: HashMap<(usize, Ref), Option<u32>>,
+    pub(crate) map: HashMap<(usize, Ref), Option<u32>>,
     /// Objects numbered but not yet copied.
     pending: VecDeque<(usize, Ref, u32)>,
 }
 
 impl Copier {
-    fn reserve(&mut self) -> u32 {
+    pub(crate) fn reserve(&mut self) -> u32 {
         self.objects.push(Object::Null);
         self.objects.len() as u32
     }
 
-    fn set(&mut self, num: u32, obj: Object) {
+    pub(crate) fn set(&mut self, num: u32, obj: Object) {
         self.objects[num as usize - 1] = obj;
     }
 
     /// `obj` from document `d` with its references renumbered; what they
     /// point to is copied by [`Copier::drain`].
-    fn copy(&mut self, docs: &[&Document], d: usize, obj: &Object) -> Object {
+    pub(crate) fn copy(&mut self, docs: &[&Document], d: usize, obj: &Object) -> Object {
         match obj {
             Object::Ref(r) => match self.map.get(&(d, *r)) {
                 Some(Some(num)) => Object::Ref(Ref::new(*num, 0)),
@@ -337,7 +337,7 @@ impl Copier {
         }
     }
 
-    fn copy_dict(&mut self, docs: &[&Document], d: usize, dict: &Dict) -> Dict {
+    pub(crate) fn copy_dict(&mut self, docs: &[&Document], d: usize, dict: &Dict) -> Dict {
         let mut out = Dict::new();
         for (key, value) in dict.iter() {
             // A stream's length is written from its data.
@@ -351,7 +351,7 @@ impl Copier {
 
     /// Copies everything numbered but not yet copied, and what that
     /// reaches in turn.
-    fn drain(&mut self, docs: &[&Document]) {
+    pub(crate) fn drain(&mut self, docs: &[&Document]) {
         while let Some((d, old, num)) = self.pending.pop_front() {
             let obj = docs[d].get(old).unwrap_or(Object::Null);
             let obj = self.copy(docs, d, &obj);
@@ -360,7 +360,7 @@ impl Copier {
     }
 
     /// The file: header, objects, a classic cross-reference table.
-    fn write(self, trailer: Dict) -> Vec<u8> {
+    pub(crate) fn write(self, trailer: Dict) -> Vec<u8> {
         write_file(&self.objects, trailer)
     }
 }

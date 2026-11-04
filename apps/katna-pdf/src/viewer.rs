@@ -52,6 +52,7 @@ mod numbering;
 mod objects;
 mod organizer;
 mod present;
+mod printing;
 mod properties;
 mod redact;
 mod setup;
@@ -507,6 +508,8 @@ pub struct Viewer {
     redacting: Option<redact::Redacting>,
     /// The export card, while open.
     exporting: Option<export::Exporting>,
+    /// The print card, while open.
+    printing: Option<printing::Printing>,
     /// The link tool, while in hand.
     linking: Option<linking::Linking>,
     /// The form tool, while in hand.
@@ -672,6 +675,7 @@ impl Viewer {
             marking: None,
             redacting: None,
             exporting: None,
+            printing: None,
             linking: None,
             designing: None,
             properties: None,
@@ -3659,7 +3663,7 @@ impl Viewer {
                         "print",
                         t("print", &[]),
                         th,
-                        cx.listener(|this, _, _, cx| this.print(cx)),
+                        cx.listener(|this, _, _, cx| this.toggle_printing(cx)),
                     ))
                 })
                 .child(
@@ -3965,6 +3969,7 @@ impl Render for Viewer {
         let marks_card = self.marks_card(cx);
         let redact_card = self.redact_card(cx);
         let export_card = self.export_card(cx);
+        let print_card = self.print_card(cx);
         let link_card = self.link_card(window, cx);
         let numbering_card = self.numbering_card(cx);
         let setup_card = self.setup_card(cx);
@@ -4141,7 +4146,7 @@ impl Render for Viewer {
             .on_action(cx.listener(|this, _: &NextPage, _, cx| this.step_page(true, cx)))
             .on_action(cx.listener(|this, _: &PreviousPage, _, cx| this.step_page(false, cx)))
             .on_action(cx.listener(|this, _: &NextSpread, _, cx| this.next_spread(cx)))
-            .on_action(cx.listener(|this, _: &Print, _, cx| this.print(cx)))
+            .on_action(cx.listener(|this, _: &Print, _, cx| this.toggle_printing(cx)))
             .on_action(cx.listener(|this, _: &Save, _, cx| this.save(cx)))
             .on_action(cx.listener(|this, _: &Undo, _, cx| this.undo(cx)))
             .on_action(cx.listener(|this, _: &Redo, _, cx| this.redo(cx)))
@@ -4279,6 +4284,7 @@ impl Render for Viewer {
                             .children(marks_card)
                             .children(redact_card)
                             .children(export_card)
+                            .children(print_card)
                             .children(link_card)
                             .children(numbering_card)
                             .children(setup_card)
