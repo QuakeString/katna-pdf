@@ -520,6 +520,8 @@ pub struct Viewer {
     colors_menu: bool,
     /// Whether the list of fonts is open under the text inspector.
     font_menu: Option<textedit::FontMenu>,
+    /// The spacing fields open under the text inspector.
+    spacing_menu: Option<textedit::SpacingMenu>,
     colors_menu_closed: Option<std::time::Instant>,
     _appearance: Subscription,
 }
@@ -644,6 +646,7 @@ impl Viewer {
             last_colors: PageColors::Night,
             colors_menu: false,
             font_menu: None,
+            spacing_menu: None,
             colors_menu_closed: None,
             _appearance: appearance,
         };

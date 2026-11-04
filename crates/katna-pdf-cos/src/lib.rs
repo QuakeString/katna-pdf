@@ -56,7 +56,7 @@ pub use crypt::{Permissions, UnlockError};
 pub use design::{FieldEdit, FieldSpec, FormDesign, FormError, NewField};
 pub use document::{Document, Entry, LoadError, XrefKind};
 pub use dss::Dss;
-pub use edit::{EditError, NewFont, TextBlock, TextRun};
+pub use edit::{EditError, Layout, NewFont, TextAlign, TextBlock, TextRun};
 pub use filter::{FilterError, decode};
 pub use formdata::{
     FormDataError, data_from_csv, data_from_fdf, data_from_json, data_from_xfdf, data_to_csv,

@@ -223,14 +223,11 @@ impl Viewer {
                     ),
             );
         }
-        if let Some(inspector) = self.text_inspector(cx) {
-            row = row.child(separator(th)).child(inspector);
-        }
         Some(row.into_any_element())
     }
 
-    /// A row under the row of tools while objects are picked: where they
-    /// are and how big, and what can be done with them.
+    /// A row under the row of tools: the paragraph being typed in, or
+    /// the objects picked, and what can be done with them.
     pub(super) fn object_row(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         if !self.text_editing || !matches!(self.content, Content::Ready(_)) {
             return None;
@@ -238,13 +235,16 @@ impl Viewer {
         let th = self.theme;
         // With none picked, how to pick them, so the page does not jump
         // when the row comes and goes.
-        let inspector = self.inspector(cx).unwrap_or_else(|| {
-            div()
-                .text_size(px(katna_ui::tokens::text::SMALL))
-                .text_color(gpui::rgba(th.katna.text_dim))
-                .child(t("object-row-hint", &[]))
-                .into_any_element()
-        });
+        let inspector = self
+            .text_inspector(cx)
+            .or_else(|| self.inspector(cx))
+            .unwrap_or_else(|| {
+                div()
+                    .text_size(px(katna_ui::tokens::text::SMALL))
+                    .text_color(gpui::rgba(th.katna.text_dim))
+                    .child(t("object-row-hint", &[]))
+                    .into_any_element()
+            });
         Some(
             div()
                 .id("object-tools")
