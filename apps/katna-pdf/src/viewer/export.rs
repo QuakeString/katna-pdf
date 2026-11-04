@@ -26,15 +26,18 @@ pub(super) enum ExportKind {
     Jpeg,
     Text,
     Word,
+    /// The tables the pages' text makes, as CSV.
+    Csv,
     Scanned,
 }
 
 impl ExportKind {
-    const ALL: [(ExportKind, &'static str); 5] = [
+    const ALL: [(ExportKind, &'static str); 6] = [
         (ExportKind::Png, "export-png"),
         (ExportKind::Jpeg, "export-jpeg"),
         (ExportKind::Text, "export-text"),
         (ExportKind::Word, "export-word"),
+        (ExportKind::Csv, "export-csv"),
         (ExportKind::Scanned, "export-scanned"),
     ];
 
@@ -57,6 +60,7 @@ impl ExportKind {
             ExportKind::Jpeg => "jpg",
             ExportKind::Text => "txt",
             ExportKind::Word => "docx",
+            ExportKind::Csv => "csv",
             ExportKind::Scanned => "pdf",
         }
     }
@@ -435,6 +439,14 @@ fn export(job: &Job, target: &Path) -> Result<(String, usize), String> {
         ExportKind::Word => {
             let bytes = katna_pdf_cos::docx(&cos()?, pages);
             std::fs::write(target, bytes).map_err(|e| e.to_string())?;
+            Ok((name, pages.len()))
+        }
+        ExportKind::Csv => {
+            let tables = katna_pdf_cos::tables(&cos()?, pages);
+            if tables.is_empty() {
+                return Err(t("export-no-tables", &[]));
+            }
+            std::fs::write(target, katna_pdf_cos::csv(&tables)).map_err(|e| e.to_string())?;
             Ok((name, pages.len()))
         }
         ExportKind::Scanned => {
