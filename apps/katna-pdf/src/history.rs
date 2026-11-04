@@ -5,7 +5,8 @@
 //! start screen lists them and a file opens again where it was left.
 //!
 //! Kept in `$XDG_STATE_HOME/katna/pdf/recent.tsv`, one file a line: the
-//! page, a tab, the path.
+//! page, a tab, the path. The files open at the end of the last session
+//! are kept beside it in `session.txt`, a path a line, to open again.
 
 use std::path::{Path, PathBuf};
 
@@ -26,6 +27,10 @@ pub struct History {
     entries: Vec<Entry>,
     /// Where it is kept; none when there is no home folder.
     file: Option<PathBuf>,
+    /// The files open when the app last ran, as read at the start.
+    last_session: Vec<PathBuf>,
+    /// The files open now, as last written.
+    session: Vec<PathBuf>,
 }
 
 impl Global for History {}
@@ -44,7 +49,54 @@ impl History {
             .into_iter()
             .filter(|e| e.path.is_file())
             .collect();
-        Self { entries, file }
+        let last_session = file
+            .as_ref()
+            .and_then(|f| std::fs::read_to_string(session_file(f)).ok())
+            .map(|text| {
+                text.lines()
+                    .map(str::trim)
+                    .filter(|l| !l.is_empty())
+                    .map(PathBuf::from)
+                    .filter(|p| p.is_file())
+                    .collect()
+            })
+            .unwrap_or_default();
+        Self {
+            entries,
+            file,
+            last_session,
+            session: Vec::new(),
+        }
+    }
+
+    /// The files open when the app last ran.
+    pub fn last_session(&self) -> &[PathBuf] {
+        &self.last_session
+    }
+
+    /// The files open now: kept, so they can be opened again next time.
+    pub fn session_is(files: Vec<PathBuf>, cx: &mut App) {
+        let history = cx.default_global::<Self>();
+        if history.session == files {
+            return;
+        }
+        history.session = files;
+        let Some(file) = history.file.as_ref().map(|f| session_file(f)) else {
+            return;
+        };
+        let text: String = history
+            .session
+            .iter()
+            .filter_map(|p| p.to_str().filter(|p| !p.contains(['\n', '\r'])))
+            .map(|p| format!("{p}\n"))
+            .collect();
+        cx.background_executor()
+            .spawn(async move {
+                if let Err(err) = save(&file, &text) {
+                    eprintln!("katna-pdf: cannot save {}: {err}", file.display());
+                }
+            })
+            .detach();
     }
 
     /// The files opened lately, newest first.
@@ -123,12 +175,17 @@ fn write(entries: &[Entry]) -> String {
         .collect()
 }
 
+/// Where the session is kept, beside the history.
+fn session_file(history: &Path) -> PathBuf {
+    history.with_file_name("session.txt")
+}
+
 /// Writes `text` to `file` whole: to a file beside it, then moved over.
 fn save(file: &Path, text: &str) -> std::io::Result<()> {
     if let Some(dir) = file.parent() {
         std::fs::create_dir_all(dir)?;
     }
-    let new = file.with_extension("tsv.new");
+    let new = file.with_extension("new");
     std::fs::write(&new, text)?;
     std::fs::rename(&new, file)
 }

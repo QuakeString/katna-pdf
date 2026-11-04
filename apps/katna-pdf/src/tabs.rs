@@ -15,11 +15,14 @@ use gpui::{
 use katna_ui::px;
 use katna_ui::tokens::{radius, space, text};
 
+use crate::history::History;
 use crate::library::{LibraryEvent, LibraryView};
 use crate::text::t;
 use crate::theme::Theme;
 use crate::update::{self, InstallError, Offer, Seen};
-use crate::viewer::{CloseTab, NextTab, Open, PreviousTab, ShowLibrary, Viewer, ViewerEvent};
+use crate::viewer::{
+    CloseTab, NextTab, Open, PreviousTab, ReopenSession, ShowLibrary, Viewer, ViewerEvent,
+};
 
 /// A tab is never wider than this, so many still fit on one line.
 const TAB_WIDTH: f32 = 220.0;
@@ -300,14 +303,36 @@ impl Tabs {
         let viewer = cx.new(|cx| Viewer::new(file, window, cx));
         let events = cx.subscribe_in(&viewer, window, |this, _, event, window, cx| match event {
             ViewerEvent::ChooseFiles => this.choose_files(window, cx),
+            ViewerEvent::ReopenSession => this.reopen_session(window, cx),
             ViewerEvent::Dropped(paths) => this.open_files(paths.clone(), window, cx),
             ViewerEvent::ShowLibrary => this.toggle_library(window, cx),
         });
-        let changes = cx.observe(&viewer, |_, _, cx| cx.notify());
+        let changes = cx.observe(&viewer, |this, _, cx| {
+            this.note_session(cx);
+            cx.notify();
+        });
         self.tabs.push(Tab {
             viewer,
             _subscriptions: [events, changes],
         });
+    }
+
+    /// Opens the files that were open when the app last ran.
+    fn reopen_session(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let files = cx.global::<History>().last_session().to_vec();
+        if !files.is_empty() {
+            self.open_files(files, window, cx);
+        }
+    }
+
+    /// Keeps the files open now, for next time.
+    fn note_session(&self, cx: &mut App) {
+        let files: Vec<PathBuf> = self
+            .tabs
+            .iter()
+            .filter_map(|tab| tab.viewer.read(cx).path().map(Path::to_path_buf))
+            .collect();
+        History::session_is(files, cx);
     }
 
     /// The tab showing `file`, if one does.
@@ -446,6 +471,7 @@ impl Tabs {
                 self.active -= 1;
             }
         }
+        self.note_session(cx);
         self.focus_active(window, cx);
         cx.notify();
     }
@@ -557,6 +583,9 @@ impl Render for Tabs {
             .id("katna-pdf")
             .key_context("Tabs")
             .on_action(cx.listener(|this, _: &Open, window, cx| this.choose_files(window, cx)))
+            .on_action(
+                cx.listener(|this, _: &ReopenSession, window, cx| this.reopen_session(window, cx)),
+            )
             .on_action(cx.listener(|this, _: &CloseTab, window, cx| {
                 let i = this.active;
                 this.close(i, window, cx);

@@ -108,6 +108,9 @@ cargo run --release -p katna-pdf-bench -- file.pdf
   `espeak-ng`, or PowerShell's voice on Windows.
   F5 presents (`viewer/present.rs`): full screen, the pages' own
   transitions and timings from cos `present.rs`.
+  `viewer/initials.rs` keeps initials (typed, a picture, or drawn) in
+  the state folder and puts them into pages with a click; `history.rs`
+  keeps the last session's files (`session.txt`) to open again.
   `update.rs` looks for a newer build on the package's own release
   (`katna-pdf-update.txt`, from `packaging/update-manifest.sh`) and, for
   the Arch package (pkexec and `packaging/arch/katna-pdf-update-helper`),

@@ -14,8 +14,8 @@ use crate::text::t;
 use crate::viewer::{
     ActualSize, AddBookmark, Annotate, CloseTab, Compare, CopyText, Find, FindNext, FindPrevious,
     FitPage, FitWidth, NextPage, NextSpread, NextTab, Open, Organize, Present, PreviousPage,
-    PreviousTab, Print, Properties, Quit, ReadAloud, Save, ShowLibrary, Sign, ToggleContents,
-    ToggleNight, ZoomIn, ZoomOut,
+    PreviousTab, Print, Properties, Quit, ReadAloud, ReopenSession, Save, ShowLibrary, Sign,
+    ToggleContents, ToggleNight, ZoomIn, ZoomOut,
 };
 
 /// The menus, their items, and each item's keys.
@@ -29,6 +29,7 @@ fn items() -> Vec<MenuItem> {
             t("menu-file", &[]),
             vec![
                 item("menu-open", &ctrl("O")),
+                item("menu-reopen-session", &[]),
                 item("menu-save", &ctrl("S")),
                 item("menu-print", &ctrl("P")),
                 item("menu-properties", &ctrl("D")),
@@ -88,6 +89,7 @@ fn items() -> Vec<MenuItem> {
 fn action(id: &str) -> Option<Box<dyn Action>> {
     Some(match id {
         "menu-open" => Box::new(Open),
+        "menu-reopen-session" => Box::new(ReopenSession),
         "menu-save" => Box::new(Save),
         "menu-print" => Box::new(Print),
         "menu-properties" => Box::new(Properties),

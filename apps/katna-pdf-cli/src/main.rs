@@ -80,13 +80,14 @@ usage: katna-pdf-cli COMMAND [--json] ...
                                   (the default) brings pictures down to 150 dpi,
                                   strong to 96 dpi, lossless leaves them
   redact FILE -o OUT [--area PAGE:L,B,R,T]... [--find pan,aadhaar,phone,email]
-         [--words TEXT]... [--pages PAGES] [--scrub] [--no-fill]
+         [--words TEXT]... [--pages PAGES] [--scrub] [--no-fill] [--overlay TEXT]
                                   what lies under each box taken out of the file, not
                                   only covered: text (invisible text too), the pixels
                                   of pictures, shapes, annotations; boxes found from
                                   numbers or words on PAGES (all without it); a black
-                                  box drawn over each unless --no-fill; with --scrub,
-                                  the properties, scripts and attached files go too
+                                  box drawn over each unless --no-fill, with TEXT
+                                  written on it with --overlay; with --scrub, the
+                                  properties, scripts and attached files go too
   meta FILE -o OUT [--title T] [--author A] [--subject S] [--keywords K]
        [--creator C] [--producer P]
                                   the document's properties changed (`info` shows
@@ -1647,6 +1648,7 @@ fn redact(args: &[String], json: bool) -> Done {
     let options = RedactOptions {
         fill: (!args.flag("--no-fill")).then_some([0.0; 3]),
         scrub: args.flag("--scrub"),
+        overlay: args.option("--overlay").map(str::to_owned),
     };
     let bytes = doc
         .redact(&areas, &options)

@@ -38,6 +38,8 @@ pub(super) struct Redacting {
     /// Which of [`FINDS`] to look for.
     find: [bool; 4],
     words: Entity<TextInput>,
+    /// Words written over each box, such as a reason code.
+    overlay: Entity<TextInput>,
     /// The properties, scripts and attached files go too.
     scrub: bool,
     /// A box being dragged out on the page shown.
@@ -66,6 +68,11 @@ impl Viewer {
             input.set_accent(accent);
             input
         });
+        let overlay = cx.new(|cx| {
+            let mut input = TextInput::new(t("redact-overlay", &[]), cx);
+            input.set_accent(accent);
+            input
+        });
         let inputs = vec![cx.subscribe(&words, |this, _, event, cx| {
             if let InputEvent::Submit = event {
                 this.find_redactions(cx);
@@ -75,6 +82,7 @@ impl Viewer {
             areas: Vec::new(),
             find: [false; 4],
             words,
+            overlay,
             scrub: false,
             drawing: None,
             finding: false,
@@ -258,9 +266,11 @@ impl Viewer {
             return;
         }
         let areas = redacting.areas.clone();
+        let overlay = redacting.overlay.read(cx).text().trim().to_owned();
         let options = RedactOptions {
             fill: Some([0.0; 3]),
             scrub: redacting.scrub,
+            overlay: (!overlay.is_empty()).then_some(overlay),
         };
         self.redacting = None;
         let mut pages: Vec<usize> = areas.iter().map(|(p, _)| *p).collect();
@@ -423,6 +433,19 @@ impl Viewer {
                             )
                             .on_click(cx.listener(|this, _, _, cx| this.find_redactions(cx))),
                         ),
+                )
+                .child(label("redact-overlay-label"))
+                .child(
+                    div()
+                        .h(px(36.0))
+                        .flex()
+                        .items_center()
+                        .px(px(space::S3))
+                        .rounded(px(radius::SM))
+                        .bg(th.field)
+                        .text_size(px(text::BODY))
+                        .text_color(th.text)
+                        .child(redacting.overlay.clone()),
                 )
                 .child(
                     div()

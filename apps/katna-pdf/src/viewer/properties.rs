@@ -30,10 +30,27 @@ pub(super) struct Properties {
     /// How large the file is, in bytes, once read.
     size: Option<u64>,
     fields: [Entity<TextInput>; 4],
-    /// A new password to put on.
+    /// A new password to put on: the one that opens the file, and the
+    /// owner's, which opens it fully.
     password: Entity<TextInput>,
+    owner: Entity<TextInput>,
+    /// What someone opening it without the owner's password may do.
+    allow: Permissions,
     _fields: Vec<Subscription>,
 }
+
+/// Reaches one of the allowed actions.
+type Allowed = fn(&mut Permissions) -> &mut bool;
+
+/// The allowed actions the card offers, in order.
+const ALLOWED: [(&str, Allowed); 6] = [
+    ("properties-allow-print", |p| &mut p.print),
+    ("properties-allow-change", |p| &mut p.change),
+    ("properties-allow-copy", |p| &mut p.copy),
+    ("properties-allow-comment", |p| &mut p.comment),
+    ("properties-allow-fill", |p| &mut p.fill_forms),
+    ("properties-allow-assemble", |p| &mut p.assemble),
+];
 
 const LABELS: [&str; 4] = [
     "properties-title",
@@ -71,6 +88,12 @@ impl Viewer {
             input.set_masked(true, cx);
             input
         });
+        let owner = cx.new(|cx| {
+            let mut input = TextInput::new(t("properties-password-owner-new", &[]), cx);
+            input.set_accent(accent);
+            input.set_masked(true, cx);
+            input
+        });
         let subs = fields
             .iter()
             .map(|f| {
@@ -87,6 +110,8 @@ impl Viewer {
             size: None,
             fields,
             password,
+            owner,
+            allow: Permissions::ALL,
             _fields: subs,
         });
         let current = self.unsaved();
@@ -164,20 +189,24 @@ impl Viewer {
             return;
         };
         let password = properties.password.read(cx).text().to_owned();
-        if password.is_empty() {
-            return;
-        }
+        let owner = properties.owner.read(cx).text().to_owned();
+        let allow = properties.allow;
+        // One password typed serves both ways; the owner's alone leaves
+        // the file open to anyone, with only what is allowed.
+        let (user, owner) = match (password.is_empty(), owner.is_empty()) {
+            (true, true) => return,
+            (false, true) => (password.clone(), password),
+            (true, false) => (String::new(), owner),
+            (false, false) => (password, owner),
+        };
         self.properties = None;
         let pages = (0..self.page_count()).collect();
-        let after: Arc<str> = Arc::from(password.as_str());
+        let after: Arc<str> = Arc::from(owner.as_str());
         self.change_document_keyed(
             pages,
             "properties-lock-failed",
             Some(after),
-            move |doc| {
-                doc.lock(&password, &password, Permissions::ALL)
-                    .map_err(|e| e.to_string())
-            },
+            move |doc| doc.lock(&user, &owner, allow).map_err(|e| e.to_string()),
             cx,
         );
     }
@@ -193,6 +222,23 @@ impl Viewer {
             |doc| doc.without_lock().map_err(|e| e.to_string()),
             cx,
         );
+    }
+
+    /// Takes the lock off a file opened without its owner's password,
+    /// with the owner's password typed in the card.
+    fn unlock_file_with(&mut self, cx: &mut Context<Self>) {
+        let Some(properties) = self.properties.as_ref() else {
+            return;
+        };
+        let owner = properties.owner.read(cx).text().to_owned();
+        if owner.is_empty() {
+            return;
+        }
+        // The change opens the file with the owner's password; the
+        // result has none.
+        let key = self.key.replace(Arc::from(owner.as_str()));
+        self.unlock_file(cx);
+        self.key = key;
     }
 
     /// Writes the file again as small as `how` allows, and says how much
@@ -350,25 +396,64 @@ impl Viewer {
                     .text_color(th.text)
                     .child(t("properties-password", &[])),
             );
-            card = match (locked, owner) {
-                (false, _) => card.child(label("properties-password-none")).child(
+            let field = |input: &Entity<TextInput>| {
+                div()
+                    .flex_1()
+                    .h(px(36.0))
+                    .flex()
+                    .items_center()
+                    .px(px(space::S3))
+                    .rounded(px(radius::SM))
+                    .bg(th.field)
+                    .text_size(px(text::BODY))
+                    .text_color(th.text)
+                    .child(input.clone())
+            };
+            let mut allowed = div()
+                .flex()
+                .flex_wrap()
+                .gap_x(px(space::S3))
+                .gap_y(px(space::S1));
+            for (i, (id, get)) in ALLOWED.into_iter().enumerate() {
+                let mut allow = properties.allow;
+                let on = *get(&mut allow);
+                allowed = allowed.child(
                     div()
+                        .id(("properties-allow", i))
                         .flex()
-                        .gap(px(space::S2))
+                        .items_center()
+                        .gap(px(space::S1))
+                        .cursor_pointer()
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            if let Some(p) = this.properties.as_mut() {
+                                let flag = get(&mut p.allow);
+                                *flag = !*flag;
+                            }
+                            cx.notify();
+                        }))
+                        .child(super::sign::check_box(on, th))
                         .child(
                             div()
-                                .flex_1()
-                                .h(px(36.0))
-                                .flex()
-                                .items_center()
-                                .px(px(space::S3))
-                                .rounded(px(radius::SM))
-                                .bg(th.field)
-                                .text_size(px(text::BODY))
+                                .text_size(px(text::SMALL))
                                 .text_color(th.text)
-                                .child(properties.password.clone()),
-                        )
-                        .child(
+                                .child(t(id, &[])),
+                        ),
+                );
+            }
+            card = match (locked, owner) {
+                (false, _) => card
+                    .child(label("properties-password-none"))
+                    .child(
+                        div()
+                            .flex()
+                            .gap(px(space::S2))
+                            .child(field(&properties.password))
+                            .child(field(&properties.owner)),
+                    )
+                    .child(label("properties-allow"))
+                    .child(allowed)
+                    .child(
+                        div().flex().justify_end().child(
                             widgets::outlined_button(
                                 "properties-lock",
                                 t("properties-lock", &[]),
@@ -376,7 +461,7 @@ impl Viewer {
                             )
                             .on_click(cx.listener(|this, _, _, cx| this.lock_file(cx))),
                         ),
-                ),
+                    ),
                 (true, true) => card.child(label("properties-password-on")).child(
                     div().flex().child(
                         widgets::outlined_button(
@@ -387,7 +472,20 @@ impl Viewer {
                         .on_click(cx.listener(|this, _, _, cx| this.unlock_file(cx))),
                     ),
                 ),
-                (true, false) => card.child(label("properties-password-owner")),
+                (true, false) => card.child(label("properties-password-owner")).child(
+                    div()
+                        .flex()
+                        .gap(px(space::S2))
+                        .child(field(&properties.owner))
+                        .child(
+                            widgets::outlined_button(
+                                "properties-unlock",
+                                t("properties-unlock", &[]),
+                                &th.katna,
+                            )
+                            .on_click(cx.listener(|this, _, _, cx| this.unlock_file_with(cx))),
+                        ),
+                ),
             };
         }
         if let Some(size) = properties.size {

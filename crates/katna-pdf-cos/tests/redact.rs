@@ -115,6 +115,7 @@ fn older_revisions_do_not_keep_what_was_taken_out() {
                 &RedactOptions {
                     fill: None,
                     scrub: true,
+                    overlay: None,
                 },
             )
             .unwrap(),
@@ -243,4 +244,33 @@ fn a_locked_file_stays_locked() {
     again.unlock("asha").unwrap();
     assert!(!text(&again).contains("ABCDE"));
     assert!(text(&again).contains("Asha Rao"));
+}
+
+#[test]
+fn words_are_written_over_the_boxes() {
+    let doc = letter();
+    let found = doc.find_redactions(0, &[Pattern::Pan]);
+    let areas: Vec<(usize, [f32; 4])> = found.iter().map(|r| (0, *r)).collect();
+    let out = Document::load(
+        doc.redact(
+            &areas,
+            &RedactOptions {
+                overlay: Some("B(1)".into()),
+                ..RedactOptions::default()
+            },
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let after = text(&out);
+    assert!(!after.contains("ABCDE"), "{after}");
+    assert!(after.contains("B(1)"), "{after}");
+    let runs = out.text_runs(0);
+    let over = runs.iter().find(|r| r.text == "B(1)").unwrap();
+    let area = found[0];
+    assert!(
+        over.rect[0] >= area[0] && over.rect[2] <= area[2] + 0.5,
+        "{:?} in {area:?}",
+        over.rect
+    );
 }
