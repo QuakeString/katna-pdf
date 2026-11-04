@@ -13,17 +13,20 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 
-use crate::UpdateError;
 use crate::content::{Op, ops, splice, write_op};
 use crate::document::Document;
 use crate::filter::decode;
+use crate::fonts::truetype::TrueType;
 use crate::fonts::{Font, stand_in, win_ansi_code, win_ansi_width};
-use crate::object::{Dict, Name, Object, Ref};
+use crate::object::{Dict, Name, Object, Ref, Stream};
 use crate::pages::page_dict;
+use crate::write::{Update, UpdateError};
 
 /// The start of the names given to standard fonts brought in to stand in
 /// for letters a font lacks.
 const STAND_IN: &[u8] = b"KatnaF";
+/// The name fonts put in whole for a paragraph start with.
+const PUT_IN: &[u8] = b"KatnaE";
 /// A gap wider than this share of the text size is a space.
 const SPACE: f64 = 0.15;
 /// How far above and below its baseline a line of text reaches, as a
@@ -63,7 +66,21 @@ pub enum EditError {
     Content,
     /// A character neither the font nor a standard font has.
     Unsupported(char),
+    /// The font file to put in is not TrueType, or could not be read.
+    NotTrueType,
+    /// The font file's licence does not allow embedding it.
+    NotEmbeddable,
     Update(UpdateError),
+}
+
+/// A font to show a paragraph in instead of its own.
+#[derive(Debug, Clone, PartialEq)]
+pub enum NewFont {
+    /// One of the standard 14 by name (`Helvetica-Bold`), not embedded.
+    Standard(String),
+    /// A TrueType font file (face `face` of a collection), the glyphs the
+    /// paragraph needs embedded, with the Latin letters besides.
+    TrueType { data: Vec<u8>, face: usize },
 }
 
 impl fmt::Display for EditError {
@@ -77,6 +94,10 @@ impl fmt::Display for EditError {
                     f,
                     "the font has no “{c}”, and no standard font has it either"
                 )
+            }
+            EditError::NotTrueType => write!(f, "the font file is not TrueType"),
+            EditError::NotEmbeddable => {
+                write!(f, "the font's licence does not allow putting it in a file")
             }
             EditError::Update(e) => write!(f, "{e}"),
         }
@@ -234,12 +255,14 @@ impl Document {
             .collect();
         self.rewrite(
             page,
+            self.update()?,
             &read,
             &all,
             &edits,
             More {
                 moves: Vec::new(),
                 shift: true,
+                added: None,
                 append: None,
             },
         )
@@ -334,7 +357,46 @@ impl Document {
         lines: &[usize],
         text: &str,
     ) -> Result<Vec<u8>, EditError> {
-        let read = self.read_page(page).ok_or(EditError::Content)?;
+        self.edit_block_in(page, lines, text, None)
+    }
+
+    /// The file with the paragraph of runs `lines` on page `page` shown
+    /// in `font` instead of its own, its text `text` laid out again in
+    /// it (wrapped to the paragraph's width as [`Document::edit_block`]
+    /// does); letters the font lacks come from a standard font.
+    pub fn refont_block(
+        &self,
+        page: usize,
+        lines: &[usize],
+        text: &str,
+        font: &NewFont,
+    ) -> Result<Vec<u8>, EditError> {
+        self.edit_block_in(page, lines, text, Some(font))
+    }
+
+    fn edit_block_in(
+        &self,
+        page: usize,
+        lines: &[usize],
+        text: &str,
+        font: Option<&NewFont>,
+    ) -> Result<Vec<u8>, EditError> {
+        let mut read = self.read_page(page).ok_or(EditError::Content)?;
+        // The font brought in, under a name of its own among the page's.
+        let mut update = self.update()?;
+        let added = match font {
+            Some(font) => {
+                let prefix = match font {
+                    NewFont::Standard(_) => STAND_IN,
+                    NewFont::TrueType { .. } => PUT_IN,
+                };
+                let key = free_name(&self.font_dict(page), &Vec::new(), prefix);
+                let (dict, r) = self.add_font(&mut update, font, text)?;
+                read.fonts.insert(key.clone(), Font::load(self, &dict));
+                Some((key, r))
+            }
+            None => None,
+        };
         let all = runs(&read);
         let old: Vec<&TextRun> = lines
             .iter()
@@ -386,10 +448,16 @@ impl Document {
             Align::Right => top_place.end - wide,
             Align::Center => (top_place.start + top_place.end - wide) / 2.0,
         };
+        let in_font = |piece: &Piece| -> Vec<u8> {
+            added
+                .as_ref()
+                .map_or_else(|| piece.font.clone(), |(key, _)| key.clone())
+        };
         let width = |j: usize, line: &str| -> Result<f64, EditError> {
             let run = old[j.min(old.len() - 1)];
             let piece = piece_of(j);
-            let letters = letters(&read, run, &piece.font);
+            let key = in_font(piece);
+            let letters = letters(&read, run, &key);
             Ok(lay(line, &letters, piece, &read, None)? * scale_between(piece, first))
         };
         let text = text.replace("\r\n", "\n").replace('\r', "\n");
@@ -435,7 +503,9 @@ impl Document {
             .enumerate()
             .map(|(j, run)| (*run, new.get(j).cloned().unwrap_or_default()))
             .collect();
-        edits.retain(|(i, t)| all[*i].text != *t);
+        if added.is_none() {
+            edits.retain(|(i, t)| all[*i].text != *t);
+        }
         // Lines not lined up on the left move to stay lined up as they
         // were, by a move before their first piece, in its units.
         let mut moves = Vec::new();
@@ -473,6 +543,7 @@ impl Document {
         };
         self.rewrite(
             page,
+            update,
             &read,
             &all,
             &edits,
@@ -480,8 +551,55 @@ impl Document {
                 moves,
                 shift: old.len() == 1,
                 append,
+                added,
             },
         )
+    }
+
+    /// Page `page`'s fonts, by name.
+    fn font_dict(&self, page: usize) -> Dict {
+        let Some(page_ref) = self.pages().get(page).copied() else {
+            return Dict::new();
+        };
+        let full = page_dict(self, page_ref);
+        let resources = match full.get("Resources").map(|r| self.resolve(r)) {
+            Some(Object::Dict(d)) => d,
+            _ => Dict::new(),
+        };
+        match self.resolve_key(&resources, "Font") {
+            Object::Dict(d) => d,
+            _ => Dict::new(),
+        }
+    }
+
+    /// `font` written into `update` for `text`: the dictionary to read
+    /// it back from (its parts inline), and the font's reference.
+    fn add_font(
+        &self,
+        update: &mut Update,
+        font: &NewFont,
+        text: &str,
+    ) -> Result<(Dict, Ref), EditError> {
+        match font {
+            NewFont::Standard(name) => {
+                let (name, _) = stand_in(name);
+                let dict = Dict(vec![
+                    (Name::new("Type"), Object::name("Font")),
+                    (Name::new("Subtype"), Object::name("Type1")),
+                    (Name::new("BaseFont"), Object::name(name)),
+                    (Name::new("Encoding"), Object::name("WinAnsiEncoding")),
+                ]);
+                let r = update.add(Object::Dict(dict.clone()));
+                Ok((dict, r))
+            }
+            NewFont::TrueType { data, face } => {
+                let tt = TrueType::parse(data.clone(), *face).ok_or(EditError::NotTrueType)?;
+                if !tt.embeddable {
+                    return Err(EditError::NotEmbeddable);
+                }
+                Ok(embed_truetype(update, &tt, text))
+            }
+        }
     }
 
     /// Writes `edits` to runs of `all` into page `page`'s content, and
@@ -489,6 +607,7 @@ impl Document {
     fn rewrite(
         &self,
         page: usize,
+        mut update: Update,
         read: &Page,
         all: &[TextRun],
         edits: &[(usize, String)],
@@ -498,9 +617,9 @@ impl Document {
             moves,
             shift,
             append,
+            added,
         } = more;
         let page_ref = *self.pages().get(page).ok_or(EditError::NoPage)?;
-        let mut update = self.update()?;
         // Standard fonts brought in for glyphs a font lacks, by name.
         let mut stand_ins: StandIns = Vec::new();
         let full = page_dict(self, page_ref);
@@ -520,22 +639,27 @@ impl Document {
             let run = all.get(*index).ok_or(EditError::NoRun)?;
             let old: Vec<char> = run.text.chars().collect();
             let new: Vec<char> = text.chars().collect();
-            if old == new {
+            if old == new && added.is_none() {
                 continue;
             }
             // The part that changed: what lies between the text the old
             // and new have in common at either end, widened to whole codes
-            // (a ligature's glyph stands for several letters).
-            let mut from = old.iter().zip(&new).take_while(|(a, b)| a == b).count();
-            let most = old.len().min(new.len()) - from;
-            let common_end = old
-                .iter()
-                .rev()
-                .zip(new.iter().rev())
-                .take(most)
-                .take_while(|(a, b)| a == b)
-                .count();
-            let mut to = old.len() - common_end;
+            // (a ligature's glyph stands for several letters); all of it
+            // in a new font.
+            let (mut from, mut to) = if added.is_some() {
+                (0, old.len())
+            } else {
+                let from = old.iter().zip(&new).take_while(|(a, b)| a == b).count();
+                let most = old.len().min(new.len()) - from;
+                let common_end = old
+                    .iter()
+                    .rev()
+                    .zip(new.iter().rev())
+                    .take(most)
+                    .take_while(|(a, b)| a == b)
+                    .count();
+                (from, old.len() - common_end)
+            };
             // Each atom of the run: (piece in the run, atom, its chars).
             let mut flat: Vec<(usize, usize, usize, usize)> = Vec::new();
             for (k, i) in run.ops.iter().enumerate() {
@@ -582,7 +706,8 @@ impl Document {
                 let (px, py) = apply(&piece.m, x, 0.0);
                 apply(&inv, px, py).0
             };
-            let letters = letters(read, run, &fp.font);
+            let in_font = added.as_ref().map_or(&fp.font, |(key, _)| key);
+            let letters = letters(read, run, in_font);
             let size = fp.size;
             let mut w = Writer {
                 out: lead_in(&read.ops[fp.op]),
@@ -695,7 +820,8 @@ impl Document {
             let run = &all[append.last];
             let lp = &read.pieces[*run.ops.last().ok_or(EditError::NoRun)?];
             let first = &read.pieces[all[append.first].ops[0]];
-            let letters = letters(read, run, &lp.font);
+            let in_font = added.as_ref().map_or(&lp.font, |(key, _)| key);
+            let letters = letters(read, run, in_font);
             let back = invert(&lp.ctm).ok_or(EditError::NoRun)?;
             let mut out = replaced
                 .remove(&lp.op)
@@ -750,7 +876,10 @@ impl Document {
             .and_then(|o| o.as_dict().cloned())
             .unwrap_or_default();
         dict.set("Contents", Object::Ref(stream));
-        if !stand_ins.is_empty() {
+        if !stand_ins.is_empty() || added.is_some() {
+            if let Some((key, r)) = &added {
+                font_dict.0.push((Name(key.clone()), Object::Ref(*r)));
+            }
             for (name, key) in &stand_ins {
                 let font = Dict(vec![
                     (Name::new("Type"), Object::name("Font")),
@@ -1178,6 +1307,9 @@ fn place(page: &Page, inv: &Matrix, run: &TextRun) -> Place {
 /// `TJ` number before their first piece), whether text further along an
 /// edited line moves with it, and lines written under a paragraph.
 struct More {
+    /// A font brought in for the whole paragraph: its name among the
+    /// page's fonts, and its reference.
+    added: Option<(Vec<u8>, Ref)>,
     moves: Vec<(usize, f64)>,
     shift: bool,
     append: Option<Append>,
@@ -1480,7 +1612,7 @@ fn lay(
                     let key = match stand_ins.iter().find(|(n, _)| *n == letters.name) {
                         Some((_, key)) => key.clone(),
                         None => {
-                            let key = free_name(font_dict, stand_ins);
+                            let key = free_name(font_dict, stand_ins, STAND_IN);
                             stand_ins.push((letters.name, key.clone()));
                             key
                         }
@@ -1782,15 +1914,189 @@ fn segments(
 
 /// A name for a font brought in that neither the page's fonts nor those
 /// brought in already use.
-fn free_name(fonts: &Dict, taken: &StandIns) -> Vec<u8> {
+fn free_name(fonts: &Dict, taken: &StandIns, prefix: &[u8]) -> Vec<u8> {
     let mut k = 1;
     loop {
-        let name = format!("{}{k}", String::from_utf8_lossy(STAND_IN));
+        let name = format!("{}{k}", String::from_utf8_lossy(prefix));
         if fonts.get(&name).is_none() && !taken.iter().any(|(_, t)| *t == name.as_bytes()) {
             return name.into_bytes();
         }
         k += 1;
     }
+}
+
+/// Font `tt` written into `update` as a Type 0 font with glyphs named
+/// by number (`Identity-H`), holding the glyphs for `text` and for the
+/// Latin letters; returns the dictionary to read it back from (its parts
+/// inline) and the font's reference.
+fn embed_truetype(update: &mut Update, tt: &TrueType, text: &str) -> (Dict, Ref) {
+    let mut chars: Vec<char> = (0x20..0x7Fu32)
+        .chain(0xA0..0x100)
+        .filter_map(char::from_u32)
+        .collect();
+    chars.extend(text.chars().filter(|c| !c.is_control()));
+    chars.sort_unstable();
+    chars.dedup();
+    let mut glyphs: Vec<(u16, char)> = chars
+        .into_iter()
+        .filter_map(|c| tt.gid(c).map(|g| (g, c)))
+        .collect();
+    glyphs.sort_unstable();
+    let gids: Vec<u16> = glyphs.iter().map(|(g, _)| *g).collect();
+    let file = tt.subset(&gids);
+    let mut stream = crate::dss::compressed(&file);
+    stream.dict.set("Length1", file.len() as i64);
+    let file_ref = update.add(Object::Stream(stream));
+    // A tag from the glyphs held, as subset fonts carry.
+    let mut hash: u32 = 2166136261;
+    for g in &gids {
+        hash = (hash ^ u32::from(*g)).wrapping_mul(16777619);
+    }
+    let tag: String = (0..6)
+        .map(|i| char::from(b'A' + ((hash >> (5 * i)) % 26) as u8))
+        .collect();
+    let base = format!("{tag}+{}", tt.postscript_name);
+    let scale = 1000.0 / tt.units_per_em;
+    let mut flags = 1 << 5;
+    if tt.fixed_pitch {
+        flags |= 1;
+    }
+    if tt.serif {
+        flags |= 1 << 1;
+    }
+    if tt.italic_angle != 0.0 {
+        flags |= 1 << 6;
+    }
+    if tt.weight >= 600 {
+        flags |= 1 << 18;
+    }
+    let stem = 50.0 + f64::from(tt.weight.clamp(100, 900) - 100) / 8.0;
+    let descriptor = Dict(vec![
+        (Name::new("Type"), Object::name("FontDescriptor")),
+        (Name::new("FontName"), Object::name(&base)),
+        (Name::new("Flags"), Object::Int(flags)),
+        (
+            Name::new("FontBBox"),
+            Object::Array(
+                tt.bbox
+                    .iter()
+                    .map(|v| number((f64::from(*v) * scale).round()))
+                    .collect(),
+            ),
+        ),
+        (Name::new("ItalicAngle"), number(tt.italic_angle)),
+        (
+            Name::new("Ascent"),
+            number((f64::from(tt.ascent) * scale).round()),
+        ),
+        (
+            Name::new("Descent"),
+            number((f64::from(tt.descent) * scale).round()),
+        ),
+        (
+            Name::new("CapHeight"),
+            number((f64::from(tt.cap_height) * scale).round()),
+        ),
+        (Name::new("StemV"), number(stem.round())),
+        (Name::new("FontFile2"), Object::Ref(file_ref)),
+    ]);
+    let descriptor_ref = update.add(Object::Dict(descriptor.clone()));
+    // Widths as runs of glyphs in a row.
+    let mut w = Vec::new();
+    let mut i = 0;
+    while i < gids.len() {
+        let mut j = i;
+        while j + 1 < gids.len() && gids[j + 1] == gids[j] + 1 {
+            j += 1;
+        }
+        w.push(Object::Int(i64::from(gids[i])));
+        w.push(Object::Array(
+            gids[i..=j]
+                .iter()
+                .map(|g| number(tt.advance(*g).round()))
+                .collect(),
+        ));
+        i = j + 1;
+    }
+    let cid_font = |descriptor: Object| {
+        Dict(vec![
+            (Name::new("Type"), Object::name("Font")),
+            (Name::new("Subtype"), Object::name("CIDFontType2")),
+            (Name::new("BaseFont"), Object::name(&base)),
+            (
+                Name::new("CIDSystemInfo"),
+                Object::Dict(Dict(vec![
+                    (
+                        Name::new("Registry"),
+                        Object::String {
+                            bytes: b"Adobe".to_vec(),
+                            hex: false,
+                        },
+                    ),
+                    (
+                        Name::new("Ordering"),
+                        Object::String {
+                            bytes: b"Identity".to_vec(),
+                            hex: false,
+                        },
+                    ),
+                    (Name::new("Supplement"), Object::Int(0)),
+                ])),
+            ),
+            (Name::new("FontDescriptor"), descriptor),
+            (Name::new("DW"), Object::Int(1000)),
+            (Name::new("W"), Object::Array(w.clone())),
+            (Name::new("CIDToGIDMap"), Object::name("Identity")),
+            (Name::new("KatnaGlyphs"), Object::Bool(true)),
+        ])
+    };
+    let cid_ref = update.add(Object::Dict(cid_font(Object::Ref(descriptor_ref))));
+    let mut cmap = String::from(
+        "/CIDInit /ProcSet findresource begin\n12 dict begin\nbegincmap\n\
+         /CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def\n\
+         /CMapName /Adobe-Identity-UCS def\n/CMapType 2 def\n\
+         1 begincodespacerange\n<0000> <FFFF>\nendcodespacerange\n",
+    );
+    for chunk in glyphs.chunks(100) {
+        cmap.push_str(&format!("{} beginbfchar\n", chunk.len()));
+        for (g, c) in chunk {
+            let units: Vec<u16> = c.encode_utf16(&mut [0; 2]).to_vec();
+            let hex: String = units.iter().map(|u| format!("{u:04X}")).collect();
+            cmap.push_str(&format!("<{g:04X}> <{hex}>\n"));
+        }
+        cmap.push_str("endbfchar\n");
+    }
+    cmap.push_str("endcmap\nCMapName currentdict /CMap defineresource pop\nend\nend\n");
+    let to_unicode = Stream {
+        dict: Dict::new(),
+        data: cmap.into_bytes(),
+    };
+    let to_unicode_ref = update.add(Object::Stream(crate::dss::compressed(&to_unicode.data)));
+    let type0 = |descendant: Object, to_unicode: Object, base: &str| {
+        Dict(vec![
+            (Name::new("Type"), Object::name("Font")),
+            (Name::new("Subtype"), Object::name("Type0")),
+            (Name::new("BaseFont"), Object::name(base)),
+            (Name::new("Encoding"), Object::name("Identity-H")),
+            (
+                Name::new("DescendantFonts"),
+                Object::Array(vec![descendant]),
+            ),
+            (Name::new("ToUnicode"), to_unicode),
+        ])
+    };
+    let r = update.add(Object::Dict(type0(
+        Object::Ref(cid_ref),
+        Object::Ref(to_unicode_ref),
+        &base,
+    )));
+    // Read back without the tag, so every glyph held is offered.
+    let load = type0(
+        Object::Dict(cid_font(Object::Dict(descriptor))),
+        Object::Stream(to_unicode),
+        &tt.postscript_name,
+    );
+    (load, r)
 }
 
 fn number(v: f64) -> Object {
