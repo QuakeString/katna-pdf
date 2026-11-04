@@ -266,3 +266,78 @@ fn pages_are_cropped_within_their_media_and_uncropped() {
     let none = crop(&cropped, 0, [500.0, 500.0, 600.0, 600.0]);
     assert_eq!(none.page_info(0).unwrap().crop, info.crop);
 }
+
+fn stream_text(doc: &Document, at: &Object) -> String {
+    let Object::Stream(s) = doc.resolve(at) else {
+        panic!("not a stream");
+    };
+    String::from_utf8(katna_pdf_cos::decode(&s.dict, &s.data).unwrap()).unwrap()
+}
+
+#[test]
+fn blank_pages_are_made_and_pages_resized() {
+    let blank =
+        Document::load(katna_pdf_cos::blank_pdf(&[(595.0, 842.0), (842.0, 595.0)])).unwrap();
+    assert_eq!(blank.pages().len(), 2);
+    assert_eq!(blank.page_info(0).unwrap().media, [0.0, 0.0, 595.0, 842.0]);
+    assert_eq!(blank.page_info(1).unwrap().size(), (842.0, 595.0));
+    // Blank pages go into another file through compose.
+    let doc = three();
+    let out = compose(
+        Some(&doc),
+        &[
+            PageSource {
+                doc: &doc,
+                page: 0,
+                turns: 0,
+                crop: None,
+            },
+            PageSource {
+                doc: &blank,
+                page: 0,
+                turns: 0,
+                crop: None,
+            },
+            PageSource {
+                doc: &doc,
+                page: 1,
+                turns: 0,
+                crop: None,
+            },
+        ],
+    )
+    .unwrap();
+    let merged = Document::load(out).unwrap();
+    assert_eq!(merged.pages().len(), 3);
+    assert_eq!(merged.page_info(1).unwrap().media, [0.0, 0.0, 595.0, 842.0]);
+
+    // Page 1 (100 × 100, `q Q`) made A4 with its drawing scaled: fits by
+    // the width, centred.
+    let out = doc.resize_pages(&[0], (595.0, 842.0), true).unwrap();
+    let resized = Document::load(out).unwrap();
+    let info = resized.page_info(0).unwrap();
+    assert_eq!(info.media, [0.0, 0.0, 595.0, 842.0]);
+    assert_eq!(info.crop, info.media);
+    let page = resized.get(resized.pages()[0]).unwrap();
+    let dict = page.as_dict().unwrap();
+    let Some(Object::Array(contents)) = dict.get("Contents") else {
+        panic!("contents not an array");
+    };
+    assert_eq!(contents.len(), 3);
+    // 595 / 100 = 5.95 across; (842 - 595) / 2 = 123.5 up.
+    assert_eq!(
+        stream_text(&resized, &contents[0]),
+        "q 5.95 0 0 5.95 0 123.5 cm\n"
+    );
+    assert_eq!(stream_text(&resized, &contents[2]), "\nQ\n");
+    // Kept as big as it was: moved to the middle.
+    let out = doc.resize_pages(&[0], (300.0, 200.0), false).unwrap();
+    let resized = Document::load(out).unwrap();
+    let dict = resized.get(resized.pages()[0]).unwrap();
+    let Some(Object::Array(contents)) = dict.as_dict().unwrap().get("Contents") else {
+        panic!("contents not an array");
+    };
+    assert_eq!(stream_text(&resized, &contents[0]), "q 1 0 0 1 100 50 cm\n");
+    // Nothing else changed: the file still composes.
+    assert_eq!(resized.pages().len(), 3);
+}

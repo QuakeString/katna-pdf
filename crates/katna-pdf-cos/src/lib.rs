@@ -75,7 +75,7 @@ pub use object::{Dict, Name, Object, Ref, Stream};
 pub use objects::{ObjectChange, ObjectCopy, ObjectKind, PageObject, PictureFile, ShapeStyle};
 pub use optimize::{ImageLimit, Optimize, OptimizeError, Optimized};
 pub use outline::{Destination, OutlineItem, text_string};
-pub use pages::{ComposeError, PageInfo, PageSource, compose};
+pub use pages::{ComposeError, PageInfo, PageSource, blank_pdf, compose};
 pub use present::{PageShow, Transition, TransitionStyle};
 pub use redact::{Pattern, RedactError, RedactOptions};
 pub use report::text_pdf;
