@@ -120,6 +120,7 @@ actions!(
         Sign,
         PastePicture,
         PasteInPlace,
+        PasteToPages,
         Cut,
         SelectAll,
         NudgeLeft,
@@ -224,6 +225,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl-c", CopyText, Some(READING)),
         KeyBinding::new("ctrl-v", PastePicture, Some(READING)),
         KeyBinding::new("ctrl-shift-v", PasteInPlace, Some(READING)),
+        KeyBinding::new("ctrl-alt-v", PasteToPages, Some(READING)),
         KeyBinding::new("ctrl-x", Cut, Some(READING)),
         KeyBinding::new("ctrl-a", SelectAll, Some(READING)),
         KeyBinding::new("left", NudgeLeft, Some(READING)),
@@ -433,6 +435,8 @@ pub struct Viewer {
     compare_count: u64,
     /// The page numbers card, while open.
     numbering: Option<numbering::Numbering>,
+    /// The card for pasting copied objects on many pages, while open.
+    pasting_many: Option<objects::PastingMany>,
     setup: Option<setup::PageSetup>,
     /// The form, once read, if the file has fields to fill in.
     form: Option<Form>,
@@ -638,6 +642,7 @@ impl Viewer {
             compare_after: None,
             compare_count: 0,
             numbering: None,
+            pasting_many: None,
             setup: None,
             form: None,
             links: None,
@@ -3972,6 +3977,7 @@ impl Render for Viewer {
         let print_card = self.print_card(cx);
         let link_card = self.link_card(window, cx);
         let numbering_card = self.numbering_card(cx);
+        let paste_many_card = self.paste_many_card(cx);
         let setup_card = self.setup_card(cx);
         let design_card = self.design_card(cx);
         // The properties card scrolls when the window is shorter than it.
@@ -4167,6 +4173,9 @@ impl Render for Viewer {
             .on_action(cx.listener(|this, _: &PasteInPlace, _, cx| {
                 this.paste_copied_objects(true, cx);
             }))
+            .on_action(cx.listener(|this, _: &PasteToPages, window, cx| {
+                this.toggle_paste_many(window, cx);
+            }))
             .on_action(cx.listener(|this, _: &NudgeLeft, _, cx| {
                 this.nudge_picked(-1.0, 0.0, cx);
             }))
@@ -4287,6 +4296,7 @@ impl Render for Viewer {
                             .children(print_card)
                             .children(link_card)
                             .children(numbering_card)
+                            .children(paste_many_card)
                             .children(setup_card)
                             .children(design_card)
                             .children(properties_card),
