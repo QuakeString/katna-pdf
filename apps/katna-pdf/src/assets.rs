@@ -151,6 +151,19 @@ const ICONS: &[(&str, &[u8])] = &[
         include_bytes!("../icons/format-italic.svg"),
     ),
     (
+        "icons/text-align-left.svg",
+        include_bytes!("../icons/text-align-left.svg"),
+    ),
+    (
+        "icons/text-align-centre.svg",
+        include_bytes!("../icons/text-align-centre.svg"),
+    ),
+    (
+        "icons/text-align-right.svg",
+        include_bytes!("../icons/text-align-right.svg"),
+    ),
+    ("icons/spacing.svg", include_bytes!("../icons/spacing.svg")),
+    (
         "icons/text-edit.svg",
         include_bytes!("../icons/text-edit.svg"),
     ),

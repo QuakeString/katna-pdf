@@ -281,8 +281,9 @@ impl Document {
         let read = self.read_page(page).ok_or(EditError::Content)?;
         let all = runs(&read);
         let by = translate(f64::from(dx), f64::from(dy));
-        let content = redraw(&read, &all, lines, |_, _| {
-            (Some(by), Vec::new(), Vec::new())
+        let content = redraw(&read, &all, lines, |_, _| Redrawn {
+            by: Some(by),
+            ..Redrawn::default()
         })?;
         self.write_page_content(page, &content)
     }
@@ -314,12 +315,25 @@ impl Document {
         // it moves: down (or up) by its share of the change in leading.
         let places: Vec<Place> = old.iter().map(|r| place(&read, &inv, r)).collect();
         let ratio = size.map_or(1.0, |s| f64::from(s) / f64::from(top.size).max(1e-6));
+        // Lines lined up on the right or in the middle stay so as they
+        // grow from their starts.
+        let align = align_of(&places, first.size.abs());
         let shift = |k: usize| -> Option<Matrix> {
-            if k == 0 || (ratio - 1.0).abs() < 1e-9 {
+            if (ratio - 1.0).abs() < 1e-9 {
                 return None;
             }
-            let dy = (places[k].y - places[0].y) * (ratio - 1.0);
-            Some(mul(&mul(&inv, &translate(0.0, dy)), &first.m))
+            let p = &places[k];
+            let dy = (p.y - places[0].y) * (ratio - 1.0);
+            let grown = (p.end - p.start) * (ratio - 1.0);
+            let dx = match align {
+                Align::Left => 0.0,
+                Align::Right => -grown,
+                Align::Center => -grown / 2.0,
+            };
+            if dx.abs() < 1e-9 && dy.abs() < 1e-9 {
+                return None;
+            }
+            Some(mul(&mul(&inv, &translate(dx, dy)), &first.m))
         };
         let content = redraw(&read, &all, lines, |k, piece| {
             let mut before = Vec::new();
@@ -341,7 +355,120 @@ impl Document {
                 after.push(b' ');
                 write_op(&mut after, &Op::new("rg", piece.fill.map(number).to_vec()));
             }
-            (shift(k), before, after)
+            Redrawn {
+                by: shift(k),
+                before,
+                after,
+                op: None,
+            }
+        })?;
+        self.write_page_content(page, &content)
+    }
+
+    /// The file with the paragraph of runs `lines` on page `page` laid
+    /// out as `layout` says, each part where given: its lines lined up
+    /// on the left, right or middle of where they are, spaced by a
+    /// leading under the first, which stays, its letters spaced apart,
+    /// and its words spaced further. Spacing does not wrap the words
+    /// again. Word spacing in a font with codes of two bytes (an
+    /// embedded Unicode font) is written as moves after its spaces, as
+    /// `Tw` does nothing there.
+    pub fn layout_block(
+        &self,
+        page: usize,
+        lines: &[usize],
+        layout: &Layout,
+    ) -> Result<Vec<u8>, EditError> {
+        let read = self.read_page(page).ok_or(EditError::Content)?;
+        let all = runs(&read);
+        let old: Vec<&TextRun> = lines
+            .iter()
+            .map(|i| all.get(*i).ok_or(EditError::NoRun))
+            .collect::<Result<_, _>>()?;
+        let top = old.first().ok_or(EditError::NoRun)?;
+        let first = &read.pieces[top.ops[0]];
+        let inv = invert(&first.m).ok_or(EditError::NoRun)?;
+        let places: Vec<Place> = old.iter().map(|r| place(&read, &inv, r)).collect();
+        // Points on the page per unit of the first piece's text space.
+        let unit = f64::from(top.size) / first.size.abs().max(1e-9);
+        let lead = match places.len() {
+            1 => 1.2 * first.size.abs(),
+            _ => places[0].y - places[1].y,
+        };
+        let ratio = layout
+            .leading
+            .map_or(1.0, |l| (f64::from(l) / unit) / lead.abs().max(1e-6));
+        let left = places.iter().map(|p| p.start).fold(f64::MAX, f64::min);
+        let right = places.iter().map(|p| p.end).fold(f64::MIN, f64::max);
+        // Spaced out, a line grows from its start: lined up on the right
+        // or in the middle, it moves back to stay so.
+        let align = layout
+            .align
+            .unwrap_or_else(|| align_of(&places, first.size.abs()).into());
+        let grown = |k: usize| -> f64 {
+            let text = &old[k].text;
+            let tc = layout
+                .char_spacing
+                .map_or(0.0, |tc| f64::from(tc) / unit - first.char_spacing);
+            let tw = layout
+                .word_spacing
+                .map_or(0.0, |tw| f64::from(tw) / unit - first.word_spacing);
+            // The ink's end takes in the spacing after the last letter.
+            let letters = text.chars().count() as f64;
+            let spaces = text.matches(' ').count() as f64;
+            (tc * letters + tw * spaces) * first.stretch
+        };
+        let shift = |k: usize| -> Option<Matrix> {
+            let p = &places[k];
+            let dx = match layout.align {
+                None => 0.0,
+                Some(TextAlign::Left) => left - p.start,
+                Some(TextAlign::Right) => right - p.end,
+                Some(TextAlign::Center) => (left + right - p.start - p.end) / 2.0,
+            } + match align {
+                TextAlign::Left => 0.0,
+                TextAlign::Right => -grown(k),
+                TextAlign::Center => -grown(k) / 2.0,
+            };
+            let dy = (p.y - places[0].y) * (ratio - 1.0);
+            if dx.abs() < 1e-6 && dy.abs() < 1e-6 {
+                return None;
+            }
+            Some(mul(&mul(&inv, &translate(dx, dy)), &first.m))
+        };
+        let content = redraw(&read, &all, lines, |k, piece| {
+            let mut before = Vec::new();
+            let mut after = Vec::new();
+            let unit = f64::from(top.size) / piece.size.abs().max(1e-9);
+            if let Some(tc) = layout.char_spacing {
+                write_op(
+                    &mut before,
+                    &Op::new("Tc", vec![number(f64::from(tc) / unit)]),
+                );
+                before.push(b' ');
+                after.push(b' ');
+                write_op(&mut after, &Op::new("Tc", vec![number(piece.char_spacing)]));
+            }
+            let mut instead = None;
+            if let Some(tw) = layout.word_spacing {
+                let tw = f64::from(tw) / unit;
+                write_op(&mut before, &Op::new("Tw", vec![number(tw)]));
+                before.push(b' ');
+                after.push(b' ');
+                write_op(&mut after, &Op::new("Tw", vec![number(piece.word_spacing)]));
+                let font = read.fonts.get(&piece.font);
+                if font.is_some_and(|f| !f.single_byte()) && piece.size.abs() > 1e-9 {
+                    // So much more after each space, in `TJ`'s thousandths.
+                    let n = -(tw - piece.word_spacing) * 1000.0 / piece.size;
+                    instead = Some(spaced_out(piece, n));
+                }
+            }
+            Redrawn {
+                by: shift(k),
+                before,
+                after,
+                op: instead,
+            }
         })?;
         self.write_page_content(page, &content)
     }
@@ -1275,6 +1402,33 @@ pub struct TextBlock {
     /// From one line's baseline to the next's, in points: 1.2 times the
     /// size for a line alone.
     pub leading: f32,
+    /// How its lines line up.
+    pub align: TextAlign,
+    /// Between letters, in points (`Tc`).
+    pub char_spacing: f32,
+    /// More between words, in points (`Tw`).
+    pub word_spacing: f32,
+}
+
+/// How a paragraph's lines line up.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TextAlign {
+    #[default]
+    Left,
+    Center,
+    Right,
+}
+
+/// How a paragraph is laid out, each where it is to change.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Layout {
+    pub align: Option<TextAlign>,
+    /// From one baseline to the next, in points.
+    pub leading: Option<f32>,
+    /// Between letters, in points.
+    pub char_spacing: Option<f32>,
+    /// More between words, in points.
+    pub word_spacing: Option<f32>,
 }
 
 /// Where a line is, in the text space of its paragraph's first: where
@@ -1385,7 +1539,9 @@ fn blocks(page: &Page, runs: &[TextRun]) -> Vec<TextBlock> {
             }
             _ => {
                 if let Some(block) = out.last_mut() {
-                    block.text = joined_text(runs, block, &places, size_of(page, runs, block));
+                    let size = size_of(page, runs, block);
+                    block.text = joined_text(runs, block, &places, size);
+                    block.align = align_of(&places, size).into();
                 }
                 let p = &page.pieces[run.ops[0]];
                 places = invert(&p.m)
@@ -1399,12 +1555,19 @@ fn blocks(page: &Page, runs: &[TextRun]) -> Vec<TextBlock> {
                     rect: run.rect,
                     leading: 1.2 * run.size,
                     colour: p.fill.map(|c| (c.clamp(0.0, 1.0) * 255.0).round() as u8),
+                    align: TextAlign::Left,
+                    char_spacing: (p.char_spacing * f64::from(run.size) / p.size.abs().max(1e-9))
+                        as f32,
+                    word_spacing: (p.word_spacing * f64::from(run.size) / p.size.abs().max(1e-9))
+                        as f32,
                 });
             }
         }
     }
     if let Some(block) = out.last_mut() {
-        block.text = joined_text(runs, block, &places, size_of(page, runs, block));
+        let size = size_of(page, runs, block);
+        block.text = joined_text(runs, block, &places, size);
+        block.align = align_of(&places, size).into();
     }
     out
 }
@@ -1414,6 +1577,16 @@ enum Align {
     Left,
     Right,
     Center,
+}
+
+impl From<Align> for TextAlign {
+    fn from(a: Align) -> TextAlign {
+        match a {
+            Align::Left => TextAlign::Left,
+            Align::Right => TextAlign::Right,
+            Align::Center => TextAlign::Center,
+        }
+    }
 }
 
 /// Whether lines (two or more) line up as a paragraph's do: their starts
@@ -1720,11 +1893,22 @@ fn piece_rect(piece: &Piece) -> [f32; 4] {
 /// space (its text operator drawn from a text matrix moved so, and the
 /// matrices put back after it for the text that follows), and between
 /// bytes before and after it.
+/// What [`redraw`] does to a piece's operator: moved by a matrix (in
+/// the page's space), bytes put before and after it, and the operator
+/// itself written another way.
+#[derive(Default)]
+struct Redrawn {
+    by: Option<Matrix>,
+    before: Vec<u8>,
+    after: Vec<u8>,
+    op: Option<Op>,
+}
+
 fn redraw(
     read: &Page,
     all: &[TextRun],
     lines: &[usize],
-    how: impl Fn(usize, &Piece) -> (Option<Matrix>, Vec<u8>, Vec<u8>),
+    how: impl Fn(usize, &Piece) -> Redrawn,
 ) -> Result<Vec<u8>, EditError> {
     let mut replaced: HashMap<usize, Vec<u8>> = HashMap::new();
     for (k, i) in lines.iter().enumerate() {
@@ -1734,7 +1918,12 @@ fn redraw(
                 continue;
             }
             let op = &read.ops[piece.op];
-            let (by, before, after) = how(k, piece);
+            let Redrawn {
+                by,
+                before,
+                after,
+                op: instead,
+            } = how(k, piece);
             // Apart from what ends before it (`Tf<24>Tj` is read as one).
             let mut out = b" ".to_vec();
             out.extend(lead_in(op));
@@ -1754,7 +1943,9 @@ fn redraw(
             };
             out.extend(before);
             // `'` and `"` have moved to their line already (`lead_in`).
-            if moved && (op.is("'") || op.is("\"")) {
+            if let Some(instead) = instead {
+                write_op(&mut out, &instead);
+            } else if moved && (op.is("'") || op.is("\"")) {
                 let text = op.operands.last().cloned().ok_or(EditError::NoRun)?;
                 write_op(&mut out, &Op::new("Tj", vec![text]));
             } else if moved {
@@ -1787,6 +1978,37 @@ fn redraw(
         .map(|(op, bytes)| (read.ops[op].span.clone(), bytes))
         .collect();
     Ok(splice(&read.content, splices))
+}
+
+/// Piece `piece`'s text as a `TJ` with `n` (thousandths) more after each
+/// space, on top of any move already there.
+fn spaced_out(piece: &Piece, n: f64) -> Op {
+    let mut items: Vec<Object> = Vec::new();
+    let mut chars = piece.text.chars();
+    for atom in &piece.atoms {
+        let text: String = chars.by_ref().take(atom.chars).collect();
+        let space = atom.chars == 1 && text == " ";
+        match &atom.kind {
+            AtomKind::Code(bytes) => {
+                if let Some(Object::String { bytes: last, .. }) = items.last_mut() {
+                    last.extend_from_slice(bytes);
+                } else {
+                    items.push(Object::String {
+                        bytes: bytes.clone(),
+                        hex: true,
+                    });
+                }
+                if space && n.abs() > 1e-9 {
+                    items.push(number(n));
+                }
+            }
+            AtomKind::Move(m) => {
+                let was = m.as_number().unwrap_or(0.0);
+                items.push(number(if space { was + n } else { was }));
+            }
+        }
+    }
+    Op::new("TJ", vec![Object::Array(items)])
 }
 
 /// `Tm` setting the text matrix to `m`.

@@ -436,3 +436,145 @@ fn a_paragraph_changes_font() {
         Err(katna_pdf_cos::EditError::NotTrueType)
     ));
 }
+
+#[test]
+fn a_paragraph_is_laid_out_again() {
+    use katna_pdf_cos::{Layout, TextAlign};
+    let doc = page(PARAGRAPH, "/F1 5 0 R", &[HELVETICA]);
+    let block = doc.text_blocks(0)[0].clone();
+    assert_eq!(block.align, TextAlign::Left);
+    assert_eq!(block.char_spacing, 0.0);
+    let runs_of = block.runs.clone();
+
+    // Lined up on the right: every line ends where the widest did.
+    let right = Layout {
+        align: Some(TextAlign::Right),
+        ..Layout::default()
+    };
+    let out = Document::load(doc.layout_block(0, &runs_of, &right).unwrap()).unwrap();
+    let blocks = out.text_blocks(0);
+    assert_eq!(blocks[0].align, TextAlign::Right, "{}", content(&out));
+    let runs = out.text_runs(0);
+    for run in &runs[..3] {
+        assert!((run.rect[2] - block.rect[2]).abs() < 0.05, "{runs:?}");
+    }
+    assert_eq!(runs[3].text, "Apart");
+    // And in the middle, then on the left again, back where they were.
+    let centre = Layout {
+        align: Some(TextAlign::Center),
+        ..Layout::default()
+    };
+    let out = Document::load(out.layout_block(0, &runs_of, &centre).unwrap()).unwrap();
+    assert_eq!(out.text_blocks(0)[0].align, TextAlign::Center);
+    let mid = (block.rect[0] + block.rect[2]) / 2.0;
+    for run in &out.text_runs(0)[..3] {
+        assert!(
+            ((run.rect[0] + run.rect[2]) / 2.0 - mid).abs() < 0.05,
+            "{run:?}"
+        );
+    }
+    let left = Layout {
+        align: Some(TextAlign::Left),
+        ..Layout::default()
+    };
+    let out = Document::load(out.layout_block(0, &runs_of, &left).unwrap()).unwrap();
+    for run in &out.text_runs(0)[..3] {
+        assert!((run.rect[0] - 72.0).abs() < 0.05, "{run:?}");
+    }
+
+    // Centred, then letters spaced out: still centred. Bigger: still
+    // centred.
+    let centred = Document::load(doc.layout_block(0, &runs_of, &centre).unwrap()).unwrap();
+    let letters = Layout {
+        char_spacing: Some(1.0),
+        ..Layout::default()
+    };
+    let out = Document::load(centred.layout_block(0, &runs_of, &letters).unwrap()).unwrap();
+    assert_eq!(
+        out.text_blocks(0)[0].align,
+        TextAlign::Center,
+        "{:?}",
+        out.text_runs(0)
+    );
+    for run in &out.text_runs(0)[..3] {
+        assert!(
+            ((run.rect[0] + run.rect[2]) / 2.0 - mid).abs() < 0.1,
+            "{run:?}"
+        );
+    }
+    let out = Document::load(centred.style_block(0, &runs_of, Some(16.0), None).unwrap()).unwrap();
+    assert_eq!(
+        out.text_blocks(0)[0].align,
+        TextAlign::Center,
+        "{:?}",
+        out.text_runs(0)
+    );
+    for run in &out.text_runs(0)[..3] {
+        assert!(
+            ((run.rect[0] + run.rect[2]) / 2.0 - mid).abs() < 0.1,
+            "{run:?}"
+        );
+    }
+
+    // Spaced further apart: 20 pt from one baseline to the next.
+    let spaced = Layout {
+        leading: Some(20.0),
+        ..Layout::default()
+    };
+    let out = Document::load(doc.layout_block(0, &runs_of, &spaced).unwrap()).unwrap();
+    let got = lines(&out);
+    assert_eq!(got[0].1, 700.0);
+    assert_eq!(got[1].1, 680.0);
+    assert_eq!(got[2].1, 660.0);
+    assert_eq!(got[3], ("Apart".into(), 600.0));
+    assert!((out.text_blocks(0)[0].leading - 20.0).abs() < 0.05);
+
+    // Letters 1 pt apart: the first line ("Katna reads the lines of a",
+    // 26 letters) is 26 pt wider, and says so.
+    let out = Document::load(doc.layout_block(0, &runs_of, &letters).unwrap()).unwrap();
+    let runs = out.text_runs(0);
+    let was = doc.text_runs(0)[0].rect[2];
+    assert!((runs[0].rect[2] - was - 26.0).abs() < 0.1, "{runs:?}");
+    assert!((out.text_blocks(0)[0].char_spacing - 1.0).abs() < 0.01);
+    assert_eq!(runs[3].rect, doc.text_runs(0)[3].rect);
+
+    // Words 2 pt further apart: five spaces on the first line.
+    let words = Layout {
+        word_spacing: Some(2.0),
+        ..Layout::default()
+    };
+    let out = Document::load(doc.layout_block(0, &runs_of, &words).unwrap()).unwrap();
+    let runs = out.text_runs(0);
+    assert!((runs[0].rect[2] - was - 10.0).abs() < 0.1, "{runs:?}");
+    assert!((out.text_blocks(0)[0].word_spacing - 2.0).abs() < 0.01);
+
+    // In a font with two-byte codes `Tw` does nothing, so the spaces are
+    // moved past instead; the same width, and 2 pt read back.
+    let Ok(data) = std::fs::read("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf") else {
+        return;
+    };
+    let dejavu = katna_pdf_cos::NewFont::TrueType { data, face: 0 };
+    let out = Document::load(doc.refont_block(0, &runs_of, &block.text, &dejavu).unwrap()).unwrap();
+    let runs_of = out.text_blocks(0)[0].runs.clone();
+    let was = out.text_runs(0)[0].rect[2];
+    let spaces = out.text_runs(0)[0].text.matches(' ').count() as f32;
+    let again = Document::load(out.layout_block(0, &runs_of, &words).unwrap()).unwrap();
+    let runs = again.text_runs(0);
+    assert_eq!(runs[0].text, out.text_runs(0)[0].text);
+    assert!(
+        (runs[0].rect[2] - was - 2.0 * spaces).abs() < 0.1,
+        "{was} {runs:?}"
+    );
+    assert!((again.text_blocks(0)[0].word_spacing - 2.0).abs() < 0.01);
+    // Set again to 3 pt: 3 pt, not 5.
+    let more = Layout {
+        word_spacing: Some(3.0),
+        ..Layout::default()
+    };
+    let third = Document::load(again.layout_block(0, &runs_of, &more).unwrap()).unwrap();
+    let runs = third.text_runs(0);
+    assert!(
+        (runs[0].rect[2] - was - 3.0 * spaces).abs() < 0.1,
+        "{was} {runs:?}"
+    );
+}

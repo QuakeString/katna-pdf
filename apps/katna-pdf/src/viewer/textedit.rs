@@ -13,7 +13,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use gpui::{AnyElement, Context, Entity, Focusable, Subscription, Window, div, prelude::*};
-use katna_pdf_cos::{PageObject, TextBlock};
+use katna_pdf_cos::{Layout, PageObject, TextAlign, TextBlock};
 use katna_ui::px;
 use katna_ui::scale::desktop_px;
 use katna_ui::text_area::TextArea;
@@ -53,6 +53,15 @@ enum Next {
     Style(Option<f32>, Option<[f32; 3]>),
     /// Put it in a face.
     Font(FontChoice),
+    /// Lay it out again: lined up, spaced.
+    Layout(Layout),
+}
+
+/// The spacing fields open under the text inspector: between letters,
+/// between words, line to line.
+pub(super) struct SpacingMenu {
+    fields: [Entity<TextInput>; 3],
+    _fields: Vec<Subscription>,
 }
 
 /// A face chosen for a paragraph: a family installed here (or a
@@ -551,6 +560,7 @@ impl Viewer {
                 Next::Move(by) => this.move_text(page, i, by, cx),
                 Next::Style(size, colour) => this.style_text(page, i, size, colour, cx),
                 Next::Font(choice) => this.font_text(page, i, choice, cx),
+                Next::Layout(layout) => this.layout_text(page, i, layout, cx),
             });
         }
         let dragging = self
@@ -907,6 +917,23 @@ impl Viewer {
         self.runs.next = Some((page, at, Next::Edit));
     }
 
+    /// Lays paragraph `block` of page `page` out as `layout` says and
+    /// opens it for typing again.
+    fn layout_text(&mut self, page: usize, block: usize, layout: Layout, cx: &mut Context<Self>) {
+        let Some((runs, at)) = self.block_runs(page, block) else {
+            return;
+        };
+        self.change_page(
+            page,
+            move |doc| {
+                doc.layout_block(page, &runs, &layout)
+                    .map_err(|e| e.to_string())
+            },
+            cx,
+        );
+        self.runs.next = Some((page, at, Next::Edit));
+    }
+
     /// Paragraph `block` of page `page`'s lines and middle, in the
     /// page's own space.
     fn block_runs(&self, page: usize, block: usize) -> Option<(Vec<usize>, [f32; 2])> {
@@ -938,6 +965,7 @@ impl Viewer {
                 Next::Style(size, colour) => self.style_text(page, block, size, colour, cx),
                 Next::Move(by) => self.move_text(page, block, by, cx),
                 Next::Font(choice) => self.font_text(page, block, choice, cx),
+                Next::Layout(layout) => self.layout_text(page, block, layout, cx),
                 Next::Edit => {}
             }
         } else {
@@ -1020,6 +1048,163 @@ impl Viewer {
         if choice != face {
             self.restyle_typed(Next::Font(choice), cx);
         }
+    }
+
+    /// The paragraph being typed in lined up as `align` says.
+    pub(super) fn align_typed(&mut self, align: TextAlign, cx: &mut Context<Self>) {
+        if self.typed_block().is_some_and(|(_, _, b)| b.align != align) {
+            self.restyle_typed(
+                Next::Layout(Layout {
+                    align: Some(align),
+                    ..Layout::default()
+                }),
+                cx,
+            );
+        }
+    }
+
+    /// Opens or closes the spacing fields under the inspector, filled
+    /// with the paragraph's spacing now.
+    pub(super) fn toggle_spacing_menu(&mut self, cx: &mut Context<Self>) {
+        if self.spacing_menu.take().is_none() {
+            let Some((_, _, b)) = self.typed_block() else {
+                return;
+            };
+            let now = [b.char_spacing, b.word_spacing, b.leading];
+            let accent = gpui::rgba(self.theme.katna.accent).into();
+            let fields = now.map(|v| {
+                cx.new(|cx| {
+                    let mut input = TextInput::new("", cx);
+                    input.set_accent(accent);
+                    input.set_text(format!("{}", (v * 10.0).round() / 10.0), cx);
+                    input
+                })
+            });
+            let subs = fields
+                .iter()
+                .map(|f| {
+                    cx.subscribe(f, |this, _, event, cx| match event {
+                        InputEvent::Submit => this.apply_spacing(cx),
+                        InputEvent::Cancel => {
+                            this.spacing_menu = None;
+                            cx.notify();
+                        }
+                        InputEvent::Changed => {}
+                    })
+                })
+                .collect();
+            self.spacing_menu = Some(SpacingMenu {
+                fields,
+                _fields: subs,
+            });
+        }
+        cx.notify();
+    }
+
+    /// The spacing typed into the fields put on the paragraph being
+    /// typed in, where it differs from what it has.
+    fn apply_spacing(&mut self, cx: &mut Context<Self>) {
+        let Some(menu) = self.spacing_menu.take() else {
+            return;
+        };
+        let Some((_, _, b)) = self.typed_block() else {
+            return;
+        };
+        let typed = menu
+            .fields
+            .each_ref()
+            .map(|f| super::objects::length(f.read(cx).text()));
+        let differs = |v: Option<f32>, now: f32| v.filter(|v| (v - now).abs() > 0.01);
+        let layout = Layout {
+            align: None,
+            char_spacing: differs(typed[0], b.char_spacing),
+            word_spacing: differs(typed[1], b.word_spacing),
+            leading: differs(typed[2], b.leading).map(|l| l.max(1.0)),
+        };
+        cx.notify();
+        if layout != Layout::default() {
+            self.restyle_typed(Next::Layout(layout), cx);
+        }
+    }
+
+    /// The spacing fields, under the inspector's spacing button.
+    fn spacing_menu(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let menu = self.spacing_menu.as_ref()?;
+        let th = self.theme;
+        let labels = [
+            "text-spacing-letters",
+            "text-spacing-words",
+            "text-spacing-lines",
+        ];
+        let rows = labels.iter().zip(&menu.fields).map(|(label, field)| {
+            div()
+                .flex()
+                .items_center()
+                .gap(px(space::S2))
+                .child(
+                    div()
+                        .flex_1()
+                        .text_size(px(text::SMALL))
+                        .text_color(th.text)
+                        .child(t(label, &[])),
+                )
+                .child(
+                    div()
+                        .w(px(72.0))
+                        .h(px(28.0))
+                        .px(px(space::S2))
+                        .flex()
+                        .items_center()
+                        .rounded(px(radius::XS))
+                        .bg(th.field)
+                        .text_size(px(text::SMALL))
+                        .child(field.clone()),
+                )
+                .child(
+                    div()
+                        .w(px(20.0))
+                        .text_size(px(text::SMALL))
+                        .text_color(gpui::rgba(th.katna.text_dim))
+                        .child(t("text-spacing-pt", &[])),
+                )
+        });
+        let card = div()
+            .id("text-spacing-menu")
+            .occlude()
+            .w(px(280.0))
+            .mt(px(space::S1))
+            .p(px(space::S3))
+            .flex()
+            .flex_col()
+            .gap(px(space::S2))
+            .rounded(px(radius::MD))
+            .bg(th.card)
+            .border_1()
+            .border_color(th.line)
+            .shadow_lg()
+            .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+                this.spacing_menu = None;
+                cx.notify();
+            }))
+            .children(rows)
+            .child(
+                div()
+                    .text_size(px(text::SMALL))
+                    .text_color(gpui::rgba(th.katna.text_dim))
+                    .child(t("text-spacing-hint", &[])),
+            );
+        Some(
+            div()
+                .absolute()
+                .top_full()
+                .left_0()
+                .child(gpui::deferred(
+                    katna_ui::anchored()
+                        .anchor(gpui::Anchor::TopLeft)
+                        .child(card),
+                ))
+                .into_any_element(),
+        )
     }
 
     /// Opens or closes the list of fonts under the inspector.
@@ -1160,6 +1345,8 @@ impl Viewer {
         let th = self.theme;
         let face = self.typed_face(cx)?;
         let menu = self.font_menu(cx);
+        let spacing = self.spacing_menu(cx);
+        let align = block.align;
         let field = |wide: f32| {
             div()
                 .h(px(28.0))
@@ -1235,6 +1422,28 @@ impl Viewer {
                 &[("size", &format!("{}", block.size.round()))],
             )))
             .child(step("text-bigger", "A+", "text-bigger", 1.0))
+            .child(super::separator(th))
+            .children(
+                [
+                    (TextAlign::Left, "text-align-left"),
+                    (TextAlign::Center, "text-align-centre"),
+                    (TextAlign::Right, "text-align-right"),
+                ]
+                .map(|(how, id)| {
+                    toggle(id, id, id, align == how)
+                        .on_click(cx.listener(move |this, _, _, cx| this.align_typed(how, cx)))
+                }),
+            )
+            .child(
+                div()
+                    .relative()
+                    .child(
+                        toggle("text-spacing", "spacing", "text-spacing", spacing.is_some())
+                            .on_click(cx.listener(|this, _, _, cx| this.toggle_spacing_menu(cx))),
+                    )
+                    .children(spacing),
+            )
+            .child(super::separator(th))
             .child(
                 widgets::icon_button("text-delete", "trash", 18.0, &th.katna)
                     .tip(t("text-delete", &[]), &th.katna)
