@@ -193,3 +193,136 @@ fn objects_restack_fade_recolour_and_change_picture() {
         .is_err()
     );
 }
+
+#[test]
+fn objects_step_forward_and_back_and_change_together() {
+    use katna_pdf_cos::ObjectChange;
+    let doc = page();
+    let before = doc.page_objects(0);
+    let n = before.len();
+    // The picture one step forward: over the rectangle, both where they
+    // were.
+    let forward =
+        Document::load(doc.change_object(0, n - 2, &ObjectChange::Forward).unwrap()).unwrap();
+    let objects = forward.page_objects(0);
+    assert_eq!(objects.len(), n);
+    assert_eq!(objects[n - 1].kind, ObjectKind::Picture);
+    assert!(
+        close(objects[n - 1].rect, before[n - 2].rect),
+        "{objects:?}"
+    );
+    assert_eq!(objects[n - 2].kind, ObjectKind::Path);
+    assert!(
+        close(objects[n - 2].rect, before[n - 1].rect),
+        "{objects:?}"
+    );
+    assert_eq!(forward.text_runs(0), doc.text_runs(0));
+    // And one step back again: as it was.
+    let back = Document::load(
+        forward
+            .change_object(0, n - 1, &ObjectChange::Backward)
+            .unwrap(),
+    )
+    .unwrap();
+    let objects = back.page_objects(0);
+    assert_eq!(objects[n - 2].kind, ObjectKind::Picture);
+    assert!(
+        close(objects[n - 2].rect, before[n - 2].rect),
+        "{objects:?}"
+    );
+    assert!(
+        close(objects[n - 1].rect, before[n - 1].rect),
+        "{objects:?}"
+    );
+    // Forward from the top, or back from the bottom: nothing changes.
+    let same =
+        Document::load(doc.change_object(0, n - 1, &ObjectChange::Forward).unwrap()).unwrap();
+    assert_eq!(same.page_objects(0), before);
+
+    // Both moved up by 10 in one change; then both taken out.
+    let moved = Document::load(
+        doc.transform_objects(
+            0,
+            &[
+                (n - 2, [1.0, 0.0, 0.0, 1.0, 0.0, 10.0]),
+                (n - 1, [1.0, 0.0, 0.0, 1.0, 0.0, 10.0]),
+            ],
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let objects = moved.page_objects(0);
+    assert!(
+        close(objects[n - 2].rect, [100.0, 210.0, 200.0, 260.0]),
+        "{objects:?}"
+    );
+    assert!(
+        close(objects[n - 1].rect, [300.0, 310.0, 340.0, 330.0]),
+        "{objects:?}"
+    );
+    let gone = Document::load(moved.delete_objects(0, &[n - 1, n - 2]).unwrap()).unwrap();
+    assert_eq!(gone.page_objects(0).len(), n - 2);
+    assert_eq!(gone.text_runs(0), doc.text_runs(0));
+}
+
+#[test]
+fn objects_copy_and_paste_here_and_elsewhere() {
+    let doc = page();
+    let before = doc.page_objects(0);
+    let n = before.len();
+    let picture = doc.copy_object(0, n - 2).unwrap();
+    let shape = doc.copy_object(0, n - 1).unwrap();
+    assert_eq!(picture.kind, ObjectKind::Picture);
+    assert!(close(picture.rect, before[n - 2].rect));
+
+    // Pasted on the same page, moved along: two more objects, the
+    // picture's stream used again rather than written twice.
+    let pasted = Document::load(
+        doc.paste_objects(0, &[&picture, &shape], [20.0, -30.0])
+            .unwrap(),
+    )
+    .unwrap();
+    let objects = pasted.page_objects(0);
+    assert_eq!(objects.len(), n + 2, "{objects:?}");
+    assert_eq!(objects[n].kind, ObjectKind::Picture);
+    assert!(
+        close(objects[n].rect, [120.0, 170.0, 220.0, 220.0]),
+        "{objects:?}"
+    );
+    assert_eq!(objects[n + 1].kind, ObjectKind::Path);
+    assert!(
+        close(objects[n + 1].rect, [320.0, 270.0, 360.0, 290.0]),
+        "{objects:?}"
+    );
+    let images = pasted
+        .object_numbers()
+        .filter(|&num| {
+            matches!(
+                pasted.get(katna_pdf_cos::Ref::new(num, 0)),
+                Some(katna_pdf_cos::Object::Stream(s)) if s.dict.name("Subtype") == Some(b"Image")
+            )
+        })
+        .count();
+    assert_eq!(images, 1);
+    assert_eq!(pasted.text_runs(0), doc.text_runs(0));
+
+    // Pasted into another file, where it is drawn in the same place with
+    // its picture brought along.
+    let other = Document::load(text_pdf("Other", &["  Elsewhere".to_string()])).unwrap();
+    assert!(other.page_objects(0).is_empty());
+    let there = Document::load(other.paste_objects(0, &[&picture], [0.0, 0.0]).unwrap()).unwrap();
+    let objects = there.page_objects(0);
+    assert_eq!(objects.len(), 1, "{objects:?}");
+    assert_eq!(objects[0].kind, ObjectKind::Picture);
+    assert!(close(objects[0].rect, before[n - 2].rect), "{objects:?}");
+    let images = there
+        .object_numbers()
+        .filter(|&num| {
+            matches!(
+                there.get(katna_pdf_cos::Ref::new(num, 0)),
+                Some(katna_pdf_cos::Object::Stream(s)) if s.dict.name("Subtype") == Some(b"Image")
+            )
+        })
+        .count();
+    assert_eq!(images, 1);
+}

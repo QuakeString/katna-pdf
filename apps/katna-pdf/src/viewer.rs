@@ -109,6 +109,17 @@ actions!(
         Organize,
         Sign,
         PastePicture,
+        PasteInPlace,
+        Cut,
+        SelectAll,
+        NudgeLeft,
+        NudgeRight,
+        NudgeUp,
+        NudgeDown,
+        NudgeLeftMore,
+        NudgeRightMore,
+        NudgeUpMore,
+        NudgeDownMore,
         Properties,
         AddBookmark,
         ShowLibrary,
@@ -199,6 +210,15 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("up", ScrollUp, Some(READING)),
         KeyBinding::new("ctrl-c", CopyText, Some(READING)),
         KeyBinding::new("ctrl-v", PastePicture, Some(READING)),
+        KeyBinding::new("ctrl-shift-v", PasteInPlace, Some(READING)),
+        KeyBinding::new("ctrl-x", Cut, Some(READING)),
+        KeyBinding::new("ctrl-a", SelectAll, Some(READING)),
+        KeyBinding::new("left", NudgeLeft, Some(READING)),
+        KeyBinding::new("right", NudgeRight, Some(READING)),
+        KeyBinding::new("shift-left", NudgeLeftMore, Some(READING)),
+        KeyBinding::new("shift-right", NudgeRightMore, Some(READING)),
+        KeyBinding::new("shift-up", NudgeUpMore, Some(READING)),
+        KeyBinding::new("shift-down", NudgeDownMore, Some(READING)),
         KeyBinding::new("delete", DeleteAnnotation, Some(READING)),
         KeyBinding::new("escape", PutToolDown, Some(READING)),
         KeyBinding::new("ctrl-f", Find, None),
@@ -446,6 +466,11 @@ pub struct Viewer {
     designing: Option<design::Designing>,
     properties: Option<properties::Properties>,
     moving: Option<objects::Moving>,
+    /// A drag over empty page picking the objects it runs over.
+    band: Option<objects::Band>,
+    /// Whether a grid is drawn over the pages while Edit text is on, for
+    /// objects to line up with.
+    gridded: bool,
     /// A paragraph being dragged elsewhere (`textedit.rs`).
     text_moving: Option<textedit::TextMoving>,
     tool: Option<Tool>,
@@ -587,6 +612,8 @@ impl Viewer {
             designing: None,
             properties: None,
             moving: None,
+            band: None,
+            gridded: false,
             text_moving: None,
             tool: None,
             colour: 0,
@@ -707,6 +734,7 @@ impl Viewer {
         self.placing = None;
         self.picked_object = None;
         self.moving = None;
+        self.band = None;
         self.forget_runs();
         self.signatures = None;
         self.signable = Arc::default();
@@ -1217,7 +1245,7 @@ impl Viewer {
             || self.redact_press(event.position, cx)
             || self.link_press(event.position, cx)
             || self.insert_press(event.position, window, cx)
-            || self.object_press(event.position, cx)
+            || self.object_press(event, cx)
             || self.text_edit_press(cx)
             || self.crop_press(event.position, cx)
             || self.annot_press(event.position, cx)
@@ -1259,7 +1287,7 @@ impl Viewer {
             || self.link_drag(event.position, cx)
             || self.insert_drag(event.position, cx)
             || self.text_move_drag(event.position, cx)
-            || self.object_drag(event.position, cx)
+            || self.object_drag(event, cx)
             || self.annot_drag(event.position, cx)
         {
             return;
@@ -2508,6 +2536,7 @@ impl Viewer {
         self.forget_runs();
         self.picked_object = None;
         self.moving = None;
+        self.band = None;
         self.chosen = None;
         cx.spawn(async move |this, cx| {
             let opened = cx
@@ -3207,11 +3236,11 @@ impl Viewer {
                 cx.listener(|_, _, _, cx| cx.emit(ViewerEvent::ChooseFiles)),
             ))
             .child(
-                div().flex_1().min_w_0().flex().child(
+                // A few letters at least when the bar is crowded.
+                div().flex_1().min_w(px(72.0)).flex().child(
                     div()
                         .id("file-name")
-                        // A few letters at least when the bar is crowded.
-                        .min_w(px(56.0))
+                        .min_w(px(72.0))
                         .px(px(space::S2))
                         .py(px(space::S1))
                         .rounded(px(radius::SM))
@@ -3632,6 +3661,7 @@ impl Render for Viewer {
         self.focus_calibrating(window, cx);
         let pane = self.pane(window, cx);
         let tools = self.tools_row(cx).or_else(|| self.edit_row(cx));
+        let object_row = self.object_row(cx);
         let measure_bar = self.measure_bar(cx);
         let reading_bar = self.reading_bar(cx);
         let signatures_line = self.signatures_line(cx);
@@ -3816,7 +3846,44 @@ impl Render for Viewer {
             .on_action(cx.listener(|this, _: &ToggleContents, _, cx| this.toggle_pane(cx)))
             .on_action(cx.listener(|this, _: &ToggleNight, _, cx| this.toggle_night(cx)))
             .on_action(cx.listener(|this, _: &Find, window, cx| this.open_search(window, cx)))
-            .on_action(cx.listener(|this, _: &CopyText, _, cx| this.copy_text(cx)))
+            .on_action(cx.listener(|this, _: &CopyText, _, cx| {
+                if !this.copy_picked_objects(cx) {
+                    this.copy_text(cx);
+                }
+            }))
+            .on_action(cx.listener(|this, _: &Cut, _, cx| {
+                this.cut_picked_objects(cx);
+            }))
+            .on_action(cx.listener(|this, _: &SelectAll, _, cx| {
+                this.pick_all_objects(cx);
+            }))
+            .on_action(cx.listener(|this, _: &PasteInPlace, _, cx| {
+                this.paste_copied_objects(true, cx);
+            }))
+            .on_action(cx.listener(|this, _: &NudgeLeft, _, cx| {
+                this.nudge_picked(-1.0, 0.0, cx);
+            }))
+            .on_action(cx.listener(|this, _: &NudgeRight, _, cx| {
+                this.nudge_picked(1.0, 0.0, cx);
+            }))
+            .on_action(cx.listener(|this, _: &NudgeUp, _, cx| {
+                this.nudge_picked(0.0, -1.0, cx);
+            }))
+            .on_action(cx.listener(|this, _: &NudgeDown, _, cx| {
+                this.nudge_picked(0.0, 1.0, cx);
+            }))
+            .on_action(cx.listener(|this, _: &NudgeLeftMore, _, cx| {
+                this.nudge_picked(-10.0, 0.0, cx);
+            }))
+            .on_action(cx.listener(|this, _: &NudgeRightMore, _, cx| {
+                this.nudge_picked(10.0, 0.0, cx);
+            }))
+            .on_action(cx.listener(|this, _: &NudgeUpMore, _, cx| {
+                this.nudge_picked(0.0, -10.0, cx);
+            }))
+            .on_action(cx.listener(|this, _: &NudgeDownMore, _, cx| {
+                this.nudge_picked(0.0, 10.0, cx);
+            }))
             .on_action(cx.listener(|this, _: &DeleteAnnotation, _, cx| {
                 if !this.delete_picked_object(cx) {
                     this.delete_chosen(cx);
@@ -3835,7 +3902,9 @@ impl Render for Viewer {
                 this.add_bookmark(window, cx);
             }))
             .on_action(cx.listener(|this, _: &PastePicture, _, cx| {
-                this.paste_picture(cx);
+                if !this.paste_copied_objects(false, cx) {
+                    this.paste_picture(cx);
+                }
             }))
             .on_action(cx.listener(|this, _: &PutToolDown, _, cx| {
                 if this.signing.is_some() {
@@ -3855,12 +3924,16 @@ impl Render for Viewer {
             .on_action(cx.listener(|this, _: &FindNext, _, cx| this.step_search(true, cx)))
             .on_action(cx.listener(|this, _: &FindPrevious, _, cx| this.step_search(false, cx)))
             .on_action(cx.listener(|this, _: &ScrollDown, _, cx| {
-                this.list.scroll_by(px(48.0));
-                cx.notify();
+                if !this.nudge_picked(0.0, 1.0, cx) {
+                    this.list.scroll_by(px(48.0));
+                    cx.notify();
+                }
             }))
             .on_action(cx.listener(|this, _: &ScrollUp, _, cx| {
-                this.list.scroll_by(px(-48.0));
-                cx.notify();
+                if !this.nudge_picked(0.0, -1.0, cx) {
+                    this.list.scroll_by(px(-48.0));
+                    cx.notify();
+                }
             }))
             .on_drop(cx.listener(|_, paths: &ExternalPaths, _, cx| {
                 cx.emit(ViewerEvent::Dropped(paths.paths().to_vec()));
@@ -3881,6 +3954,7 @@ impl Render for Viewer {
                     .flex_col()
                     .child(self.toolbar(cx))
                     .children(tools)
+                    .children(object_row)
                     .children(measure_bar)
                     .children(reading_bar)
                     .children(find_bar)

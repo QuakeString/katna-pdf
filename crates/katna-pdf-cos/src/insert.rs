@@ -24,6 +24,7 @@ use crate::write::Update;
 const FONT_KEY: &str = "KatnaT";
 const IMAGE_KEY: &str = "KatnaI";
 const STATE_KEY: &str = "KatnaG";
+const PASTE_KEY: &str = "KatnaP";
 /// How far the curve handles of a quarter circle reach, as a share of
 /// its radius.
 const KAPPA: f32 = 0.552_284_8;
@@ -220,6 +221,9 @@ pub(crate) struct PageAdd<'a> {
     fonts: Dict,
     xobjects: Dict,
     states: Dict,
+    /// Other categories pasted objects bring (colour spaces, patterns,
+    /// shadings), each as the page will have it.
+    others: Dict,
     pub(crate) rotate: i64,
 }
 
@@ -243,6 +247,7 @@ impl<'a> PageAdd<'a> {
             fonts: part("Font"),
             xobjects: part("XObject"),
             states: part("ExtGState"),
+            others: Dict::new(),
             resources,
             rotate,
         })
@@ -258,6 +263,46 @@ impl<'a> PageAdd<'a> {
         let key = free_key(&self.xobjects, IMAGE_KEY);
         self.xobjects.0.push((Name::new(&key), Object::Ref(r)));
         key
+    }
+
+    /// The key of `value` in the page's resources of `category`
+    /// (`XObject`, `ExtGState`, `ColorSpace`, `Pattern` or `Shading`):
+    /// `name` when the page has nothing else under it, else a free one.
+    pub(crate) fn resource(&mut self, category: &str, name: &str, value: Object) -> String {
+        let dict = match category {
+            "XObject" => &mut self.xobjects,
+            "ExtGState" => &mut self.states,
+            _ => {
+                if self.others.get(category).is_none() {
+                    let existing = match self.doc.resolve_key(&self.resources, category) {
+                        Object::Dict(d) => d,
+                        _ => Dict::new(),
+                    };
+                    self.others.set(category, existing);
+                }
+                match self
+                    .others
+                    .0
+                    .iter_mut()
+                    .find(|(k, _)| k.as_bytes() == category.as_bytes())
+                {
+                    Some((_, Object::Dict(d))) => d,
+                    _ => return String::new(),
+                }
+            }
+        };
+        match dict.get(name) {
+            None => {
+                dict.0.push((Name::new(name), value));
+                name.to_string()
+            }
+            Some(there) if *there == value => name.to_string(),
+            Some(_) => {
+                let key = free_key(dict, PASTE_KEY);
+                dict.0.push((Name::new(&key), value));
+                key
+            }
+        }
     }
 
     /// The key of a graphics state drawing at `opacity` (0 to 1).
@@ -288,6 +333,10 @@ impl<'a> PageAdd<'a> {
         }
         if !self.states.0.is_empty() {
             self.resources.set("ExtGState", self.states);
+        }
+        for (category, value) in self.others.0 {
+            self.resources.0.retain(|(k, _)| *k != category);
+            self.resources.0.push((category, value));
         }
         dict.set("Resources", self.resources);
         update.replace(self.page_ref, Object::Dict(dict));
@@ -334,6 +383,10 @@ impl<'a> PageAdd<'a> {
         self.resources.set("XObject", self.xobjects);
         if !self.states.0.is_empty() {
             self.resources.set("ExtGState", self.states);
+        }
+        for (category, value) in self.others.0 {
+            self.resources.0.retain(|(k, _)| *k != category);
+            self.resources.0.push((category, value));
         }
         dict.set("Resources", self.resources);
         update.replace(self.page_ref, Object::Dict(dict));

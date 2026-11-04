@@ -581,6 +581,11 @@ impl Viewer {
                     .on_mouse_down(
                         gpui::MouseButton::Left,
                         cx.listener(move |this, event: &gpui::MouseDownEvent, _, cx| {
+                            // With Ctrl, the press picks objects under
+                            // the paragraph instead.
+                            if event.modifiers.control || event.modifiers.platform {
+                                return;
+                            }
                             cx.stop_propagation();
                             this.text_move_press(page, i, event.position, cx);
                         }),
