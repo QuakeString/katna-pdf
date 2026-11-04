@@ -88,6 +88,8 @@ actions!(
         NextSpread,
         Print,
         Save,
+        Undo,
+        Redo,
         NextPage,
         PreviousPage,
         ScrollDown,
@@ -125,6 +127,9 @@ pub(crate) fn cos(bytes: Vec<u8>, key: Option<&str>) -> Result<katna_pdf_cos::Do
     Ok(doc)
 }
 
+/// Changes kept to undo.
+const UNDO_STEPS: usize = 50;
+
 /// Pages drawn at once.
 const WORKERS: usize = 3;
 /// Requests waiting beyond this many are dropped, oldest first.
@@ -150,6 +155,9 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl-o", Open, None),
         KeyBinding::new("ctrl-p", Print, None),
         KeyBinding::new("ctrl-s", Save, None),
+        KeyBinding::new("ctrl-z", Undo, Some(READING)),
+        KeyBinding::new("ctrl-shift-z", Redo, Some(READING)),
+        KeyBinding::new("ctrl-y", Redo, Some(READING)),
         KeyBinding::new("ctrl-d", Properties, None),
         KeyBinding::new("ctrl-shift-d", Compare, None),
         KeyBinding::new("ctrl-shift-y", ReadAloud, None),
@@ -406,6 +414,13 @@ pub struct Viewer {
     anchor: Option<usize>,
     /// The file with its pages changed, until saved.
     edited: Option<Arc<Vec<u8>>>,
+    /// The file as it was before each change not undone, oldest first,
+    /// and after each one undone (`None`: the file as opened), for Undo
+    /// and Redo.
+    undo: Vec<Option<Arc<Vec<u8>>>>,
+    redo: Vec<Option<Arc<Vec<u8>>>>,
+    /// A change being put back, which is not a change to record.
+    restoring: bool,
     /// Whether a page change is being written.
     changing_pages: bool,
     /// Whether the row of annotation tools is shown, the tool in hand,
@@ -554,6 +569,9 @@ impl Viewer {
             picked: BTreeSet::new(),
             anchor: None,
             edited: None,
+            undo: Vec::new(),
+            redo: Vec::new(),
+            restoring: false,
             changing_pages: false,
             tools: false,
             text_editing: false,
@@ -695,6 +713,8 @@ impl Viewer {
         self.signing = None;
         self.anchor = None;
         self.edited = None;
+        self.undo.clear();
+        self.redo.clear();
         self.changing_pages = false;
         self.annots = None;
         self.draft = None;
@@ -2435,9 +2455,95 @@ impl Viewer {
             widest,
             tallest,
         });
+        self.record_change();
         self.edited = Some(bytes);
         self.anchor = picked.first().copied();
         self.picked = picked;
+    }
+
+    /// Notes the file as it is, before a change to it lands, for Undo.
+    pub(crate) fn record_change(&mut self) {
+        if self.restoring {
+            return;
+        }
+        self.undo.push(self.unsaved());
+        self.redo.clear();
+        if self.undo.len() > UNDO_STEPS {
+            self.undo.remove(0);
+        }
+    }
+
+    /// Puts the file back as it was before the last change.
+    fn undo(&mut self, cx: &mut Context<Self>) {
+        self.finish_typing(true, cx);
+        self.finish_text_edit(true, cx);
+        let Some(before) = self.undo.pop() else {
+            return;
+        };
+        self.redo.push(self.unsaved());
+        self.restore(before, cx);
+    }
+
+    /// Does the last change undone again.
+    fn redo(&mut self, cx: &mut Context<Self>) {
+        self.finish_typing(true, cx);
+        self.finish_text_edit(true, cx);
+        let Some(after) = self.redo.pop() else {
+            return;
+        };
+        self.undo.push(self.unsaved());
+        self.restore(after, cx);
+    }
+
+    /// Shows the file as `bytes` (or, with none, as opened from disk) in
+    /// place of the one shown, without recording a change.
+    fn restore(&mut self, bytes: Option<Arc<Vec<u8>>>, cx: &mut Context<Self>) {
+        let (Some(path), Content::Ready(opened)) = (self.path.clone(), &self.content) else {
+            return;
+        };
+        let name = opened.name.clone();
+        let key = self.key.clone();
+        let generation = self.generation;
+        let original = bytes.is_none();
+        self.forget_runs();
+        self.picked_object = None;
+        self.moving = None;
+        self.chosen = None;
+        cx.spawn(async move |this, cx| {
+            let opened = cx
+                .background_executor()
+                .spawn(async move {
+                    let bytes = match bytes {
+                        Some(bytes) => bytes,
+                        None => Arc::new(std::fs::read(&path).map_err(|e| e.to_string())?),
+                    };
+                    let doc = crate::engine::engine()
+                        .open(bytes.clone(), key.as_deref().unwrap_or(""))
+                        .map_err(|e| e.to_string())?;
+                    let cos = cos(bytes.to_vec(), key.as_deref())?;
+                    Ok::<_, String>((bytes, doc, cos))
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                if this.generation != generation {
+                    return;
+                }
+                match opened {
+                    Ok((bytes, doc, cos)) => {
+                        this.restoring = true;
+                        this.show_changed(name, bytes, doc, cos, BTreeSet::new());
+                        this.restoring = false;
+                        if original {
+                            this.edited = None;
+                        }
+                    }
+                    Err(error) => this.notice = Some(t("undo-failed", &[("error", &error)])),
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// Whether the file shown has changes not saved: a form filled in or
@@ -3104,7 +3210,8 @@ impl Viewer {
                 div().flex_1().min_w_0().flex().child(
                     div()
                         .id("file-name")
-                        .min_w_0()
+                        // A few letters at least when the bar is crowded.
+                        .min_w(px(56.0))
                         .px(px(space::S2))
                         .py(px(space::S1))
                         .rounded(px(radius::SM))
@@ -3123,6 +3230,21 @@ impl Viewer {
                         .child(title),
                 ),
             )
+            .when(!self.undo.is_empty() || !self.redo.is_empty(), |bar| {
+                let step = |id: &'static str, icon: &'static str, tip: &'static str, on: bool| {
+                    let tint = if on { th.katna.text } else { th.katna.text_dim };
+                    widgets::icon_button_colored(id, icon, 18.0, tint, &th.katna)
+                        .tip(t(tip, &[]), &th.katna)
+                };
+                bar.child(
+                    step("undo", "undo", "undo-tip", !self.undo.is_empty())
+                        .on_click(cx.listener(|this, _, _, cx| this.undo(cx))),
+                )
+                .child(
+                    step("redo", "redo", "redo-tip", !self.redo.is_empty())
+                        .on_click(cx.listener(|this, _, _, cx| this.redo(cx))),
+                )
+            })
             .when(self.dirty(), |bar| {
                 bar.child(
                     widgets::filled_button("save", t("save", &[]), &th.katna)
@@ -3689,6 +3811,8 @@ impl Render for Viewer {
             .on_action(cx.listener(|this, _: &NextSpread, _, cx| this.next_spread(cx)))
             .on_action(cx.listener(|this, _: &Print, _, cx| this.print(cx)))
             .on_action(cx.listener(|this, _: &Save, _, cx| this.save(cx)))
+            .on_action(cx.listener(|this, _: &Undo, _, cx| this.undo(cx)))
+            .on_action(cx.listener(|this, _: &Redo, _, cx| this.redo(cx)))
             .on_action(cx.listener(|this, _: &ToggleContents, _, cx| this.toggle_pane(cx)))
             .on_action(cx.listener(|this, _: &ToggleNight, _, cx| this.toggle_night(cx)))
             .on_action(cx.listener(|this, _: &Find, window, cx| this.open_search(window, cx)))
