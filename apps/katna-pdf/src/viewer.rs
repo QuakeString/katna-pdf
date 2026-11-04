@@ -50,6 +50,7 @@ mod organizer;
 mod present;
 mod properties;
 mod redact;
+mod setup;
 pub(crate) mod sign;
 mod speak;
 mod textedit;
@@ -281,16 +282,38 @@ pub enum ViewerEvent {
 }
 
 /// A change to the pages, as [`Viewer::change_pages`] writes it.
-enum Pages {
+pub(super) enum Pages {
     /// The new pages: (0 for this file, page, quarter turns added).
     Order(Vec<(usize, usize, i32)>),
-    /// The pages of `file` inserted before page `at`.
-    Insert { file: PathBuf, at: usize },
+    /// Pages from `from` inserted before page `at`.
+    Insert { from: PagesFrom, at: usize },
+    /// `pages`, in order, replaced by the pages of `file`: more of those
+    /// go in after the last, fewer leave the rest as they were.
+    Replace {
+        file: PathBuf,
+        pages: BTreeSet<usize>,
+    },
     /// `pages` cropped to `crop` in their user space, or uncropped.
     Crop {
         pages: BTreeSet<usize>,
         crop: Option<[f32; 4]>,
     },
+    /// `pages` cropped by margins (top, right, bottom, left, in points
+    /// as each page shows) from their media boxes.
+    Margins {
+        pages: BTreeSet<usize>,
+        margins: [f32; 4],
+    },
+}
+
+/// Where pages inserted come from.
+pub(super) enum PagesFrom {
+    /// Another PDF, all its pages.
+    File(PathBuf),
+    /// Blank pages of these sizes (width, height in points).
+    Blank(Vec<(f32, f32)>),
+    /// Picture files, a page each, at 96 pixels to the inch.
+    Pictures(Vec<PathBuf>),
 }
 
 /// Recent files on the start screen.
@@ -391,6 +414,7 @@ pub struct Viewer {
     compare_count: u64,
     /// The page numbers card, while open.
     numbering: Option<numbering::Numbering>,
+    setup: Option<setup::PageSetup>,
     /// The form, once read, if the file has fields to fill in.
     form: Option<Form>,
     /// Each page's links, once read.
@@ -579,6 +603,7 @@ impl Viewer {
             compare_after: None,
             compare_count: 0,
             numbering: None,
+            setup: None,
             form: None,
             links: None,
             texts: None,
@@ -724,6 +749,7 @@ impl Viewer {
         self.renaming = None;
         self.label_ranges.clear();
         self.numbering = None;
+        self.setup = None;
         self.form = None;
         self.links = None;
         self.texts = None;
@@ -2219,13 +2245,22 @@ impl Viewer {
                 button("pages-delete", "trash", "pages-delete", some).on_click(op(PageOp::Delete)),
             )
             .child(
-                button(
+                widgets::icon_button_colored(
                     "pages-insert",
                     "insert-below",
-                    "pages-insert",
-                    !self.changing_pages,
+                    18.0,
+                    if self.setup.is_some() {
+                        th.katna.accent
+                    } else {
+                        th.katna.text_dim
+                    },
+                    &th.katna,
                 )
-                .on_click(cx.listener(|this, _, _, cx| this.choose_insert(cx))),
+                .size(px(32.0))
+                .when(self.setup.is_some(), |b| b.bg(th.field))
+                .tip(t("pages-insert", &[]), &th.katna)
+                .when(self.changing_pages, |b| b.opacity(0.4))
+                .on_click(cx.listener(|this, _, _, cx| this.toggle_setup(cx))),
             )
             .child(
                 widgets::icon_button_colored(
@@ -2265,7 +2300,7 @@ impl Viewer {
     }
 
     /// Asks for a PDF whose pages go after the pages picked.
-    fn choose_insert(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn choose_insert(&mut self, cx: &mut Context<Self>) {
         if self.changing_pages || self.page_count() == 0 {
             return;
         }
@@ -2281,7 +2316,14 @@ impl Viewer {
             {
                 this.update(cx, |this, cx| {
                     let at = organize::insert_at(this.page_count(), &this.picked);
-                    this.change_pages(Pages::Insert { file, at }, BTreeSet::new(), cx);
+                    this.change_pages(
+                        Pages::Insert {
+                            from: PagesFrom::File(file),
+                            at,
+                        },
+                        BTreeSet::new(),
+                        cx,
+                    );
                 })
                 .ok();
             }
@@ -2347,7 +2389,12 @@ impl Viewer {
 
     /// Writes the file with its pages changed, off the UI thread, and
     /// shows it; `picked` are the pages picked afterwards.
-    fn change_pages(&mut self, change: Pages, picked: BTreeSet<usize>, cx: &mut Context<Self>) {
+    pub(super) fn change_pages(
+        &mut self,
+        change: Pages,
+        picked: BTreeSet<usize>,
+        cx: &mut Context<Self>,
+    ) {
         let key = self.key.clone();
         self.finish_typing(true, cx);
         let (Some(path), Content::Ready(opened)) = (self.path.clone(), &self.content) else {
@@ -2375,20 +2422,44 @@ impl Viewer {
                         None => std::fs::read(&path).map_err(|e| e.to_string())?,
                     };
                     let base = cos(bytes, key.as_deref()).map_err(|e| e.to_string())?;
-                    let (order, other, crop) = match change {
-                        Pages::Order(order) => (order, None, None),
+                    let all = || (0..base.pages().len()).map(|p| (0, p, 0));
+                    // The crops, by page of this file.
+                    let mut crops: HashMap<usize, [f32; 4]> = HashMap::new();
+                    let (order, other) = match change {
+                        Pages::Order(order) => (order, None),
                         Pages::Crop { pages, crop } => {
-                            let order = (0..base.pages().len()).map(|p| (0, p, 0)).collect();
-                            (order, None, Some((pages, crop)))
+                            for page in pages {
+                                // Uncropped: to the media box.
+                                let to = crop.or_else(|| base.page_info(page).map(|i| i.media));
+                                if let Some(to) = to {
+                                    crops.insert(page, to);
+                                }
+                            }
+                            (all().collect(), None)
                         }
-                        Pages::Insert { file, at } => {
-                            let bytes = std::fs::read(&file).map_err(|e| e.to_string())?;
-                            let other =
-                                katna_pdf_cos::Document::load(bytes).map_err(|e| e.to_string())?;
+                        Pages::Margins { pages, margins } => {
+                            for page in pages {
+                                let Some(info) = base.page_info(page) else {
+                                    continue;
+                                };
+                                let [l, b, r, t] = setup::margins_in_media(info.rotate, margins);
+                                let m = info.media;
+                                crops.insert(page, [m[0] + l, m[1] + b, m[2] - r, m[3] - t]);
+                            }
+                            (all().collect(), None)
+                        }
+                        Pages::Insert { from, at } => {
+                            let other = pages_from(from)?;
                             let mut order: Vec<_> = (0..at).map(|p| (0, p, 0)).collect();
                             order.extend((0..other.pages().len()).map(|p| (1, p, 0)));
                             order.extend((at..base.pages().len()).map(|p| (0, p, 0)));
-                            (order, Some(other), None)
+                            (order, Some(other))
+                        }
+                        Pages::Replace { file, pages } => {
+                            let other = pages_from(PagesFrom::File(file))?;
+                            let order =
+                                replaced_order(base.pages().len(), &pages, other.pages().len());
+                            (order, Some(other))
                         }
                     };
                     let sources = order
@@ -2398,13 +2469,11 @@ impl Viewer {
                                 (1, Some(other)) => other,
                                 _ => &base,
                             };
-                            // Uncropped: to the media box.
-                            let crop = crop
-                                .as_ref()
-                                .filter(|(pages, _)| from == 0 && pages.contains(&page))
-                                .and_then(|(_, crop)| {
-                                    crop.or_else(|| base.page_info(page).map(|i| i.media))
-                                });
+                            let crop = if from == 0 {
+                                crops.get(&page).copied()
+                            } else {
+                                None
+                            };
                             katna_pdf_cos::PageSource {
                                 doc,
                                 page,
@@ -3715,6 +3784,7 @@ impl Render for Viewer {
         let redact_card = self.redact_card(cx);
         let link_card = self.link_card(window, cx);
         let numbering_card = self.numbering_card(cx);
+        let setup_card = self.setup_card(cx);
         let design_card = self.design_card(cx);
         let properties_card = self.properties_card(cx);
         let find_bar = self.find_bar(cx);
@@ -4020,6 +4090,7 @@ impl Render for Viewer {
                             .children(redact_card)
                             .children(link_card)
                             .children(numbering_card)
+                            .children(setup_card)
                             .children(design_card)
                             .children(properties_card),
                     ),
@@ -4083,6 +4154,63 @@ fn short_folder(folder: &Path) -> String {
         Some(rest) if rest.as_os_str().is_empty() => "~".into(),
         Some(rest) => format!("~{}{}", std::path::MAIN_SEPARATOR, rest.display()),
         None => folder.display().to_string(),
+    }
+}
+
+/// The pages of a file of `count` pages with `picked`, in order, replaced
+/// by the pages of another of `others`: (0 for this file or 1 for the
+/// other, page, no turn). More of the other's go in after the last
+/// picked; fewer leave the rest of the picked as they were.
+fn replaced_order(
+    count: usize,
+    picked: &BTreeSet<usize>,
+    others: usize,
+) -> Vec<(usize, usize, i32)> {
+    let picked: Vec<usize> = picked.iter().copied().filter(|&p| p < count).collect();
+    let mut order = Vec::with_capacity(count + others);
+    for page in 0..count {
+        match picked.iter().position(|&p| p == page) {
+            Some(j) if j < others => order.push((1, j, 0)),
+            _ => order.push((0, page, 0)),
+        }
+        if picked.last() == Some(&page) {
+            order.extend((picked.len()..others).map(|j| (1, j, 0)));
+        }
+    }
+    order
+}
+
+/// The document whose pages are inserted, as [`PagesFrom`] says.
+fn pages_from(from: PagesFrom) -> Result<katna_pdf_cos::Document, String> {
+    let load = |bytes| katna_pdf_cos::Document::load(bytes).map_err(|e| e.to_string());
+    match from {
+        PagesFrom::File(file) => load(std::fs::read(&file).map_err(|e| e.to_string())?),
+        PagesFrom::Blank(sizes) => load(katna_pdf_cos::blank_pdf(&sizes)),
+        PagesFrom::Pictures(files) => {
+            let mut images = Vec::new();
+            for file in files {
+                let bytes = std::fs::read(&file).map_err(|e| e.to_string())?;
+                let image = katna_pdf_sign::page_image(&bytes)?;
+                let (w, h) = match &image {
+                    katna_pdf_cos::Image::Pixels(p) => (p.width, p.height),
+                    katna_pdf_cos::Image::Jpeg { width, height, .. } => (*width, *height),
+                };
+                // A pixel to a point, as 96 pixels to the inch.
+                let size = (w.max(1) as f32 * 0.75, h.max(1) as f32 * 0.75);
+                images.push((image, size));
+            }
+            let sizes: Vec<(f32, f32)> = images.iter().map(|(_, s)| *s).collect();
+            let mut doc = load(katna_pdf_cos::blank_pdf(&sizes))?;
+            for (page, (image, (w, h))) in images.into_iter().enumerate() {
+                let item = katna_pdf_cos::Insert::Image {
+                    rect: [0.0, 0.0, w, h],
+                    image,
+                };
+                let bytes = doc.insert(page, &[item]).map_err(|e| e.to_string())?;
+                doc = load(bytes)?;
+            }
+            Ok(doc)
+        }
     }
 }
 
@@ -4157,5 +4285,40 @@ mod tests {
         assert_eq!(shown_with(&(9..10), 9, 10), 9..11);
         // A page above the top, drawn ahead of scrolling back.
         assert_eq!(shown_with(&(9..11), 9, 8), 8..10);
+    }
+
+    #[test]
+    fn replaced_pages_take_the_others_place() {
+        let picked: BTreeSet<usize> = [1, 2].into_iter().collect();
+        // As many: one for one.
+        assert_eq!(
+            replaced_order(4, &picked, 2),
+            vec![(0, 0, 0), (1, 0, 0), (1, 1, 0), (0, 3, 0)]
+        );
+        // More: the rest go in after the last picked.
+        assert_eq!(
+            replaced_order(4, &picked, 3),
+            vec![(0, 0, 0), (1, 0, 0), (1, 1, 0), (1, 2, 0), (0, 3, 0)]
+        );
+        // Fewer: the last picked stays.
+        assert_eq!(
+            replaced_order(4, &picked, 1),
+            vec![(0, 0, 0), (1, 0, 0), (0, 2, 0), (0, 3, 0)]
+        );
+    }
+
+    #[test]
+    fn pictures_become_pages() {
+        let dir = std::env::temp_dir().join(format!("katna-pdf-pictures-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("p.png");
+        let image = image::RgbImage::from_pixel(96, 48, image::Rgb([200, 30, 30]));
+        image.save(&file).unwrap();
+        let doc = pages_from(PagesFrom::Pictures(vec![file.clone(), file])).unwrap();
+        assert_eq!(doc.pages().len(), 2);
+        // 96 pixels at 96 to the inch: 72 points across, 36 up.
+        assert_eq!(doc.page_info(1).unwrap().media, [0.0, 0.0, 72.0, 36.0]);
+        assert_eq!(doc.page_objects(0).len(), 1);
+        std::fs::remove_dir_all(dir).ok();
     }
 }

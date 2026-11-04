@@ -364,3 +364,160 @@ impl Copier {
         write_file(&self.objects, trailer)
     }
 }
+
+/// A new file of blank pages, each `sizes[i]` wide and high in points.
+pub fn blank_pdf(sizes: &[(f32, f32)]) -> Vec<u8> {
+    let count = sizes.len().max(1);
+    let sizes: Vec<(f32, f32)> = if sizes.is_empty() {
+        vec![(612.0, 792.0)]
+    } else {
+        sizes.to_vec()
+    };
+    let mut catalog = Dict::default();
+    catalog.set("Type", Object::name("Catalog"));
+    catalog.set("Pages", Ref::new(2, 0));
+    let mut tree = Dict::default();
+    tree.set("Type", Object::name("Pages"));
+    tree.set(
+        "Kids",
+        (0..count)
+            .map(|i| Object::Ref(Ref::new(3 + i as u32, 0)))
+            .collect::<Vec<_>>(),
+    );
+    tree.set("Count", count as i64);
+    let mut objects = vec![Object::Dict(catalog), Object::Dict(tree)];
+    for (w, h) in sizes {
+        let mut page = Dict::default();
+        page.set("Type", Object::name("Page"));
+        page.set("Parent", Ref::new(2, 0));
+        page.set(
+            "MediaBox",
+            vec![
+                Object::Int(0),
+                Object::Int(0),
+                Object::Real(f64::from(w.max(1.0))),
+                Object::Real(f64::from(h.max(1.0))),
+            ],
+        );
+        objects.push(Object::Dict(page));
+    }
+    let mut trailer = Dict::default();
+    trailer.set("Root", Ref::new(1, 0));
+    write_file(&objects, trailer)
+}
+
+impl Document {
+    /// The file with `pages` made `size` (width, height in points, as
+    /// the page lies before its `/Rotate`): what they draw is scaled to
+    /// fit the new size with `scale`, else kept as big as it was, and
+    /// in the middle of the page either way; their annotations go along.
+    /// A crop box is dropped, as the new size is the whole page.
+    pub fn resize_pages(
+        &self,
+        pages: &[usize],
+        size: (f32, f32),
+        scale: bool,
+    ) -> Result<Vec<u8>, crate::edit::EditError> {
+        use crate::edit::EditError;
+        let (w, h) = (size.0.max(1.0), size.1.max(1.0));
+        let mut update = self.update().map_err(EditError::Update)?;
+        let refs = self.pages();
+        for &page in pages {
+            let page_ref = *refs.get(page).ok_or(EditError::NoPage)?;
+            let info = self.page_info(page).ok_or(EditError::NoPage)?;
+            let [l, b, r, t] = info.media;
+            let (pw, ph) = ((r - l).max(1.0), (t - b).max(1.0));
+            let s = if scale { (w / pw).min(h / ph) } else { 1.0 };
+            let tx = (w - pw * s) / 2.0 - l * s;
+            let ty = (h - ph * s) / 2.0 - b * s;
+            let mut dict = self
+                .get(page_ref)
+                .and_then(|o| o.as_dict().cloned())
+                .unwrap_or_default();
+            let mut old = Vec::new();
+            match dict.get("Contents").map(|c| self.resolve(c)) {
+                Some(Object::Array(a)) => old.extend(a),
+                Some(Object::Stream(_)) => {
+                    if let Some(c) = dict.get("Contents") {
+                        old.push(c.clone());
+                    }
+                }
+                _ => {}
+            }
+            let before = format!("q {} 0 0 {} {} {} cm\n", num(s), num(s), num(tx), num(ty));
+            let before = update.add(Object::Stream(crate::dss::compressed(before.as_bytes())));
+            let after = update.add(Object::Stream(crate::dss::compressed(b"\nQ\n")));
+            let mut contents = vec![Object::Ref(before)];
+            contents.extend(old);
+            contents.push(Object::Ref(after));
+            dict.set("Contents", contents);
+            dict.set(
+                "MediaBox",
+                vec![
+                    Object::Int(0),
+                    Object::Int(0),
+                    Object::Real(f64::from(w)),
+                    Object::Real(f64::from(h)),
+                ],
+            );
+            dict.remove("CropBox");
+            dict.remove("BleedBox");
+            dict.remove("TrimBox");
+            dict.remove("ArtBox");
+            // The annotations go where what they mark goes.
+            if let Some(Object::Array(annots)) = dict.get("Annots").map(|a| self.resolve(a)) {
+                for annot in annots {
+                    let Object::Ref(annot_ref) = annot else {
+                        continue;
+                    };
+                    let Some(mut adict) = self.get(annot_ref).and_then(|o| o.as_dict().cloned())
+                    else {
+                        continue;
+                    };
+                    let Some(Object::Array(rect)) = adict.get("Rect").map(|r| self.resolve(r))
+                    else {
+                        continue;
+                    };
+                    let n: Vec<f64> = rect
+                        .iter()
+                        .filter_map(|v| self.resolve(v).as_number())
+                        .collect();
+                    let [x0, y0, x1, y1] = n[..] else {
+                        continue;
+                    };
+                    let map = |x: f64, y: f64| {
+                        (
+                            x * f64::from(s) + f64::from(tx),
+                            y * f64::from(s) + f64::from(ty),
+                        )
+                    };
+                    let (nx0, ny0) = map(x0, y0);
+                    let (nx1, ny1) = map(x1, y1);
+                    adict.set(
+                        "Rect",
+                        vec![
+                            Object::Real(nx0),
+                            Object::Real(ny0),
+                            Object::Real(nx1),
+                            Object::Real(ny1),
+                        ],
+                    );
+                    update.replace(annot_ref, Object::Dict(adict));
+                }
+            }
+            update.replace(page_ref, Object::Dict(dict));
+        }
+        Ok(update.finish())
+    }
+}
+
+/// A number written as content streams have them: no trailing zeros.
+fn num(v: f32) -> String {
+    let s = format!("{v:.4}");
+    let s = s.trim_end_matches('0').trim_end_matches('.');
+    if s.is_empty() || s == "-" {
+        "0".to_owned()
+    } else {
+        s.to_owned()
+    }
+}
