@@ -63,6 +63,8 @@ pub enum ObjectKind {
     /// logo or a stamp.
     Form,
     Path,
+    /// A paragraph of text, copied with [`Document::copy_block`].
+    Text,
 }
 
 /// How a shape is painted.
@@ -494,6 +496,46 @@ impl Document {
         Ok(ObjectCopy {
             kind: object.kind,
             rect: object.rect,
+            content,
+            resources: used,
+            objects: taken.objects,
+        })
+    }
+
+    /// A copy of the paragraph of runs `lines` (of `text_runs`) on page
+    /// `page`, drawn in its own font, to paste onto a page of this or
+    /// another file with [`Document::paste_objects`].
+    pub fn copy_block(&self, page: usize, lines: &[usize]) -> Result<ObjectCopy, EditError> {
+        let crate::edit::BlockDrawing {
+            content,
+            fonts,
+            rect,
+        } = crate::edit::block_drawing(self, page, lines)?;
+        let page_ref = *self.pages().get(page).ok_or(EditError::NoPage)?;
+        let dict = page_dict(self, page_ref);
+        let resources = match dict.get("Resources").map(|r| self.resolve(r)) {
+            Some(Object::Dict(d)) => d,
+            _ => Dict::new(),
+        };
+        let mut taken = Taken::default();
+        let used = fonts
+            .into_iter()
+            .map(|name| {
+                let value = match self.resolve_key(&resources, "Font") {
+                    Object::Dict(d) => d.get(&name).cloned().unwrap_or(Object::Null),
+                    _ => Object::Null,
+                };
+                let value = taken.take(self, &value);
+                CopiedResource {
+                    category: "Font".to_owned(),
+                    name,
+                    value,
+                }
+            })
+            .collect();
+        Ok(ObjectCopy {
+            kind: ObjectKind::Text,
+            rect,
             content,
             resources: used,
             objects: taken.objects,
@@ -1429,6 +1471,7 @@ fn resource_operand(op: &Op) -> Option<(&'static str, usize)> {
     match op.operator.as_slice() {
         b"Do" => Some(("XObject", 0)),
         b"gs" => Some(("ExtGState", 0)),
+        b"Tf" => Some(("Font", 0)),
         b"sh" => Some(("Shading", 0)),
         b"cs" | b"CS" => {
             let name = op.operands.first()?.as_name()?;

@@ -2211,6 +2211,7 @@ fn objects(args: &[String], json: bool) -> Done {
                 katna_pdf_cos::ObjectKind::Picture => "picture",
                 katna_pdf_cos::ObjectKind::Form => "form",
                 katna_pdf_cos::ObjectKind::Path => "shape",
+                katna_pdf_cos::ObjectKind::Text => "text",
             };
             let rect = object.rect.map(num);
             if json {
