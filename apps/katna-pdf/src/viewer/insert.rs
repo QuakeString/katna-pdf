@@ -175,6 +175,18 @@ impl Viewer {
             )
             .on_click(cx.listener(|this, _, _, cx| this.toggle_linking(cx))),
         );
+        row = row.child(
+            button(
+                Adding::ALL.len() + 5,
+                "view-grid",
+                "grid-tool",
+                self.gridded,
+            )
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.gridded = !this.gridded;
+                cx.notify();
+            })),
+        );
         row = row.child(separator(th));
         for (i, ink) in INKS.into_iter().enumerate() {
             let on = self.ink == i;
@@ -211,10 +223,43 @@ impl Viewer {
                     ),
             );
         }
-        if let Some(inspector) = self.inspector(cx).or_else(|| self.text_inspector(cx)) {
+        if let Some(inspector) = self.text_inspector(cx) {
             row = row.child(separator(th)).child(inspector);
         }
         Some(row.into_any_element())
+    }
+
+    /// A row under the row of tools while objects are picked: where they
+    /// are and how big, and what can be done with them.
+    pub(super) fn object_row(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if !self.text_editing || !matches!(self.content, Content::Ready(_)) {
+            return None;
+        }
+        let th = self.theme;
+        // With none picked, how to pick them, so the page does not jump
+        // when the row comes and goes.
+        let inspector = self.inspector(cx).unwrap_or_else(|| {
+            div()
+                .text_size(px(katna_ui::tokens::text::SMALL))
+                .text_color(gpui::rgba(th.katna.text_dim))
+                .child(t("object-row-hint", &[]))
+                .into_any_element()
+        });
+        Some(
+            div()
+                .id("object-tools")
+                .h(px(44.0))
+                .flex_shrink_0()
+                .flex()
+                .items_center()
+                .gap(px(space::S1))
+                .px(px(space::S3))
+                .border_b_1()
+                .border_color(th.line)
+                .overflow_x_scroll()
+                .child(inspector)
+                .into_any_element(),
+        )
     }
 
     pub(super) fn pick_adding(&mut self, adding: Option<Adding>, cx: &mut Context<Self>) {

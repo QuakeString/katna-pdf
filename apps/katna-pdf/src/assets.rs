@@ -23,6 +23,41 @@ const ICONS: &[(&str, &[u8])] = &[
     ("icons/undo.svg", include_bytes!("../icons/undo.svg")),
     ("icons/redo.svg", include_bytes!("../icons/redo.svg")),
     (
+        "icons/align-left.svg",
+        include_bytes!("../icons/align-left.svg"),
+    ),
+    (
+        "icons/align-centre.svg",
+        include_bytes!("../icons/align-centre.svg"),
+    ),
+    (
+        "icons/align-right.svg",
+        include_bytes!("../icons/align-right.svg"),
+    ),
+    (
+        "icons/align-top.svg",
+        include_bytes!("../icons/align-top.svg"),
+    ),
+    (
+        "icons/align-middle.svg",
+        include_bytes!("../icons/align-middle.svg"),
+    ),
+    (
+        "icons/align-bottom.svg",
+        include_bytes!("../icons/align-bottom.svg"),
+    ),
+    (
+        "icons/step-forward.svg",
+        include_bytes!("../icons/step-forward.svg"),
+    ),
+    (
+        "icons/step-back.svg",
+        include_bytes!("../icons/step-back.svg"),
+    ),
+    ("icons/flip-h.svg", include_bytes!("../icons/flip-h.svg")),
+    ("icons/flip-v.svg", include_bytes!("../icons/flip-v.svg")),
+    ("icons/turn.svg", include_bytes!("../icons/turn.svg")),
+    (
         "icons/compress.svg",
         include_bytes!("../icons/compress.svg"),
     ),
