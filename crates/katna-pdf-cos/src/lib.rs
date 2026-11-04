@@ -46,8 +46,9 @@ mod write;
 mod xfdf;
 
 pub use annots::{
-    AnnotChanges, AnnotFlags, AnnotKind, Annotation, MarkupStyle, NOTE_SIZE, REVIEW_STATES,
-    annotation_status, comments_text, pdf_date, stamp_label,
+    AnnotChanges, AnnotFlags, AnnotKind, Annotation, DYNAMIC_STAMPS, MarkupStyle, NOTE_SIZE,
+    REVIEW_STATES, STAMPS, annotation_status, comments_text, custom_stamp, pdf_date,
+    stamp_is_dynamic, stamp_label,
 };
 pub use calc::{
     CalcOp, Calculation, Format, Scripts, calculate, number, parse_date, show, write_date,
@@ -86,4 +87,4 @@ pub use sign::{
 };
 pub use stamp::{Background, Bates, Stamp, StampPlace};
 pub use write::{Update, UpdateError, write_object};
-pub use xfdf::{XfdfAnnotation, XfdfError, from_xfdf, to_xfdf};
+pub use xfdf::{XfdfAnnotation, XfdfError, from_fdf, from_xfdf, to_fdf, to_xfdf};

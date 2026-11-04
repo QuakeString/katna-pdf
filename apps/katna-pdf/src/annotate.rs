@@ -30,6 +30,8 @@ pub enum Tool {
     /// A closed shape with a cloudy edge.
     Cloud,
     Stamp,
+    /// A file kept in the document, shown as a paper clip.
+    Attach,
     /// Measures the length of a line.
     Distance,
     /// Measures the length along several lines.
@@ -39,7 +41,7 @@ pub enum Tool {
 }
 
 impl Tool {
-    pub const ALL: [Tool; 19] = [
+    pub const ALL: [Tool; 20] = [
         Tool::Highlight,
         Tool::Underline,
         Tool::StrikeOut,
@@ -56,6 +58,7 @@ impl Tool {
         Tool::Polygon,
         Tool::Cloud,
         Tool::Stamp,
+        Tool::Attach,
         Tool::Distance,
         Tool::Perimeter,
         Tool::Area,
@@ -79,6 +82,7 @@ impl Tool {
             Tool::Polygon => "shape-polygon",
             Tool::Cloud => "cloud",
             Tool::Stamp => "stamp",
+            Tool::Attach => "attachment",
             Tool::Distance => "ruler",
             Tool::Perimeter => "measure-perimeter",
             Tool::Area => "measure-area",
@@ -104,6 +108,7 @@ impl Tool {
             Tool::Polygon => "tool-polygon",
             Tool::Cloud => "tool-cloud",
             Tool::Stamp => "tool-stamp",
+            Tool::Attach => "tool-attach",
             Tool::Distance => "tool-distance",
             Tool::Perimeter => "tool-perimeter",
             Tool::Area => "tool-area",
@@ -269,13 +274,20 @@ pub fn drawn(tool: Tool, page: usize, path: &[[f32; 2]], inv: Inverse) -> Option
             arrow: tool == Tool::Arrow,
         },
         Tool::Stamp => AnnotKind::Stamp("Approved".into()),
+        // The file is asked for once the clip is placed.
+        Tool::Attach => AnnotKind::FileAttachment {
+            name: String::new(),
+            data: None,
+        },
         Tool::Rectangle | Tool::Ellipse | Tool::Line | Tool::Arrow => return None,
     };
     let mut a = Annotation::new(page, kind);
     a.width = WIDTH;
     a.rect = match tool {
         // The icon's top left where the click was.
-        Tool::Note => inv.rect([from[0], from[1], from[0] + NOTE_SIZE, from[1] + NOTE_SIZE]),
+        Tool::Note | Tool::Attach => {
+            inv.rect([from[0], from[1], from[0] + NOTE_SIZE, from[1] + NOTE_SIZE])
+        }
         Tool::FreeText => inv.rect(boxed(FREE_TEXT_SIZE)),
         Tool::Typewriter => inv.rect([
             from[0],
@@ -337,6 +349,7 @@ pub fn kind_message(kind: &AnnotKind) -> &'static str {
         AnnotKind::Line { arrow: true, .. } => "tool-arrow",
         AnnotKind::Polygon(_) | AnnotKind::PolyLine(_) => "annot-shape",
         AnnotKind::Stamp(_) => "tool-stamp",
+        AnnotKind::FileAttachment { .. } => "tool-attach",
         AnnotKind::Other(_) => "annot-other",
     }
 }

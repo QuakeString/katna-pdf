@@ -10,17 +10,24 @@ use std::fmt::Write as _;
 
 use crate::annots::{AnnotChanges, AnnotFlags, AnnotKind, Annotation, MarkupStyle};
 use crate::document::Document;
+use crate::forms::text_object;
+use crate::object::{Dict, Name, Object, Ref};
 
 /// Why XFDF could not be read.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum XfdfError {
     /// Not XFDF: no `<xfdf>` element.
     NotXfdf,
+    /// Not FDF, or FDF that could not be read.
+    NotFdf,
 }
 
 impl std::fmt::Display for XfdfError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("the file is not XFDF")
+        f.write_str(match self {
+            XfdfError::NotXfdf => "the file is not XFDF",
+            XfdfError::NotFdf => "the file is not FDF",
+        })
     }
 }
 
@@ -92,7 +99,8 @@ pub fn to_xfdf(annots: &[Vec<Annotation>], file: &str) -> String {
             AnnotKind::Polygon(_) => ("polygon", format!(" width=\"{}\"", num(a.width))),
             AnnotKind::PolyLine(_) => ("polyline", format!(" width=\"{}\"", num(a.width))),
             AnnotKind::Stamp(name) => ("stamp", format!(" icon=\"{}\"", escape(name))),
-            AnnotKind::Other(_) => continue,
+            // The file itself does not go in XML.
+            AnnotKind::FileAttachment { .. } | AnnotKind::Other(_) => continue,
         };
         let _ = write!(
             out,
@@ -308,6 +316,15 @@ impl Document {
     /// are added. Replies keep to what they reply to when it is here.
     /// Annotations on pages the file does not have are left out.
     pub fn xfdf_changes(&self, xml: &str) -> Result<AnnotChanges, XfdfError> {
+        Ok(self.changes_from(from_xfdf(xml)?))
+    }
+
+    /// As [`Document::xfdf_changes`], from FDF.
+    pub fn fdf_changes(&self, fdf: &[u8]) -> Result<AnnotChanges, XfdfError> {
+        Ok(self.changes_from(from_fdf(fdf)?))
+    }
+
+    fn changes_from(&self, list: Vec<XfdfAnnotation>) -> AnnotChanges {
         let existing: Vec<Annotation> = self.annotations().into_iter().flatten().collect();
         let named = |name: &str| {
             existing
@@ -317,20 +334,137 @@ impl Document {
         };
         let pages = self.pages().len();
         let mut put = Vec::new();
-        for x in from_xfdf(xml)? {
+        for x in list {
             let mut a = x.annotation;
             if a.page >= pages {
                 continue;
             }
             a.id = named(&a.name);
             a.reply_to = x.reply_to.as_deref().and_then(named);
+            // What it answers may be coming in with it.
+            a.answers = x.reply_to.filter(|_| a.reply_to.is_none());
             put.push(a);
         }
-        Ok(AnnotChanges {
+        AnnotChanges {
             put,
             remove: Vec::new(),
-        })
+        }
     }
+}
+
+/// The annotations as FDF (the PDF-syntax form of XFDF, which Acrobat
+/// also reads and writes), for the PDF named `file`: each annotation's
+/// dictionary with its page number and appearance, replies pointing at
+/// what they answer.
+pub fn to_fdf(annots: &[Vec<Annotation>], file: &str) -> Vec<u8> {
+    use std::collections::HashMap;
+    // Object 1 is the catalog; each annotation takes two objects, its
+    // dictionary and its appearance.
+    let listed: Vec<&Annotation> = annots
+        .iter()
+        .flatten()
+        .filter(|a| {
+            !matches!(
+                a.kind,
+                AnnotKind::Other(_) | AnnotKind::FileAttachment { .. }
+            )
+        })
+        .collect();
+    let numbers: HashMap<Ref, u32> = listed
+        .iter()
+        .enumerate()
+        .filter_map(|(i, a)| Some((a.id?, 2 + 2 * i as u32)))
+        .collect();
+    let mut objects: Vec<Object> = Vec::with_capacity(1 + 2 * listed.len());
+    let mut fdf = Dict::new();
+    fdf.set("F", text_object(file));
+    fdf.set(
+        "Annots",
+        Object::Array(
+            (0..listed.len())
+                .map(|i| Object::Ref(Ref::new(2 + 2 * i as u32, 0)))
+                .collect(),
+        ),
+    );
+    let mut root = Dict::new();
+    root.set("FDF", Object::Dict(fdf));
+    objects.push(Object::Dict(root));
+    for (i, a) in listed.iter().enumerate() {
+        let mut dict = Dict::new();
+        crate::annots::write_dict(&mut dict, a, Ref::new(0, 0));
+        dict.remove("P");
+        dict.set("Page", a.page as i64);
+        match a.reply_to.and_then(|r| numbers.get(&r)) {
+            Some(n) => dict.set("IRT", Object::Ref(Ref::new(*n, 0))),
+            None => {
+                dict.remove("IRT");
+            }
+        }
+        let ap = 3 + 2 * i as u32;
+        dict.set(
+            "AP",
+            Dict(vec![(Name::new("N"), Object::Ref(Ref::new(ap, 0)))]),
+        );
+        objects.push(Object::Dict(dict));
+        objects.push(crate::annots::appearance(a));
+    }
+    let mut out = b"%FDF-1.2\n%\xe2\xe3\xcf\xd3\n".to_vec();
+    for (i, obj) in objects.iter().enumerate() {
+        out.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+        crate::write_object(&mut out, obj);
+        out.extend_from_slice(b"\nendobj\n");
+    }
+    out.extend_from_slice(b"trailer\n<< /Root 1 0 R >>\n%%EOF\n");
+    out
+}
+
+/// The annotations in an FDF file.
+pub fn from_fdf(bytes: &[u8]) -> Result<Vec<XfdfAnnotation>, XfdfError> {
+    if !bytes.starts_with(b"%FDF") {
+        return Err(XfdfError::NotFdf);
+    }
+    let doc = Document::load(bytes.to_vec()).map_err(|_| XfdfError::NotFdf)?;
+    let Some(Object::Dict(root)) = doc.trailer().get("Root").map(|r| doc.resolve(r)) else {
+        return Err(XfdfError::NotFdf);
+    };
+    let Object::Dict(fdf) = doc.resolve_key(&root, "FDF") else {
+        return Err(XfdfError::NotFdf);
+    };
+    let Object::Array(annots) = doc.resolve_key(&fdf, "Annots") else {
+        return Ok(Vec::new());
+    };
+    let mut read: Vec<(Option<Ref>, Annotation)> = Vec::new();
+    for obj in &annots {
+        let Object::Dict(d) = doc.resolve(obj) else {
+            continue;
+        };
+        let page = doc.resolve_key(&d, "Page").as_number().unwrap_or(0.0) as usize;
+        let Some(mut a) = doc.read_annotation(page, obj) else {
+            continue;
+        };
+        a.page = page;
+        a.id = None;
+        let to = a.reply_to.take();
+        read.push((to, a));
+    }
+    // Replies name what they answer, by the annotation's name.
+    let name_of = |r: Ref| -> Option<String> {
+        let d = doc.get(r)?;
+        let Object::Dict(d) = d else {
+            return None;
+        };
+        match doc.resolve_key(&d, "NM") {
+            Object::String { bytes, .. } => Some(crate::outline::text_string(&bytes)),
+            _ => None,
+        }
+    };
+    Ok(read
+        .into_iter()
+        .map(|(to, annotation)| XfdfAnnotation {
+            reply_to: to.and_then(name_of),
+            annotation,
+        })
+        .collect())
 }
 
 /// An annotation read from XFDF, and the name of the one it replies to.

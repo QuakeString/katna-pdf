@@ -10,8 +10,9 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use katna_pdf_cos::{
-    Allowed, Change, Coverage, Document, FieldEdit, FieldSpec, FormDesign, Lock, NewField, Object,
-    ObjectChange, PageSource, Placement, SignRequest, SigningInfo, compose, text_string,
+    Allowed, AnnotChanges, AnnotKind, Annotation, Change, Coverage, Document, FieldEdit, FieldSpec,
+    FormDesign, Lock, NewField, Object, ObjectChange, PageSource, Placement, SignRequest,
+    SigningInfo, compose, text_string,
 };
 use katna_pdf_sign::{Digest, Revocation, Signer, Trust, common_name, p12, pkcs11};
 
@@ -187,8 +188,19 @@ usage: katna-pdf-cli COMMAND [--json] ...
                                   it, such as i, ii, 1, 2); with -o the pages numbered
                                   in ranges from page FROM: STYLE 1, i, I, a, A or
                                   none, after PREFIX, counting from START
-  annots FILE [--as-text]         the annotations, page by page; --as-text as comments
-                                  to read, replies under what they answer
+  annots FILE [--as-text] [--save DIR]
+                                  the annotations, page by page; --as-text as comments
+                                  to read, replies under what they answer; --save
+                                  writes the files attached as comments into DIR
+  attach FILE -o OUT --file PATH [--page N] [--at X,Y] [--note TEXT]
+                                  a file kept in the PDF as a comment (a paper clip
+                                  at X,Y, the top left corner), with a note
+  stamp-page FILE -o OUT --stamp NAME --rect L,B,R,T [--page N] [--author NAME]
+                                  a stamp: Approved, Draft, Final, Confidential and
+                                  the other standard ones; #DApproved, #DReviewed,
+                                  #DReceived, #DRevised, #DConfidential show the
+                                  author and date too; #C followed by any text
+                                  shows that text
   library [--db CATALOG] (folders | add-folder DIR | remove-folder DIR | scan |
           list [QUERY] | search WORDS [--limit N] | tags ID [TAG,...] |
           rate ID STARS | note ID TEXT | duplicates | collections |
@@ -206,6 +218,8 @@ usage: katna-pdf-cli COMMAND [--json] ...
                                   given
   xfdf-export FILE -o OUT.xfdf    the annotations as XFDF
   xfdf-import FILE XFDF -o OUT    the annotations of XFDF added to the PDF
+  fdf-export FILE -o OUT.fdf      the annotations as FDF (Acrobat's own form)
+  fdf-import FILE FDF -o OUT      the annotations of FDF added to the PDF
 
 PAGES are counted from 1: 1-3,5,8- ; last ; odd ; even ; all.";
 
@@ -254,6 +268,10 @@ fn main() -> ExitCode {
         "library" => library(rest, json),
         "xfdf-export" => xfdf_export(rest, json),
         "xfdf-import" => xfdf_import(rest, json),
+        "fdf-export" => fdf_export(rest, json),
+        "fdf-import" => fdf_import(rest, json),
+        "attach" => attach(rest, json),
+        "stamp-page" => stamp_page(rest, json),
         "help" | "-h" | "--help" => {
             println!("{USAGE}");
             return ExitCode::SUCCESS;
@@ -389,6 +407,10 @@ impl<'a> Args<'a> {
                     | "--from"
                     | "--range"
                     | "--level"
+                    | "--file"
+                    | "--save"
+                    | "--stamp"
+                    | "--note"
                     | "--overlay"
             ) {
                 let Some(value) = it.next() else {
@@ -3009,6 +3031,45 @@ fn annots(args: &[String], json: bool) -> Done {
     if args.flag("--as-text") {
         return Ok(katna_pdf_cos::comments_text(&all));
     }
+    if let Some(dir) = args.option("--save") {
+        let dir = Path::new(dir);
+        std::fs::create_dir_all(dir).map_err(|e| failed(format!("{}: {e}", dir.display())))?;
+        let mut saved = Vec::new();
+        for a in all.iter().flatten() {
+            let AnnotKind::FileAttachment { name, .. } = &a.kind else {
+                continue;
+            };
+            let Some(data) = doc.attached_file(a) else {
+                continue;
+            };
+            let name = Path::new(name)
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .filter(|n| !n.is_empty())
+                .unwrap_or_else(|| "attachment".into());
+            let target = dir.join(&name);
+            write(&target, &data)?;
+            saved.push((target, data.len()));
+        }
+        return Ok(if json {
+            format!(
+                "{{\"saved\":[{}]}}\n",
+                saved
+                    .iter()
+                    .map(|(p, n)| format!(
+                        "{{\"file\":{},\"bytes\":{n}}}",
+                        string(&p.display().to_string())
+                    ))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            )
+        } else {
+            saved
+                .iter()
+                .map(|(p, n)| format!("{} ({n} bytes)\n", p.display()))
+                .collect()
+        });
+    }
     let mut out = String::new();
     let mut items = Vec::new();
     for a in all.iter().flatten() {
@@ -3307,6 +3368,150 @@ fn xfdf_import(args: &[String], json: bool) -> Done {
             "{} ({added} annotations added or replaced)\n",
             out.display()
         )
+    })
+}
+
+fn fdf_export(args: &[String], json: bool) -> Done {
+    let args = Args::parse(args)?;
+    let [file] = args.words()?;
+    let out = args.output()?;
+    let doc = open(file)?;
+    let annots = doc.annotations();
+    let name = Path::new(file)
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    write(&out, &katna_pdf_cos::to_fdf(&annots, &name))?;
+    let count: usize = annots.iter().map(Vec::len).sum();
+    Ok(if json {
+        format!(
+            "{{\"written\":[{{\"file\":{},\"annotations\":{count}}}]}}\n",
+            string(&out.display().to_string())
+        )
+    } else {
+        format!("{} ({count} annotations)\n", out.display())
+    })
+}
+
+fn fdf_import(args: &[String], json: bool) -> Done {
+    let args = Args::parse(args)?;
+    let [file, fdf] = args.words()?;
+    let out = args.output()?;
+    let doc = open(file)?;
+    let bytes = std::fs::read(fdf).map_err(|e| failed(format!("{fdf}: {e}")))?;
+    let changes = doc
+        .fdf_changes(&bytes)
+        .map_err(|e| failed(format!("{fdf}: {e}")))?;
+    let added = changes.put.len();
+    let bytes = doc.annotate(&changes).map_err(failed)?;
+    write(&out, &bytes)?;
+    Ok(if json {
+        format!(
+            "{{\"written\":[{{\"file\":{},\"annotations_added\":{added}}}]}}\n",
+            string(&out.display().to_string())
+        )
+    } else {
+        format!(
+            "{} ({added} annotations added or replaced)\n",
+            out.display()
+        )
+    })
+}
+
+fn attach(args: &[String], json: bool) -> Done {
+    let args = Args::parse(args)?;
+    let [file] = args.words()?;
+    let out = args.output()?;
+    let doc = open(file)?;
+    let page = page_number(&doc, args.option("--page"))?;
+    let path = args
+        .option("--file")
+        .ok_or_else(|| Failure::Usage("say which file with --file PATH".into()))?;
+    let data = std::fs::read(path).map_err(|e| failed(format!("{path}: {e}")))?;
+    let name = Path::new(path)
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let at = match args.option("--at") {
+        Some(at) => {
+            let at: Vec<f32> = at
+                .split(',')
+                .map(|v| v.trim().parse::<f32>().ok().filter(|v| v.is_finite()))
+                .collect::<Option<Vec<_>>>()
+                .filter(|v| v.len() == 2)
+                .ok_or_else(|| Failure::Usage(format!("--at {at}: 2 numbers, comma between")))?;
+            [at[0], at[1]]
+        }
+        None => {
+            let (_, h) = doc
+                .page_info(page)
+                .map(|i| i.size())
+                .unwrap_or((612.0, 792.0));
+            [36.0, h - 36.0]
+        }
+    };
+    let mut a = Annotation::new(
+        page,
+        AnnotKind::FileAttachment {
+            name,
+            data: Some(data),
+        },
+    );
+    a.rect = [
+        at[0],
+        at[1] - katna_pdf_cos::NOTE_SIZE,
+        at[0] + katna_pdf_cos::NOTE_SIZE,
+        at[1],
+    ];
+    a.contents = args.option("--note").unwrap_or_default().to_owned();
+    let bytes = doc
+        .annotate(&AnnotChanges {
+            put: vec![a],
+            remove: Vec::new(),
+        })
+        .map_err(failed)?;
+    write(&out, &bytes)?;
+    Ok(if json {
+        format!(
+            "{{\"written\":[{{\"file\":{}}}]}}\n",
+            string(&out.display().to_string())
+        )
+    } else {
+        format!("{}\n", out.display())
+    })
+}
+
+fn stamp_page(args: &[String], json: bool) -> Done {
+    let args = Args::parse(args)?;
+    let [file] = args.words()?;
+    let out = args.output()?;
+    let doc = open(file)?;
+    let page = page_number(&doc, args.option("--page"))?;
+    let name = args
+        .option("--stamp")
+        .ok_or_else(|| Failure::Usage("say which stamp with --stamp NAME".into()))?;
+    let rect = parse_rect(
+        args.option("--rect")
+            .ok_or_else(|| Failure::Usage("say where with --rect L,B,R,T".into()))?,
+    )?;
+    let mut a = Annotation::new(page, AnnotKind::Stamp(name.to_owned()));
+    a.rect = rect;
+    a.colour = [0.8, 0.1, 0.1];
+    a.author = args.option("--author").unwrap_or_default().to_owned();
+    let bytes = doc
+        .annotate(&AnnotChanges {
+            put: vec![a],
+            remove: Vec::new(),
+        })
+        .map_err(failed)?;
+    write(&out, &bytes)?;
+    Ok(if json {
+        format!(
+            "{{\"written\":[{{\"file\":{}}}]}}\n",
+            string(&out.display().to_string())
+        )
+    } else {
+        format!("{}\n", out.display())
     })
 }
 

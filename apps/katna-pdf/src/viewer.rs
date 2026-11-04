@@ -54,6 +54,7 @@ mod redact;
 mod setup;
 pub(crate) mod sign;
 mod speak;
+mod stamps;
 mod textedit;
 
 use crate::annotate::Tool;
@@ -511,6 +512,10 @@ pub struct Viewer {
     /// A reply being typed, and which comments the list shows.
     reply: Option<comments::Reply>,
     comment_filter: comments::CommentFilter,
+    /// The stamp the stamp tool puts on, and the ones typed in.
+    stamp: String,
+    custom_stamps: Vec<String>,
+    stamp_input: Option<(Entity<TextInput>, Subscription)>,
     /// Whether annotation changes are being written, and those asked for
     /// meanwhile.
     annotating: bool,
@@ -657,6 +662,9 @@ impl Viewer {
             comment: None,
             reply: None,
             comment_filter: Default::default(),
+            stamp: "Approved".into(),
+            custom_stamps: stamps::load_custom(),
+            stamp_input: None,
             annotating: false,
             annots_waiting: Default::default(),
             comment_next: false,
@@ -3783,6 +3791,7 @@ impl Render for Viewer {
         let tools = self.tools_row(cx).or_else(|| self.edit_row(cx));
         let object_row = self.object_row(cx);
         let measure_bar = self.measure_bar(cx);
+        let stamp_bar = self.stamp_bar(cx);
         let reading_bar = self.reading_bar(cx);
         let signatures_line = self.signatures_line(cx);
         let signing_card = self.signing_card(cx);
@@ -4079,6 +4088,7 @@ impl Render for Viewer {
                     .children(tools)
                     .children(object_row)
                     .children(measure_bar)
+                    .children(stamp_bar)
                     .children(reading_bar)
                     .children(find_bar)
                     .children(signatures_line)

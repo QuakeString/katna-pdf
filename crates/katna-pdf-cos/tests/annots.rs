@@ -509,3 +509,111 @@ fn flags_states_and_replies_round_trip() {
             .any(|a| a.annotation.state.as_deref() == Some("Accepted"))
     );
 }
+
+#[test]
+fn stamps_attachments_and_fdf_round_trip() {
+    let doc = two();
+    let mut dynamic = Annotation::new(1, AnnotKind::Stamp("#DApproved".into()));
+    dynamic.rect = [100.0, 600.0, 250.0, 650.0];
+    dynamic.author = "Asha".into();
+    let mut custom = Annotation::new(
+        1,
+        AnnotKind::Stamp(katna_pdf_cos::custom_stamp("Paid in full")),
+    );
+    custom.rect = [100.0, 500.0, 250.0, 550.0];
+    let mut file = Annotation::new(
+        1,
+        AnnotKind::FileAttachment {
+            name: "notes.txt".into(),
+            data: Some(b"the notes\n".to_vec()),
+        },
+    );
+    file.rect = [300.0, 600.0, 320.0, 620.0];
+    file.contents = "See the notes".into();
+    let out = doc
+        .annotate(&AnnotChanges {
+            put: vec![dynamic, custom, file],
+            remove: vec![],
+        })
+        .unwrap();
+    let again = Document::load(out).unwrap();
+    let read = &again.annotations()[1];
+    assert_eq!(read[0].kind, AnnotKind::Stamp("#DApproved".into()));
+    assert!(katna_pdf_cos::stamp_is_dynamic("#DApproved"));
+    assert_eq!(katna_pdf_cos::stamp_label("#DApproved"), "APPROVED");
+    assert_eq!(katna_pdf_cos::stamp_label("#CPaid in full"), "Paid in full");
+    assert_eq!(read[1].kind.label(), "Stamp Paid in full");
+    // The dynamic stamp's appearance names who put it on.
+    let Some(Object::Dict(dict)) = again.get(read[0].id.unwrap()) else {
+        panic!();
+    };
+    let Object::Dict(ap) = again.resolve_key(&dict, "AP") else {
+        panic!();
+    };
+    let Object::Stream(n) = again.resolve_key(&ap, "N") else {
+        panic!();
+    };
+    let content = String::from_utf8_lossy(&n.data);
+    assert!(
+        content.contains("(APPROVED)") && content.contains("(Asha, 20"),
+        "{content}"
+    );
+    // The attachment keeps its file.
+    assert_eq!(
+        read[2].kind,
+        AnnotKind::FileAttachment {
+            name: "notes.txt".into(),
+            data: None,
+        }
+    );
+    assert_eq!(
+        again.attached_file(&read[2]).as_deref(),
+        Some(&b"the notes\n"[..])
+    );
+    // Through FDF: the stamps, not the file; a reply follows its parent.
+    let mut reply = Annotation::new(1, AnnotKind::Note);
+    reply.reply_to = read[1].id;
+    reply.contents = "Thanks".into();
+    let out = again
+        .annotate(&AnnotChanges {
+            put: vec![reply],
+            remove: vec![],
+        })
+        .unwrap();
+    let again = Document::load(out).unwrap();
+    let all = again.annotations();
+    let fdf = katna_pdf_cos::to_fdf(&all, "a.pdf");
+    assert!(fdf.starts_with(b"%FDF-1.2"));
+    let back = katna_pdf_cos::from_fdf(&fdf).unwrap();
+    // Page 1's note (its caret is of a kind not written), and page 2's
+    // two stamps and the reply.
+    assert_eq!(back.len(), 4);
+    let stamps: Vec<&katna_pdf_cos::XfdfAnnotation> = back
+        .iter()
+        .filter(|x| matches!(x.annotation.kind, AnnotKind::Stamp(_)))
+        .collect();
+    assert_eq!(stamps.len(), 2);
+    assert_eq!(stamps[0].annotation.page, 1);
+    assert_eq!(stamps[0].annotation.rect, [100.0, 600.0, 250.0, 650.0]);
+    assert_eq!(stamps[0].annotation.author, "Asha");
+    let reply = back
+        .iter()
+        .find(|x| x.annotation.contents == "Thanks")
+        .unwrap();
+    assert_eq!(reply.reply_to.as_deref(), Some(all[1][1].name.as_str()));
+    // Into a fresh file: the reply still answers the custom stamp.
+    let changes = two().fdf_changes(&fdf).unwrap();
+    assert_eq!(changes.put.len(), 4);
+    let out = two().annotate(&changes).unwrap();
+    let fresh = Document::load(out).unwrap();
+    let page2 = &fresh.annotations()[1];
+    let stamp = page2
+        .iter()
+        .find(|a| a.kind == AnnotKind::Stamp("#CPaid in full".into()))
+        .unwrap();
+    assert!(
+        page2
+            .iter()
+            .any(|a| a.contents == "Thanks" && a.reply_to == stamp.id)
+    );
+}

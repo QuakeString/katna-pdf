@@ -56,7 +56,7 @@ impl KindGroup {
 
     fn of(kind: &AnnotKind) -> Option<Self> {
         Some(match kind {
-            AnnotKind::Note => KindGroup::Notes,
+            AnnotKind::Note | AnnotKind::FileAttachment { .. } => KindGroup::Notes,
             AnnotKind::FreeText { .. } => KindGroup::Text,
             AnnotKind::Markup(..) => KindGroup::Markup,
             AnnotKind::Ink(_)
@@ -604,10 +604,14 @@ impl Viewer {
         };
         let chosen = self.chosen == Some(id);
         let page_label = (page + 1).to_string();
-        let what = if a.contents.is_empty() {
-            t(annotate::kind_message(&a.kind), &[])
-        } else {
+        let what = if !a.contents.is_empty() {
             a.contents.clone()
+        } else {
+            match &a.kind {
+                AnnotKind::Stamp(name) => katna_pdf_cos::stamp_label(name),
+                AnnotKind::FileAttachment { name, .. } => name.clone(),
+                kind => t(annotate::kind_message(kind), &[]),
+            }
         };
         let mut meta = t("comment-page", &[("page", &page_label)]);
         if !a.author.is_empty() {
@@ -717,12 +721,19 @@ impl Viewer {
                 .tip(t(tip, &[]), &th.katna)
                 .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
         };
+        let attachment = matches!(a.kind, AnnotKind::FileAttachment { .. });
         row = row.child(
             div()
                 .flex()
                 .items_center()
                 .justify_end()
                 .gap(px(space::S1))
+                .when(attachment, |d| {
+                    d.child(
+                        button("comment-save-file", "download", "comment-save-file")
+                            .on_click(cx.listener(|this, _, _, cx| this.save_attachment(cx))),
+                    )
+                })
                 .child(
                     button("comment-reply", "reply", "comment-reply")
                         .on_click(cx.listener(|this, _, window, cx| this.start_reply(window, cx))),

@@ -107,7 +107,7 @@ impl Viewer {
             } else {
                 th.katna.text_dim
             };
-            if i == 4 || i == 8 || i == 16 {
+            if i == 4 || i == 8 || i == 17 {
                 row = row.child(separator(th));
             }
             row = row.child(
@@ -269,6 +269,19 @@ impl Viewer {
                 .and_then(|(tool, inv)| annotate::drawn(tool, draft.page, &draft.path, inv));
             if let Some(mut a) = made {
                 a.colour = COLOURS[self.colour];
+                if let AnnotKind::Stamp(name) = &mut a.kind {
+                    name.clone_from(&self.stamp);
+                    // Stamps read red unless another colour was picked.
+                    if self.colour == 0 {
+                        a.colour = [0.8, 0.1, 0.1];
+                    }
+                }
+                a.author = author();
+                if let AnnotKind::FileAttachment { .. } = a.kind {
+                    self.attach_file(a, cx);
+                    cx.notify();
+                    return true;
+                }
                 if let AnnotKind::FreeText { .. } = a.kind {
                     // Black text unless a colour other than the first
                     // (yellow) was picked.
@@ -276,7 +289,6 @@ impl Viewer {
                         a.colour = [0.0, 0.0, 0.0];
                     }
                 }
-                a.author = author();
                 // Notes and free text are written in at once.
                 self.comment_next = matches!(a.kind, AnnotKind::Note | AnnotKind::FreeText { .. });
                 self.change_annotations(
@@ -698,8 +710,16 @@ impl Viewer {
             let written = cx
                 .background_executor()
                 .spawn(async move {
-                    let xml = katna_pdf_cos::to_xfdf(&annots, &file);
-                    std::fs::write(&target, xml).map_err(|e| e.to_string())?;
+                    // FDF when that is the name given, else XFDF.
+                    let fdf = target
+                        .extension()
+                        .is_some_and(|e| e.eq_ignore_ascii_case("fdf"));
+                    let bytes = if fdf {
+                        katna_pdf_cos::to_fdf(&annots, &file)
+                    } else {
+                        katna_pdf_cos::to_xfdf(&annots, &file).into_bytes()
+                    };
+                    std::fs::write(&target, bytes).map_err(|e| e.to_string())?;
                     Ok::<_, String>(target)
                 })
                 .await;
@@ -740,14 +760,18 @@ impl Viewer {
             let read = cx
                 .background_executor()
                 .spawn(async move {
-                    let xml = std::fs::read(&file).map_err(|e| e.to_string())?;
-                    let xml = String::from_utf8_lossy(&xml);
+                    let data = std::fs::read(&file).map_err(|e| e.to_string())?;
                     let bytes = match current {
                         Some(bytes) => bytes.to_vec(),
                         None => std::fs::read(&path).map_err(|e| e.to_string())?,
                     };
                     let doc = super::cos(bytes, key.as_deref()).map_err(|e| e.to_string())?;
-                    doc.xfdf_changes(&xml).map_err(|e| e.to_string())
+                    if data.starts_with(b"%FDF") {
+                        doc.fdf_changes(&data).map_err(|e| e.to_string())
+                    } else {
+                        doc.xfdf_changes(&String::from_utf8_lossy(&data))
+                            .map_err(|e| e.to_string())
+                    }
                 })
                 .await;
             this.update(cx, |this, cx| {
