@@ -21,12 +21,12 @@
 use std::path::Path;
 use std::sync::Mutex;
 
-use gpui::{AnyElement, Context, Entity, Subscription, div, prelude::*};
+use gpui::{AnyElement, Context, Entity, Focusable, Subscription, Window, div, prelude::*};
 use katna_pdf_cos::{ObjectChange, ObjectCopy, ObjectKind, PageObject, PictureFile, ShapeStyle};
 use katna_ui::px;
 use katna_ui::scale::desktop_px;
 use katna_ui::text_input::{InputEvent, TextInput};
-use katna_ui::tokens::{space, text};
+use katna_ui::tokens::{radius, space, text};
 use katna_ui::widgets::{self, Tip};
 
 use super::{Viewer, separator};
@@ -71,6 +71,12 @@ pub(super) struct Picked {
     opacity: f32,
     /// Whether a shape's own points are shown, to drag one at a time.
     points: bool,
+}
+
+/// The card asking which pages the copied objects go on.
+pub(super) struct PastingMany {
+    pages: Entity<TextInput>,
+    _sub: Subscription,
 }
 
 /// What a drag on the picked objects holds: their body, a corner (0 top
@@ -1292,6 +1298,197 @@ impl Viewer {
             cx,
         );
         true
+    }
+
+    /// Ctrl+Alt+V: opens the card asking which pages the copied objects
+    /// go on, each at the copied place. Returns whether there were any.
+    pub(super) fn toggle_paste_many(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if self.pasting_many.take().is_some() {
+            window.focus(&self.focus, cx);
+            cx.notify();
+            return true;
+        }
+        if !self.text_editing || !matches!(self.content, super::Content::Ready(_)) {
+            return false;
+        }
+        let any = COPIED.lock().is_ok_and(|c| !c.is_empty());
+        if !any {
+            return false;
+        }
+        let accent = gpui::rgba(self.theme.katna.accent).into();
+        let pages = cx.new(|cx| {
+            let mut input = TextInput::new(t("paste-many-pages", &[]), cx);
+            input.set_accent(accent);
+            input
+        });
+        let sub = cx.subscribe_in(&pages, window, |this, _, event, window, cx| match event {
+            InputEvent::Submit => {
+                window.focus(&this.focus, cx);
+                this.paste_to_pages(cx);
+            }
+            InputEvent::Cancel => {
+                this.pasting_many = None;
+                window.focus(&this.focus, cx);
+                cx.notify();
+            }
+            _ => {}
+        });
+        let handle = pages.focus_handle(cx);
+        window.focus(&handle, cx);
+        cx.defer_in(window, move |_, window, cx| window.focus(&handle, cx));
+        self.pasting_many = Some(PastingMany { pages, _sub: sub });
+        cx.notify();
+        true
+    }
+
+    /// The card asking which pages the copied objects go on.
+    pub(super) fn paste_many_card(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let pasting = self.pasting_many.as_ref()?;
+        let th = self.theme;
+        let count = COPIED.lock().map_or(0, |c| c.len());
+        Some(
+            div()
+                .id("paste-many-card")
+                .absolute()
+                .top(px(space::S3))
+                .right(px(space::S5))
+                .w(px(320.0))
+                .p(px(space::S4))
+                .flex()
+                .flex_col()
+                .gap(px(space::S2))
+                .rounded(px(radius::MD))
+                .bg(th.card)
+                .border_1()
+                .border_color(th.line)
+                .shadow(widgets::elevation(&th.katna, 2.0))
+                .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .child(
+                    div()
+                        .text_size(px(text::BODY))
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .text_color(th.text)
+                        .child(t("paste-many-title", &[("count", &count.to_string())])),
+                )
+                .child(
+                    div()
+                        .text_size(px(text::SMALL))
+                        .text_color(th.dim)
+                        .child(t("paste-many-hint", &[])),
+                )
+                .child(
+                    div()
+                        .h(px(36.0))
+                        .flex()
+                        .items_center()
+                        .px(px(space::S3))
+                        .rounded(px(radius::SM))
+                        .bg(th.field)
+                        .text_size(px(text::BODY))
+                        .text_color(th.text)
+                        .child(pasting.pages.clone()),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .justify_end()
+                        .gap(px(space::S2))
+                        .child(
+                            widgets::outlined_button(
+                                "paste-many-cancel",
+                                t("paste-many-cancel", &[]),
+                                &th.katna,
+                            )
+                            .on_click(cx.listener(
+                                |this, _, window, cx| {
+                                    this.toggle_paste_many(window, cx);
+                                },
+                            )),
+                        )
+                        .child(
+                            widgets::filled_button(
+                                "paste-many-go",
+                                t("paste-many-go", &[]),
+                                &th.katna,
+                            )
+                            .on_click(cx.listener(
+                                |this, _, window, cx| {
+                                    window.focus(&this.focus, cx);
+                                    this.paste_to_pages(cx);
+                                },
+                            )),
+                        ),
+                )
+                .into_any_element(),
+        )
+    }
+
+    /// Pastes the copied objects on the pages the card names (all when
+    /// none), each at the copied place.
+    fn paste_to_pages(&mut self, cx: &mut Context<Self>) {
+        let Some(pasting) = self.pasting_many.take() else {
+            return;
+        };
+        cx.notify();
+        let copies = match COPIED.lock() {
+            Ok(copied) if !copied.is_empty() => copied.clone(),
+            _ => return,
+        };
+        let count = self.page_count();
+        let spec = pasting.pages.read(cx).text().trim().to_owned();
+        let pages: Vec<usize> = if spec.is_empty() {
+            (0..count).collect()
+        } else {
+            match katna_pdf_cos::ranges::parse(&spec, count) {
+                Ok(pages) => pages,
+                Err(error) => {
+                    self.notice = Some(t("paste-many-failed", &[("error", &error.to_string())]));
+                    cx.notify();
+                    return;
+                }
+            }
+        };
+        if pages.is_empty() {
+            return;
+        }
+        let shown = pages.clone();
+        let total = pages.len();
+        let copied = copies.len();
+        self.picked_object = None;
+        self.change_document(
+            shown,
+            "paste-many-failed",
+            move |doc| {
+                let refs: Vec<&ObjectCopy> = copies.iter().collect();
+                let mut owned: Option<katna_pdf_cos::Document> = None;
+                let mut bytes = Vec::new();
+                for (k, page) in pages.iter().enumerate() {
+                    let now = owned.as_ref().unwrap_or(doc);
+                    bytes = now
+                        .paste_objects(*page, &refs, [0.0, 0.0])
+                        .map_err(|e| e.to_string())?;
+                    if k + 1 < pages.len() {
+                        owned = Some(
+                            katna_pdf_cos::Document::load(bytes.clone())
+                                .map_err(|e| e.to_string())?,
+                        );
+                    }
+                }
+                Ok(bytes)
+            },
+            cx,
+        );
+        self.notice = Some(t(
+            "paste-many-done",
+            &[
+                ("count", &copied.to_string()),
+                ("pages", &total.to_string()),
+            ],
+        ));
     }
 
     /// The picked objects' frame, corners and turning handle on page

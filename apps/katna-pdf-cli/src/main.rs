@@ -257,6 +257,10 @@ usage: katna-pdf-cli COMMAND [--json] ...
                                   (none is run): the document's own scripts, what
                                   happens when it opens, closes, is saved or printed,
                                   when a page opens or closes, and what fields do
+  page-actions FILE [-o OUT [--open PAGE=WHAT]... [--close PAGE=WHAT]...]
+                                  what each page does when opened or closed; with -o,
+                                  set (WHAT as `form --action` takes it: goto:PAGE,
+                                  url:ADDRESS, next, previous, first, last, …) or none
   annots FILE [--as-text] [--save DIR]
                                   the annotations, page by page; --as-text as comments
                                   to read, replies under what they answer; --save
@@ -342,6 +346,7 @@ fn main() -> ExitCode {
         "attachments" => attachments(rest, json),
         "layers" => layers(rest, json),
         "actions" => actions(rest, json),
+        "page-actions" => page_actions(rest, json),
         "library" => library(rest, json),
         "xfdf-export" => xfdf_export(rest, json),
         "xfdf-import" => xfdf_import(rest, json),
@@ -507,6 +512,8 @@ impl<'a> Args<'a> {
                     | "--comb"
                     | "--background"
                     | "--action"
+                    | "--open"
+                    | "--close"
                     | "--no-scroll"
                     | "--caption"
             ) {
@@ -3088,51 +3095,7 @@ fn form(args: &[String], json: bool) -> Done {
             ))
         };
         let (name, what) = item.split_once('=').ok_or_else(bad)?;
-        let (kind, arg) = what.split_once(':').unwrap_or((what, ""));
-        let names = || {
-            arg.split(',')
-                .map(str::trim)
-                .filter(|n| !n.is_empty())
-                .map(str::to_owned)
-                .collect::<Vec<_>>()
-        };
-        use katna_pdf_cos::{FieldAction, SubmitFormat};
-        let action = match kind {
-            "goto" => Some(FieldAction::GoTo(katna_pdf_cos::Destination {
-                page: page_of(arg)?,
-                top: None,
-            })),
-            "url" if !arg.is_empty() => Some(FieldAction::Uri(arg.to_owned())),
-            "reset" => Some(FieldAction::Reset {
-                fields: names(),
-                others: false,
-            }),
-            "hide" | "show" if !arg.is_empty() => Some(FieldAction::Hide {
-                fields: names(),
-                hide: kind == "hide",
-            }),
-            "submit" if !arg.is_empty() => {
-                let (url, format) = arg
-                    .rsplit_once(':')
-                    .filter(|(_, f)| ["fdf", "xfdf", "html", "pdf"].contains(f))
-                    .unwrap_or((arg, "fdf"));
-                Some(FieldAction::Submit {
-                    url: url.to_owned(),
-                    format: match format {
-                        "xfdf" => SubmitFormat::Xfdf,
-                        "html" => SubmitFormat::Html,
-                        "pdf" => SubmitFormat::Pdf,
-                        _ => SubmitFormat::Fdf,
-                    },
-                })
-            }
-            "next" => Some(FieldAction::Named("NextPage".into())),
-            "previous" => Some(FieldAction::Named("PrevPage".into())),
-            "first" => Some(FieldAction::Named("FirstPage".into())),
-            "last" => Some(FieldAction::Named("LastPage".into())),
-            "none" => None,
-            _ => return Err(bad()),
-        };
+        let action = parse_action(what, &page_of).ok_or_else(bad)?;
         change(name, &|s, e| {
             s.action = action.clone();
             e.action = Some(action.clone());
@@ -3885,6 +3848,157 @@ fn attachments(args: &[String], json: bool) -> Done {
     let out = PathBuf::from(out);
     write(&out, &bytes)?;
     Ok(wrote(&[(out, count)], json))
+}
+
+/// An action as `--action` and `page-actions` write it: `goto:PAGE`,
+/// `url:ADDRESS`, `reset[:FIELDS]`, `hide:FIELDS`, `show:FIELDS`,
+/// `submit:URL[:FORMAT]`, `next`, `previous`, `first`, `last` (as
+/// `Some`) or `none` (as `None`); `None` from the function when it is
+/// not one of those.
+fn parse_action(
+    what: &str,
+    page_of: &dyn Fn(&str) -> Result<usize, Failure>,
+) -> Option<Option<katna_pdf_cos::FieldAction>> {
+    let (kind, arg) = what.split_once(':').unwrap_or((what, ""));
+    let names = || {
+        arg.split(',')
+            .map(str::trim)
+            .filter(|n| !n.is_empty())
+            .map(str::to_owned)
+            .collect::<Vec<_>>()
+    };
+    use katna_pdf_cos::{FieldAction, SubmitFormat};
+    let action = match kind {
+        "goto" => Some(FieldAction::GoTo(katna_pdf_cos::Destination {
+            page: page_of(arg).ok()?,
+            top: None,
+        })),
+        "url" if !arg.is_empty() => Some(FieldAction::Uri(arg.to_owned())),
+        "reset" => Some(FieldAction::Reset {
+            fields: names(),
+            others: false,
+        }),
+        "hide" | "show" if !arg.is_empty() => Some(FieldAction::Hide {
+            fields: names(),
+            hide: kind == "hide",
+        }),
+        "submit" if !arg.is_empty() => {
+            let (url, format) = arg
+                .rsplit_once(':')
+                .filter(|(_, f)| ["fdf", "xfdf", "html", "pdf"].contains(f))
+                .unwrap_or((arg, "fdf"));
+            Some(FieldAction::Submit {
+                url: url.to_owned(),
+                format: match format {
+                    "xfdf" => SubmitFormat::Xfdf,
+                    "html" => SubmitFormat::Html,
+                    "pdf" => SubmitFormat::Pdf,
+                    _ => SubmitFormat::Fdf,
+                },
+            })
+        }
+        "next" => Some(FieldAction::Named("NextPage".into())),
+        "previous" => Some(FieldAction::Named("PrevPage".into())),
+        "first" => Some(FieldAction::Named("FirstPage".into())),
+        "last" => Some(FieldAction::Named("LastPage".into())),
+        "none" => None,
+        _ => return None,
+    };
+    Some(action)
+}
+
+/// Lists what pages do when opened and closed, or changes it.
+fn page_actions(args: &[String], json: bool) -> Done {
+    use katna_pdf_cos::ActionPlace;
+    let args = Args::parse(args)?;
+    let [file] = args.words()?;
+    let doc = open(file)?;
+    let count = doc.pages().len();
+    let page_of = |p: &str| {
+        p.parse::<usize>()
+            .ok()
+            .filter(|p| (1..=count).contains(p))
+            .map(|p| p - 1)
+            .ok_or_else(|| Failure::Usage(format!("{p}: no such page")))
+    };
+    let Some(out) = args.option("-o").map(PathBuf::from) else {
+        let actions = doc.document_actions();
+        let pages: Vec<(usize, bool, String, String)> = actions
+            .iter()
+            .filter_map(|a| match &a.place {
+                ActionPlace::Page { page, opened } => Some((
+                    *page,
+                    *opened,
+                    a.action.kind().to_owned(),
+                    a.action.detail(),
+                )),
+                _ => None,
+            })
+            .collect();
+        return Ok(if json {
+            let items: Vec<String> = pages
+                .iter()
+                .map(|(page, opened, kind, detail)| {
+                    format!(
+                        "{{\"page\":{},\"when\":{},\"kind\":{},\"detail\":{}}}",
+                        page + 1,
+                        string(if *opened { "open" } else { "close" }),
+                        string(kind),
+                        string(detail)
+                    )
+                })
+                .collect();
+            format!("{{\"page_actions\":[{}]}}\n", items.join(","))
+        } else if pages.is_empty() {
+            "no page does anything when opened or closed\n".to_string()
+        } else {
+            pages
+                .iter()
+                .map(|(page, opened, kind, detail)| {
+                    format!(
+                        "page {} {}: {kind} {}\n",
+                        page + 1,
+                        if *opened { "opened" } else { "closed" },
+                        detail.lines().next().unwrap_or_default()
+                    )
+                })
+                .collect()
+        });
+    };
+    let mut bytes = doc.bytes().to_vec();
+    let mut changed = 0;
+    for (option, opened) in [("--open", true), ("--close", false)] {
+        for item in args.all(option) {
+            let bad = || {
+                Failure::Usage(format!(
+                    "{option} {item}: PAGE=goto:PAGE, url:ADDRESS, reset[:FIELDS], hide:FIELDS, \
+                     show:FIELDS, submit:URL[:FORMAT], next, previous, first, last or none"
+                ))
+            };
+            let (page, what) = item.split_once('=').ok_or_else(bad)?;
+            let page = page_of(page)?;
+            let action = parse_action(what, &page_of).ok_or_else(bad)?;
+            let now = reload(bytes)?;
+            bytes = now
+                .set_page_action(page, opened, action.as_ref())
+                .map_err(failed)?;
+            changed += 1;
+        }
+    }
+    if changed == 0 {
+        return Err(Failure::Usage(
+            "page-actions with -o takes --open PAGE=WHAT and --close PAGE=WHAT".into(),
+        ));
+    }
+    write(&out, &bytes)?;
+    Ok(if json {
+        format!(
+            "{{\"written\":[{{\"file\":{},\"pages\":{count}}}],\"changed\":{changed}}}\n",
+            string(&out.display().to_string())
+        )
+    } else {
+        format!("{} ({changed} page actions changed)\n", out.display())
+    })
 }
 
 /// Lists the document's layers, or changes them.

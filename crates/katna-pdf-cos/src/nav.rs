@@ -78,6 +78,41 @@ fn visible(items: &[OutlineItem]) -> i64 {
 }
 
 impl Document {
+    /// The file with page `page` doing `action` when it is opened (or,
+    /// with `opened` false, closed), or nothing when none: its `/AA`
+    /// `/O` or `/C`. The other stays as it was.
+    pub fn set_page_action(
+        &self,
+        page: usize,
+        opened: bool,
+        action: Option<&crate::actions::FieldAction>,
+    ) -> Result<Vec<u8>, NavError> {
+        let page_ref = *self.pages().get(page).ok_or(NavError::NoPage(page))?;
+        let mut dict = self
+            .get(page_ref)
+            .and_then(|o| o.as_dict().cloned())
+            .ok_or(NavError::NoPage(page))?;
+        let mut aa = match self.resolve_key(&dict, "AA") {
+            Object::Dict(d) => d,
+            _ => Dict::new(),
+        };
+        let key = if opened { "O" } else { "C" };
+        match action {
+            Some(a) => aa.set(key, self.action_object(a)?),
+            None => {
+                aa.remove(key);
+            }
+        }
+        if aa.is_empty() {
+            dict.remove("AA");
+        } else {
+            dict.set("AA", Object::Dict(aa));
+        }
+        let mut up = self.update()?;
+        up.replace(page_ref, Object::Dict(dict));
+        Ok(up.finish())
+    }
+
     /// The document with `items` as its whole outline; an empty list
     /// takes the outline out. Items keep their titles, places and which
     /// are shown open; an item with no page to go to becomes a heading.
