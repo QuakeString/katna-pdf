@@ -431,6 +431,8 @@ pub struct Viewer {
     designing: Option<design::Designing>,
     properties: Option<properties::Properties>,
     moving: Option<objects::Moving>,
+    /// A paragraph being dragged elsewhere (`textedit.rs`).
+    text_moving: Option<textedit::TextMoving>,
     tool: Option<Tool>,
     colour: usize,
     /// Each page's annotations, once read.
@@ -567,6 +569,7 @@ impl Viewer {
             designing: None,
             properties: None,
             moving: None,
+            text_moving: None,
             tool: None,
             colour: 0,
             annots: None,
@@ -1235,6 +1238,7 @@ impl Viewer {
             || self.redact_drag(event.position, cx)
             || self.link_drag(event.position, cx)
             || self.insert_drag(event.position, cx)
+            || self.text_move_drag(event.position, cx)
             || self.object_drag(event.position, cx)
             || self.annot_drag(event.position, cx)
         {
@@ -1253,12 +1257,13 @@ impl Viewer {
         }
     }
 
-    fn release_pointer(&mut self, cx: &mut Context<Self>) {
+    fn release_pointer(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.panning.take().is_some() {
             cx.notify();
         }
         self.selecting = false;
-        if self.measure_release(cx)
+        if self.text_move_release(window, cx)
+            || self.measure_release(cx)
             || self.sign_release(cx)
             || self.crop_release(cx)
             || self.design_release(cx)
@@ -2884,6 +2889,11 @@ impl Viewer {
             .relative()
             .cursor(match self.tool {
                 _ if self.cropping => gpui::CursorStyle::Crosshair,
+                // Drawing a shape or placing a picture with Edit text on.
+                _ if self.adding.is_some_and(|a| a != insert::Adding::Text) => {
+                    gpui::CursorStyle::Crosshair
+                }
+                _ if self.text_editing && self.adding.is_none() => gpui::CursorStyle::Arrow,
                 Some(tool) if tool.markup().is_none() => gpui::CursorStyle::Crosshair,
                 _ => gpui::CursorStyle::IBeam,
             })
@@ -3569,7 +3579,7 @@ impl Render for Viewer {
                     )
                     .on_mouse_up(
                         gpui::MouseButton::Middle,
-                        cx.listener(|this, _, _, cx| this.release_pointer(cx)),
+                        cx.listener(|this, _, window, cx| this.release_pointer(window, cx)),
                     )
                     .when(self.panning.is_some(), |d| {
                         d.cursor(gpui::CursorStyle::ClosedHand)
@@ -3649,7 +3659,7 @@ impl Render for Viewer {
                     })
                     .on_mouse_up(
                         gpui::MouseButton::Left,
-                        cx.listener(|this, _, _, cx| this.release_pointer(cx)),
+                        cx.listener(|this, _, window, cx| this.release_pointer(window, cx)),
                     )
                     .child(self.bar.clone().wrap(
                         "pages-scroll",

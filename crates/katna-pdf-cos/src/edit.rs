@@ -246,6 +246,84 @@ impl Document {
     }
 
     /// The file with the paragraph of runs `lines` (indexes into
+    /// `text_runs`) on page `page` moved by `dx`, `dy` points in the
+    /// page's own space.
+    pub fn move_block(
+        &self,
+        page: usize,
+        lines: &[usize],
+        dx: f32,
+        dy: f32,
+    ) -> Result<Vec<u8>, EditError> {
+        let read = self.read_page(page).ok_or(EditError::Content)?;
+        let all = runs(&read);
+        let by = translate(f64::from(dx), f64::from(dy));
+        let content = redraw(&read, &all, lines, |_, _| {
+            (Some(by), Vec::new(), Vec::new())
+        })?;
+        self.write_page_content(page, &content)
+    }
+
+    /// The file with the paragraph of runs `lines` on page `page` shown
+    /// at `size` points and in `colour` (RGB, 0 to 1), each where given:
+    /// its text operators drawn after a size and colour of their own,
+    /// the ones in force put back after. Its lines are spaced further
+    /// apart or closer with the size, under the first, which stays; a
+    /// line's words are not wrapped again, so bigger text can run past
+    /// the paragraph's right edge.
+    pub fn style_block(
+        &self,
+        page: usize,
+        lines: &[usize],
+        size: Option<f32>,
+        colour: Option<[f32; 3]>,
+    ) -> Result<Vec<u8>, EditError> {
+        let read = self.read_page(page).ok_or(EditError::Content)?;
+        let all = runs(&read);
+        let old: Vec<&TextRun> = lines
+            .iter()
+            .map(|i| all.get(*i).ok_or(EditError::NoRun))
+            .collect::<Result<_, _>>()?;
+        let top = old.first().ok_or(EditError::NoRun)?;
+        let first = &read.pieces[top.ops[0]];
+        let inv = invert(&first.m).ok_or(EditError::NoRun)?;
+        // Each line's baseline, in the first's text space, and how far
+        // it moves: down (or up) by its share of the change in leading.
+        let places: Vec<Place> = old.iter().map(|r| place(&read, &inv, r)).collect();
+        let ratio = size.map_or(1.0, |s| f64::from(s) / f64::from(top.size).max(1e-6));
+        let shift = |k: usize| -> Option<Matrix> {
+            if k == 0 || (ratio - 1.0).abs() < 1e-9 {
+                return None;
+            }
+            let dy = (places[k].y - places[0].y) * (ratio - 1.0);
+            Some(mul(&mul(&inv, &translate(0.0, dy)), &first.m))
+        };
+        let content = redraw(&read, &all, lines, |k, piece| {
+            let mut before = Vec::new();
+            let mut after = Vec::new();
+            let font = Object::Name(Name(piece.font.clone()));
+            if size.is_some() {
+                write_op(
+                    &mut before,
+                    &Op::new("Tf", vec![font.clone(), number(piece.size * ratio)]),
+                );
+                before.push(b' ');
+                after.push(b' ');
+                write_op(&mut after, &Op::new("Tf", vec![font, number(piece.size)]));
+            }
+            if let Some(rgb) = colour {
+                let rgb = rgb.map(|c| number(f64::from(c.clamp(0.0, 1.0))));
+                write_op(&mut before, &Op::new("rg", rgb.to_vec()));
+                before.push(b' ');
+                after.push(b' ');
+                write_op(&mut after, &Op::new("rg", piece.fill.map(number).to_vec()));
+            }
+            (shift(k), before, after)
+        })?;
+        self.write_page_content(page, &content)
+    }
+
+    /// The file with the paragraph of runs `lines` (indexes into
     /// `text_runs`, top line first) on page `page` changed to `text`: its
     /// words wrapped to the paragraph's width, `\n` starting a new line.
     /// Lines the text still starts with stay as they were; lines left
@@ -1504,6 +1582,85 @@ fn piece_rect(piece: &Piece) -> [f32; 4] {
 
 /// What a text-showing operator does besides showing: `'` and `"` move
 /// to the next line first, and `"` sets the spacing.
+/// The page's content with the pieces of runs `lines` drawn again, each
+/// as `how` says for its line and piece: moved by a matrix in the page's
+/// space (its text operator drawn from a text matrix moved so, and the
+/// matrices put back after it for the text that follows), and between
+/// bytes before and after it.
+fn redraw(
+    read: &Page,
+    all: &[TextRun],
+    lines: &[usize],
+    how: impl Fn(usize, &Piece) -> (Option<Matrix>, Vec<u8>, Vec<u8>),
+) -> Result<Vec<u8>, EditError> {
+    let mut replaced: HashMap<usize, Vec<u8>> = HashMap::new();
+    for (k, i) in lines.iter().enumerate() {
+        let run = all.get(*i).ok_or(EditError::NoRun)?;
+        for piece in run.ops.iter().map(|p| &read.pieces[*p]) {
+            if replaced.contains_key(&piece.op) {
+                continue;
+            }
+            let op = &read.ops[piece.op];
+            let (by, before, after) = how(k, piece);
+            // Apart from what ends before it (`Tf<24>Tj` is read as one).
+            let mut out = b" ".to_vec();
+            out.extend(lead_in(op));
+            let moved = match by {
+                Some(by) => {
+                    let back = invert(&piece.ctm).ok_or(EditError::NoRun)?;
+                    // Text space to the page's is `tm × ctm`; moved, it is
+                    // that × `by`, so the text matrix is that × `ctm`⁻¹.
+                    write_op(
+                        &mut out,
+                        &tm_op(&mul(&mul(&mul(&piece.tm, &piece.ctm), &by), &back)),
+                    );
+                    out.push(b' ');
+                    true
+                }
+                None => false,
+            };
+            out.extend(before);
+            // `'` and `"` have moved to their line already (`lead_in`).
+            if moved && (op.is("'") || op.is("\"")) {
+                let text = op.operands.last().cloned().ok_or(EditError::NoRun)?;
+                write_op(&mut out, &Op::new("Tj", vec![text]));
+            } else if moved {
+                write_op(&mut out, op);
+            } else {
+                out.extend_from_slice(&read.content[op.span.clone()]);
+            }
+            out.extend(after);
+            if moved {
+                out.push(b' ');
+                write_op(&mut out, &tm_op(&piece.tlm));
+                let end = mul(&translate(piece.advance, 0.0), &piece.tm);
+                if let Some(inv) = invert(&piece.tlm) {
+                    let off = apply(&inv, end[4], end[5]).0;
+                    if off.abs() > 1e-6 && (piece.size * piece.stretch).abs() > 1e-9 {
+                        out.push(b' ');
+                        let n = -off * 1000.0 / (piece.size * piece.stretch);
+                        write_op(
+                            &mut out,
+                            &Op::new("TJ", vec![Object::Array(vec![number(n)])]),
+                        );
+                    }
+                }
+            }
+            replaced.insert(piece.op, out);
+        }
+    }
+    let splices = replaced
+        .into_iter()
+        .map(|(op, bytes)| (read.ops[op].span.clone(), bytes))
+        .collect();
+    Ok(splice(&read.content, splices))
+}
+
+/// `Tm` setting the text matrix to `m`.
+fn tm_op(m: &Matrix) -> Op {
+    Op::new("Tm", m.iter().map(|v| number(*v)).collect())
+}
+
 fn lead_in(op: &Op) -> Vec<u8> {
     let mut out = Vec::new();
     if op.is("\"") && op.operands.len() == 3 {

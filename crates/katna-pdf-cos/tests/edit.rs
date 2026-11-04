@@ -288,6 +288,39 @@ fn a_paragraph_has_its_colour_and_line_spacing() {
 }
 
 #[test]
+fn a_paragraph_moves_and_restyles() {
+    let doc = page(PARAGRAPH, "/F1 5 0 R", &[HELVETICA]);
+    let out = Document::load(doc.move_block(0, &[0, 1, 2], 10.0, -20.0).unwrap()).unwrap();
+    let got = lines(&out);
+    assert_eq!(got[0].1, 680.0, "{got:?}");
+    assert_eq!(got[2].1, 652.0, "{got:?}");
+    assert!((out.text_runs(0)[0].rect[0] - 82.0).abs() < 0.01, "{got:?}");
+    // Text after the paragraph stays put.
+    assert_eq!(got[3], ("Apart".into(), 600.0));
+    assert_eq!(out.text_blocks(0)[0].runs, [0, 1, 2]);
+
+    let out = Document::load(
+        doc.style_block(0, &[0, 1, 2], Some(18.0), Some([1.0, 0.0, 0.0]))
+            .unwrap(),
+    )
+    .unwrap();
+    let blocks = out.text_blocks(0);
+    assert_eq!(blocks[0].size, 18.0, "{}", content(&out));
+    assert_eq!(blocks[0].colour, [255, 0, 0]);
+    assert_eq!(blocks[0].runs, [0, 1, 2], "{}", content(&out));
+    assert!((blocks[0].leading - 21.0).abs() < 0.05, "{blocks:?}");
+    assert_eq!(blocks[1].size, 12.0, "{}", content(&out));
+    assert_eq!(blocks[1].colour, [0, 0, 0]);
+    // Baselines 21 apart (the 14 of 12 pt text, at 18 pt); `lines`
+    // takes 12 pt text's descent, so the bigger lines read 1.2 low.
+    let got = lines(&out);
+    assert!((got[0].1 - 698.8).abs() < 0.05, "{got:?}");
+    assert!((got[1].1 - 677.8).abs() < 0.05, "{got:?}");
+    assert!((got[2].1 - 656.8).abs() < 0.05, "{got:?}");
+    assert_eq!(got[3], ("Apart".into(), 600.0));
+}
+
+#[test]
 fn a_shorter_paragraph_empties_lines() {
     let doc = page(PARAGRAPH, "/F1 5 0 R", &[HELVETICA]);
     let out = Document::load(doc.edit_block(0, &[0, 1, 2], "Short now.").unwrap()).unwrap();
