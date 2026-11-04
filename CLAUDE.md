@@ -38,7 +38,8 @@ cargo run --release -p katna-pdf-bench -- file.pdf
   standard font), and putting new text, pictures and shapes into a
   page's own content (`insert.rs`), and moving, resizing, turning, restacking,
   fading, recolouring, swapping and deleting the pictures and shapes
-  already there (`objects.rs`), headers,
+  already there, and copying them and paragraphs of text, fonts along,
+  to any page of any file (`objects.rs`), headers,
   footers, watermarks, Bates numbers and backgrounds on many pages (`stamp.rs`;
   each mark is drawn inside a marked-content `/Artifact` with a `/Katna`
   dictionary that says what it is, so `page_marks` finds them again,

@@ -2548,6 +2548,97 @@ impl Document {
     }
 }
 
+/// A paragraph drawn on its own, to draw again elsewhere.
+pub(crate) struct BlockDrawing {
+    /// Each piece as a text object with its font, size, spacing, rise,
+    /// colour and place set, in the page's own space.
+    pub content: Vec<u8>,
+    /// The fonts' resource names it uses.
+    pub fonts: Vec<String>,
+    /// Where it is: left, bottom, right, top.
+    pub rect: [f32; 4],
+}
+
+/// What the paragraph of runs `lines` on page `page` draws, on its own.
+pub(crate) fn block_drawing(
+    doc: &Document,
+    page: usize,
+    lines: &[usize],
+) -> Result<BlockDrawing, EditError> {
+    let read = doc.read_page(page).ok_or(EditError::Content)?;
+    let all = runs(&read);
+    let mut out = Vec::new();
+    let mut fonts: Vec<String> = Vec::new();
+    let mut rect = [f32::MAX, f32::MAX, f32::MIN, f32::MIN];
+    let mut done: HashSet<usize> = HashSet::new();
+    for &i in lines {
+        let run = all.get(i).ok_or(EditError::NoRun)?;
+        rect = [
+            rect[0].min(run.rect[0]),
+            rect[1].min(run.rect[1]),
+            rect[2].max(run.rect[2]),
+            rect[3].max(run.rect[3]),
+        ];
+        for piece in run.ops.iter().map(|p| &read.pieces[*p]) {
+            if !done.insert(piece.op) {
+                continue;
+            }
+            let op = &read.ops[piece.op];
+            let font = String::from_utf8_lossy(&piece.font).into_owned();
+            if !fonts.contains(&font) {
+                fonts.push(font.clone());
+            }
+            out.extend_from_slice(b"BT ");
+            write_op(
+                &mut out,
+                &Op::new("Tf", vec![Object::name(&font), number(piece.size)]),
+            );
+            out.push(b' ');
+            let (char_spacing, word_spacing) = if op.is("\"") && op.operands.len() == 3 {
+                (
+                    op.operands[1].as_number().unwrap_or(piece.char_spacing),
+                    op.operands[0].as_number().unwrap_or(piece.word_spacing),
+                )
+            } else {
+                (piece.char_spacing, piece.word_spacing)
+            };
+            write_op(&mut out, &Op::new("Tc", vec![number(char_spacing)]));
+            out.push(b' ');
+            write_op(&mut out, &Op::new("Tw", vec![number(word_spacing)]));
+            out.push(b' ');
+            write_op(
+                &mut out,
+                &Op::new("Tz", vec![number(piece.stretch * 100.0)]),
+            );
+            out.push(b' ');
+            write_op(&mut out, &Op::new("Ts", vec![number(piece.rise)]));
+            out.push(b' ');
+            write_op(
+                &mut out,
+                &Op::new("rg", piece.fill.iter().map(|v| number(*v)).collect()),
+            );
+            out.push(b' ');
+            write_op(&mut out, &tm_op(&piece.m));
+            out.push(b' ');
+            if op.is("'") || op.is("\"") {
+                let text = op.operands.last().cloned().ok_or(EditError::NoRun)?;
+                write_op(&mut out, &Op::new("Tj", vec![text]));
+            } else {
+                write_op(&mut out, op);
+            }
+            out.extend_from_slice(b" ET\n");
+        }
+    }
+    if out.is_empty() {
+        return Err(EditError::NoRun);
+    }
+    Ok(BlockDrawing {
+        content: out,
+        fonts,
+        rect,
+    })
+}
+
 /// The box of the glyph or move at `pos` along `piece`, `advance` long,
 /// in the page's space. A glyph with no width is given half its size.
 fn glyph_box(piece: &Piece, pos: f64, advance: f64) -> Area {

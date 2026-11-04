@@ -1385,6 +1385,16 @@ impl Viewer {
         )
     }
 
+    /// Copies the paragraph being typed in, as it is in the file, for
+    /// Ctrl+V on any page of any open file.
+    fn copy_typed(&mut self, cx: &mut Context<Self>) {
+        let Some((page, _, b)) = self.typed_block() else {
+            return;
+        };
+        let runs = b.runs.clone();
+        self.copy_block(page, runs, cx);
+    }
+
     /// The paragraph being typed in taken out of the page.
     pub(super) fn delete_typed(&mut self, cx: &mut Context<Self>) -> bool {
         let Some((page, _, b)) = self.typed_block() else {
@@ -1507,6 +1517,13 @@ impl Viewer {
                     .children(spacing),
             )
             .child(super::separator(th))
+            .child(
+                widgets::icon_button("text-copy", "copies", 18.0, &th.katna)
+                    .tip(t("text-copy", &[]), &th.katna)
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.copy_typed(cx);
+                    })),
+            )
             .child(
                 widgets::icon_button("text-delete", "trash", 18.0, &th.katna)
                     .tip(t("text-delete", &[]), &th.katna)

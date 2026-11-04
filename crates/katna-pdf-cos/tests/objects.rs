@@ -626,3 +626,44 @@ fn a_shapes_inside_and_line_fade_apart() {
     assert_eq!((style.cap, style.join), (1, 2));
     assert_eq!(style.stroke_opacity, 0.25);
 }
+
+#[test]
+fn a_paragraph_copies_to_another_page_and_file() {
+    let doc = Document::load(text_pdf("Note", &["  Hello there".to_string()])).unwrap();
+    let runs = doc.text_runs(0);
+    let line = runs
+        .iter()
+        .position(|r| r.text.contains("Hello there"))
+        .unwrap();
+    let copy = doc.copy_block(0, &[line]).unwrap();
+    assert_eq!(copy.kind, ObjectKind::Text);
+    assert!(close(copy.rect, runs[line].rect), "{copy:?}");
+
+    // On the same page, moved down: the same words twice, the second
+    // lower, in the same font.
+    let pasted = Document::load(doc.paste_objects(0, &[&copy], [0.0, -100.0]).unwrap()).unwrap();
+    let after = pasted.text_runs(0);
+    let hellos: Vec<_> = after
+        .iter()
+        .filter(|r| r.text.contains("Hello there"))
+        .collect();
+    assert_eq!(hellos.len(), 2, "{after:?}");
+    assert_eq!(hellos[0].font, hellos[1].font);
+    assert!(
+        (hellos[0].rect[1] - hellos[1].rect[1] - 100.0).abs() < 0.01,
+        "{hellos:?}"
+    );
+    assert!(
+        (hellos[0].rect[0] - hellos[1].rect[0]).abs() < 0.01,
+        "{hellos:?}"
+    );
+
+    // Into another file with no such font: the font comes along.
+    let other = Document::load(katna_pdf_cos::blank_pdf(&[(612.0, 792.0)])).unwrap();
+    let there = Document::load(other.paste_objects(0, &[&copy], [0.0, 0.0]).unwrap()).unwrap();
+    let after = there.text_runs(0);
+    assert_eq!(after.len(), 1, "{after:?}");
+    assert_eq!(after[0].text, runs[line].text);
+    assert_eq!(after[0].font, runs[line].font);
+    assert!(close(after[0].rect, runs[line].rect), "{after:?}");
+}

@@ -1235,6 +1235,42 @@ impl Viewer {
         true
     }
 
+    /// Copies the paragraph of runs `lines` on page `page` as the objects
+    /// copied, for Ctrl+V on any page of any open file.
+    pub(super) fn copy_block(&mut self, page: usize, lines: Vec<usize>, cx: &mut Context<Self>) {
+        let key = self.key.clone();
+        let Some(path) = self.path.clone() else {
+            return;
+        };
+        let current = self.unsaved();
+        cx.spawn(async move |this, cx| {
+            let copy = cx
+                .background_executor()
+                .spawn(async move {
+                    let bytes = match current {
+                        Some(bytes) => bytes.to_vec(),
+                        None => std::fs::read(&path).ok()?,
+                    };
+                    let doc = super::cos(bytes, key.as_deref()).ok()?;
+                    doc.copy_block(page, &lines).ok()
+                })
+                .await;
+            let Some(copy) = copy else {
+                return;
+            };
+            this.update(cx, |this, cx| {
+                if let Ok(mut copied) = COPIED.lock() {
+                    *copied = vec![copy];
+                }
+                cx.write_to_clipboard(gpui::ClipboardItem::new_string(COPIED_MARK.into()));
+                this.notice = Some(t("text-copied", &[]));
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     /// Ctrl+X: copies the picked objects and takes them out.
     pub(super) fn cut_picked_objects(&mut self, cx: &mut Context<Self>) -> bool {
         self.copy_picked_objects(cx) && self.delete_picked_object(cx)
