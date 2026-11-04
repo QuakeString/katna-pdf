@@ -53,7 +53,18 @@ pub fn to_xfdf(annots: &[Vec<Annotation>], file: &str) -> String {
                 format!(" coords=\"{}\"", numbers(quads.as_flattened())),
             ),
             AnnotKind::Note => ("text", String::new()),
-            AnnotKind::FreeText { .. } => ("freetext", String::new()),
+            AnnotKind::FreeText { .. } => (
+                "freetext",
+                a.callout
+                    .map(|line| {
+                        format!(
+                            " intent=\"FreeTextCallout\" callout=\"{}\" width=\"{}\"",
+                            numbers(line.as_flattened()),
+                            num(a.width)
+                        )
+                    })
+                    .unwrap_or_default(),
+            ),
             AnnotKind::Ink(_) => ("ink", format!(" width=\"{}\"", num(a.width))),
             AnnotKind::Square { fill } | AnnotKind::Circle { fill } => (
                 if matches!(a.kind, AnnotKind::Square { .. }) {
@@ -92,6 +103,9 @@ pub fn to_xfdf(annots: &[Vec<Annotation>], file: &str) -> String {
         );
         if a.opacity < 1.0 {
             let _ = write!(out, " opacity=\"{}\"", num(a.opacity));
+        }
+        if a.cloudy {
+            out.push_str(" style=\"cloudy\" intensity=\"1\"");
         }
         for (key, value) in [
             ("name", a.name.as_str()),
@@ -240,6 +254,10 @@ pub fn from_xfdf(xml: &str) -> Result<Vec<XfdfAnnotation>, XfdfError> {
         if let Some(w) = attr("width").and_then(|w| w.parse().ok()) {
             a.width = w;
         }
+        if let [x1, y1, x2, y2, x3, y3] = nums("callout")[..] {
+            a.callout = Some([[x1, y1], [x2, y2], [x3, y3]]);
+        }
+        a.cloudy = attr("style") == Some("cloudy");
         a.contents = child("contents").unwrap_or_default();
         a.author = attr("title").unwrap_or_default().to_owned();
         a.modified = attr("date").map(str::to_owned);

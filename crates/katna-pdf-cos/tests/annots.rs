@@ -337,3 +337,84 @@ fn measurements_keep_their_scale() {
     };
     assert_eq!(dict.name("IT"), Some(&b"LineDimension"[..]));
 }
+
+#[test]
+fn callouts_and_clouds_are_written_and_read_back() {
+    let doc = two();
+    let mut callout = Annotation::new(1, AnnotKind::FreeText { size: 12.0 });
+    callout.rect = [300.0, 500.0, 460.0, 536.0];
+    callout.callout = Some([[200.0, 400.0], [288.0, 400.0], [300.0, 518.0]]);
+    callout.contents = "Here".into();
+    callout.width = 2.0;
+    // The line and its arrowhead lie outside the text box.
+    let outer = callout.outer_rect();
+    assert!(outer[0] < 200.0 && outer[1] < 400.0);
+    assert_eq!(outer[2], 460.0);
+    let mut cloud = Annotation::new(
+        1,
+        AnnotKind::Polygon(vec![[100.0, 100.0], [200.0, 100.0], [150.0, 180.0]]),
+    );
+    cloud.cloudy = true;
+    cloud.width = 2.0;
+    cloud.rect = cloud.bounds();
+    let mut square = Annotation::new(1, AnnotKind::Square { fill: None });
+    square.cloudy = true;
+    square.rect = [300.0, 100.0, 400.0, 200.0];
+    let out = doc
+        .annotate(&AnnotChanges {
+            put: vec![callout, cloud, square],
+            remove: vec![],
+        })
+        .unwrap();
+    let again = Document::load(out).unwrap();
+    let read = &again.annotations()[1];
+    assert_eq!(read.len(), 3);
+    // The callout's text box and line come back as they went.
+    assert_eq!(read[0].rect, [300.0, 500.0, 460.0, 536.0]);
+    assert_eq!(
+        read[0].callout,
+        Some([[200.0, 400.0], [288.0, 400.0], [300.0, 518.0]])
+    );
+    let Some(Object::Dict(dict)) = again.get(read[0].id.unwrap()) else {
+        panic!();
+    };
+    assert_eq!(dict.name("IT"), Some(&b"FreeTextCallout"[..]));
+    assert!(dict.get("RD").is_some());
+    // Cloudy edges stay cloudy, and are drawn with curves.
+    assert!(read[1].cloudy && read[2].cloudy);
+    assert!(!read[0].cloudy);
+    for a in &read[1..] {
+        let Some(Object::Dict(dict)) = again.get(a.id.unwrap()) else {
+            panic!();
+        };
+        let Object::Dict(be) = again.resolve_key(&dict, "BE") else {
+            panic!("no border effect");
+        };
+        assert_eq!(be.name("S"), Some(&b"C"[..]));
+        let Object::Dict(ap) = again.resolve_key(&dict, "AP") else {
+            panic!();
+        };
+        let Object::Stream(n) = again.resolve_key(&ap, "N") else {
+            panic!();
+        };
+        let content = String::from_utf8_lossy(&n.data);
+        assert!(
+            content.contains(" c\n") || content.contains(" c "),
+            "{content}"
+        );
+    }
+    // The bumps reach outside the polygon's points.
+    assert!(read[1].rect[0] < 100.0 && read[1].rect[3] > 180.0);
+    // Both go through XFDF.
+    let xml = katna_pdf_cos::to_xfdf(&again.annotations(), "a.pdf");
+    assert!(xml.contains("callout=\"200,400,288,400,300,518\""), "{xml}");
+    assert!(xml.contains("style=\"cloudy\""), "{xml}");
+    let back = two().xfdf_changes(&xml).unwrap();
+    let free = back
+        .put
+        .iter()
+        .find(|a| matches!(a.kind, AnnotKind::FreeText { .. }))
+        .unwrap();
+    assert_eq!(free.callout, read[0].callout);
+    assert!(back.put.iter().filter(|a| a.cloudy).count() == 2);
+}

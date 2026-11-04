@@ -56,7 +56,7 @@ impl Viewer {
         self.cropping = false;
         self.draft = None;
         self.measuring = None;
-        if tool.measures() {
+        if tool.clicks_points() {
             self.start_measuring(cx);
         }
         // Marking text that is already selected marks it now.
@@ -107,7 +107,7 @@ impl Viewer {
             } else {
                 th.katna.text_dim
             };
-            if i == 4 || i == 6 || i == 12 {
+            if i == 4 || i == 8 || i == 16 {
                 row = row.child(separator(th));
             }
             row = row.child(
@@ -604,8 +604,20 @@ impl Viewer {
             (b * 255.0) as u8,
         ]));
         match self.tool {
-            Some(Tool::Ink | Tool::Line | Tool::Arrow) => {
-                let path = draft.path.clone();
+            Some(Tool::Ink | Tool::Line | Tool::Arrow | Tool::Callout) => {
+                // A callout shows its line from the first point to the
+                // last; the box comes when the pointer lets go.
+                let path = if self.tool == Some(Tool::Callout) {
+                    draft
+                        .path
+                        .first()
+                        .into_iter()
+                        .chain(draft.path.last())
+                        .copied()
+                        .collect()
+                } else {
+                    draft.path.clone()
+                };
                 out.push(
                     gpui::canvas(
                         |_, _, _| {},
@@ -638,7 +650,9 @@ impl Viewer {
                     .into_any_element(),
                 );
             }
-            Some(Tool::Rectangle | Tool::Ellipse | Tool::FreeText | Tool::Stamp) => {
+            Some(
+                Tool::Rectangle | Tool::Ellipse | Tool::FreeText | Tool::Stamp | Tool::Typewriter,
+            ) => {
                 let (Some(from), Some(to)) = (draft.path.first(), draft.path.last()) else {
                     return out;
                 };

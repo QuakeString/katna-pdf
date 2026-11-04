@@ -490,11 +490,15 @@ tool-strikeout = Strike text out
 tool-squiggly = Squiggle under text
 tool-note = Note
 tool-free-text = Text box
+tool-typewriter = Typewriter: type on the page
+tool-callout = Callout: a text box pointing at something
 tool-ink = Pen
 tool-rectangle = Rectangle
 tool-ellipse = Ellipse
 tool-line = Line
 tool-arrow = Arrow
+tool-polygon = Polygon: click the corners, double-click to close
+tool-cloud = Cloud: click the corners, double-click to close
 tool-stamp = Stamp
 tool-distance = Measure a distance
 tool-perimeter = Measure along lines
@@ -505,6 +509,7 @@ tool-area = Measure an area
 measure-how-distance = Drag, or click both ends.
 measure-how-perimeter = Click each point; double-click to finish.
 measure-how-area = Click each corner; click the first again to finish.
+measure-how-shape = Click each corner; double-click, or click the first again, to close.
 measure-scale-paper = Scale: 1 pt = { $scale } (paper)
 measure-scale-file = Scale: 1 pt = { $scale } (from the drawing)
 measure-scale-set = Scale: 1 pt = { $scale } (set by you)

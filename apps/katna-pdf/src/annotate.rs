@@ -16,11 +16,19 @@ pub enum Tool {
     Squiggly,
     Note,
     FreeText,
+    /// Text typed where the page is clicked, with no box drawn.
+    Typewriter,
+    /// A text box with a line pointing at something.
+    Callout,
     Ink,
     Rectangle,
     Ellipse,
     Line,
     Arrow,
+    /// A closed shape through points clicked.
+    Polygon,
+    /// A closed shape with a cloudy edge.
+    Cloud,
     Stamp,
     /// Measures the length of a line.
     Distance,
@@ -31,18 +39,22 @@ pub enum Tool {
 }
 
 impl Tool {
-    pub const ALL: [Tool; 15] = [
+    pub const ALL: [Tool; 19] = [
         Tool::Highlight,
         Tool::Underline,
         Tool::StrikeOut,
         Tool::Squiggly,
         Tool::Note,
         Tool::FreeText,
+        Tool::Typewriter,
+        Tool::Callout,
         Tool::Ink,
         Tool::Rectangle,
         Tool::Ellipse,
         Tool::Line,
         Tool::Arrow,
+        Tool::Polygon,
+        Tool::Cloud,
         Tool::Stamp,
         Tool::Distance,
         Tool::Perimeter,
@@ -57,11 +69,15 @@ impl Tool {
             Tool::Squiggly => "format-squiggle",
             Tool::Note => "notes",
             Tool::FreeText => "format-text",
+            Tool::Typewriter => "typewriter",
+            Tool::Callout => "callout",
             Tool::Ink => "ink",
             Tool::Rectangle => "shape-square",
             Tool::Ellipse => "shape-circle",
             Tool::Line => "shape-line",
             Tool::Arrow => "shape-arrow",
+            Tool::Polygon => "shape-polygon",
+            Tool::Cloud => "cloud",
             Tool::Stamp => "stamp",
             Tool::Distance => "ruler",
             Tool::Perimeter => "measure-perimeter",
@@ -78,11 +94,15 @@ impl Tool {
             Tool::Squiggly => "tool-squiggly",
             Tool::Note => "tool-note",
             Tool::FreeText => "tool-free-text",
+            Tool::Typewriter => "tool-typewriter",
+            Tool::Callout => "tool-callout",
             Tool::Ink => "tool-ink",
             Tool::Rectangle => "tool-rectangle",
             Tool::Ellipse => "tool-ellipse",
             Tool::Line => "tool-line",
             Tool::Arrow => "tool-arrow",
+            Tool::Polygon => "tool-polygon",
+            Tool::Cloud => "tool-cloud",
             Tool::Stamp => "tool-stamp",
             Tool::Distance => "tool-distance",
             Tool::Perimeter => "tool-perimeter",
@@ -105,6 +125,12 @@ impl Tool {
     pub fn measures(self) -> bool {
         matches!(self, Tool::Distance | Tool::Perimeter | Tool::Area)
     }
+
+    /// Whether it takes its points one click at a time (closed with a
+    /// double click, or a click on the first point).
+    pub fn clicks_points(self) -> bool {
+        self.measures() || matches!(self, Tool::Polygon | Tool::Cloud)
+    }
 }
 
 /// The colours to pick from, red, green, blue: yellow, green, blue, pink,
@@ -125,6 +151,10 @@ pub const TEXT_SIZE: f32 = 12.0;
 /// A free text box or stamp placed with a click, not dragged out.
 const FREE_TEXT_SIZE: [f32; 2] = [200.0, 40.0];
 const STAMP_SIZE: [f32; 2] = [150.0, 50.0];
+/// A callout's text box.
+const CALLOUT_SIZE: [f32; 2] = [160.0, 36.0];
+/// A typewriter line: wide, one line of text high.
+const TYPEWRITER_SIZE: [f32; 2] = [240.0, 18.0];
 /// A drag shorter than this, in points, is a click.
 const CLICK: f32 = 3.0;
 
@@ -221,10 +251,15 @@ pub fn drawn(tool: Tool, page: usize, path: &[[f32; 2]], inv: Inverse) -> Option
     };
     let kind = match tool {
         Tool::Highlight | Tool::Underline | Tool::StrikeOut | Tool::Squiggly => return None,
-        // Measuring has its own pointer handling (`viewer::measure`).
-        Tool::Distance | Tool::Perimeter | Tool::Area => return None,
+        // Measuring and polygons have their own pointer handling
+        // (`viewer::measure`).
+        Tool::Distance | Tool::Perimeter | Tool::Area | Tool::Polygon | Tool::Cloud => {
+            return None;
+        }
         Tool::Note => AnnotKind::Note,
-        Tool::FreeText => AnnotKind::FreeText { size: TEXT_SIZE },
+        Tool::FreeText | Tool::Typewriter => AnnotKind::FreeText { size: TEXT_SIZE },
+        Tool::Callout if !click => AnnotKind::FreeText { size: TEXT_SIZE },
+        Tool::Callout => return None,
         Tool::Ink => AnnotKind::Ink(vec![path.iter().map(|p| inv.map(*p)).collect()]),
         Tool::Rectangle if !click => AnnotKind::Square { fill: None },
         Tool::Ellipse if !click => AnnotKind::Circle { fill: None },
@@ -242,6 +277,27 @@ pub fn drawn(tool: Tool, page: usize, path: &[[f32; 2]], inv: Inverse) -> Option
         // The icon's top left where the click was.
         Tool::Note => inv.rect([from[0], from[1], from[0] + NOTE_SIZE, from[1] + NOTE_SIZE]),
         Tool::FreeText => inv.rect(boxed(FREE_TEXT_SIZE)),
+        Tool::Typewriter => inv.rect([
+            from[0],
+            from[1],
+            from[0] + TYPEWRITER_SIZE[0],
+            from[1] + TYPEWRITER_SIZE[1],
+        ]),
+        Tool::Callout => {
+            // The box where the drag ended, to the right of the pointer
+            // unless it ran left; the line from where it started to the
+            // box's near side, by a knee level with the start.
+            let [bw, bh] = CALLOUT_SIZE;
+            let left = from[0] <= to[0];
+            let x0 = if left { to[0] } else { to[0] - bw };
+            let boxed = inv.rect([x0, to[1] - bh / 2.0, x0 + bw, to[1] + bh / 2.0]);
+            let start = inv.map(from);
+            let side_x = if left { boxed[0] } else { boxed[2] };
+            let end = [side_x, (boxed[1] + boxed[3]) / 2.0];
+            let knee = [side_x + if left { -12.0 } else { 12.0 }, start[1]];
+            a.callout = Some([start, knee, end]);
+            boxed
+        }
         Tool::Stamp => inv.rect(boxed(STAMP_SIZE)),
         Tool::Rectangle | Tool::Ellipse => inv.rect(boxed([0.0, 0.0])),
         _ => a.bounds(),
