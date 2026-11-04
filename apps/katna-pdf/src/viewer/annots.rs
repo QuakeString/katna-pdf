@@ -14,7 +14,7 @@ use katna_pdf_render::Document;
 use katna_ui::px;
 use katna_ui::scale::desktop_px;
 use katna_ui::text_input::{InputEvent, TextInput};
-use katna_ui::tokens::{radius, space, text};
+use katna_ui::tokens::{radius, space};
 use katna_ui::widgets::{self, Tip};
 
 use super::{Content, PaneTab, Viewer, separator};
@@ -359,14 +359,14 @@ impl Viewer {
 
     /// Opens the chosen annotation's comment for typing, in the comments
     /// tab.
-    fn edit_comment(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn edit_comment(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(a) = self.chosen_annotation().cloned() else {
             return;
         };
         let Some(id) = a.id else {
             return;
         };
-        if self.comment.as_ref().is_some_and(|c| c.id == id) {
+        if a.flags.locked || self.comment.as_ref().is_some_and(|c| c.id == id) {
             return;
         }
         self.finish_comment(true, cx);
@@ -429,6 +429,9 @@ impl Viewer {
         let Some(id) = self.chosen else {
             return;
         };
+        if self.chosen_annotation().is_some_and(|a| a.flags.locked) {
+            return;
+        }
         self.comment = None;
         let mut remove = vec![id];
         if let Some(all) = &self.annots {
@@ -676,35 +679,8 @@ impl Viewer {
         out
     }
 
-    /// The buttons above the comments: save them as XFDF, add them from
-    /// XFDF.
-    pub(super) fn comment_actions(&self, cx: &mut Context<Self>) -> AnyElement {
-        let th = self.theme;
-        div()
-            .h(px(40.0))
-            .flex_shrink_0()
-            .flex()
-            .items_center()
-            .justify_end()
-            .gap(px(space::S1))
-            .px(px(space::S2))
-            .border_b_1()
-            .border_color(th.line)
-            .child(
-                widgets::icon_button("comments-import", "upload", 18.0, &th.katna)
-                    .tip(t("comments-import", &[]), &th.katna)
-                    .on_click(cx.listener(|this, _, _, cx| this.import_xfdf(cx))),
-            )
-            .child(
-                widgets::icon_button("comments-export", "download", 18.0, &th.katna)
-                    .tip(t("comments-export", &[]), &th.katna)
-                    .on_click(cx.listener(|this, _, _, cx| this.export_xfdf(cx))),
-            )
-            .into_any_element()
-    }
-
     /// Asks where to save the annotations as XFDF, and saves them there.
-    fn export_xfdf(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn export_xfdf(&mut self, cx: &mut Context<Self>) {
         let (Some(path), Some(annots)) = (self.path.clone(), self.annots.clone()) else {
             return;
         };
@@ -741,7 +717,7 @@ impl Viewer {
 
     /// Asks for an XFDF file and adds its annotations to the file shown;
     /// ones already here (by name) are replaced.
-    fn import_xfdf(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn import_xfdf(&mut self, cx: &mut Context<Self>) {
         let key = self.key.clone();
         let Some(path) = self.path.clone() else {
             return;
@@ -790,129 +766,6 @@ impl Viewer {
             .ok();
         })
         .detach();
-    }
-
-    /// The comments tab: every annotation, page by page, the one chosen
-    /// with its comment open for typing.
-    pub(super) fn comments(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        let th = self.theme;
-        let Some(all) = self.annots.clone() else {
-            return div().into_any_element();
-        };
-        let mut list = div()
-            .id("comments-list")
-            .size_full()
-            .overflow_y_scroll()
-            .py(px(space::S2))
-            .flex()
-            .flex_col()
-            .gap(px(space::S1));
-        let mut any = false;
-        for (page, annots) in all.iter().enumerate() {
-            for a in annots {
-                let Some(id) = a.id else {
-                    continue;
-                };
-                any = true;
-                let chosen = self.chosen == Some(id);
-                let page_label = (page + 1).to_string();
-                let what = if a.contents.is_empty() {
-                    t(annotate::kind_message(&a.kind), &[])
-                } else {
-                    a.contents.clone()
-                };
-                let mut meta = t("comment-page", &[("page", &page_label)]);
-                if !a.author.is_empty() {
-                    meta = format!("{meta} · {}", a.author);
-                }
-                let [r, g, b] = a.colour;
-                let swatch = gpui::rgb(u32::from_be_bytes([
-                    0,
-                    (r * 255.0) as u8,
-                    (g * 255.0) as u8,
-                    (b * 255.0) as u8,
-                ]));
-                let mut row = div()
-                    .id(("comment", id.num as usize))
-                    .mx(px(space::S2))
-                    .px(px(space::S3))
-                    .py(px(space::S2))
-                    .rounded(px(radius::SM))
-                    .flex()
-                    .flex_col()
-                    .gap(px(space::S1))
-                    .cursor_pointer()
-                    .when(chosen, |d| d.bg(th.field))
-                    .hover(move |s| s.bg(th.hover))
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.choose(Some(id), cx);
-                        this.edit_comment(window, cx);
-                        this.go_to(katna_pdf_cos::Destination { page, top: None }, cx);
-                    }))
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(px(space::S2))
-                            .child(div().size(px(10.0)).flex_none().rounded_full().bg(swatch))
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .overflow_hidden()
-                                    .text_ellipsis()
-                                    .whitespace_nowrap()
-                                    .text_size(px(text::SMALL))
-                                    .text_color(th.text)
-                                    .child(what),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(text::SMALL))
-                            .text_color(th.dim)
-                            .child(meta),
-                    );
-                if chosen {
-                    if let Some(comment) = self.comment.as_ref().filter(|c| c.id == id) {
-                        row = row.child(
-                            div()
-                                .px(px(space::S2))
-                                .py(px(space::S1))
-                                .rounded(px(radius::XS))
-                                .bg(th.card)
-                                .border_1()
-                                .border_color(th.line)
-                                .text_size(px(text::SMALL))
-                                .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| {
-                                    cx.stop_propagation()
-                                })
-                                .child(comment.input.clone()),
-                        );
-                    }
-                    row = row.child(
-                        div().flex().justify_end().child(
-                            widgets::icon_button("comment-delete", "trash", 18.0, &th.katna)
-                                .tip(t("comment-delete", &[]), &th.katna)
-                                .on_click(cx.listener(|this, _, _, cx| this.delete_chosen(cx))),
-                        ),
-                    );
-                }
-                list = list.child(row);
-            }
-        }
-        if !any {
-            list = list.child(
-                div()
-                    .px(px(space::S4))
-                    .py(px(space::S4))
-                    .text_size(px(text::SMALL))
-                    .text_color(th.dim)
-                    .child(t("comments-none", &[])),
-            );
-        }
-        let _ = window;
-        list.into_any_element()
     }
 }
 

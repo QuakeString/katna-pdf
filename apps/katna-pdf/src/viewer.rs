@@ -35,6 +35,7 @@ use katna_ui::{ScrollBar, px, unpx};
 
 mod annots;
 mod bookmarks;
+mod comments;
 mod compare;
 mod crop;
 mod datepick;
@@ -507,6 +508,9 @@ pub struct Viewer {
     /// The annotation chosen, and its comment while typed.
     chosen: Option<katna_pdf_cos::Ref>,
     comment: Option<annots::Comment>,
+    /// A reply being typed, and which comments the list shows.
+    reply: Option<comments::Reply>,
+    comment_filter: comments::CommentFilter,
     /// Whether annotation changes are being written, and those asked for
     /// meanwhile.
     annotating: bool,
@@ -651,6 +655,8 @@ impl Viewer {
             draft: None,
             chosen: None,
             comment: None,
+            reply: None,
+            comment_filter: Default::default(),
             annotating: false,
             annots_waiting: Default::default(),
             comment_next: false,

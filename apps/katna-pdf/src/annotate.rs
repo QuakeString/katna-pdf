@@ -310,7 +310,13 @@ pub fn drawn(tool: Tool, page: usize, path: &[[f32; 2]], inv: Inverse) -> Option
 pub fn at(annots: &[Annotation], point: [f32; 2]) -> Option<usize> {
     annots.iter().rposition(|a| {
         let r = a.rect;
-        point[0] >= r[0] && point[0] <= r[2] && point[1] >= r[1] && point[1] <= r[3]
+        // Replies sit on what they answer; hidden ones are not there.
+        a.reply_to.is_none()
+            && !a.flags.hidden
+            && point[0] >= r[0]
+            && point[0] <= r[2]
+            && point[1] >= r[1]
+            && point[1] <= r[3]
     })
 }
 

@@ -10,9 +10,8 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use katna_pdf_cos::{
-    Allowed, AnnotKind, Change, Coverage, Document, FieldEdit, FieldSpec, FormDesign, Lock,
-    NewField, Object, ObjectChange, PageSource, Placement, SignRequest, SigningInfo, compose,
-    text_string,
+    Allowed, Change, Coverage, Document, FieldEdit, FieldSpec, FormDesign, Lock, NewField, Object,
+    ObjectChange, PageSource, Placement, SignRequest, SigningInfo, compose, text_string,
 };
 use katna_pdf_sign::{Digest, Revocation, Signer, Trust, common_name, p12, pkcs11};
 
@@ -188,7 +187,8 @@ usage: katna-pdf-cli COMMAND [--json] ...
                                   it, such as i, ii, 1, 2); with -o the pages numbered
                                   in ranges from page FROM: STYLE 1, i, I, a, A or
                                   none, after PREFIX, counting from START
-  annots FILE                     the annotations, page by page
+  annots FILE [--as-text]         the annotations, page by page; --as-text as comments
+                                  to read, replies under what they answer
   library [--db CATALOG] (folders | add-folder DIR | remove-folder DIR | scan |
           list [QUERY] | search WORDS [--limit N] | tags ID [TAG,...] |
           rate ID STARS | note ID TEXT | duplicates | collections |
@@ -412,6 +412,7 @@ impl<'a> Args<'a> {
                 "--csv",
                 "--clear",
                 "--stretch",
+                "--as-text",
             ]
             .contains(&a.as_str())
             {
@@ -3004,37 +3005,58 @@ fn annots(args: &[String], json: bool) -> Done {
     let args = Args::parse(args)?;
     let [file] = args.words()?;
     let doc = open(file)?;
+    let all = doc.annotations();
+    if args.flag("--as-text") {
+        return Ok(katna_pdf_cos::comments_text(&all));
+    }
     let mut out = String::new();
     let mut items = Vec::new();
-    for a in doc.annotations().iter().flatten() {
-        let kind = match &a.kind {
-            AnnotKind::Markup(style, _) => format!("{style:?}"),
-            AnnotKind::Note => "Note".into(),
-            AnnotKind::FreeText { .. } => "FreeText".into(),
-            AnnotKind::Ink(_) => "Ink".into(),
-            AnnotKind::Square { .. } => "Square".into(),
-            AnnotKind::Circle { .. } => "Circle".into(),
-            AnnotKind::Line { arrow: true, .. } => "Arrow".into(),
-            AnnotKind::Line { .. } => "Line".into(),
-            AnnotKind::Polygon(_) => "Polygon".into(),
-            AnnotKind::PolyLine(_) => "PolyLine".into(),
-            AnnotKind::Stamp(name) => format!("Stamp {name}"),
-            AnnotKind::Other(subtype) => subtype.clone(),
-        };
+    for a in all.iter().flatten() {
+        let kind = a.kind.label();
+        let status =
+            a.id.and_then(|id| katna_pdf_cos::annotation_status(&all, id));
+        let mut marks = Vec::new();
+        if a.flags.hidden {
+            marks.push("hidden");
+        }
+        if !a.flags.print {
+            marks.push("not printed");
+        }
+        if a.flags.locked {
+            marks.push("locked");
+        }
         if json {
             items.push(format!(
-                "{{\"page\":{},\"kind\":{},\"rect\":[{}],\"author\":{},\"contents\":{},\"modified\":{}}}",
+                "{{\"page\":{},\"kind\":{},\"rect\":[{}],\"author\":{},\"contents\":{},\"modified\":{},\
+                 \"hidden\":{},\"print\":{},\"locked\":{},\"reply\":{},\"state\":{},\"status\":{}}}",
                 a.page + 1,
                 string(&kind),
                 a.rect.iter().map(|v| num(*v)).collect::<Vec<_>>().join(","),
                 string(&a.author),
                 string(&a.contents),
                 a.modified.as_deref().map_or("null".into(), string),
+                a.flags.hidden,
+                a.flags.print,
+                a.flags.locked,
+                a.reply_to.is_some(),
+                a.state.as_deref().map_or("null".into(), string),
+                status.map_or("null".into(), string),
             ));
         } else {
             let _ = write!(out, "page {:<4} {kind}", a.page + 1);
+            if a.reply_to.is_some() {
+                out.push_str(" (reply)");
+            }
             if !a.author.is_empty() {
                 let _ = write!(out, " by {}", a.author);
+            }
+            if let Some(state) = &a.state {
+                let _ = write!(out, " sets {state}");
+            } else if let Some(status) = status {
+                let _ = write!(out, " [{status}]");
+            }
+            if !marks.is_empty() {
+                let _ = write!(out, " ({})", marks.join(", "));
             }
             if !a.contents.is_empty() {
                 let _ = write!(out, ": {}", a.contents.replace('\n', " / "));

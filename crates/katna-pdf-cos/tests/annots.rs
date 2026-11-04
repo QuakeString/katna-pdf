@@ -418,3 +418,94 @@ fn callouts_and_clouds_are_written_and_read_back() {
     assert_eq!(free.callout, read[0].callout);
     assert!(back.put.iter().filter(|a| a.cloudy).count() == 2);
 }
+
+#[test]
+fn flags_states_and_replies_round_trip() {
+    let doc = two();
+    let mut note = Annotation::new(1, AnnotKind::Note);
+    note.rect = [100.0, 700.0, 120.0, 720.0];
+    note.contents = "Fix this".into();
+    note.author = "Asha".into();
+    note.modified = Some("D:20260102000000Z".into());
+    note.flags.locked = true;
+    note.flags.print = false;
+    let mut hidden = Annotation::new(1, AnnotKind::Square { fill: None });
+    hidden.rect = [10.0, 10.0, 50.0, 50.0];
+    hidden.flags.hidden = true;
+    let out = doc
+        .annotate(&AnnotChanges {
+            put: vec![note, hidden],
+            remove: vec![],
+        })
+        .unwrap();
+    let again = Document::load(out).unwrap();
+    let read = again.annotations();
+    let (note, square) = (&read[1][0], &read[1][1]);
+    assert!(note.flags.locked && !note.flags.print && !note.flags.hidden);
+    assert!(square.flags.hidden && square.flags.print && !square.flags.locked);
+    let Some(Object::Dict(dict)) = again.get(note.id.unwrap()) else {
+        panic!();
+    };
+    assert_eq!(
+        dict.get("F").and_then(Object::as_number),
+        Some(128.0 + 512.0)
+    );
+    // A reply, and a state reply that marks the note accepted.
+    let mut reply = Annotation::new(1, AnnotKind::Note);
+    reply.reply_to = note.id;
+    reply.contents = "Done".into();
+    reply.author = "Ravi".into();
+    reply.modified = Some("D:20260103000000Z".into());
+    let mut state = Annotation::new(1, AnnotKind::Note);
+    state.reply_to = note.id;
+    state.state = Some("Accepted".into());
+    state.author = "Ravi".into();
+    state.modified = Some("D:20260104000000Z".into());
+    state.flags.hidden = true;
+    let out = again
+        .annotate(&AnnotChanges {
+            put: vec![reply, state],
+            remove: vec![],
+        })
+        .unwrap();
+    let again = Document::load(out).unwrap();
+    let read = again.annotations();
+    assert_eq!(read[1].len(), 4);
+    assert_eq!(
+        katna_pdf_cos::annotation_status(&read, note.id.unwrap()),
+        Some("Accepted")
+    );
+    let Some(Object::Dict(dict)) = again.get(read[1][3].id.unwrap()) else {
+        panic!();
+    };
+    assert_eq!(dict.name("StateModel"), Some(&b"Review"[..]));
+    // As text: the note, its status and its reply; not the state reply.
+    // (Dates are when they were written, so they are cut out.)
+    let text = katna_pdf_cos::comments_text(&read);
+    let mut undated = String::new();
+    for (i, piece) in text.split(" on ").enumerate() {
+        undated.push_str(if i == 0 { piece } else { &piece[16..] });
+    }
+    assert_eq!(
+        undated,
+        "Page 1\n  Note by Asha: Look here\n    Caret: \u{928}\u{92e}\u{938}\u{94d}\u{924}\u{947}\n\n\
+         Page 2\n  Note by Asha: Fix this\n    [Accepted]\n    Note by Ravi: Done\n  Rectangle\n\n"
+    );
+    // Flags and states go through XFDF.
+    let xml = katna_pdf_cos::to_xfdf(&read, "a.pdf");
+    assert!(xml.contains("flags=\"locked\""), "{xml}");
+    assert!(xml.contains("flags=\"hidden,print\""), "{xml}");
+    assert!(
+        xml.contains("state=\"Accepted\" statemodel=\"Review\""),
+        "{xml}"
+    );
+    let back = katna_pdf_cos::from_xfdf(&xml).unwrap();
+    assert!(
+        back.iter()
+            .any(|a| a.annotation.flags.locked && !a.annotation.flags.print)
+    );
+    assert!(
+        back.iter()
+            .any(|a| a.annotation.state.as_deref() == Some("Accepted"))
+    );
+}

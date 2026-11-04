@@ -46,7 +46,8 @@ mod write;
 mod xfdf;
 
 pub use annots::{
-    AnnotChanges, AnnotKind, Annotation, MarkupStyle, NOTE_SIZE, pdf_date, stamp_label,
+    AnnotChanges, AnnotFlags, AnnotKind, Annotation, MarkupStyle, NOTE_SIZE, REVIEW_STATES,
+    annotation_status, comments_text, pdf_date, stamp_label,
 };
 pub use calc::{
     CalcOp, Calculation, Format, Scripts, calculate, number, parse_date, show, write_date,
