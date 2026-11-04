@@ -11,8 +11,8 @@ use std::path::{Path, PathBuf};
 
 use gpui::{AnyElement, Context, Entity, Subscription, div, prelude::*};
 use katna_pdf_cos::{
-    Border, CalcOp, Calculation, Field, FieldEdit, FieldKind, FieldSpec, Flatten, FormDesign,
-    Format, Look, NewField, Object, Ref, Scripts,
+    Border, CalcOp, Calculation, Destination, Field, FieldAction, FieldEdit, FieldKind, FieldSpec,
+    Flatten, FormDesign, Format, Look, NewField, Object, Ref, Scripts, SubmitFormat,
 };
 use katna_ui::px;
 use katna_ui::scale::desktop_px;
@@ -46,6 +46,72 @@ fn inks() -> [[f32; 3]; 7] {
     let mut out = [[0.45; 3]; 7];
     out[1..].copy_from_slice(&COLOURS);
     out
+}
+
+/// The kinds of action a button can have, in the card's order.
+const ACTIONS: [&str; 8] = [
+    "form-action-none",
+    "form-action-goto",
+    "form-action-url",
+    "form-action-reset",
+    "form-action-hide",
+    "form-action-show",
+    "form-action-submit",
+    "form-action-next",
+];
+
+/// Which of [`ACTIONS`] `action` is, and what its card input holds.
+fn action_index(action: Option<&FieldAction>) -> (usize, String) {
+    match action {
+        None => (0, String::new()),
+        Some(FieldAction::GoTo(dest)) => (1, (dest.page + 1).to_string()),
+        Some(FieldAction::Uri(uri)) => (2, uri.clone()),
+        Some(FieldAction::Reset { fields, .. }) => (3, fields.join(", ")),
+        Some(FieldAction::Hide { fields, hide: true }) => (4, fields.join(", ")),
+        Some(FieldAction::Hide {
+            fields,
+            hide: false,
+        }) => (5, fields.join(", ")),
+        Some(FieldAction::Submit { url, .. }) => (6, url.clone()),
+        Some(FieldAction::Named(_) | FieldAction::JavaScript(_)) => (7, String::new()),
+    }
+}
+
+/// The action of kind `index` (into [`ACTIONS`]) with `arg` typed.
+fn action_of(index: usize, arg: &str, pages: usize) -> Option<FieldAction> {
+    let names = || {
+        arg.split(',')
+            .map(str::trim)
+            .filter(|n| !n.is_empty())
+            .map(str::to_owned)
+            .collect::<Vec<_>>()
+    };
+    Some(match index {
+        1 => FieldAction::GoTo(Destination {
+            page: arg
+                .trim()
+                .parse::<usize>()
+                .ok()
+                .filter(|p| (1..=pages).contains(p))
+                .map_or(0, |p| p - 1),
+            top: None,
+        }),
+        2 => FieldAction::Uri(arg.trim().to_owned()),
+        3 => FieldAction::Reset {
+            fields: names(),
+            others: false,
+        },
+        4 | 5 => FieldAction::Hide {
+            fields: names(),
+            hide: index == 4,
+        },
+        6 => FieldAction::Submit {
+            url: arg.trim().to_owned(),
+            format: SubmitFormat::Fdf,
+        },
+        7 => FieldAction::Named("NextPage".into()),
+        _ => return None,
+    })
 }
 
 fn border_label(border: Border) -> &'static str {
@@ -129,6 +195,7 @@ pub(super) struct Designing {
     /// How each field is drawn, and buttons' captions.
     looks: HashMap<Ref, Look>,
     captions: HashMap<Ref, String>,
+    actions: HashMap<Ref, FieldAction>,
     /// The kind of field (an index into [`KINDS`]) to drag out next.
     adding: Option<usize>,
     drawing: Option<Draft>,
@@ -147,6 +214,8 @@ pub(super) struct Designing {
     max_len: Entity<TextInput>,
     caption: Entity<TextInput>,
     pattern: Entity<TextInput>,
+    /// What a button's action needs: a page, an address or field names.
+    action_arg: Entity<TextInput>,
     _inputs: Vec<Subscription>,
 }
 
@@ -188,6 +257,7 @@ pub(super) struct FormRead {
     scripts: HashMap<Ref, Scripts>,
     looks: HashMap<Ref, Look>,
     captions: HashMap<Ref, String>,
+    actions: HashMap<Ref, FieldAction>,
 }
 
 /// The fields of `doc`, each page's widgets in their order, and the
@@ -236,12 +306,17 @@ pub(super) fn read_form(doc: &katna_pdf_cos::Document) -> FormRead {
             }
         })
         .collect();
+    let actions = fields
+        .iter()
+        .filter_map(|f| Some((f.id, doc.field_action(f)?)))
+        .collect();
     FormRead {
         fields,
         order,
         scripts,
         looks,
         captions,
+        actions,
     }
 }
 
@@ -274,16 +349,26 @@ impl Viewer {
         let max_len = input("form-max-len-hint", cx);
         let caption = input("form-caption", cx);
         let pattern = input("form-date-pattern-hint", cx);
-        let inputs = [&name, &tip, &options, &total, &max_len, &caption, &pattern]
-            .into_iter()
-            .map(|i| {
-                cx.subscribe(i, |this, _, event, cx| {
-                    if let InputEvent::Submit = event {
-                        this.apply_field_edit(cx);
-                    }
-                })
+        let action_arg = input("form-action-arg", cx);
+        let inputs = [
+            &name,
+            &tip,
+            &options,
+            &total,
+            &max_len,
+            &caption,
+            &pattern,
+            &action_arg,
+        ]
+        .into_iter()
+        .map(|i| {
+            cx.subscribe(i, |this, _, event, cx| {
+                if let InputEvent::Submit = event {
+                    this.apply_field_edit(cx);
+                }
             })
-            .collect();
+        })
+        .collect();
         let read = match &self.form {
             Some(form) => read_form(&form.source),
             None => FormRead {
@@ -292,6 +377,7 @@ impl Viewer {
                 scripts: HashMap::new(),
                 looks: HashMap::new(),
                 captions: HashMap::new(),
+                actions: HashMap::new(),
             },
         };
         self.designing = Some(Designing {
@@ -300,6 +386,7 @@ impl Viewer {
             scripts: read.scripts,
             looks: read.looks,
             captions: read.captions,
+            actions: read.actions,
             adding: None,
             drawing: None,
             chosen: None,
@@ -312,6 +399,7 @@ impl Viewer {
             max_len,
             caption,
             pattern,
+            action_arg,
             _inputs: inputs,
         });
         // Fields nobody can fill (buttons, signatures) are only read when
@@ -348,6 +436,7 @@ impl Viewer {
                     designing.scripts = read.scripts;
                     designing.looks = read.looks;
                     designing.captions = read.captions;
+                    designing.actions = read.actions;
                     cx.notify();
                 }
             })
@@ -367,6 +456,7 @@ impl Viewer {
         designing.scripts = read.scripts;
         designing.looks = read.looks;
         designing.captions = read.captions;
+        designing.actions = read.actions;
         if let Some(name) = designing.choose_next.take() {
             designing.chosen = designing
                 .fields
@@ -423,6 +513,7 @@ impl Viewer {
             Some(Format::Date(pattern)) => pattern.clone(),
             _ => DATE_PATTERN.to_owned(),
         };
+        let (_, action_arg) = action_index(field.and_then(|f| designing.actions.get(&f.id)));
         for (input, value) in [
             (designing.name.clone(), name),
             (designing.tip.clone(), tip),
@@ -431,6 +522,7 @@ impl Viewer {
             (designing.max_len.clone(), max_len),
             (designing.caption.clone(), caption),
             (designing.pattern.clone(), pattern),
+            (designing.action_arg.clone(), action_arg),
         ] {
             input.update(cx, |i, cx| i.set_text(value, cx));
         }
@@ -661,6 +753,7 @@ impl Viewer {
                 value: None,
                 scripts: katna_pdf_cos::Scripts::default(),
                 look: Look::default(),
+                action: None,
             }],
             ..FormDesign::default()
         };
@@ -780,10 +873,39 @@ impl Viewer {
             {
                 edit.caption = Some(caption);
             }
+            // The action's page, address or fields as typed.
+            let was = designing.actions.get(&field.id);
+            let (index, arg) = action_index(was);
+            let typed = designing.action_arg.read(cx).text().trim().to_owned();
+            if index != 0 && typed != arg {
+                let action = action_of(index, &typed, self.page_count());
+                if action.as_ref() != was {
+                    edit.action = Some(action);
+                }
+            }
         }
         if edit == FieldEdit::new(field.id) {
             return;
         }
+        self.edit_field(&field, edit, cx);
+    }
+
+    /// Gives the button chosen the action of kind `index` (into
+    /// [`ACTIONS`]), with what is typed for it.
+    fn set_action(&mut self, index: usize, cx: &mut Context<Self>) {
+        let Some(field) = self.chosen_field().cloned() else {
+            return;
+        };
+        let Some(designing) = self.designing.as_ref() else {
+            return;
+        };
+        let typed = designing.action_arg.read(cx).text().trim().to_owned();
+        let action = action_of(index, &typed, self.page_count());
+        if action.as_ref() == designing.actions.get(&field.id) {
+            return;
+        }
+        let mut edit = FieldEdit::new(field.id);
+        edit.action = Some(action);
         self.edit_field(&field, edit, cx);
     }
 
@@ -1204,6 +1326,18 @@ impl Viewer {
                 card = card
                     .child(label("form-caption"))
                     .child(input(designing.caption.clone()));
+                let (now, _) = action_index(designing.actions.get(&field.id));
+                let mut actions = div().flex().flex_wrap().gap(px(space::S1));
+                for (i, id) in ACTIONS.iter().enumerate() {
+                    actions = actions.child(
+                        chip(("form-action", i), now == i, t(id, &[]))
+                            .on_click(cx.listener(move |this, _, _, cx| this.set_action(i, cx))),
+                    );
+                }
+                card = card.child(label("form-action")).child(actions);
+                if (1..=6).contains(&now) {
+                    card = card.child(input(designing.action_arg.clone()));
+                }
             }
             card = card
                 .child(toggle(0, field.required, "form-required"))

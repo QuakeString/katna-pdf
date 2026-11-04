@@ -121,7 +121,8 @@ usage: katna-pdf-cli COMMAND [--json] ...
        [--border NAME=STYLE[:WIDTH]]... [--border-colour NAME=#RRGGBB|none]...
        [--background NAME=#RRGGBB|none]... [--font NAME=SIZE[:#RRGGBB]]...
        [--max-len NAME=N|none]... [--comb NAME]... [--password NAME]...
-       [--no-scroll NAME]... [--caption NAME=TEXT]... [--detect PAGES|all]
+       [--no-scroll NAME]... [--caption NAME=TEXT]... [--action NAME=WHAT]...
+       [--detect PAGES|all]
                                   the form designed: fields added (KIND text, multiline,
                                   password, check, radio=CHOICE, combo=A;B;C,
                                   list=A;B;C, button=CAPTION or signature; radio
@@ -139,7 +140,11 @@ usage: katna-pdf-cli COMMAND [--json] ...
                                   and colour), the most letters a text field takes,
                                   a letter to each box (--comb), letters hidden as
                                   typed, no scrolling past the box, a button's
-                                  caption; --detect adds the fields a
+                                  caption and what it does when clicked (WHAT:
+                                  goto:PAGE, url:ADDRESS, reset[:FIELD,...],
+                                  hide:FIELD,..., show:FIELD,..., submit:URL[:fdf|
+                                  xfdf|html|pdf], next, previous, first, last, or
+                                  none); --detect adds the fields a
                                   flat form's pages ask for (blanks of underscores,
                                   rules to write on, empty boxes, rows of letter
                                   boxes, squares to tick), named from the words
@@ -434,6 +439,7 @@ impl<'a> Args<'a> {
                     | "--max-len"
                     | "--comb"
                     | "--background"
+                    | "--action"
                     | "--no-scroll"
                     | "--caption"
             ) {
@@ -2312,6 +2318,7 @@ fn form(args: &[String], json: bool) -> Done {
             value: None,
             scripts: katna_pdf_cos::Scripts::default(),
             look: katna_pdf_cos::Look::default(),
+            action: None,
         });
     }
     if let Some(spec) = args.option("--detect") {
@@ -2365,6 +2372,7 @@ fn form(args: &[String], json: bool) -> Done {
                 value: None,
                 scripts: katna_pdf_cos::Scripts::default(),
                 look: katna_pdf_cos::Look::default(),
+                action: None,
             };
             how(&mut spec, &mut edits[at]);
             Ok(())
@@ -2605,6 +2613,63 @@ fn form(args: &[String], json: bool) -> Done {
                 *caption = text.to_owned();
             }
             e.caption = Some(text.to_owned());
+        })?;
+    }
+    for item in args.all("--action") {
+        let bad = || {
+            Failure::Usage(format!(
+                "--action {item}: NAME=goto:PAGE, url:ADDRESS, reset[:FIELDS], hide:FIELDS, show:FIELDS, submit:URL[:FORMAT], next, previous, first, last or none"
+            ))
+        };
+        let (name, what) = item.split_once('=').ok_or_else(bad)?;
+        let (kind, arg) = what.split_once(':').unwrap_or((what, ""));
+        let names = || {
+            arg.split(',')
+                .map(str::trim)
+                .filter(|n| !n.is_empty())
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        };
+        use katna_pdf_cos::{FieldAction, SubmitFormat};
+        let action = match kind {
+            "goto" => Some(FieldAction::GoTo(katna_pdf_cos::Destination {
+                page: page_of(arg)?,
+                top: None,
+            })),
+            "url" if !arg.is_empty() => Some(FieldAction::Uri(arg.to_owned())),
+            "reset" => Some(FieldAction::Reset {
+                fields: names(),
+                others: false,
+            }),
+            "hide" | "show" if !arg.is_empty() => Some(FieldAction::Hide {
+                fields: names(),
+                hide: kind == "hide",
+            }),
+            "submit" if !arg.is_empty() => {
+                let (url, format) = arg
+                    .rsplit_once(':')
+                    .filter(|(_, f)| ["fdf", "xfdf", "html", "pdf"].contains(f))
+                    .unwrap_or((arg, "fdf"));
+                Some(FieldAction::Submit {
+                    url: url.to_owned(),
+                    format: match format {
+                        "xfdf" => SubmitFormat::Xfdf,
+                        "html" => SubmitFormat::Html,
+                        "pdf" => SubmitFormat::Pdf,
+                        _ => SubmitFormat::Fdf,
+                    },
+                })
+            }
+            "next" => Some(FieldAction::Named("NextPage".into())),
+            "previous" => Some(FieldAction::Named("PrevPage".into())),
+            "first" => Some(FieldAction::Named("FirstPage".into())),
+            "last" => Some(FieldAction::Named("LastPage".into())),
+            "none" => None,
+            _ => return Err(bad()),
+        };
+        change(name, &|s, e| {
+            s.action = action.clone();
+            e.action = Some(action.clone());
         })?;
     }
     for rename in args.all("--rename") {

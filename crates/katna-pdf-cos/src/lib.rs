@@ -9,6 +9,7 @@
 //! Locked files open with their password (an empty one is tried first);
 //! updates to them are locked with the same key.
 
+mod actions;
 mod annots;
 mod calc;
 mod content;
@@ -46,6 +47,7 @@ mod stamp;
 mod write;
 mod xfdf;
 
+pub use actions::{FieldAction, SubmitFormat};
 pub use annots::{
     AnnotChanges, AnnotFlags, AnnotKind, Annotation, DYNAMIC_STAMPS, MarkupStyle, NOTE_SIZE,
     REVIEW_STATES, STAMPS, annotation_status, comments_text, custom_stamp, pdf_date,

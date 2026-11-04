@@ -2067,6 +2067,10 @@ impl Viewer {
         let Some(form) = self.form.as_mut() else {
             return;
         };
+        if let Some(action) = form.action(field).cloned() {
+            self.act(action, cx);
+            return;
+        }
         if let Some(value) = form.clicked(field, widget) {
             if form.set(field, value) {
                 self.refill(field, cx);
@@ -2115,6 +2119,107 @@ impl Viewer {
             month,
         });
         cx.notify();
+    }
+
+    /// Does what a button clicked asks: goes somewhere, resets or hides
+    /// fields, or sends the form's data.
+    fn act(&mut self, action: katna_pdf_cos::FieldAction, cx: &mut Context<Self>) {
+        use katna_pdf_cos::FieldAction;
+        let all: Vec<usize> = (0..self.page_count()).collect();
+        match action {
+            FieldAction::GoTo(dest) => self.go_to(dest, cx),
+            FieldAction::Uri(uri) => self.follow(&katna_pdf_cos::LinkTarget::Uri(uri), cx),
+            FieldAction::Reset { fields, others } => self.change_document(
+                all,
+                "form-failed",
+                move |doc| {
+                    doc.fill(&doc.reset_values_of(&fields, others))
+                        .map_err(|e| e.to_string())
+                },
+                cx,
+            ),
+            FieldAction::Hide { fields, hide } => self.change_document(
+                all,
+                "form-failed",
+                move |doc| doc.hide_fields(&fields, hide).map_err(|e| e.to_string()),
+                cx,
+            ),
+            FieldAction::Submit { url, format } => self.submit_form(url, format, cx),
+            FieldAction::Named(name) => {
+                let page = self.current_page();
+                let last = self.page_count().saturating_sub(1);
+                let to = match name.as_str() {
+                    "NextPage" => (page + 1).min(last),
+                    "PrevPage" => page.saturating_sub(1),
+                    "FirstPage" => 0,
+                    "LastPage" => last,
+                    _ => {
+                        self.notice = Some(t("form-action-unsupported", &[("what", &name)]));
+                        cx.notify();
+                        return;
+                    }
+                };
+                self.show_page(to, cx);
+            }
+            FieldAction::JavaScript(_) => {
+                self.notice = Some(t("form-action-unsupported", &[("what", "JavaScript")]));
+                cx.notify();
+            }
+        }
+    }
+
+    /// Sends the form's data to `url`, as a submit button asks.
+    fn submit_form(
+        &mut self,
+        url: String,
+        format: katna_pdf_cos::SubmitFormat,
+        cx: &mut Context<Self>,
+    ) {
+        let lower = url.trim().to_ascii_lowercase();
+        if !lower.starts_with("https://") && !lower.starts_with("http://") {
+            self.notice = Some(t("form-send-failed", &[("error", &url)]));
+            cx.notify();
+            return;
+        }
+        let Some(path) = self.path.clone() else {
+            return;
+        };
+        self.finish_typing(true, cx);
+        let current = self.unsaved();
+        let key = self.key.clone();
+        let name = file_name(&path);
+        self.notice = Some(t("form-sending", &[]));
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let sent = cx
+                .background_executor()
+                .spawn(async move {
+                    let bytes = match current {
+                        Some(bytes) => bytes.to_vec(),
+                        None => std::fs::read(&path).map_err(|e| e.to_string())?,
+                    };
+                    let doc = cos(bytes, key.as_deref()).map_err(|e| e.to_string())?;
+                    let (body, kind) = doc.submit_body(format, &name);
+                    let agent = crate::update::agent(std::time::Duration::from_secs(30));
+                    let reply = agent
+                        .post(url.trim())
+                        .header("Content-Type", kind)
+                        .send(&body[..])
+                        .map_err(|e| e.to_string())?;
+                    Ok::<_, String>(reply.status().as_u16())
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                this.notice = Some(match sent {
+                    Ok(status) if (200..300).contains(&status) => t("form-sent", &[]),
+                    Ok(status) => t("form-send-failed", &[("error", &status.to_string())]),
+                    Err(error) => t("form-send-failed", &[("error", &error)]),
+                });
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// Ends typing in a text field, keeping what was typed or not.

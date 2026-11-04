@@ -324,6 +324,7 @@ impl Document {
                     value: None,
                     scripts: Scripts::default(),
                     look: crate::forms::Look::default(),
+                    action: None,
                 }
             })
             .collect()

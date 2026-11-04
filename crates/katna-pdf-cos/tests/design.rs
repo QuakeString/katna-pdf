@@ -28,6 +28,7 @@ fn spec(page: usize, y: f32, name: &str, kind: NewField) -> FieldSpec {
         value: None,
         scripts: katna_pdf_cos::Scripts::default(),
         look: katna_pdf_cos::Look::default(),
+        action: None,
     }
 }
 
@@ -697,4 +698,161 @@ fn a_form_is_reset_to_its_defaults() {
     // New fields have no default, so the text goes; the box is off.
     assert_eq!(form[0].value, None);
     assert_eq!(form[1].value, None);
+}
+
+#[test]
+fn button_actions_are_written_read_and_done() {
+    use katna_pdf_cos::{Destination, FieldAction, SubmitFormat};
+    let text = NewField::Text {
+        multiline: false,
+        password: false,
+        max_len: None,
+        comb: false,
+    };
+    let mut name = spec(0, 700.0, "Name", text.clone());
+    name.value = Some("Mozammel".into());
+    let mut city = spec(0, 660.0, "City", text);
+    city.value = Some("Kolkata".into());
+    let button = |y, name: &str, action| {
+        let mut b = spec(
+            1,
+            y,
+            name,
+            NewField::PushButton {
+                caption: name.into(),
+            },
+        );
+        b.action = Some(action);
+        b
+    };
+    let doc = designed(
+        &blank(2),
+        &FormDesign {
+            add: vec![
+                name,
+                city,
+                button(
+                    700.0,
+                    "Go",
+                    FieldAction::GoTo(Destination {
+                        page: 0,
+                        top: Some(700.0),
+                    }),
+                ),
+                button(
+                    660.0,
+                    "Web",
+                    FieldAction::Uri("https://katna.invenia.in".into()),
+                ),
+                button(
+                    620.0,
+                    "Clear",
+                    FieldAction::Reset {
+                        fields: vec!["Name".into()],
+                        others: false,
+                    },
+                ),
+                button(
+                    580.0,
+                    "Tidy",
+                    FieldAction::Hide {
+                        fields: vec!["City".into()],
+                        hide: true,
+                    },
+                ),
+                button(
+                    540.0,
+                    "Send",
+                    FieldAction::Submit {
+                        url: "https://example.org/in".into(),
+                        format: SubmitFormat::Xfdf,
+                    },
+                ),
+                button(500.0, "Next", FieldAction::Named("NextPage".into())),
+            ],
+            ..FormDesign::default()
+        },
+    );
+    let form = doc.form();
+    let action = |name: &str| doc.field_action(form.iter().find(|f| f.name == name).unwrap());
+    assert_eq!(
+        action("Go"),
+        Some(FieldAction::GoTo(Destination {
+            page: 0,
+            top: Some(700.0)
+        }))
+    );
+    assert_eq!(
+        action("Web"),
+        Some(FieldAction::Uri("https://katna.invenia.in".into()))
+    );
+    assert_eq!(
+        action("Clear"),
+        Some(FieldAction::Reset {
+            fields: vec!["Name".into()],
+            others: false
+        })
+    );
+    assert_eq!(
+        action("Send"),
+        Some(FieldAction::Submit {
+            url: "https://example.org/in".into(),
+            format: SubmitFormat::Xfdf
+        })
+    );
+    assert_eq!(action("Next"), Some(FieldAction::Named("NextPage".into())));
+    assert_eq!(action("Name"), None);
+    // Clearing Name alone leaves City.
+    let reset = Document::load(
+        doc.fill(&doc.reset_values_of(&["Name".into()], false))
+            .unwrap(),
+    )
+    .unwrap();
+    let values = reset.form_data();
+    assert_eq!(values[0], ("Name".into(), String::new()));
+    assert_eq!(values[1], ("City".into(), "Kolkata".into()));
+    // Clearing all but Name leaves Name.
+    let reset = Document::load(
+        doc.fill(&doc.reset_values_of(&["Name".into()], true))
+            .unwrap(),
+    )
+    .unwrap();
+    let values = reset.form_data();
+    assert_eq!(values[0], ("Name".into(), "Mozammel".into()));
+    assert_eq!(values[1], ("City".into(), String::new()));
+    // Hiding City sets its widget's flag; the submit body carries the data.
+    let hidden = Document::load(doc.hide_fields(&["City".into()], true).unwrap()).unwrap();
+    let city = hidden
+        .form()
+        .into_iter()
+        .find(|f| f.name == "City")
+        .unwrap();
+    let Some(Object::Dict(w)) = hidden.get(city.widgets[0].id) else {
+        panic!()
+    };
+    assert_eq!(hidden.resolve(w.get("F").unwrap()).as_int().unwrap() & 2, 2);
+    let (body, kind) = doc.submit_body(SubmitFormat::Html, "form.pdf");
+    assert_eq!(kind, "application/x-www-form-urlencoded");
+    assert_eq!(
+        String::from_utf8(body).unwrap(),
+        "Name=Mozammel&City=Kolkata"
+    );
+    // The action comes off, and another goes on, by an edit.
+    let web = form.iter().find(|f| f.name == "Web").unwrap();
+    let mut off = FieldEdit::new(web.id);
+    off.action = Some(None);
+    let go = form.iter().find(|f| f.name == "Go").unwrap();
+    let mut other = FieldEdit::new(go.id);
+    other.action = Some(Some(FieldAction::Named("LastPage".into())));
+    let doc = designed(
+        &doc,
+        &FormDesign {
+            edit: vec![off, other],
+            ..FormDesign::default()
+        },
+    );
+    let form = doc.form();
+    let action = |name: &str| doc.field_action(form.iter().find(|f| f.name == name).unwrap());
+    assert_eq!(action("Web"), None);
+    assert_eq!(action("Go"), Some(FieldAction::Named("LastPage".into())));
 }

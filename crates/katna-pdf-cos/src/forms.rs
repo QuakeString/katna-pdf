@@ -75,6 +75,8 @@ pub struct Widget {
     pub rect: [f32; 4],
     /// For a check box or radio button, the name of its "on" state.
     pub on: Option<String>,
+    /// Not shown (`/F` hidden or no-view), as a Hide action leaves it.
+    pub hidden: bool,
 }
 
 /// How a field is drawn: its border, background and text.
@@ -807,11 +809,13 @@ impl FieldReader<'_> {
             },
             _ => None,
         };
+        let flags = self.doc.resolve_key(dict, "F").as_int().unwrap_or(0);
         Some(Widget {
             id,
             page,
             rect: [x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1)].map(|v| v as f32),
             on,
+            hidden: flags & (2 | 32) != 0,
         })
     }
 }

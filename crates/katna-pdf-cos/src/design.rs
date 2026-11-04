@@ -16,7 +16,8 @@ use crate::forms::{
     READ_ONLY, REQUIRED, border_content, inset, literal, text_object,
 };
 use crate::{
-    Dict, Document, Field, FieldKind, Name, Object, Ref, Stream, Update, UpdateError, Widget,
+    Dict, Document, Field, FieldAction, FieldKind, Name, NavError, Object, Ref, Stream, Update,
+    UpdateError, Widget,
 };
 
 /// A radio group whose buttons cannot all be turned off.
@@ -76,6 +77,8 @@ pub struct FieldSpec {
     pub scripts: Scripts,
     /// Its border, background and text.
     pub look: Look,
+    /// What it does when clicked (a button, usually).
+    pub action: Option<FieldAction>,
 }
 
 /// Changes to a field; `None` leaves that part as it is.
@@ -106,6 +109,8 @@ pub struct FieldEdit {
     pub scripts: Option<Scripts>,
     /// Its border, background and text, on every place it is shown.
     pub look: Option<Look>,
+    /// What it does when clicked; `Some(None)` takes that away.
+    pub action: Option<Option<FieldAction>>,
 }
 
 impl FieldEdit {
@@ -125,6 +130,7 @@ impl FieldEdit {
             options: None,
             scripts: None,
             look: None,
+            action: None,
         }
     }
 }
@@ -154,6 +160,14 @@ pub enum FormError {
     /// Another kind of field already has this name.
     NameTaken(String),
     Update(UpdateError),
+    /// An action's destination is not in the file.
+    Nav(NavError),
+}
+
+impl From<NavError> for FormError {
+    fn from(e: NavError) -> FormError {
+        FormError::Nav(e)
+    }
 }
 
 impl std::fmt::Display for FormError {
@@ -163,6 +177,7 @@ impl std::fmt::Display for FormError {
             FormError::NoField => f.write_str("the field is not in the form"),
             FormError::NameTaken(name) => write!(f, "another kind of field is named {name}"),
             FormError::Update(e) => write!(f, "{e}"),
+            FormError::Nav(e) => write!(f, "{e}"),
         }
     }
 }
@@ -732,6 +747,33 @@ impl Designer<'_> {
                 }
             }
         }
+        if let Some(action) = &edit.action {
+            let a = match action {
+                Some(action) => Some(self.doc.action_object(action)?),
+                None => None,
+            };
+            for w in &f.widgets {
+                let mut target = if w.id == f.id {
+                    dict.clone()
+                } else {
+                    self.dict(w.id)
+                };
+                match &a {
+                    Some(a) => target.set("A", a.clone()),
+                    None => {
+                        target.remove("A");
+                    }
+                }
+                if w.id == f.id {
+                    dict = target;
+                } else {
+                    self.up.replace(w.id, Object::Dict(target));
+                }
+            }
+            if a.is_none() {
+                dict.remove("A");
+            }
+        }
         if let (Some(caption), FieldKind::PushButton) = (&edit.caption, &f.kind) {
             for w in &f.widgets {
                 let mut target = if w.id == f.id {
@@ -863,6 +905,11 @@ impl Designer<'_> {
         mk.set("BC", bc);
         mk.set("BG", bg);
         w.set("BS", bs_of(&look));
+        if let Some(action) = &spec.action
+            && let Ok(a) = self.doc.action_object(action)
+        {
+            w.set("A", a);
+        }
         let on = spec.value.is_some();
         let ap = match &spec.kind {
             NewField::CheckBox | NewField::Radio { .. } => {
@@ -903,6 +950,7 @@ impl Designer<'_> {
                             page: spec.page,
                             rect,
                             on: None,
+                            hidden: false,
                         };
                         let mut here = Dict::new();
                         here.set("MK", Object::Dict(mk.clone()));

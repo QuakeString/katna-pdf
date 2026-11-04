@@ -26,6 +26,7 @@ fn with_form_and_note() -> Document {
         value: None,
         scripts: katna_pdf_cos::Scripts::default(),
         look: katna_pdf_cos::Look::default(),
+        action: None,
     };
     let doc = Document::load(
         doc.design_form(&FormDesign {
