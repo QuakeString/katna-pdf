@@ -24,6 +24,7 @@ katna-ui.workspace = true
 gpui.workspace = true
 gpui-platform.workspace = true
 image.workspace = true
+fontdb.workspace = true
 async-channel.workspace = true
 # Updates (`update.rs`).
 ureq.workspace = true

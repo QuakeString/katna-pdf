@@ -462,11 +462,12 @@ impl Document {
         };
         let text = text.replace("\r\n", "\n").replace('\r', "\n");
         let mut new: Vec<String> = Vec::new();
-        // Lines kept as they were, while the text still starts with them.
+        // Lines kept as they were, while the text still starts with them;
+        // in a new font the words take other widths, so none is kept.
         let mut rest = text.as_str();
         // The last line kept goes on into the text after it.
         let mut soft = false;
-        while let Some(run) = old.get(new.len()) {
+        while let Some(run) = old.get(new.len()).filter(|_| added.is_none()) {
             match rest.strip_prefix(run.text.as_str()) {
                 Some(after) if after.is_empty() || after.starts_with([' ', '\n']) => {
                     new.push(run.text.clone());

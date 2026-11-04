@@ -142,6 +142,14 @@ const ICONS: &[(&str, &[u8])] = &[
         include_bytes!("../icons/format-strike.svg"),
     ),
     (
+        "icons/format-bold.svg",
+        include_bytes!("../icons/format-bold.svg"),
+    ),
+    (
+        "icons/format-italic.svg",
+        include_bytes!("../icons/format-italic.svg"),
+    ),
+    (
         "icons/text-edit.svg",
         include_bytes!("../icons/text-edit.svg"),
     ),

@@ -395,6 +395,14 @@ fn a_paragraph_changes_font() {
         "{}",
         content(&out)
     );
+    // Bold is wider, so the words wrap again within the old width: no
+    // line runs past where the widest did.
+    let right = doc.text_blocks(0)[0].rect[2];
+    let runs = out.text_runs(0);
+    assert_ne!(runs[1].text, "paragraph as one block of text", "{runs:?}");
+    for run in &runs[..runs.len() - 1] {
+        assert!(run.rect[2] <= right + 0.5, "{right} {runs:?}");
+    }
 
     // To an installed TrueType font, embedded: its glyphs by number,
     // read back as the same text.

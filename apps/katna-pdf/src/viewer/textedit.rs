@@ -17,11 +17,11 @@ use katna_pdf_cos::{PageObject, TextBlock};
 use katna_ui::px;
 use katna_ui::scale::desktop_px;
 use katna_ui::text_area::TextArea;
-use katna_ui::text_input::InputEvent;
+use katna_ui::text_input::{InputEvent, TextInput};
 use katna_ui::tokens::{radius, space, text};
 use katna_ui::widgets::{self, Tip};
 
-use super::{Content, Viewer};
+use super::{Content, Viewer, fonts};
 use crate::text::t;
 
 /// The paragraphs, pictures and shapes read so far, by page, and the
@@ -38,16 +38,37 @@ pub(super) struct Runs {
     /// Bumped when the file changes, so runs read from the old one are
     /// dropped.
     generation: u64,
+    /// Whether the file is being changed: nothing is read from it until
+    /// the change is in, as what was read would be of the old one.
+    changing: bool,
 }
 
 /// What to do with a paragraph once its page is read again.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 enum Next {
     Edit,
     /// Move it by so much in the page's own space.
     Move([f32; 2]),
     /// Show it at a size, in a colour, each where given.
     Style(Option<f32>, Option<[f32; 3]>),
+    /// Put it in a face.
+    Font(FontChoice),
+}
+
+/// A face chosen for a paragraph: a family installed here (or a
+/// standard one) and its weight and slant.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct FontChoice {
+    pub family: String,
+    pub bold: bool,
+    pub italic: bool,
+}
+
+/// The list of fonts open under the text inspector, with a box to
+/// narrow it.
+pub(super) struct FontMenu {
+    filter: Entity<TextInput>,
+    _filter: Subscription,
 }
 
 /// A paragraph being dragged: from a place to a place on the page shown,
@@ -142,8 +163,15 @@ impl Look {
             .into_iter()
             .chain(alike.iter().copied())
             .chain(kind.iter().copied());
+        // `DejaVuSans` is `DejaVu Sans`.
+        let plain = |s: &str| {
+            s.chars()
+                .filter(|c| !c.is_whitespace())
+                .map(|c| c.to_ascii_lowercase())
+                .collect::<String>()
+        };
         let family = wanted
-            .filter_map(|w| installed.iter().find(|f| f.eq_ignore_ascii_case(w)))
+            .filter_map(|w| installed.iter().find(|f| plain(f) == plain(w)))
             .next()
             .map(|f| f.clone().into());
         Look {
@@ -233,7 +261,10 @@ impl Viewer {
     /// changed so far.
     fn read_runs(&mut self, page: usize, cx: &mut Context<Self>) {
         let key = self.key.clone();
-        if self.runs.pages.contains_key(&page) || !self.runs.reading.insert(page) {
+        if self.runs.changing
+            || self.runs.pages.contains_key(&page)
+            || !self.runs.reading.insert(page)
+        {
             return;
         }
         let Some(path) = self.path.clone() else {
@@ -441,6 +472,7 @@ impl Viewer {
         let current = self.unsaved();
         let generation = self.generation;
         self.forget_runs();
+        self.runs.changing = true;
         cx.spawn(async move |this, cx| {
             let written = cx
                 .background_executor()
@@ -460,7 +492,9 @@ impl Viewer {
                 })
                 .await;
             this.update(cx, |this, cx| {
+                this.runs.changing = false;
                 if this.generation != generation {
+                    cx.notify();
                     return;
                 }
                 match written {
@@ -507,17 +541,17 @@ impl Viewer {
             self.read_runs(page, cx);
             return Vec::new();
         };
-        if let Some((_, [x, y], next)) = self.runs.next.filter(|(p, _, _)| *p == page) {
-            self.runs.next = None;
-            if let Some(i) = blocks.iter().position(|b| {
+        if let Some((_, [x, y], next)) = self.runs.next.take_if(|(p, _, _)| *p == page)
+            && let Some(i) = blocks.iter().position(|b| {
                 (b.rect[0]..=b.rect[2]).contains(&x) && (b.rect[1]..=b.rect[3]).contains(&y)
-            }) {
-                cx.defer_in(window, move |this, window, cx| match next {
-                    Next::Edit => this.start_text_edit(page, i, window, cx),
-                    Next::Move(by) => this.move_text(page, i, by, cx),
-                    Next::Style(size, colour) => this.style_text(page, i, size, colour, cx),
-                });
-            }
+            })
+        {
+            cx.defer_in(window, move |this, window, cx| match next {
+                Next::Edit => this.start_text_edit(page, i, window, cx),
+                Next::Move(by) => this.move_text(page, i, by, cx),
+                Next::Style(size, colour) => this.style_text(page, i, size, colour, cx),
+                Next::Font(choice) => this.font_text(page, i, choice, cx),
+            });
         }
         let dragging = self
             .text_moving
@@ -844,6 +878,35 @@ impl Viewer {
         self.runs.next = Some((page, at, Next::Edit));
     }
 
+    /// Puts paragraph `block` of page `page` in face `choice`, its
+    /// glyphs put into the file, and opens it for typing again.
+    fn font_text(&mut self, page: usize, block: usize, choice: FontChoice, cx: &mut Context<Self>) {
+        let Some((runs, at)) = self.block_runs(page, block) else {
+            return;
+        };
+        let Some(text) = self
+            .runs
+            .pages
+            .get(&page)
+            .and_then(|blocks| blocks.get(block))
+            .map(|b| b.text.clone())
+        else {
+            return;
+        };
+        self.change_document(
+            vec![page],
+            "text-font-failed",
+            move |doc| {
+                let font =
+                    fonts::installed().new_font(&choice.family, choice.bold, choice.italic)?;
+                doc.refont_block(page, &runs, &text, &font)
+                    .map_err(|e| e.to_string())
+            },
+            cx,
+        );
+        self.runs.next = Some((page, at, Next::Edit));
+    }
+
     /// Paragraph `block` of page `page`'s lines and middle, in the
     /// page's own space.
     fn block_runs(&self, page: usize, block: usize) -> Option<(Vec<usize>, [f32; 2])> {
@@ -874,6 +937,7 @@ impl Viewer {
             match what {
                 Next::Style(size, colour) => self.style_text(page, block, size, colour, cx),
                 Next::Move(by) => self.move_text(page, block, by, cx),
+                Next::Font(choice) => self.font_text(page, block, choice, cx),
                 Next::Edit => {}
             }
         } else {
@@ -900,6 +964,180 @@ impl Viewer {
         }
     }
 
+    /// The face the paragraph being typed in is in now, as the inspector
+    /// shows it: the installed family nearest its font, or the font's
+    /// own name, and whether it is bold and italic.
+    fn typed_face(&self, cx: &Context<Self>) -> Option<FontChoice> {
+        let (_, _, b) = self.typed_block()?;
+        let look = Look::of(&b.font, &cx.text_system().all_font_names());
+        let family = match look.family {
+            Some(f) => f.to_string(),
+            None => {
+                let name = b.font.split_once('+').map_or(b.font.as_str(), |(_, n)| n);
+                name.split(['-', ',']).next().unwrap_or(name).to_string()
+            }
+        };
+        Some(FontChoice {
+            family,
+            bold: look.bold,
+            italic: look.italic,
+        })
+    }
+
+    /// The paragraph being typed in put in family `family`, keeping its
+    /// weight and slant.
+    pub(super) fn refont_typed(&mut self, family: String, cx: &mut Context<Self>) {
+        let Some(face) = self.typed_face(cx) else {
+            return;
+        };
+        self.font_menu = None;
+        cx.notify();
+        let choice = FontChoice {
+            family,
+            ..face.clone()
+        };
+        if choice != face {
+            self.restyle_typed(Next::Font(choice), cx);
+        }
+    }
+
+    /// The paragraph being typed in made bold, or not, and italic, or
+    /// not, where given.
+    pub(super) fn reweigh_typed(
+        &mut self,
+        bold: Option<bool>,
+        italic: Option<bool>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(face) = self.typed_face(cx) else {
+            return;
+        };
+        let choice = FontChoice {
+            bold: bold.unwrap_or(face.bold),
+            italic: italic.unwrap_or(face.italic),
+            ..face.clone()
+        };
+        if choice != face {
+            self.restyle_typed(Next::Font(choice), cx);
+        }
+    }
+
+    /// Opens or closes the list of fonts under the inspector.
+    pub(super) fn toggle_font_menu(&mut self, cx: &mut Context<Self>) {
+        if self.font_menu.take().is_none() {
+            let accent = gpui::rgba(self.theme.katna.accent).into();
+            let filter = cx.new(|cx| {
+                let mut input = TextInput::new(t("text-font-find", &[]), cx);
+                input.set_accent(accent);
+                input
+            });
+            let sub = cx.subscribe(&filter, |this, _, event, cx| match event {
+                InputEvent::Cancel => {
+                    this.font_menu = None;
+                    cx.notify();
+                }
+                _ => cx.notify(),
+            });
+            self.font_menu = Some(FontMenu {
+                filter,
+                _filter: sub,
+            });
+        }
+        cx.notify();
+    }
+
+    /// The list of fonts, under the inspector's font field.
+    fn font_menu(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let menu = self.font_menu.as_ref()?;
+        let th = self.theme;
+        let now = self.typed_face(cx)?;
+        let wanted = menu.filter.read(cx).text().trim().to_lowercase();
+        let rows = fonts::installed()
+            .families()
+            .iter()
+            .filter(|f| wanted.is_empty() || f.to_lowercase().contains(&wanted))
+            .take(400)
+            .map(|family| {
+                let chosen = family.eq_ignore_ascii_case(&now.family);
+                let name = family.clone();
+                div()
+                    .id(gpui::SharedString::from(family.clone()))
+                    .flex()
+                    .items_center()
+                    .gap(px(space::S2))
+                    .px(px(space::S3))
+                    .py(px(space::S1))
+                    .rounded(px(radius::SM))
+                    .cursor_pointer()
+                    .hover(move |s| s.bg(th.hover))
+                    .text_size(px(text::BODY))
+                    .text_color(th.text)
+                    .font_family(gpui::SharedString::from(family.clone()))
+                    .on_click(
+                        cx.listener(move |this, _, _, cx| this.refont_typed(name.clone(), cx)),
+                    )
+                    .child(div().flex_1().child(family.clone()))
+                    .when(chosen, |row| {
+                        row.child(
+                            gpui::svg()
+                                .path("icons/check.svg")
+                                .size(px(16.0))
+                                .flex_none()
+                                .text_color(gpui::rgb(th.katna.accent >> 8)),
+                        )
+                    })
+            });
+        let list = div()
+            .id("text-font-menu")
+            .occlude()
+            .w(px(280.0))
+            .mt(px(space::S1))
+            .p(px(space::S1))
+            .flex()
+            .flex_col()
+            .rounded(px(radius::MD))
+            .bg(th.card)
+            .border_1()
+            .border_color(th.line)
+            .shadow_lg()
+            .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+                this.font_menu = None;
+                cx.notify();
+            }))
+            .child(
+                div()
+                    .h(px(28.0))
+                    .mb(px(space::S1))
+                    .px(px(space::S2))
+                    .flex()
+                    .items_center()
+                    .rounded(px(radius::XS))
+                    .bg(th.field)
+                    .child(menu.filter.clone()),
+            )
+            .child(
+                div()
+                    .id("text-font-list")
+                    .max_h(px(320.0))
+                    .overflow_y_scroll()
+                    .flex()
+                    .flex_col()
+                    .children(rows),
+            );
+        Some(
+            div()
+                .absolute()
+                .top_full()
+                .left_0()
+                .child(gpui::deferred(
+                    katna_ui::anchored()
+                        .anchor(gpui::Anchor::TopLeft)
+                        .child(list),
+                ))
+                .into_any_element(),
+        )
+    }
+
     /// The paragraph being typed in taken out of the page.
     pub(super) fn delete_typed(&mut self, cx: &mut Context<Self>) -> bool {
         let Some((page, _, b)) = self.typed_block() else {
@@ -920,10 +1158,8 @@ impl Viewer {
     pub(super) fn text_inspector(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let (_, _, block) = self.typed_block()?;
         let th = self.theme;
-        let font = block
-            .font
-            .split_once('+')
-            .map_or(block.font.as_str(), |(_, n)| n);
+        let face = self.typed_face(cx)?;
+        let menu = self.font_menu(cx);
         let field = |wide: f32| {
             div()
                 .h(px(28.0))
@@ -950,11 +1186,49 @@ impl Viewer {
                 .child(label)
                 .on_click(cx.listener(move |this, _, _, cx| this.resize_typed(by, cx)))
         };
+        let toggle = |id: &'static str, icon: &'static str, tip: &'static str, set: bool| {
+            let colour = if set {
+                th.katna.accent >> 8
+            } else {
+                th.katna.text_dim
+            };
+            widgets::icon_button_colored(id, icon, 18.0, colour, &th.katna)
+                .when(set, |b| b.bg(th.hover))
+                .tip(t(tip, &[]), &th.katna)
+        };
+        let bold = face.bold;
+        let italic = face.italic;
         let row = div()
             .flex()
             .items_center()
             .gap(px(space::S1))
-            .child(field(160.0).child(font.to_string()))
+            .child(
+                div()
+                    .relative()
+                    .child(
+                        field(180.0)
+                            .id("text-font")
+                            .cursor_pointer()
+                            .hover(move |s| s.bg(th.hover))
+                            .tip(t("text-font-tip", &[]), &th.katna)
+                            .font_family(gpui::SharedString::from(face.family.clone()))
+                            .when(bold, |d| d.font_weight(gpui::FontWeight::BOLD))
+                            .when(italic, |d| d.italic())
+                            .on_click(cx.listener(|this, _, _, cx| this.toggle_font_menu(cx)))
+                            .child(div().overflow_hidden().child(face.family.clone())),
+                    )
+                    .children(menu),
+            )
+            .child(
+                toggle("text-bold", "format-bold", "text-bold", bold).on_click(
+                    cx.listener(move |this, _, _, cx| this.reweigh_typed(Some(!bold), None, cx)),
+                ),
+            )
+            .child(
+                toggle("text-italic", "format-italic", "text-italic", italic).on_click(
+                    cx.listener(move |this, _, _, cx| this.reweigh_typed(None, Some(!italic), cx)),
+                ),
+            )
             .child(step("text-smaller", "A−", "text-smaller", -1.0))
             .child(field(0.0).child(t(
                 "text-size",
