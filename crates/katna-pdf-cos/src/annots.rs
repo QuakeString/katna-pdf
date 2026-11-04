@@ -112,6 +112,163 @@ pub struct Annotation {
     pub callout: Option<[[f32; 2]; 3]>,
     /// A polygon or rectangle drawn with a cloudy edge (`/BE`).
     pub cloudy: bool,
+    /// Hidden, printed, locked (`/F`).
+    pub flags: AnnotFlags,
+    /// For a reply that sets its parent's review state: `Accepted`,
+    /// `Rejected`, `Cancelled`, `Completed` or `None` (`/State`). Such a
+    /// reply is not a comment to read.
+    pub state: Option<String>,
+}
+
+/// An annotation's flags (`/F`): whether it is shown, printed and may
+/// be changed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AnnotFlags {
+    /// Not drawn on screen (`Hidden` or `NoView`).
+    pub hidden: bool,
+    /// Printed with the page (`Print`).
+    pub print: bool,
+    /// Not to be moved, deleted or its comment changed (`Locked` and
+    /// `LockedContents`).
+    pub locked: bool,
+}
+
+impl Default for AnnotFlags {
+    fn default() -> Self {
+        AnnotFlags {
+            hidden: false,
+            print: true,
+            locked: false,
+        }
+    }
+}
+
+impl AnnotFlags {
+    const HIDDEN: i64 = 2;
+    const PRINT: i64 = 4;
+    const NO_VIEW: i64 = 32;
+    const LOCKED: i64 = 128;
+    const LOCKED_CONTENTS: i64 = 512;
+
+    /// From the file's bits.
+    pub fn from_bits(bits: i64) -> Self {
+        AnnotFlags {
+            hidden: bits & (Self::HIDDEN | Self::NO_VIEW) != 0,
+            print: bits & Self::PRINT != 0,
+            locked: bits & (Self::LOCKED | Self::LOCKED_CONTENTS) != 0,
+        }
+    }
+
+    /// The file's bits, keeping those of `was` these flags do not cover.
+    pub fn bits(self, was: i64) -> i64 {
+        let keep = was
+            & !(Self::HIDDEN | Self::NO_VIEW | Self::PRINT | Self::LOCKED | Self::LOCKED_CONTENTS);
+        keep | if self.hidden { Self::HIDDEN } else { 0 }
+            | if self.print { Self::PRINT } else { 0 }
+            | if self.locked {
+                Self::LOCKED | Self::LOCKED_CONTENTS
+            } else {
+                0
+            }
+    }
+}
+
+/// The review states a reply can set on what it replies to.
+pub const REVIEW_STATES: [&str; 4] = ["Accepted", "Rejected", "Cancelled", "Completed"];
+
+/// The review state of annotation `id`: that of its latest state reply,
+/// if any sets one.
+pub fn annotation_status(all: &[Vec<Annotation>], id: Ref) -> Option<&str> {
+    all.iter()
+        .flatten()
+        .filter(|a| a.reply_to == Some(id))
+        .filter_map(|a| Some((a.modified.as_deref().unwrap_or(""), a.state.as_deref()?)))
+        .filter(|(_, s)| *s != "None")
+        .max_by(|a, b| a.0.cmp(b.0))
+        .map(|(_, s)| s)
+}
+
+/// The comments as text to read or paste: page by page, each
+/// annotation with its kind, author, date, state and comment, its
+/// replies indented under it.
+pub fn comments_text(all: &[Vec<Annotation>]) -> String {
+    let mut out = String::new();
+    for (page, annots) in all.iter().enumerate() {
+        let tops: Vec<&Annotation> = annots
+            .iter()
+            .filter(|a| a.reply_to.is_none() && a.state.is_none())
+            .collect();
+        if tops.is_empty() {
+            continue;
+        }
+        let _ = writeln!(out, "Page {}", page + 1);
+        for a in tops {
+            comment_line(&mut out, a, 2);
+            if let Some(status) = a.id.and_then(|id| annotation_status(all, id)) {
+                let _ = writeln!(out, "    [{status}]");
+            }
+            for reply in annots
+                .iter()
+                .filter(|r| r.state.is_none() && r.reply_to.is_some() && r.reply_to == a.id)
+            {
+                comment_line(&mut out, reply, 4);
+            }
+        }
+        out.push('\n');
+    }
+    out
+}
+
+fn comment_line(out: &mut String, a: &Annotation, indent: usize) {
+    let _ = write!(out, "{:indent$}{}", "", a.kind.label());
+    if !a.author.is_empty() {
+        let _ = write!(out, " by {}", a.author);
+    }
+    if let Some(date) = a.modified.as_deref().and_then(plain_date) {
+        let _ = write!(out, " on {date}");
+    }
+    if a.contents.is_empty() {
+        out.push('\n');
+    } else {
+        let _ = writeln!(
+            out,
+            ": {}",
+            a.contents.replace('\n', &format!("\n{:indent$}  ", ""))
+        );
+    }
+}
+
+/// `D:20261018123000Z` as `2026-10-18 12:30`.
+fn plain_date(d: &str) -> Option<String> {
+    let d = d.strip_prefix("D:").unwrap_or(d);
+    if d.len() < 8 || !d.as_bytes()[..8].iter().all(u8::is_ascii_digit) {
+        return None;
+    }
+    let mut out = format!("{}-{}-{}", &d[..4], &d[4..6], &d[6..8]);
+    if d.len() >= 12 && d.as_bytes()[8..12].iter().all(u8::is_ascii_digit) {
+        let _ = write!(out, " {}:{}", &d[8..10], &d[10..12]);
+    }
+    Some(out)
+}
+
+impl AnnotKind {
+    /// What kind it is, as a word.
+    pub fn label(&self) -> String {
+        match self {
+            AnnotKind::Markup(style, _) => format!("{style:?}"),
+            AnnotKind::Note => "Note".into(),
+            AnnotKind::FreeText { .. } => "Text".into(),
+            AnnotKind::Ink(_) => "Ink".into(),
+            AnnotKind::Square { .. } => "Rectangle".into(),
+            AnnotKind::Circle { .. } => "Ellipse".into(),
+            AnnotKind::Line { arrow: true, .. } => "Arrow".into(),
+            AnnotKind::Line { .. } => "Line".into(),
+            AnnotKind::Polygon(_) => "Polygon".into(),
+            AnnotKind::PolyLine(_) => "Polyline".into(),
+            AnnotKind::Stamp(name) => format!("Stamp {name}"),
+            AnnotKind::Other(subtype) => subtype.clone(),
+        }
+    }
 }
 
 impl Annotation {
@@ -133,6 +290,8 @@ impl Annotation {
             measure: None,
             callout: None,
             cloudy: false,
+            flags: AnnotFlags::default(),
+            state: None,
         };
         a.rect = a.bounds();
         a
@@ -400,6 +559,10 @@ impl Document {
             },
             callout,
             cloudy,
+            flags: AnnotFlags::from_bits(
+                self.resolve_key(&d, "F").as_number().unwrap_or(4.0) as i64
+            ),
+            state: text("State").filter(|_| d.get("IRT").is_some()),
             kind,
         })
     }
@@ -609,10 +772,8 @@ fn write_dict(dict: &mut Dict, a: &Annotation, page: Ref) {
         dict.remove("RD");
     }
     dict.set("P", page);
-    if dict.get("F").is_none() {
-        // Printed.
-        dict.set("F", 4_i64);
-    }
+    let was = dict.get("F").and_then(Object::as_number).unwrap_or(0.0) as i64;
+    dict.set("F", a.flags.bits(was));
     dict.set("C", reals(&a.colour));
     if a.opacity < 1.0 {
         dict.set("CA", Object::Real(f64::from(a.opacity)));
@@ -639,6 +800,23 @@ fn write_dict(dict: &mut Dict, a: &Annotation, page: Ref) {
         Some(r) => dict.set("IRT", r),
         None => {
             dict.remove("IRT");
+        }
+    }
+    match (&a.state, a.reply_to) {
+        (Some(state), Some(_)) => {
+            dict.set("State", Object::string(state));
+            dict.set(
+                "StateModel",
+                Object::name(if state == "Marked" || state == "Unmarked" {
+                    "Marked"
+                } else {
+                    "Review"
+                }),
+            );
+        }
+        _ => {
+            dict.remove("State");
+            dict.remove("StateModel");
         }
     }
     let border = |dict: &mut Dict| {

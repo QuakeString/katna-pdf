@@ -8,7 +8,7 @@
 use std::collections::HashMap;
 use std::fmt::Write as _;
 
-use crate::annots::{AnnotChanges, AnnotKind, Annotation, MarkupStyle};
+use crate::annots::{AnnotChanges, AnnotFlags, AnnotKind, Annotation, MarkupStyle};
 use crate::document::Document;
 
 /// Why XFDF could not be read.
@@ -106,6 +106,29 @@ pub fn to_xfdf(annots: &[Vec<Annotation>], file: &str) -> String {
         }
         if a.cloudy {
             out.push_str(" style=\"cloudy\" intensity=\"1\"");
+        }
+        let flags: Vec<&str> = [
+            (a.flags.hidden, "hidden"),
+            (a.flags.print, "print"),
+            (a.flags.locked, "locked"),
+        ]
+        .into_iter()
+        .filter_map(|(on, name)| on.then_some(name))
+        .collect();
+        if !flags.is_empty() {
+            let _ = write!(out, " flags=\"{}\"", flags.join(","));
+        }
+        if let (Some(state), Some(_)) = (&a.state, a.reply_to) {
+            let _ = write!(
+                out,
+                " state=\"{}\" statemodel=\"{}\"",
+                escape(state),
+                if state == "Marked" || state == "Unmarked" {
+                    "Marked"
+                } else {
+                    "Review"
+                }
+            );
         }
         for (key, value) in [
             ("name", a.name.as_str()),
@@ -258,6 +281,15 @@ pub fn from_xfdf(xml: &str) -> Result<Vec<XfdfAnnotation>, XfdfError> {
             a.callout = Some([[x1, y1], [x2, y2], [x3, y3]]);
         }
         a.cloudy = attr("style") == Some("cloudy");
+        if let Some(flags) = attr("flags") {
+            let has = |name: &str| flags.split(',').any(|f| f.trim() == name);
+            a.flags = AnnotFlags {
+                hidden: has("hidden"),
+                print: has("print"),
+                locked: has("locked"),
+            };
+        }
+        a.state = attr("state").map(str::to_owned);
         a.contents = child("contents").unwrap_or_default();
         a.author = attr("title").unwrap_or_default().to_owned();
         a.modified = attr("date").map(str::to_owned);
