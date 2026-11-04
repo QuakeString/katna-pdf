@@ -9,6 +9,7 @@
 //! else in the content stays byte for byte, and the change is an
 //! incremental update. Text is edited as text (`edit.rs`).
 
+use std::collections::HashMap;
 use std::ops::RangeInclusive;
 
 use crate::content::{Op, ops, splice};
@@ -79,6 +80,8 @@ pub struct ShapeStyle {
     pub cap: u8,
     /// How its line turns corners: 0 pointed, 1 round, 2 cut off.
     pub join: u8,
+    /// How see-through its line is: 0 not shown, 1 solid (`CA`).
+    pub stroke_opacity: f32,
 }
 
 /// A picture or shape on a page.
@@ -93,6 +96,9 @@ pub struct PageObject {
     ctm: Matrix,
     /// How it is painted, for a shape.
     pub style: Option<ShapeStyle>,
+    /// How see-through it is: 0 not shown, 1 solid (`ca`, a shape's
+    /// inside; its line has its own in `style`).
+    pub opacity: f32,
     /// Whether a clipping path cuts it down.
     pub clipped: bool,
     /// The layer it is on (`/OC` marked content), if any.
@@ -117,6 +123,9 @@ struct Painting {
     cap: u8,
     join: u8,
     clipped: bool,
+    /// How see-through fills (and pictures) and lines are.
+    fill_opacity: f32,
+    stroke_opacity: f32,
 }
 
 impl Default for Painting {
@@ -129,6 +138,8 @@ impl Default for Painting {
             cap: 0,
             join: 0,
             clipped: false,
+            fill_opacity: 1.0,
+            stroke_opacity: 1.0,
         }
     }
 }
@@ -186,6 +197,7 @@ impl Document {
         };
         let forms = self.form_boxes(page);
         let properties = self.layer_properties(page);
+        let states = self.opacity_states(page);
         let mut out = Vec::new();
         let mut ctm = IDENTITY;
         // The marked content open at this point: a layer for each `/OC`.
@@ -245,6 +257,18 @@ impl Document {
                         paint.stroke = c;
                     }
                 }
+                b"gs" => {
+                    if let Some(name) = op.operands.first().and_then(Object::as_name)
+                        && let Some((fill, stroke)) = states.get(name)
+                    {
+                        if let Some(f) = fill {
+                            paint.fill_opacity = *f;
+                        }
+                        if let Some(st) = stroke {
+                            paint.stroke_opacity = *st;
+                        }
+                    }
+                }
                 b"w" => paint.width = n(0),
                 b"J" => paint.cap = n(0) as u8,
                 b"j" => paint.join = n(0) as u8,
@@ -299,7 +323,9 @@ impl Document {
                                 dash: paint.dash.iter().map(|d| (d * scale) as f32).collect(),
                                 cap: paint.cap,
                                 join: paint.join,
+                                stroke_opacity: paint.stroke_opacity,
                             }),
+                            opacity: paint.fill_opacity,
                             clipped: paint.clipped,
                             layer,
                             points: std::mem::take(&mut anchors),
@@ -333,6 +359,7 @@ impl Document {
                         ops: i..=i,
                         ctm,
                         style: None,
+                        opacity: paint.fill_opacity,
                         clipped: paint.clipped,
                         layer,
                         points: Vec::new(),
@@ -352,6 +379,7 @@ impl Document {
                         ops: i..=i,
                         ctm,
                         style: None,
+                        opacity: paint.fill_opacity,
                         clipped: paint.clipped,
                         layer,
                         points: Vec::new(),
@@ -699,6 +727,18 @@ impl Document {
                 let key = add.opacity(&mut update, opacity.clamp(0.0, 1.0));
                 wrap(&|op| !op.is("gs"), format!("/{key} gs "))
             }
+            ObjectChange::Opacities { fill, stroke } => {
+                // The other one stays as it is.
+                let fill = fill.unwrap_or(object.opacity);
+                let stroke = stroke.unwrap_or_else(|| {
+                    object
+                        .style
+                        .as_ref()
+                        .map_or(object.opacity, |s| s.stroke_opacity)
+                });
+                let key = add.opacities(&mut update, fill.clamp(0.0, 1.0), stroke.clamp(0.0, 1.0));
+                wrap(&|op| !op.is("gs"), format!("/{key} gs "))
+            }
             ObjectChange::Style {
                 fill,
                 stroke,
@@ -1036,6 +1076,35 @@ impl Document {
     /// The page's XObjects by name: forms with their boxes in form space,
     /// other XObjects not listed (pictures). A form without a box is
     /// listed with none.
+    /// The page's graphics states that set how see-through fills and
+    /// lines are, by name: `ca` and `CA`, each when set.
+    fn opacity_states(&self, page: usize) -> HashMap<Vec<u8>, (Option<f32>, Option<f32>)> {
+        let mut out = HashMap::new();
+        let Some(page_ref) = self.pages().get(page).copied() else {
+            return out;
+        };
+        let dict = page_dict(self, page_ref);
+        let resources = match dict.get("Resources").map(|r| self.resolve(r)) {
+            Some(Object::Dict(d)) => d,
+            _ => Dict::new(),
+        };
+        let Object::Dict(states) = self.resolve_key(&resources, "ExtGState") else {
+            return out;
+        };
+        for (name, value) in states.iter() {
+            let Object::Dict(state) = self.resolve(value) else {
+                continue;
+            };
+            let get = |k: &str| {
+                self.resolve_key(&state, k)
+                    .as_number()
+                    .map(|v| v.clamp(0.0, 1.0) as f32)
+            };
+            out.insert(name.as_bytes().to_vec(), (get("ca"), get("CA")));
+        }
+        out
+    }
+
     fn form_boxes(&self, page: usize) -> Vec<(Vec<u8>, Option<[f64; 4]>)> {
         let Some(page_ref) = self.pages().get(page).copied() else {
             return Vec::new();
@@ -1125,6 +1194,12 @@ pub enum ObjectChange {
     Backward,
     /// Drawn see-through: 0 is not at all, 1 fully.
     Opacity(f32),
+    /// A shape's inside (and a picture) and its line each drawn so
+    /// see-through, where given.
+    Opacities {
+        fill: Option<f32>,
+        stroke: Option<f32>,
+    },
     /// A shape's fill and line colours (RGB, 0 to 1), each if given.
     Colours {
         fill: Option<[f32; 3]>,

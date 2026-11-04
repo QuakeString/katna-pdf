@@ -1449,6 +1449,7 @@ impl Viewer {
         let italic = face.italic;
         let row = div()
             .flex()
+            .flex_wrap()
             .items_center()
             .gap(px(space::S1))
             .child(

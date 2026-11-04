@@ -342,10 +342,16 @@ impl<'a> PageAdd<'a> {
 
     /// The key of a graphics state drawing at `opacity` (0 to 1).
     pub(crate) fn opacity(&mut self, update: &mut Update, opacity: f32) -> String {
+        self.opacities(update, opacity, opacity)
+    }
+
+    /// A graphics state drawing fills `fill` and lines `stroke`
+    /// see-through (0 not at all, 1 solid), added under a key of its own.
+    pub(crate) fn opacities(&mut self, update: &mut Update, fill: f32, stroke: f32) -> String {
         let state = Dict(vec![
             (Name::new("Type"), Object::name("ExtGState")),
-            (Name::new("CA"), Object::Real(f64::from(opacity))),
-            (Name::new("ca"), Object::Real(f64::from(opacity))),
+            (Name::new("CA"), Object::Real(f64::from(stroke))),
+            (Name::new("ca"), Object::Real(f64::from(fill))),
         ]);
         let r = update.add(Object::Dict(state));
         let key = free_key(&self.states, STATE_KEY);
