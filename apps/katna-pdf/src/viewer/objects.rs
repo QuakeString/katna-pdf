@@ -11,13 +11,18 @@
 //! (with units and sums: `2cm+5`), and lines them up with each other or
 //! the page, steps them forward and back, flips them, and fits them to
 //! the page. Ctrl+C, Ctrl+X and Ctrl+V copy, cut and paste them, on any
-//! page of any open file. The changes go into the page's content
+//! page of any open file. A shape picked alone shows whether it is
+//! filled and lined, how wide its line is and whether it is dashed, to
+//! change, and its corners to drag one at a time; a picture can be
+//! saved as a file, and drawn whole again when a clipping path cuts it
+//! down. The changes go into the page's content
 //! (`katna_pdf_cos::objects`).
 
+use std::path::Path;
 use std::sync::Mutex;
 
 use gpui::{AnyElement, Context, Entity, Subscription, div, prelude::*};
-use katna_pdf_cos::{ObjectChange, ObjectCopy, ObjectKind, PageObject};
+use katna_pdf_cos::{ObjectChange, ObjectCopy, ObjectKind, PageObject, PictureFile, ShapeStyle};
 use katna_ui::px;
 use katna_ui::scale::desktop_px;
 use katna_ui::text_input::{InputEvent, TextInput};
@@ -56,24 +61,27 @@ static COPIED: Mutex<Vec<ObjectCopy>> = Mutex::new(Vec::new());
 
 /// The objects picked: their page and places in the page's list (the
 /// last picked last), and the inspector's fields (left, top, width,
-/// height, turn).
+/// height, turn, line width).
 pub(super) struct Picked {
     page: usize,
     indices: Vec<usize>,
-    fields: [Entity<TextInput>; 5],
+    fields: [Entity<TextInput>; 6],
     _fields: Vec<Subscription>,
     /// How see-through they were last made here (1 when not yet).
     opacity: f32,
+    /// Whether a shape's own points are shown, to drag one at a time.
+    points: bool,
 }
 
 /// What a drag on the picked objects holds: their body, a corner (0 top
-/// left, 1 top right, 2 bottom left, 3 bottom right), or the turning
-/// handle.
+/// left, 1 top right, 2 bottom left, 3 bottom right), the turning
+/// handle, or one of a shape's own points.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Grip {
     Body,
     Corner(usize),
     Turn,
+    Point(usize),
 }
 
 /// The picked objects being dragged, from a place to a place on the page
@@ -170,7 +178,7 @@ impl Viewer {
         let raw = self.moved_raw()?;
         let (page, indices) = self.picked_indices()?;
         let moving = self.moving.as_ref()?;
-        if moving.grip == Grip::Turn {
+        if matches!(moving.grip, Grip::Turn | Grip::Point(_)) {
             return Some((raw, [None, None]));
         }
         // The page as shown, in points (the bounds drawn last are cleared
@@ -232,7 +240,7 @@ impl Viewer {
                 r = (r + dx).max(l + SMALLEST);
                 bo = (bo + dy).max(t + SMALLEST);
             }
-            Grip::Turn => {}
+            Grip::Turn | Grip::Point(_) => {}
         }
         Some([l, t, r, bo])
     }
@@ -294,11 +302,20 @@ impl Viewer {
             cx.notify();
             true
         };
-        // The picked ones' handle, corners, then body.
+        // The picked ones' points when shown, then handle, corners and
+        // body.
         if self.picked_object_on(page)
             && let Some(b) = self.picked_box()
         {
             let grip = Self::scale_grip(self.shown);
+            if let Some(points) = self.shown_points() {
+                let hit = points.iter().position(|p| {
+                    (p[0] - point[0]).abs() <= grip && (p[1] - point[1]).abs() <= grip
+                });
+                if let Some(i) = hit {
+                    return start(self, Grip::Point(i), cx);
+                }
+            }
             let turn = [(b[0] + b[2]) / 2.0, b[1] - TURN_ABOVE / self.shown.max(0.1)];
             if (turn[0] - point[0]).abs() <= grip && (turn[1] - point[1]).abs() <= grip {
                 return start(self, Grip::Turn, cx);
@@ -373,6 +390,31 @@ impl Viewer {
         }
     }
 
+    /// The picked shape's own points on the page shown, while they are
+    /// shown to drag.
+    fn shown_points(&self) -> Option<Vec<[f32; 2]>> {
+        self.picked_object.as_ref().filter(|p| p.points)?;
+        let (page, indices) = self.picked_indices()?;
+        let [index] = indices[..] else {
+            return None;
+        };
+        let (object, _) = self.object_shown(page, index)?;
+        if object.kind != ObjectKind::Path || object.points.is_empty() {
+            return None;
+        }
+        let transform = self.page_transform(page)?;
+        Some(
+            object
+                .points
+                .iter()
+                .map(|&[x, y]| {
+                    let [l, t, _, _] = katna_pdf_render::map_rect(transform, [x, y, x, y]);
+                    [l, t]
+                })
+                .collect(),
+        )
+    }
+
     fn scale_grip(shown: f32) -> f32 {
         // As big on screen at any zoom.
         GRIP / shown.max(0.1)
@@ -411,7 +453,7 @@ impl Viewer {
     /// inspector.
     fn pick_object(&mut self, page: usize, indices: Vec<usize>, cx: &mut Context<Self>) {
         let accent = gpui::rgba(self.theme.katna.accent).into();
-        let fields = [0, 1, 2, 3, 4].map(|_| {
+        let fields = [0, 1, 2, 3, 4, 5].map(|_| {
             cx.new(|cx| {
                 let mut input = TextInput::new("", cx);
                 input.set_accent(accent);
@@ -424,10 +466,10 @@ impl Viewer {
             .map(|(i, f)| {
                 cx.subscribe(f, move |this, _, event, cx| {
                     if let InputEvent::Submit = event {
-                        if i == 4 {
-                            this.apply_turn(cx);
-                        } else {
-                            this.apply_inspector(cx);
+                        match i {
+                            4 => this.apply_turn(cx),
+                            5 => this.apply_width(cx),
+                            _ => this.apply_inspector(cx),
                         }
                     }
                 })
@@ -439,6 +481,7 @@ impl Viewer {
             fields,
             _fields: subs,
             opacity: 1.0,
+            points: false,
         });
         self.refresh_inspector(cx);
     }
@@ -483,6 +526,7 @@ impl Viewer {
             return;
         };
         let angle = self.picked_angle();
+        let width = self.picked_style().map(|s| s.width);
         let Some(picked) = self.picked_object.as_ref() else {
             return;
         };
@@ -490,6 +534,132 @@ impl Viewer {
         for (field, value) in picked.fields.iter().zip(values) {
             let shown = format!("{:.1}", value);
             field.update(cx, |f, cx| f.set_text(shown, cx));
+        }
+        let shown = width.map_or_else(String::new, |w| format!("{w:.1}"));
+        picked.fields[5].update(cx, |f, cx| f.set_text(shown, cx));
+    }
+
+    /// How the one shape picked is painted.
+    fn picked_style(&self) -> Option<ShapeStyle> {
+        let (page, indices) = self.picked_indices()?;
+        let [index] = indices[..] else {
+            return None;
+        };
+        let (object, _) = self.object_shown(page, index)?;
+        object.style
+    }
+
+    /// The line width typed: the picked shapes' lines go that wide.
+    fn apply_width(&mut self, cx: &mut Context<Self>) {
+        let Some(picked) = self.picked_object.as_ref() else {
+            return;
+        };
+        let Some(width) = length(picked.fields[5].read(cx).text()).filter(|w| *w >= 0.0) else {
+            return;
+        };
+        self.style_picked(
+            ObjectChange::Style {
+                fill: None,
+                stroke: None,
+                width: Some(width),
+                dash: None,
+                cap: None,
+                join: None,
+            },
+            cx,
+        );
+    }
+
+    /// The picked shapes painted as `change` says (a `Style`).
+    fn style_picked(&mut self, change: ObjectChange, cx: &mut Context<Self>) {
+        let Some((page, indices)) = self.picked_indices() else {
+            return;
+        };
+        let shapes: Vec<usize> = indices
+            .into_iter()
+            .filter(|&i| {
+                self.object_shown(page, i)
+                    .is_some_and(|(o, _)| o.kind == ObjectKind::Path)
+            })
+            .collect();
+        if shapes.is_empty() {
+            return;
+        }
+        if let Some(picked) = self.picked_object.as_mut() {
+            picked.indices = shapes;
+        }
+        self.change_picked(change, cx);
+    }
+
+    /// The picked shape filled, or not, as it was not; one left neither
+    /// filled nor lined would vanish, so its line comes on instead.
+    fn toggle_fill(&mut self, cx: &mut Context<Self>) {
+        let Some(style) = self.picked_style() else {
+            return;
+        };
+        let fill = style.fill.is_none();
+        self.style_picked(
+            ObjectChange::Style {
+                fill: Some(fill),
+                stroke: (!fill && style.stroke.is_none()).then_some(true),
+                width: None,
+                dash: None,
+                cap: None,
+                join: None,
+            },
+            cx,
+        );
+    }
+
+    /// The picked shape's line drawn, or not, as it was not; one left
+    /// neither lined nor filled would vanish, so it is filled instead.
+    fn toggle_stroke(&mut self, cx: &mut Context<Self>) {
+        let Some(style) = self.picked_style() else {
+            return;
+        };
+        let stroke = style.stroke.is_none();
+        self.style_picked(
+            ObjectChange::Style {
+                fill: (!stroke && style.fill.is_none()).then_some(true),
+                stroke: Some(stroke),
+                width: None,
+                dash: None,
+                cap: None,
+                join: None,
+            },
+            cx,
+        );
+    }
+
+    /// The picked shape's line dashed, or solid again.
+    fn toggle_dash(&mut self, cx: &mut Context<Self>) {
+        let Some(style) = self.picked_style() else {
+            return;
+        };
+        let dash = if style.dash.is_empty() {
+            let w = style.width.max(1.0);
+            vec![w * 3.0, w * 2.0]
+        } else {
+            Vec::new()
+        };
+        self.style_picked(
+            ObjectChange::Style {
+                fill: None,
+                stroke: None,
+                width: None,
+                dash: Some(dash),
+                cap: None,
+                join: None,
+            },
+            cx,
+        );
+    }
+
+    /// The picked shape's own points shown to drag, or hidden again.
+    fn toggle_points(&mut self, cx: &mut Context<Self>) {
+        if let Some(picked) = self.picked_object.as_mut() {
+            picked.points = !picked.points;
+            cx.notify();
         }
     }
 
@@ -614,13 +784,19 @@ impl Viewer {
         if dragged < CLICK {
             return true;
         }
-        match turned {
-            Some(degrees) => {
+        match (moving.grip, turned) {
+            (Grip::Point(index), _) => {
+                if let Some(inv) = self.picked_indices().and_then(|(p, _)| self.inverse(p)) {
+                    let to = inv.map(moving.to);
+                    self.change_picked(ObjectChange::MovePoint { index, to }, cx);
+                }
+            }
+            (_, Some(degrees)) => {
                 if degrees.abs() > 0.05 {
                     self.rotate_picked(degrees, cx);
                 }
             }
-            None => self.place_picked(new, cx),
+            (_, None) => self.place_picked(new, cx),
         }
         true
     }
@@ -844,29 +1020,111 @@ impl Viewer {
         );
     }
 
-    /// The picked shapes filled and drawn in `ink`.
-    pub(super) fn colour_picked(&mut self, ink: [f32; 3], cx: &mut Context<Self>) {
+    /// The picked shapes coloured `ink`: one shape's inside when it is
+    /// filled, else its line; many take it inside and out. With
+    /// `line_only` (Shift), the line only.
+    pub(super) fn colour_picked(&mut self, ink: [f32; 3], line_only: bool, cx: &mut Context<Self>) {
+        let one = self.picked_style();
+        let change = match (line_only, one) {
+            (true, _) => ObjectChange::Colours {
+                fill: None,
+                stroke: Some(ink),
+            },
+            (false, Some(style)) if style.fill.is_some() => ObjectChange::Colours {
+                fill: Some(ink),
+                stroke: None,
+            },
+            (false, Some(_)) => ObjectChange::Colours {
+                fill: None,
+                stroke: Some(ink),
+            },
+            (false, None) => ObjectChange::Colours {
+                fill: Some(ink),
+                stroke: Some(ink),
+            },
+        };
+        self.style_picked(change, cx);
+    }
+
+    /// The picked picture drawn whole, out from under the clipping path
+    /// that cuts it down.
+    fn unclip_picked(&mut self, cx: &mut Context<Self>) {
+        self.change_picked(ObjectChange::Unclip, cx);
+    }
+
+    /// Asks where to save the picked picture as a file: a JPEG as it is
+    /// in the file, else a PNG.
+    fn save_picked_picture(&mut self, cx: &mut Context<Self>) {
         let Some((page, indices)) = self.picked_indices() else {
             return;
         };
-        let shapes: Vec<usize> = indices
-            .into_iter()
-            .filter(|&i| {
-                self.object_shown(page, i)
-                    .is_some_and(|(o, _)| o.kind == ObjectKind::Path)
-            })
-            .collect();
-        if shapes.is_empty() {
+        let [index] = indices[..] else {
             return;
-        }
-        if let Some(picked) = self.picked_object.as_mut() {
-            picked.indices = shapes;
-        }
-        let change = ObjectChange::Colours {
-            fill: Some(ink),
-            stroke: Some(ink),
         };
-        self.change_picked(change, cx);
+        let key = self.key.clone();
+        let Some(path) = self.path.clone() else {
+            return;
+        };
+        let current = self.unsaved();
+        let folder = path.parent().map(Path::to_path_buf).unwrap_or_default();
+        let stem = path
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        cx.spawn(async move |this, cx| {
+            let read = cx
+                .background_executor()
+                .spawn(async move {
+                    let bytes = match current {
+                        Some(bytes) => bytes.to_vec(),
+                        None => std::fs::read(&path).map_err(|e| e.to_string())?,
+                    };
+                    let doc = super::cos(bytes, key.as_deref()).map_err(|e| e.to_string())?;
+                    let picture = doc
+                        .picture_file(page, index)
+                        .ok_or_else(|| t("object-save-picture-none", &[]))?;
+                    picture_bytes(picture)
+                })
+                .await;
+            let (bytes, ext) = match read {
+                Ok(read) => read,
+                Err(error) => {
+                    this.update(cx, |this, cx| {
+                        this.notice = Some(t("object-save-failed", &[("error", &error)]));
+                        cx.notify();
+                    })
+                    .ok();
+                    return;
+                }
+            };
+            let name = format!("{stem}-p{}-{}.{ext}", page + 1, index + 1);
+            let Ok(chosen) = this.update(cx, |_, cx| cx.prompt_for_new_path(&folder, Some(&name)))
+            else {
+                return;
+            };
+            let Ok(Ok(Some(target))) = chosen.await else {
+                return;
+            };
+            let written = cx
+                .background_executor()
+                .spawn(async move {
+                    std::fs::write(&target, bytes).map_err(|e| e.to_string())?;
+                    Ok::<_, String>(target)
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                this.notice = Some(match written {
+                    Ok(target) => t(
+                        "object-saved-picture",
+                        &[("name", &super::file_name(&target))],
+                    ),
+                    Err(error) => t("object-save-failed", &[("error", &error)]),
+                });
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// Asks for a picture file to show in the picked picture's place.
@@ -1035,8 +1293,20 @@ impl Viewer {
     /// The picked objects' frame, corners and turning handle on page
     /// `page`, where they are being dragged to while they are; the band
     /// being dragged over the page; and the grid when shown.
-    pub(super) fn objects_overlay(&self, page: usize) -> Vec<AnyElement> {
+    pub(super) fn objects_overlay(&self, page: usize, cx: &Context<Self>) -> Vec<AnyElement> {
         let shown = self.shown;
+        // The frame and handles take the press themselves, so a
+        // paragraph's box under them does not.
+        let handle = cx.entity().downgrade();
+        let grab = move || {
+            let handle = handle.clone();
+            move |event: &gpui::MouseDownEvent, window: &mut gpui::Window, cx: &mut gpui::App| {
+                cx.stop_propagation();
+                handle
+                    .update(cx, |this, cx| this.press(event, window, cx))
+                    .ok();
+            }
+        };
         let accent = gpui::rgba(self.theme.katna.accent);
         let paper = self.paper();
         let mut out = Vec::new();
@@ -1145,6 +1415,7 @@ impl Viewer {
             }
         }
         out.extend([div()
+            .id(("object-frame", page))
             .absolute()
             .left(desktop_px(b[0] * shown - 1.0))
             .top(desktop_px(b[1] * shown - 1.0))
@@ -1153,6 +1424,7 @@ impl Viewer {
             .border_1()
             .border_color(accent)
             .cursor_move()
+            .on_mouse_down(gpui::MouseButton::Left, grab())
             .into_any_element()]);
         let size = 8.0;
         for (i, [x, y]) in [[b[0], b[1]], [b[2], b[1]], [b[0], b[3]], [b[2], b[3]]]
@@ -1166,6 +1438,7 @@ impl Viewer {
             };
             out.push(
                 div()
+                    .id(("object-corner", i))
                     .absolute()
                     .left(desktop_px(x * shown - size / 2.0))
                     .top(desktop_px(y * shown - size / 2.0))
@@ -1174,8 +1447,38 @@ impl Viewer {
                     .border_1()
                     .border_color(accent)
                     .cursor(cursor)
+                    .on_mouse_down(gpui::MouseButton::Left, grab())
                     .into_any_element(),
             );
+        }
+        // The shape's own points, when shown; the one being dragged
+        // goes with the pointer.
+        if let Some(points) = self.shown_points() {
+            let dragged = self.moving.as_ref().and_then(|m| match m.grip {
+                Grip::Point(i) => Some((i, m.to)),
+                _ => None,
+            });
+            for (i, p) in points.into_iter().enumerate() {
+                let p = match dragged {
+                    Some((d, to)) if d == i => to,
+                    _ => p,
+                };
+                out.push(
+                    div()
+                        .id(("object-point", i))
+                        .absolute()
+                        .left(desktop_px(p[0] * shown - size / 2.0))
+                        .top(desktop_px(p[1] * shown - size / 2.0))
+                        .size(desktop_px(size))
+                        .rounded_full()
+                        .bg(accent)
+                        .border_1()
+                        .border_color(paper)
+                        .cursor_crosshair()
+                        .on_mouse_down(gpui::MouseButton::Left, grab())
+                        .into_any_element(),
+                );
+            }
         }
         // The turning handle above the middle of the top, on a stalk;
         // while it is dragged, how far round it has gone.
@@ -1193,6 +1496,7 @@ impl Viewer {
         );
         out.push(
             div()
+                .id(("object-turn", page))
                 .absolute()
                 .left(desktop_px(mx - size / 2.0))
                 .top(desktop_px(top - TURN_ABOVE - size / 2.0))
@@ -1202,6 +1506,7 @@ impl Viewer {
                 .border_1()
                 .border_color(accent)
                 .cursor_grab()
+                .on_mouse_down(gpui::MouseButton::Left, grab())
                 .into_any_element(),
         );
         if let Some(degrees) = self.turned() {
@@ -1236,7 +1541,13 @@ impl Viewer {
         let many = indices.len() > 1;
         let th = self.theme;
         let mut row = div().flex().items_center().gap(px(space::S1));
-        for (field, label) in picked.fields.iter().zip(["X", "Y", "W", "H", "∠"]) {
+        let style = one.as_ref().and_then(|o| o.style.clone());
+        let labels = ["X", "Y", "W", "H", "∠", "─"];
+        for (i, (field, label)) in picked.fields.iter().zip(labels).enumerate() {
+            // The line width only for one shape.
+            if i == 5 && style.is_none() {
+                break;
+            }
             row = row.child(
                 div()
                     .text_size(px(text::SMALL))
@@ -1259,6 +1570,45 @@ impl Viewer {
         let tool = |id: &'static str, icon: &'static str, tip: String| {
             widgets::icon_button(id, icon, 18.0, &th.katna).tip(tip, &th.katna)
         };
+        if let Some(style) = style {
+            let on = |on: bool| {
+                if on {
+                    th.katna.accent
+                } else {
+                    th.katna.text_dim
+                }
+            };
+            let toggle = |id: &'static str, icon: &'static str, lit: bool, tip: &'static str| {
+                widgets::icon_button_colored(id, icon, 18.0, on(lit), &th.katna)
+                    .when(lit, |b| b.bg(th.field))
+                    .tip(t(tip, &[]), &th.katna)
+            };
+            row = row
+                .child(
+                    toggle("object-fill", "fill", style.fill.is_some(), "object-fill")
+                        .on_click(cx.listener(|this, _, _, cx| this.toggle_fill(cx))),
+                )
+                .child(
+                    toggle(
+                        "object-stroke",
+                        "stroke",
+                        style.stroke.is_some(),
+                        "object-stroke",
+                    )
+                    .on_click(cx.listener(|this, _, _, cx| this.toggle_stroke(cx))),
+                )
+                .child(
+                    toggle("object-dash", "dash", !style.dash.is_empty(), "object-dash")
+                        .on_click(cx.listener(|this, _, _, cx| this.toggle_dash(cx))),
+                );
+            if one.as_ref().is_some_and(|o| !o.points.is_empty()) {
+                row = row.child(
+                    toggle("object-points", "points", picked.points, "object-points")
+                        .on_click(cx.listener(|this, _, _, cx| this.toggle_points(cx))),
+                );
+            }
+            row = row.child(separator(th));
+        }
         let suffix = if many { "-together" } else { "-page" };
         for (id, icon, how) in [
             ("object-align-left", "align-left", Align::Left),
@@ -1329,10 +1679,25 @@ impl Viewer {
                 this.change_picked(ObjectChange::Opacity(next), cx)
             })),
         );
-        if one.is_some_and(|o| o.kind == ObjectKind::Picture) {
+        if one.as_ref().is_some_and(|o| o.kind == ObjectKind::Picture) {
+            row = row
+                .child(
+                    tool("object-replace", "image", t("object-replace", &[]))
+                        .on_click(cx.listener(|this, _, _, cx| this.replace_picked(cx))),
+                )
+                .child(
+                    tool(
+                        "object-save-picture",
+                        "download",
+                        t("object-save-picture", &[]),
+                    )
+                    .on_click(cx.listener(|this, _, _, cx| this.save_picked_picture(cx))),
+                );
+        }
+        if one.as_ref().is_some_and(|o| o.clipped) {
             row = row.child(
-                tool("object-replace", "image", t("object-replace", &[]))
-                    .on_click(cx.listener(|this, _, _, cx| this.replace_picked(cx))),
+                tool("object-unclip", "crop", t("object-unclip", &[]))
+                    .on_click(cx.listener(|this, _, _, cx| this.unclip_picked(cx))),
             );
         }
         row = row.child(
@@ -1344,6 +1709,71 @@ impl Viewer {
         );
         Some(row.into_any_element())
     }
+}
+
+/// A picture as a file's bytes and the file's extension: a JPEG as it
+/// is, else a PNG.
+fn picture_bytes(picture: PictureFile) -> Result<(Vec<u8>, &'static str), String> {
+    use image::{DynamicImage, GrayImage, RgbImage};
+    let (width, height, components, bits, data) = match picture {
+        PictureFile::Jpeg(bytes) => return Ok((bytes, "jpg")),
+        PictureFile::Samples {
+            width,
+            height,
+            components,
+            bits,
+            data,
+        } => (width, height, components, bits, data),
+    };
+    let n = components as usize;
+    let per_row = (width as usize * n * bits as usize).div_ceil(8);
+    // Each sample as a byte, 0 to 255.
+    let mut samples = Vec::with_capacity(width as usize * height as usize * n);
+    for y in 0..height as usize {
+        let row = data.get(y * per_row..(y + 1) * per_row).unwrap_or(&[]);
+        for i in 0..width as usize * n {
+            let value = match bits {
+                8 => row.get(i).copied().unwrap_or(0),
+                16 => row.get(i * 2).copied().unwrap_or(0),
+                1 => {
+                    let bit = row.get(i / 8).map_or(0, |b| (b >> (7 - i % 8)) & 1);
+                    if bit == 1 { 255 } else { 0 }
+                }
+                2 => row
+                    .get(i / 4)
+                    .map_or(0, |b| ((b >> (6 - 2 * (i % 4))) & 3) * 85),
+                4 => row.get(i / 2).map_or(0, |b| {
+                    let v = if i % 2 == 0 { b >> 4 } else { b & 15 };
+                    v * 17
+                }),
+                _ => return Err(format!("{bits} bits a sample")),
+            };
+            samples.push(value);
+        }
+    }
+    let image = match n {
+        1 => GrayImage::from_raw(width, height, samples).map(DynamicImage::ImageLuma8),
+        3 => RgbImage::from_raw(width, height, samples).map(DynamicImage::ImageRgb8),
+        4 => {
+            let rgb: Vec<u8> = samples
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .flat_map(|cmyk| {
+                    let k = 255 - cmyk[3] as u32;
+                    [0, 1, 2].map(|i| ((255 - cmyk[i] as u32) * k / 255) as u8)
+                })
+                .collect();
+            RgbImage::from_raw(width, height, rgb).map(DynamicImage::ImageRgb8)
+        }
+        _ => return Err(format!("{n} components a pixel")),
+    };
+    let image = image.ok_or_else(|| "too few samples".to_owned())?;
+    let mut out = std::io::Cursor::new(Vec::new());
+    image
+        .write_to(&mut out, image::ImageFormat::Png)
+        .map_err(|e| e.to_string())?;
+    Ok((out.into_inner(), "png"))
 }
 
 /// A length typed: points, or with a unit (`mm`, `cm`, `in`, `pt`), and
@@ -1508,6 +1938,39 @@ mod tests {
         let (b, lines) = snap([20.0, 20.0, 40.0, 40.0], None, &xs, &ys, 5.0);
         assert_eq!(b, [20.0, 20.0, 40.0, 40.0]);
         assert_eq!(lines, [None, None]);
+    }
+
+    #[test]
+    fn pictures_come_out_as_jpeg_or_png() {
+        let (bytes, ext) = picture_bytes(PictureFile::Jpeg(vec![0xff, 0xd8, 0xff])).unwrap();
+        assert_eq!((bytes, ext), (vec![0xff, 0xd8, 0xff], "jpg"));
+        // Two 1-bit rows of three pixels: on, off, on; off, on, off.
+        let (bytes, ext) = picture_bytes(PictureFile::Samples {
+            width: 3,
+            height: 2,
+            components: 1,
+            bits: 1,
+            data: vec![0b1010_0000, 0b0100_0000],
+        })
+        .unwrap();
+        assert_eq!(ext, "png");
+        let image = image::load_from_memory(&bytes).unwrap().into_luma8();
+        assert_eq!(image.dimensions(), (3, 2));
+        assert_eq!(image.get_pixel(0, 0).0, [255]);
+        assert_eq!(image.get_pixel(1, 0).0, [0]);
+        assert_eq!(image.get_pixel(1, 1).0, [255]);
+        // CMYK pure cyan comes out as RGB cyan; black as black.
+        let (bytes, _) = picture_bytes(PictureFile::Samples {
+            width: 2,
+            height: 1,
+            components: 4,
+            bits: 8,
+            data: vec![255, 0, 0, 0, 0, 0, 0, 255],
+        })
+        .unwrap();
+        let image = image::load_from_memory(&bytes).unwrap().into_rgb8();
+        assert_eq!(image.get_pixel(0, 0).0, [0, 255, 255]);
+        assert_eq!(image.get_pixel(1, 0).0, [0, 0, 0]);
     }
 
     #[test]

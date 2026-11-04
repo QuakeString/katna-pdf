@@ -23,7 +23,7 @@ jiff = { version = "0.2.37", default-features = false, features = ["std", "tz-sy
 katna-ui.workspace = true
 gpui.workspace = true
 gpui-platform.workspace = true
-image.workspace = true
+image = { workspace = true, features = ["png", "jpeg"] }
 fontdb.workspace = true
 async-channel.workspace = true
 # Updates (`update.rs`).

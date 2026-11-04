@@ -54,6 +54,13 @@ pub enum Insert {
         fill: Option<[f32; 3]>,
         width: f32,
     },
+    /// A line drawn freehand through `points`, `width` wide, with round
+    /// ends and corners.
+    Path {
+        points: Vec<[f32; 2]>,
+        stroke: [f32; 3],
+        width: f32,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -189,6 +196,34 @@ impl Document {
                         (false, false) => "n",
                     };
                     let _ = writeln!(out, "{paint} Q");
+                }
+                Insert::Path {
+                    points,
+                    stroke,
+                    width,
+                } => {
+                    let [r, g, b] = *stroke;
+                    let _ = write!(
+                        out,
+                        "q {} {} {} RG {} w 1 J 1 j ",
+                        num(r),
+                        num(g),
+                        num(b),
+                        num(*width)
+                    );
+                    for (k, p) in points.iter().enumerate() {
+                        let _ = write!(
+                            out,
+                            "{} {} {} ",
+                            num(p[0]),
+                            num(p[1]),
+                            if k == 0 { "m" } else { "l" }
+                        );
+                    }
+                    if points.len() == 1 {
+                        let _ = write!(out, "{} {} l ", num(points[0][0]), num(points[0][1]));
+                    }
+                    let _ = writeln!(out, "S Q");
                 }
             }
         }

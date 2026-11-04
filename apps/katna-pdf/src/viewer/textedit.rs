@@ -663,7 +663,7 @@ impl Viewer {
                     .into_any_element(),
             );
         }
-        out.extend(self.objects_overlay(page));
+        out.extend(self.objects_overlay(page, cx));
         out.extend(self.insert_preview(page));
         out.extend(self.redact_overlay(page));
         out.extend(self.link_overlay(page));

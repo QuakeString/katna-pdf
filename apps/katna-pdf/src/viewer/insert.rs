@@ -5,7 +5,9 @@
 //! into a page's own content (`katna_pdf_cos::insert`), drawn as the
 //! page's own text and pictures are, not as annotations. Text is typed
 //! in place where the page is clicked; a picture comes from a file, or
-//! from the clipboard with Ctrl+V; shapes are dragged out.
+//! from the clipboard with Ctrl+V; shapes are dragged out, and the
+//! pencil draws a freehand line as the pointer goes. A picture file
+//! dropped on a page with Edit text on goes in where it lands.
 
 use gpui::{AnyElement, Context, Window, div, prelude::*};
 use katna_pdf_cos::{Insert, ShapeKind};
@@ -27,15 +29,17 @@ pub(super) enum Adding {
     Rectangle,
     Ellipse,
     Line,
+    Pencil,
 }
 
 impl Adding {
-    const ALL: [Adding; 5] = [
+    const ALL: [Adding; 6] = [
         Adding::Text,
         Adding::Picture,
         Adding::Rectangle,
         Adding::Ellipse,
         Adding::Line,
+        Adding::Pencil,
     ];
 
     fn icon(self) -> &'static str {
@@ -45,6 +49,7 @@ impl Adding {
             Adding::Rectangle => "shape-square",
             Adding::Ellipse => "shape-circle",
             Adding::Line => "shape-line",
+            Adding::Pencil => "pen",
         }
     }
 
@@ -55,6 +60,7 @@ impl Adding {
             Adding::Rectangle => "add-rectangle",
             Adding::Ellipse => "add-ellipse",
             Adding::Line => "add-line",
+            Adding::Pencil => "add-pencil",
         }
     }
 }
@@ -79,6 +85,10 @@ const LINE_WIDTH: f32 = 2.0;
 const PICTURE_WIDTH: f32 = 200.0;
 /// A drag shorter than this, in points, is a click.
 const CLICK: f32 = 3.0;
+/// The pencil keeps a point this far, in points, from the last kept.
+const PENCIL_STEP: f32 = 1.5;
+/// Picture files that can be dropped on a page.
+const PICTURE_FILES: [&str; 7] = ["png", "jpg", "jpeg", "gif", "webp", "bmp", "tif"];
 
 pub(super) fn colour([r, g, b]: [f32; 3]) -> gpui::Rgba {
     gpui::rgb(u32::from_be_bytes([
@@ -205,11 +215,12 @@ impl Viewer {
                     })
                     .hover(move |s| s.bg(th.hover))
                     .tip(t("tool-colour", &[]), &th.katna)
-                    .on_click(cx.listener(move |this, _, _, cx| {
+                    .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| {
                         this.ink = i;
                         // A shape picked, or the paragraph being typed
-                        // in, takes the colour.
-                        this.colour_picked(ink, cx);
+                        // in, takes the colour (a shape's line only,
+                        // with Shift).
+                        this.colour_picked(ink, event.modifiers().shift, cx);
                         this.colour_typed(ink, cx);
                         cx.notify();
                     }))
@@ -324,9 +335,21 @@ impl Viewer {
             ((position.x - b.left()) / shown).clamp(0.0, (b.size.width / shown).max(0.0)),
             ((position.y - b.top()) / shown).clamp(0.0, (b.size.height / shown).max(0.0)),
         ];
+        let pencil = self.adding == Some(Adding::Pencil);
         if let Some(draft) = self.placing.as_mut() {
-            draft.path.truncate(1);
-            draft.path.push(point);
+            // The pencil keeps the whole way the pointer went; the rest
+            // only where it is now.
+            if pencil {
+                let far = draft.path.last().is_none_or(|last| {
+                    (last[0] - point[0]).hypot(last[1] - point[1]) >= PENCIL_STEP
+                });
+                if far {
+                    draft.path.push(point);
+                }
+            } else {
+                draft.path.truncate(1);
+                draft.path.push(point);
+            }
         }
         cx.notify();
         true
@@ -367,6 +390,12 @@ impl Viewer {
                 self.choose_picture_to_add(draft.page, (!click).then_some(boxed), from, cx);
                 return true;
             }
+            Adding::Pencil if draft.path.len() < 2 => return true,
+            Adding::Pencil => Insert::Path {
+                points: draft.path.iter().map(|&p| inv.map(p)).collect(),
+                stroke: ink,
+                width: LINE_WIDTH,
+            },
             _ if click => return true,
             Adding::Rectangle => shape(ShapeKind::Rectangle, inv.rect(boxed)),
             Adding::Ellipse => shape(ShapeKind::Ellipse, inv.rect(boxed)),
@@ -544,6 +573,53 @@ impl Viewer {
         true
     }
 
+    /// A picture file dropped on the window with Edit text on: it goes on
+    /// the page under the pointer, its top left where it was dropped.
+    /// Returns whether it was one.
+    pub(super) fn drop_picture(
+        &mut self,
+        paths: &[std::path::PathBuf],
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if !self.text_editing {
+            return false;
+        }
+        let [file] = paths else {
+            return false;
+        };
+        let picture = file
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| PICTURE_FILES.contains(&e.to_ascii_lowercase().as_str()));
+        if !picture {
+            return false;
+        }
+        let Some((page, at)) = self.page_point(window.mouse_position()) else {
+            return false;
+        };
+        let file = file.clone();
+        cx.spawn(async move |this, cx| {
+            let read = cx
+                .background_executor()
+                .spawn(async move {
+                    let bytes = std::fs::read(&file).map_err(|e| e.to_string())?;
+                    katna_pdf_sign::page_image(&bytes)
+                })
+                .await;
+            this.update(cx, |this, cx| match read {
+                Ok(image) => this.add_picture(page, None, at, image, cx),
+                Err(error) => {
+                    this.notice = Some(t("text-edit-failed", &[("error", &error)]));
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
+        true
+    }
+
     /// The page being read, and a place near the top of the part of it
     /// shown, across the middle.
     fn middle_point(&self) -> Option<(usize, [f32; 2])> {
@@ -566,7 +642,12 @@ impl Viewer {
         };
         let shown = self.shown;
         let ink = self.ink_colour();
-        if self.adding == Some(Adding::Line) {
+        if matches!(self.adding, Some(Adding::Line | Adding::Pencil)) {
+            let points: Vec<[f32; 2]> = if self.adding == Some(Adding::Line) {
+                vec![from, to]
+            } else {
+                draft.path.clone()
+            };
             return vec![
                 gpui::canvas(
                     |_, _, _| {},
@@ -576,8 +657,10 @@ impl Viewer {
                             bounds.origin
                                 + gpui::point(desktop_px(p[0] * shown), desktop_px(p[1] * shown))
                         };
-                        builder.move_to(at(from));
-                        builder.line_to(at(to));
+                        builder.move_to(at(points[0]));
+                        for &p in &points[1..] {
+                            builder.line_to(at(p));
+                        }
                         if let Ok(path) = builder.build() {
                             window.paint_path(path, ink);
                         }
