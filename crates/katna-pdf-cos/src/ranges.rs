@@ -71,3 +71,37 @@ mod tests {
         assert!(parse("", 6).is_err());
     }
 }
+
+/// Pages (from 0) written as people write them, from 1: `1-3, 5, 8`.
+pub fn format(pages: &[usize]) -> String {
+    let mut sorted: Vec<usize> = pages.to_vec();
+    sorted.sort_unstable();
+    sorted.dedup();
+    let mut parts: Vec<String> = Vec::new();
+    let mut i = 0;
+    while i < sorted.len() {
+        let start = sorted[i];
+        let mut end = start;
+        while i + 1 < sorted.len() && sorted[i + 1] == end + 1 {
+            i += 1;
+            end = sorted[i];
+        }
+        parts.push(if start == end {
+            (start + 1).to_string()
+        } else {
+            format!("{}-{}", start + 1, end + 1)
+        });
+        i += 1;
+    }
+    parts.join(", ")
+}
+
+#[cfg(test)]
+mod format_tests {
+    #[test]
+    fn pages_are_written_as_ranges() {
+        assert_eq!(super::format(&[0, 1, 2, 4, 7, 9, 8]), "1-3, 5, 8-10");
+        assert_eq!(super::format(&[]), "");
+        assert_eq!(super::format(&[3, 3]), "4");
+    }
+}

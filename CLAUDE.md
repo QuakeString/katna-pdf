@@ -37,7 +37,10 @@ cargo run --release -p katna-pdf-bench -- file.pdf
   page's own content (`insert.rs`), and moving, resizing, turning, restacking,
   fading, recolouring, swapping and deleting the pictures and shapes
   already there (`objects.rs`), headers,
-  footers, watermarks, Bates numbers and backgrounds on many pages (`stamp.rs`), the
+  footers, watermarks, Bates numbers and backgrounds on many pages (`stamp.rs`;
+  each mark is drawn inside a marked-content `/Artifact` with a `/Katna`
+  dictionary that says what it is, so `page_marks` finds them again,
+  `remove_marks` takes them off and the app's card changes them), the
   document's properties in `/Info` and XMP (`meta.rs`), the scale a
   drawing is measured in (`measure.rs`, from a page's `/VP`; measurement
   annotations carry theirs), opening
@@ -105,7 +108,7 @@ cargo run --release -p katna-pdf-bench -- file.pdf
   the AppImage and Setup's Windows install, downloads, checks and installs
   it; builds without `KATNA_PDF_VERSION` never look.
 - `apps/katna-pdf-cli` — the command line: info, merge, split, pages,
-  rotate, crop, sign (and certify), add-field, ltv, tokens, token-check, verify (with `--report` as a PDF), text and edit-text (`--blocks` / `--block` for paragraphs), insert, stamp, background, redact, compress, compare (with `--overlay` as a PNG), form (with `--detect`, looks, comb, limits and `--action`), form-data, fill (and `--reset`), flatten, meta, lock and unlock, objects and object, bookmarks, links, dests and labels, annotations and XFDF, and library; `--json` for scripts and agents.
+  rotate, crop, sign (and certify), add-field, ltv, tokens, token-check, verify (with `--report` as a PDF), text and edit-text (`--blocks` / `--block` for paragraphs), insert, stamp, background, marks (list and `--remove`), redact, compress, compare (with `--overlay` as a PNG), form (with `--detect`, looks, comb, limits and `--action`), form-data, fill (and `--reset`), flatten, meta, lock and unlock, objects and object, bookmarks, links, dests and labels, annotations and XFDF, and library; `--json` for scripts and agents.
 - `tools/katna-pdf-cos-check` — runs katna-pdf-cos over a folder of PDFs
   (loads, page counts against hayro, update round trips).
 - `vendor/hayro`, `vendor/hayro-interpret`, `vendor/hayro-syntax` — hayro with our patches
