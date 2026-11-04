@@ -60,8 +60,10 @@ pub(super) struct Measures {
 }
 
 impl Viewer {
+    /// The tool in hand when it takes points a click at a time: the
+    /// measuring tools, and polygons and clouds.
     fn measure_tool(&self) -> Option<Tool> {
-        self.tool.filter(|t| t.measures())
+        self.tool.filter(|t| t.clicks_points())
     }
 
     /// Gets ready to measure: the lines of the pages on screen, and
@@ -200,8 +202,9 @@ impl Viewer {
                 self.finish_measure(tool, page, points, cx);
             }
             Some(m) => {
-                let closes =
-                    tool == Tool::Area && m.points.len() >= 3 && dist(m.points[0], point) <= radius;
+                let closes = matches!(tool, Tool::Area | Tool::Polygon | Tool::Cloud)
+                    && m.points.len() >= 3
+                    && dist(m.points[0], point) <= radius;
                 if event.click_count >= 2 || closes {
                     let points = std::mem::take(&mut m.points);
                     self.finish_measure(tool, page, points, cx);
@@ -264,6 +267,29 @@ impl Viewer {
         let Some(inv) = self.inverse(page) else {
             return;
         };
+        // A polygon or cloud is a shape, not a measurement.
+        if matches!(tool, Tool::Polygon | Tool::Cloud) {
+            if points.len() < 3 {
+                return;
+            }
+            let mut a = Annotation::new(
+                page,
+                AnnotKind::Polygon(points.iter().map(|p| inv.map(*p)).collect()),
+            );
+            a.colour = COLOURS[self.colour];
+            a.width = super::super::annotate::WIDTH;
+            a.cloudy = tool == Tool::Cloud;
+            a.author = super::annots::author();
+            a.rect = a.bounds();
+            self.change_annotations(
+                AnnotChanges {
+                    put: vec![a],
+                    remove: Vec::new(),
+                },
+                cx,
+            );
+            return;
+        }
         let (scale, _) = self.scale(page);
         let (kind, value) = match tool {
             Tool::Distance if points.len() == 2 => {
@@ -322,7 +348,8 @@ impl Viewer {
             if let Some((_, at, _)) = pointer {
                 points.push(at);
             }
-            let closed = tool == Tool::Area && points.len() > 2;
+            let closed =
+                matches!(tool, Tool::Area | Tool::Polygon | Tool::Cloud) && points.len() > 2;
             let line = points.clone();
             out.push(
                 gpui::canvas(
@@ -355,7 +382,9 @@ impl Viewer {
                 .into_any_element(),
             );
             // The value so far, by the pointer.
-            if let Some(last) = points.last().copied() {
+            if let Some(last) = points.last().copied()
+                && tool.measures()
+            {
                 let (scale, _) = self.scale(page);
                 let value = match tool {
                     Tool::Area if points.len() > 2 => scale.area(measure::area(&points)),
@@ -482,14 +511,19 @@ impl Viewer {
                 match tool {
                     Tool::Distance => "measure-how-distance",
                     Tool::Perimeter => "measure-how-perimeter",
+                    Tool::Polygon | Tool::Cloud => "measure-how-shape",
                     _ => "measure-how-area",
                 },
                 &[],
-            )))
-            .child(dim(t(
-                source,
-                &[("scale", &scale.length(1.0).replace(' ', "\u{a0}"))],
             )));
+        // A polygon or cloud is a shape: the scale is not its business.
+        if !tool.measures() {
+            return Some(bar.into_any_element());
+        }
+        bar = bar.child(dim(t(
+            source,
+            &[("scale", &scale.length(1.0).replace(' ', "\u{a0}"))],
+        )));
         if let Some((_, at, _)) = self.measures.pointer {
             let x = scale.length(f64::from(at[0]));
             let y = scale.length(f64::from(at[1]));

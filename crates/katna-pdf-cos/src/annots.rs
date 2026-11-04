@@ -106,6 +106,12 @@ pub struct Annotation {
     /// For a line or shape that measures: the scale it measures in. Its
     /// comment is the length or area, shown beside it.
     pub measure: Option<Scale>,
+    /// For free text that points at something (a callout): the line from
+    /// what it points at, by a knee, to its box, in page space. Its
+    /// `rect` is the text box alone; the line is drawn outside it.
+    pub callout: Option<[[f32; 2]; 3]>,
+    /// A polygon or rectangle drawn with a cloudy edge (`/BE`).
+    pub cloudy: bool,
 }
 
 impl Annotation {
@@ -125,9 +131,31 @@ impl Annotation {
             reply_to: None,
             name: String::new(),
             measure: None,
+            callout: None,
+            cloudy: false,
         };
         a.rect = a.bounds();
         a
+    }
+
+    /// The box the annotation takes on the page: its `rect`, and for a
+    /// callout the line too, with its arrowhead.
+    pub fn outer_rect(&self) -> [f32; 4] {
+        let r = normal(self.rect);
+        let Some(line) = self.callout else {
+            return r;
+        };
+        let grow = self.width * 0.5 + arrow_size(self.width);
+        let mut b = r;
+        for p in line {
+            b = [
+                b[0].min(p[0] - grow),
+                b[1].min(p[1] - grow),
+                b[2].max(p[0] + grow),
+                b[3].max(p[1] + grow),
+            ];
+        }
+        b
     }
 
     /// The box the points reach, grown by half the line width (and the
@@ -158,6 +186,7 @@ impl Annotation {
         let grow = match self.kind {
             AnnotKind::Markup(..) => 1.0,
             AnnotKind::Line { arrow: true, .. } => self.width * 0.5 + arrow_size(self.width),
+            AnnotKind::Polygon(_) if self.cloudy => self.width * 0.5 + cloud_radius(self.width),
             _ => self.width * 0.5 + 1.0,
         };
         let b = [b[0] - grow, b[1] - grow, b[2] + grow, b[3] + grow];
@@ -327,13 +356,30 @@ impl Document {
             _ => None,
         }
         .unwrap_or(1.0) as f32;
+        let callout = match numbers("CL").as_slice() {
+            [x0, y0, x1, y1, x2, y2] => Some([[*x0, *y0], [*x1, *y1], [*x2, *y2]]),
+            [x0, y0, x1, y1] => Some([[*x0, *y0], lerp([*x0, *y0], [*x1, *y1], 0.5), [*x1, *y1]]),
+            _ => None,
+        }
+        .filter(|_| matches!(kind, AnnotKind::FreeText { .. }));
+        let cloudy = match self.resolve_key(&d, "BE") {
+            Object::Dict(be) => be.name("S") == Some(b"C"),
+            _ => false,
+        };
+        let mut rect = match numbers("Rect").as_slice() {
+            [a, b, c, d] => normal([*a, *b, *c, *d]),
+            _ => [0.0; 4],
+        };
+        // A callout's text box is the rectangle less the differences.
+        if callout.is_some()
+            && let [l, b, r, t] = numbers("RD").as_slice()
+        {
+            rect = normal([rect[0] + l, rect[1] + b, rect[2] - r, rect[3] - t]);
+        }
         Some(Annotation {
             id: obj.as_ref(),
             page,
-            rect: match numbers("Rect").as_slice() {
-                [a, b, c, d] => normal([*a, *b, *c, *d]),
-                _ => [0.0; 4],
-            },
+            rect,
             colour: match kind {
                 AnnotKind::FreeText { .. } => self.free_text_colour(&d),
                 _ => colour("C"),
@@ -352,6 +398,8 @@ impl Document {
                 }
                 _ => None,
             },
+            callout,
+            cloudy,
             kind,
         })
     }
@@ -544,7 +592,22 @@ fn write_dict(dict: &mut Dict, a: &Annotation, page: Ref) {
     if !subtype.is_empty() {
         dict.set("Subtype", Object::name(subtype));
     }
-    dict.set("Rect", reals(&a.rect));
+    let outer = a.outer_rect();
+    dict.set("Rect", reals(&outer));
+    if a.callout.is_some() {
+        let r = normal(a.rect);
+        dict.set(
+            "RD",
+            reals(&[
+                r[0] - outer[0],
+                r[1] - outer[1],
+                outer[2] - r[2],
+                outer[3] - r[3],
+            ]),
+        );
+    } else {
+        dict.remove("RD");
+    }
     dict.set("P", page);
     if dict.get("F").is_none() {
         // Printed.
@@ -601,6 +664,19 @@ fn write_dict(dict: &mut Dict, a: &Annotation, page: Ref) {
             );
             // The colour is the text's; the box has none.
             dict.remove("C");
+            match a.callout {
+                Some(line) => {
+                    dict.set("IT", Object::name("FreeTextCallout"));
+                    dict.set("CL", reals(line.as_flattened()));
+                    dict.set("LE", Object::name("OpenArrow"));
+                    border(dict);
+                }
+                None => {
+                    for key in ["IT", "CL", "LE"] {
+                        dict.remove(key);
+                    }
+                }
+            }
         }
         AnnotKind::Ink(strokes) => {
             dict.set(
@@ -641,6 +717,17 @@ fn write_dict(dict: &mut Dict, a: &Annotation, page: Ref) {
         }
         AnnotKind::Other(_) => {}
     }
+    if a.cloudy && matches!(a.kind, AnnotKind::Polygon(_) | AnnotKind::Square { .. }) {
+        dict.set(
+            "BE",
+            Dict(vec![
+                (Name::new("S"), Object::name("C")),
+                (Name::new("I"), Object::Int(1)),
+            ]),
+        );
+    } else {
+        dict.remove("BE");
+    }
     match (&a.measure, &a.kind) {
         (Some(scale), AnnotKind::Line { .. } | AnnotKind::Polygon(_) | AnnotKind::PolyLine(_)) => {
             dict.set(
@@ -655,6 +742,12 @@ fn write_dict(dict: &mut Dict, a: &Annotation, page: Ref) {
             if let AnnotKind::Line { .. } = a.kind {
                 // The length is shown on the line.
                 dict.set("Cap", true);
+            }
+        }
+        (_, AnnotKind::FreeText { .. }) => {
+            // Its intent is the callout's, set above.
+            for key in ["Measure", "Cap"] {
+                dict.remove(key);
             }
         }
         _ => {
@@ -762,6 +855,31 @@ fn appearance(a: &Annotation) -> Object {
         AnnotKind::FreeText { size } => {
             font = true;
             let [x0, y0, x1, y1] = a.rect;
+            if let Some([from, knee, to]) = a.callout {
+                // The line from what it points at to the box, with an
+                // arrowhead at what it points at, and the box's edge.
+                let _ = writeln!(
+                    c,
+                    "{stroke} {w:.2} w 1 J 1 j {} m {} l {} l S",
+                    pt(from),
+                    pt(knee),
+                    pt(to)
+                );
+                let len = dist(from, knee).max(0.001);
+                let d = [(knee[0] - from[0]) / len, (knee[1] - from[1]) / len];
+                let n = [-d[1], d[0]];
+                let s = arrow_size(w);
+                let back = [from[0] + d[0] * s, from[1] + d[1] * s];
+                let left = [back[0] + n[0] * s * 0.5, back[1] + n[1] * s * 0.5];
+                let right = [back[0] - n[0] * s * 0.5, back[1] - n[1] * s * 0.5];
+                let _ = writeln!(c, "{} m {} l {} l S", pt(left), pt(from), pt(right));
+                let _ = writeln!(
+                    c,
+                    "1 1 1 rg {x0:.2} {y0:.2} {:.2} {:.2} re B",
+                    x1 - x0,
+                    y1 - y0
+                );
+            }
             let leading = size * 1.2;
             let _ = writeln!(
                 c,
@@ -804,7 +922,13 @@ fn appearance(a: &Annotation) -> Object {
                 let _ = write!(c, "{r:.3} {g:.3} {b:.3} rg ");
             }
             let _ = write!(c, "{stroke} {w:.2} w ");
-            if matches!(a.kind, AnnotKind::Square { .. }) {
+            if a.cloudy && matches!(a.kind, AnnotKind::Square { .. }) {
+                // Bumps along the inside of the box, so they stay in it.
+                let r = cloud_radius(w);
+                let [x0, y0, x1, y1] = [x0 + r, y0 + r, x1 - r, y1 - r];
+                cloud(&mut c, &[[x0, y0], [x1, y0], [x1, y1], [x0, y1]], r);
+                c.push_str(if inside.is_some() { " B\n" } else { " S\n" });
+            } else if matches!(a.kind, AnnotKind::Square { .. }) {
                 let _ = write!(c, "{x0:.2} {y0:.2} {:.2} {:.2} re", x1 - x0, y1 - y0);
             } else {
                 ellipse(&mut c, [x0, y0, x1, y1]);
@@ -828,6 +952,11 @@ fn appearance(a: &Annotation) -> Object {
                 let right = [back[0] - n[0] * s * 0.5, back[1] - n[1] * s * 0.5];
                 let _ = writeln!(c, "{} m {} l {} l S", pt(left), pt(*to), pt(right));
             }
+        }
+        AnnotKind::Polygon(points) if a.cloudy && points.len() >= 3 => {
+            let _ = write!(c, "{stroke} {w:.2} w 1 J 1 j ");
+            cloud(&mut c, points, cloud_radius(w));
+            c.push_str(" S\n");
         }
         AnnotKind::Polygon(points) | AnnotKind::PolyLine(points) => {
             let _ = write!(c, "{stroke} {w:.2} w 1 J 1 j");
@@ -917,7 +1046,7 @@ fn appearance(a: &Annotation) -> Object {
         dict: Dict(vec![
             (Name::new("Type"), Object::name("XObject")),
             (Name::new("Subtype"), Object::name("Form")),
-            (Name::new("BBox"), reals(&a.rect)),
+            (Name::new("BBox"), reals(&a.outer_rect())),
             (Name::new("Resources"), Object::Dict(resources)),
             (Name::new("Length"), Object::Int(data.len() as i64)),
         ]),
@@ -958,6 +1087,79 @@ fn dist(a: [f32; 2], b: [f32; 2]) -> f32 {
 
 fn pt(p: [f32; 2]) -> String {
     format!("{:.2} {:.2}", p[0], p[1])
+}
+
+/// How big a cloudy edge's bumps are, for a line `width` wide.
+fn cloud_radius(width: f32) -> f32 {
+    (width * 3.0).clamp(6.0, 16.0)
+}
+
+/// The closed path through `points` drawn as a cloud: bumps of radius
+/// `r` along each side, one at each corner, bulging outward, each an
+/// arc from where its circle meets the one before to where it meets
+/// the one after. Ends with the path open for the paint operator.
+fn cloud(c: &mut String, points: &[[f32; 2]], r: f32) {
+    use std::f32::consts::{PI, TAU};
+    // Which way round the points go, so the bumps bulge outward.
+    let n = points.len();
+    let twice_area: f32 = (0..n)
+        .map(|i| {
+            let (p, q) = (points[i], points[(i + 1) % n]);
+            p[0] * q[1] - q[0] * p[1]
+        })
+        .sum();
+    let turn = if twice_area > 0.0 { 1.0 } else { -1.0 };
+    let step = r * 1.8;
+    let mut centres = Vec::new();
+    for i in 0..n {
+        let (p, q) = (points[i], points[(i + 1) % n]);
+        let bumps = ((dist(p, q) / step).round() as usize).max(1);
+        for k in 0..bumps {
+            centres.push(lerp(p, q, k as f32 / bumps as f32));
+        }
+    }
+    let m = centres.len();
+    for (i, &centre) in centres.iter().enumerate() {
+        let prev = centres[(i + m - 1) % m];
+        let next = centres[(i + 1) % m];
+        let towards = |p: [f32; 2]| (p[1] - centre[1]).atan2(p[0] - centre[0]);
+        // Where two circles this far apart meet, as an angle off the
+        // line between their centres.
+        let meet = |p: [f32; 2]| (dist(p, centre) / (2.0 * r)).min(1.0).acos();
+        let from = towards(prev) + turn * meet(prev);
+        let to = towards(next) - turn * meet(next);
+        // The sweep from one to the other, the outward way round.
+        let mut sweep = (to - from).rem_euclid(TAU);
+        if turn < 0.0 {
+            sweep -= TAU;
+        }
+        if sweep.abs() < 0.01 {
+            sweep = turn * PI;
+        }
+        arc(c, centre, r, from, from + sweep, i == 0);
+    }
+    c.push_str(" h");
+}
+
+/// An arc of the circle round `centre` of radius `r` from angle `from`
+/// to `to` (anticlockwise), as Bézier curves; a move first when `start`,
+/// else a line to its start.
+fn arc(c: &mut String, centre: [f32; 2], r: f32, from: f32, to: f32, start: bool) {
+    let at = |t: f32| [centre[0] + r * t.cos(), centre[1] + r * t.sin()];
+    let _ = write!(c, " {} {}", pt(at(from)), if start { "m" } else { "l" });
+    let pieces = ((to - from).abs() / (std::f32::consts::FRAC_PI_2))
+        .ceil()
+        .max(1.0) as usize;
+    let sweep = (to - from) / pieces as f32;
+    let k = 4.0 / 3.0 * (sweep / 4.0).tan();
+    for i in 0..pieces {
+        let (a0, a1) = (from + sweep * i as f32, from + sweep * (i + 1) as f32);
+        let p0 = at(a0);
+        let p3 = at(a1);
+        let p1 = [p0[0] - k * r * a0.sin(), p0[1] + k * r * a0.cos()];
+        let p2 = [p3[0] + k * r * a1.sin(), p3[1] - k * r * a1.cos()];
+        let _ = write!(c, " {} {} {} c", pt(p1), pt(p2), pt(p3));
+    }
 }
 
 /// An ellipse in `b` as four Bézier curves.

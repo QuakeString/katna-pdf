@@ -194,6 +194,15 @@ const ICONS: &[(&str, &[u8])] = &[
         include_bytes!("../icons/shape-arrow.svg"),
     ),
     (
+        "icons/shape-polygon.svg",
+        include_bytes!("../icons/shape-polygon.svg"),
+    ),
+    (
+        "icons/typewriter.svg",
+        include_bytes!("../icons/typewriter.svg"),
+    ),
+    ("icons/callout.svg", include_bytes!("../icons/callout.svg")),
+    (
         "icons/shape-circle.svg",
         include_bytes!("../icons/shape-circle.svg"),
     ),
