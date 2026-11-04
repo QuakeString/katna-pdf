@@ -40,6 +40,7 @@ mod compare;
 mod crop;
 mod datepick;
 mod design;
+mod export;
 mod files;
 mod fonts;
 mod initials;
@@ -77,6 +78,7 @@ actions!(
         Open,
         ReopenSession,
         Compare,
+        Export,
         ReadAloud,
         Present,
         PresentNext,
@@ -180,6 +182,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl-y", Redo, Some(READING)),
         KeyBinding::new("ctrl-d", Properties, None),
         KeyBinding::new("ctrl-shift-d", Compare, None),
+        KeyBinding::new("ctrl-shift-e", Export, None),
         KeyBinding::new("ctrl-shift-y", ReadAloud, None),
         KeyBinding::new("f5", Present, None),
         KeyBinding::new("right", PresentNext, Some(PRESENTING)),
@@ -502,6 +505,8 @@ pub struct Viewer {
     marking: Option<marks::Marking>,
     /// The redact tool, while in hand, and the areas it marked.
     redacting: Option<redact::Redacting>,
+    /// The export card, while open.
+    exporting: Option<export::Exporting>,
     /// The link tool, while in hand.
     linking: Option<linking::Linking>,
     /// The form tool, while in hand.
@@ -666,6 +671,7 @@ impl Viewer {
             picked_object: None,
             marking: None,
             redacting: None,
+            exporting: None,
             linking: None,
             designing: None,
             properties: None,
@@ -3958,6 +3964,7 @@ impl Render for Viewer {
         let signing_card = self.signing_card(cx);
         let marks_card = self.marks_card(cx);
         let redact_card = self.redact_card(cx);
+        let export_card = self.export_card(cx);
         let link_card = self.link_card(window, cx);
         let numbering_card = self.numbering_card(cx);
         let setup_card = self.setup_card(cx);
@@ -4188,6 +4195,7 @@ impl Render for Viewer {
             .on_action(cx.listener(|this, _: &Organize, _, cx| this.toggle_organizer(cx)))
             .on_action(cx.listener(|this, _: &Sign, _, cx| this.toggle_signing(cx)))
             .on_action(cx.listener(|this, _: &Properties, _, cx| this.toggle_properties(cx)))
+            .on_action(cx.listener(|this, _: &Export, _, cx| this.toggle_exporting(cx)))
             .on_action(cx.listener(|this, _: &Compare, _, cx| this.choose_compare(cx)))
             .on_action(cx.listener(|this, _: &ReadAloud, _, cx| this.toggle_reading(cx)))
             .on_action(cx.listener(|this, _: &Present, window, cx| {
@@ -4270,6 +4278,7 @@ impl Render for Viewer {
                             .children(signing_card)
                             .children(marks_card)
                             .children(redact_card)
+                            .children(export_card)
                             .children(link_card)
                             .children(numbering_card)
                             .children(setup_card)
@@ -4381,17 +4390,7 @@ fn pages_from(from: PagesFrom) -> Result<katna_pdf_cos::Document, String> {
                 let size = (w.max(1) as f32 * 0.75, h.max(1) as f32 * 0.75);
                 images.push((image, size));
             }
-            let sizes: Vec<(f32, f32)> = images.iter().map(|(_, s)| *s).collect();
-            let mut doc = load(katna_pdf_cos::blank_pdf(&sizes))?;
-            for (page, (image, (w, h))) in images.into_iter().enumerate() {
-                let item = katna_pdf_cos::Insert::Image {
-                    rect: [0.0, 0.0, w, h],
-                    image,
-                };
-                let bytes = doc.insert(page, &[item]).map_err(|e| e.to_string())?;
-                doc = load(bytes)?;
-            }
-            Ok(doc)
+            load(katna_pdf_cos::pictures_pdf(images).map_err(|e| e.to_string())?)
         }
     }
 }

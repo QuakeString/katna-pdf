@@ -20,6 +20,7 @@ mod detect;
 mod document;
 mod dss;
 mod edit;
+mod export;
 mod filter;
 mod flatten;
 mod fonts;
@@ -66,6 +67,7 @@ pub use design::{FieldEdit, FieldSpec, FormDesign, FormError, NewField};
 pub use document::{Document, Entry, LoadError, XrefKind};
 pub use dss::Dss;
 pub use edit::{EditError, Layout, NewFont, TextAlign, TextBlock, TextRun};
+pub use export::{docx, pictures_pdf, plain_text};
 pub use filter::{FilterError, decode};
 pub use flatten::Flatten;
 pub use formdata::{

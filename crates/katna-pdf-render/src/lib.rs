@@ -8,6 +8,7 @@
 //! here: the app turns a [`Bitmap`] into a GPUI image itself.
 
 pub mod compare;
+pub mod export;
 mod grid;
 mod hayro_engine;
 pub mod measure;

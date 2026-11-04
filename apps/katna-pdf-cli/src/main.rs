@@ -68,6 +68,13 @@ usage: katna-pdf-cli COMMAND [--json] ...
   unlock FILE -o OUT --owner PW   the password taken off, given the owner's
                                   (any command opens a locked file with the password
                                   in KATNA_PDF_OPEN_PASSWORD)
+  export FILE -o OUT --as png|jpeg|text|docx|scanned [--pages PAGES] [--dpi N]
+         [--quality Q] [--grey]  the pages drawn to picture files in folder OUT
+                                  (FILE-1.png…, at N dots to the inch, default 150;
+                                  JPEG at quality Q, default 85); their text as plain
+                                  text or a Word file OUT (a paragraph each, a page
+                                  break between pages); or a PDF OUT of the pages as
+                                  a scanner would see them (--grey in shades of grey)
   compare OLD NEW [--overlay PAGE -o OUT.png]
                                   what changed from OLD to NEW: words added, removed
                                   and changed (text moved to another page is not a
@@ -298,6 +305,7 @@ fn main() -> ExitCode {
         "compress" => compress(rest, json),
         "flatten" => flatten(rest, json),
         "compare" => compare(rest, json),
+        "export" => export(rest, json),
         "objects" => objects(rest, json),
         "bookmarks" => bookmarks(rest, json),
         "links" => links(rest, json),
@@ -463,6 +471,9 @@ impl<'a> Args<'a> {
                     | "--stamp"
                     | "--note"
                     | "--overlay"
+                    | "--as"
+                    | "--dpi"
+                    | "--quality"
                     | "--border"
                     | "--border-colour"
                     | "--max-len"
@@ -494,6 +505,7 @@ impl<'a> Args<'a> {
                 "--clear",
                 "--stretch",
                 "--as-text",
+                "--grey",
                 "--reset",
                 "--forms",
                 "--comments",
@@ -1443,6 +1455,109 @@ fn unlock(args: &[String], json: bool) -> Done {
 }
 
 /// Makes a file smaller.
+/// Draws pages out as pictures, or takes their text out.
+fn export(args: &[String], json: bool) -> Done {
+    use katna_pdf_render::Engine as _;
+    use katna_pdf_render::export::{PictureKind, page_picture, scanned_page};
+    let args = Args::parse(args)?;
+    let [file] = args.words()?;
+    let out = args.output()?;
+    let kind = args
+        .option("--as")
+        .ok_or_else(|| Failure::Usage("say what to write with --as".into()))?;
+    let dpi: f32 = match args.option("--dpi") {
+        Some(dpi) => dpi
+            .parse()
+            .ok()
+            .filter(|d: &f32| *d >= 10.0 && *d <= 1200.0)
+            .ok_or_else(|| Failure::Usage(format!("--dpi {dpi}: 10 to 1200")))?,
+        None => 150.0,
+    };
+    let quality: u8 = match args.option("--quality") {
+        Some(q) => q
+            .parse()
+            .ok()
+            .filter(|q: &u8| (1..=100).contains(q))
+            .ok_or_else(|| Failure::Usage(format!("--quality {q}: 1 to 100")))?,
+        None => 85,
+    };
+    let doc = open(file)?;
+    let count = doc.pages().len();
+    let pages = match args.option("--pages") {
+        Some(spec) => ranges::parse(spec, count).map_err(failed)?,
+        None => (0..count).collect(),
+    };
+    let stem = Path::new(file)
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "page".into());
+    let drawn = || {
+        let password = std::env::var("KATNA_PDF_OPEN_PASSWORD").unwrap_or_default();
+        katna_pdf_render::Hayro
+            .open(std::sync::Arc::new(doc.bytes().to_vec()), &password)
+            .map_err(|e| failed(format!("{file}: {e}")))
+    };
+    match kind {
+        "png" | "jpeg" | "jpg" => {
+            let kind = if kind == "png" {
+                PictureKind::Png
+            } else {
+                PictureKind::Jpeg { quality }
+            };
+            std::fs::create_dir_all(&out).map_err(|e| failed(format!("{}: {e}", out.display())))?;
+            let drawn = drawn()?;
+            let mut files = Vec::new();
+            for page in pages {
+                let data = page_picture(drawn.as_ref(), page, dpi, kind)
+                    .ok_or_else(|| failed(format!("page {} could not be drawn", page + 1)))?;
+                let target = out.join(format!("{stem}-{}.{}", page + 1, kind.extension()));
+                write(&target, &data)?;
+                files.push((target, 1));
+            }
+            Ok(wrote(&files, json))
+        }
+        "text" => {
+            let text = katna_pdf_cos::plain_text(&doc, &pages);
+            write(&out, text.as_bytes())?;
+            Ok(wrote(&[(out, pages.len())], json))
+        }
+        "docx" | "word" => {
+            let bytes = katna_pdf_cos::docx(&doc, &pages);
+            write(&out, &bytes)?;
+            Ok(wrote(&[(out, pages.len())], json))
+        }
+        "scanned" => {
+            let drawn = drawn()?;
+            let grey = args.flag("--grey");
+            let mut pictures = Vec::new();
+            for page in pages {
+                let (data, width, height) = scanned_page(drawn.as_ref(), page, dpi, grey)
+                    .ok_or_else(|| failed(format!("page {} could not be drawn", page + 1)))?;
+                let size = doc
+                    .page_info(page)
+                    .map(|p| p.size())
+                    .unwrap_or((612.0, 792.0));
+                pictures.push((
+                    katna_pdf_cos::Image::Jpeg {
+                        data,
+                        width,
+                        height,
+                        components: if grey { 1 } else { 3 },
+                    },
+                    size,
+                ));
+            }
+            let n = pictures.len();
+            let bytes = katna_pdf_cos::pictures_pdf(pictures).map_err(|e| failed(e.to_string()))?;
+            write(&out, &bytes)?;
+            Ok(wrote(&[(out, n)], json))
+        }
+        other => Err(Failure::Usage(format!(
+            "--as {other}: png, jpeg, text, docx or scanned"
+        ))),
+    }
+}
+
 fn compare(args: &[String], json: bool) -> Done {
     use katna_pdf_render::Engine as _;
     use katna_pdf_render::compare::{self, Kind};
