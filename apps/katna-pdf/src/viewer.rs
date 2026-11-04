@@ -42,6 +42,7 @@ mod datepick;
 mod design;
 mod files;
 mod fonts;
+mod initials;
 mod insert;
 mod linking;
 mod marks;
@@ -74,6 +75,7 @@ actions!(
     katna_pdf,
     [
         Open,
+        ReopenSession,
         Compare,
         ReadAloud,
         Present,
@@ -135,8 +137,10 @@ actions!(
 /// Our object layer's copy of `bytes`, a locked file opened with `key`.
 pub(crate) fn cos(bytes: Vec<u8>, key: Option<&str>) -> Result<katna_pdf_cos::Document, String> {
     let mut doc = katna_pdf_cos::Document::load(bytes).map_err(|e| e.to_string())?;
+    // A file anyone can open is open already, but only its owner's
+    // password opens it fully.
     if let Some(key) = key
-        && doc.is_locked()
+        && !doc.opened_as_owner()
     {
         doc.unlock(key).map_err(|e| e.to_string())?;
     }
@@ -282,6 +286,8 @@ enum PaneTab {
 pub enum ViewerEvent {
     /// The open button was pressed: choose files to open.
     ChooseFiles,
+    /// The files open last time are to be opened again.
+    ReopenSession,
     /// Files were dropped on the viewer.
     Dropped(Vec<PathBuf>),
     /// The library button was pressed.
@@ -488,6 +494,8 @@ pub struct Viewer {
     /// with it, and the colour picked (`insert::INKS`).
     adding: Option<insert::Adding>,
     placing: Option<annots::Draft>,
+    /// The initials tool, while in hand.
+    initials: Option<initials::Initials>,
     ink: usize,
     /// The picture or shape picked with Edit text on, and its drag.
     picked_object: Option<objects::Picked>,
@@ -653,6 +661,7 @@ impl Viewer {
             typing: None,
             adding: None,
             placing: None,
+            initials: None,
             ink: 0,
             picked_object: None,
             marking: None,
@@ -3776,7 +3785,19 @@ impl Viewer {
                                 &th.katna,
                             )
                             .on_click(cx.listener(|_, _, _, cx| cx.emit(ViewerEvent::ShowLibrary))),
-                        ),
+                        )
+                        .when(!cx.global::<History>().last_session().is_empty(), |row| {
+                            row.child(
+                                widgets::outlined_button(
+                                    "empty-session",
+                                    t("empty-session", &[]),
+                                    &th.katna,
+                                )
+                                .on_click(
+                                    cx.listener(|_, _, _, cx| cx.emit(ViewerEvent::ReopenSession)),
+                                ),
+                            )
+                        }),
                 )
                 .children(self.recent(cx)),
         };
@@ -3931,6 +3952,7 @@ impl Render for Viewer {
         let object_row = self.object_row(cx);
         let measure_bar = self.measure_bar(cx);
         let stamp_bar = self.stamp_bar(cx);
+        let initials_bar = self.initials_bar(cx);
         let reading_bar = self.reading_bar(cx);
         let signatures_line = self.signatures_line(cx);
         let signing_card = self.signing_card(cx);
@@ -3940,7 +3962,11 @@ impl Render for Viewer {
         let numbering_card = self.numbering_card(cx);
         let setup_card = self.setup_card(cx);
         let design_card = self.design_card(cx);
-        let properties_card = self.properties_card(cx);
+        // The properties card scrolls when the window is shorter than it.
+        let card_height = unpx(window.viewport_size().height) * katna_ui::scale::scale()
+            - 48.0
+            - 4.0 * katna_ui::tokens::space::S3;
+        let properties_card = self.properties_card(card_height, cx);
         let find_bar = self.find_bar(cx);
         let notice = self.notice.clone().map(|notice| {
             div()
@@ -4228,6 +4254,7 @@ impl Render for Viewer {
                     .children(object_row)
                     .children(measure_bar)
                     .children(stamp_bar)
+                    .children(initials_bar)
                     .children(reading_bar)
                     .children(find_bar)
                     .children(signatures_line)

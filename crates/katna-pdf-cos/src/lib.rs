@@ -44,6 +44,7 @@ mod present;
 pub mod ranges;
 mod redact;
 mod report;
+mod scripts;
 mod sign;
 mod stamp;
 mod write;
@@ -89,6 +90,7 @@ pub use pages::{ComposeError, PageInfo, PageSource, blank_pdf, compose};
 pub use present::{PageShow, Transition, TransitionStyle};
 pub use redact::{Pattern, RedactError, RedactOptions};
 pub use report::text_pdf;
+pub use scripts::{ActionPlace, DocAction, DocEvent, FieldEvent};
 pub use sign::{
     CONTENTS_LEN, Coverage, Picture, Placement, Prepared, SignError, SignRequest, Signature,
     SigningInfo,

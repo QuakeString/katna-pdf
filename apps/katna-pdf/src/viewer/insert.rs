@@ -30,16 +30,19 @@ pub(super) enum Adding {
     Ellipse,
     Line,
     Pencil,
+    /// Initials kept, put on with a click (`initials.rs`).
+    Initials,
 }
 
 impl Adding {
-    const ALL: [Adding; 6] = [
+    const ALL: [Adding; 7] = [
         Adding::Text,
         Adding::Picture,
         Adding::Rectangle,
         Adding::Ellipse,
         Adding::Line,
         Adding::Pencil,
+        Adding::Initials,
     ];
 
     fn icon(self) -> &'static str {
@@ -50,6 +53,7 @@ impl Adding {
             Adding::Ellipse => "shape-circle",
             Adding::Line => "shape-line",
             Adding::Pencil => "pen",
+            Adding::Initials => "signature",
         }
     }
 
@@ -61,6 +65,7 @@ impl Adding {
             Adding::Ellipse => "add-ellipse",
             Adding::Line => "add-line",
             Adding::Pencil => "add-pencil",
+            Adding::Initials => "add-initials",
         }
     }
 }
@@ -335,7 +340,7 @@ impl Viewer {
             ((position.x - b.left()) / shown).clamp(0.0, (b.size.width / shown).max(0.0)),
             ((position.y - b.top()) / shown).clamp(0.0, (b.size.height / shown).max(0.0)),
         ];
-        let pencil = self.adding == Some(Adding::Pencil);
+        let pencil = self.adding == Some(Adding::Pencil) || self.drawing_initials();
         if let Some(draft) = self.placing.as_mut() {
             // The pencil keeps the whole way the pointer went; the rest
             // only where it is now.
@@ -363,6 +368,10 @@ impl Viewer {
             return false;
         };
         cx.notify();
+        if self.drawing_initials() {
+            self.keep_drawn_initials(&draft.path, cx);
+            return true;
+        }
         let (Some(adding), Some(inv)) = (self.adding, self.inverse(draft.page)) else {
             return true;
         };
@@ -388,6 +397,10 @@ impl Viewer {
             Adding::Text => return true,
             Adding::Picture => {
                 self.choose_picture_to_add(draft.page, (!click).then_some(boxed), from, cx);
+                return true;
+            }
+            Adding::Initials => {
+                self.place_initials(draft.page, (!click).then_some(boxed), from, cx);
                 return true;
             }
             Adding::Pencil if draft.path.len() < 2 => return true,
@@ -433,7 +446,7 @@ impl Viewer {
         self.add_to_page(page, item, cx);
     }
 
-    fn add_to_page(&mut self, page: usize, item: Insert, cx: &mut Context<Self>) {
+    pub(super) fn add_to_page(&mut self, page: usize, item: Insert, cx: &mut Context<Self>) {
         self.change_page(
             page,
             move |doc| doc.insert(page, &[item]).map_err(|e| e.to_string()),
@@ -472,7 +485,7 @@ impl Viewer {
                 })
                 .await;
             this.update(cx, |this, cx| match read {
-                Ok(image) => this.add_picture(page, boxed, at, image, cx),
+                Ok(image) => this.add_picture(page, boxed, at, image, PICTURE_WIDTH, cx),
                 Err(error) => {
                     this.notice = Some(t("text-edit-failed", &[("error", &error)]));
                     cx.notify();
@@ -485,13 +498,14 @@ impl Viewer {
 
     /// Puts `image` on page `page`: in `boxed` (on the page shown),
     /// keeping its shape, or with its top left at `at`, at most
-    /// [`PICTURE_WIDTH`] wide.
-    fn add_picture(
+    /// `max_width` wide.
+    pub(super) fn add_picture(
         &mut self,
         page: usize,
         boxed: Option<[f32; 4]>,
         at: [f32; 2],
         image: katna_pdf_cos::Image,
+        max_width: f32,
         cx: &mut Context<Self>,
     ) {
         let Some(inv) = self.inverse(page) else {
@@ -515,7 +529,7 @@ impl Viewer {
             }
             None => {
                 // A pixel to a point, as 96 pixels to the inch.
-                let w = (w as f32 * 0.75).min(PICTURE_WIDTH);
+                let w = (w as f32 * 0.75).min(max_width);
                 [at[0], at[1], at[0] + w, at[1] + w * aspect]
             }
         };
@@ -560,7 +574,7 @@ impl Viewer {
                     let width = (w as f32 * 0.75).min(PICTURE_WIDTH);
                     let height = width * h as f32 / w.max(1) as f32;
                     let at = [middle[0] - width / 2.0, middle[1] - height / 2.0];
-                    this.add_picture(page, None, at, image, cx);
+                    this.add_picture(page, None, at, image, PICTURE_WIDTH, cx);
                 }
                 Err(error) => {
                     this.notice = Some(t("text-edit-failed", &[("error", &error)]));
@@ -608,7 +622,7 @@ impl Viewer {
                 })
                 .await;
             this.update(cx, |this, cx| match read {
-                Ok(image) => this.add_picture(page, None, at, image, cx),
+                Ok(image) => this.add_picture(page, None, at, image, PICTURE_WIDTH, cx),
                 Err(error) => {
                     this.notice = Some(t("text-edit-failed", &[("error", &error)]));
                     cx.notify();
@@ -642,7 +656,7 @@ impl Viewer {
         };
         let shown = self.shown;
         let ink = self.ink_colour();
-        if matches!(self.adding, Some(Adding::Line | Adding::Pencil)) {
+        if matches!(self.adding, Some(Adding::Line | Adding::Pencil)) || self.drawing_initials() {
             let points: Vec<[f32; 2]> = if self.adding == Some(Adding::Line) {
                 vec![from, to]
             } else {
@@ -685,10 +699,13 @@ impl Viewer {
                 .border_2()
                 .border_color(ink)
                 .when(self.adding == Some(Adding::Ellipse), |d| d.rounded_full())
-                .when(self.adding == Some(Adding::Picture), |d| {
-                    d.border_dashed()
-                        .border_color(gpui::rgba(self.theme.katna.accent))
-                })
+                .when(
+                    matches!(self.adding, Some(Adding::Picture | Adding::Initials)),
+                    |d| {
+                        d.border_dashed()
+                            .border_color(gpui::rgba(self.theme.katna.accent))
+                    },
+                )
                 .into_any_element(),
         ]
     }

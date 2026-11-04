@@ -46,6 +46,9 @@ pub struct RedactOptions {
     /// XMP), its scripts, its attached files and other programs' private
     /// data.
     pub scrub: bool,
+    /// Words written in the middle of each box (over the fill, in white
+    /// on a dark fill), such as a reason code.
+    pub overlay: Option<String>,
 }
 
 impl Default for RedactOptions {
@@ -53,6 +56,7 @@ impl Default for RedactOptions {
         RedactOptions {
             fill: Some([0.0; 3]),
             scrub: false,
+            overlay: None,
         }
     }
 }
@@ -232,7 +236,7 @@ impl Document {
             objects: BTreeMap::new(),
         };
         for (page, areas) in &by_page {
-            self.redact_page(&mut changes, pages[*page], areas, options.fill);
+            self.redact_page(&mut changes, pages[*page], areas, options);
         }
         if options.scrub {
             scrub(&mut changes, &pages);
@@ -246,8 +250,9 @@ impl Document {
         changes: &mut Changes,
         page_ref: Ref,
         areas: &[Area],
-        fill: Option<[f32; 3]>,
+        options: &RedactOptions,
     ) {
+        let fill = options.fill;
         let inherited = page_dict(self, page_ref);
         let mut dict = changes
             .get(page_ref)
@@ -320,7 +325,7 @@ impl Document {
             }
             resources.set("XObject", Object::Dict(xobjects));
         }
-        let (mut out, resources) =
+        let (mut out, mut resources) =
             self.redact_content(changes, whole, resources, IDENTITY, areas, 0);
         if let Some([r, g, b]) = fill {
             out.extend_from_slice(
@@ -345,6 +350,69 @@ impl Document {
                 );
             }
             out.extend_from_slice(b"f Q\n");
+        }
+        if let Some(words) = options
+            .overlay
+            .as_deref()
+            .map(str::trim)
+            .filter(|w| !w.is_empty())
+        {
+            // Helvetica, the page's own copy or one brought in.
+            let mut fonts = match self.resolve_key(&resources, "Font") {
+                Object::Dict(d) => d,
+                _ => Dict::new(),
+            };
+            let key = free_name(&fonts);
+            let mut font = Dict::new();
+            font.set("Type", Object::name("Font"));
+            font.set("Subtype", Object::name("Type1"));
+            font.set("BaseFont", Object::name("Helvetica"));
+            font.set("Encoding", Object::name("WinAnsiEncoding"));
+            let font = changes.add(Object::Dict(font));
+            fonts.set(&key, Object::Ref(font));
+            resources.set("Font", Object::Dict(fonts));
+            // White on a dark fill, black otherwise.
+            let dark = fill.is_some_and(|[r, g, b]| 0.299 * r + 0.587 * g + 0.114 * b < 0.5);
+            let ink = if dark { "1 1 1 rg" } else { "0 0 0 rg" };
+            let escaped: String = words
+                .chars()
+                .flat_map(|c| match c {
+                    '(' | ')' | '\\' => vec!['\\', c],
+                    '\n' | '\r' => vec![' '],
+                    c => vec![c],
+                })
+                .collect();
+            for a in areas {
+                let (w, h) = (a[2] - a[0], a[3] - a[1]);
+                if w <= 2.0 || h <= 2.0 {
+                    continue;
+                }
+                // As large as fits the box's height and width, at most 12 pt.
+                let mut size = (h * 0.6).min(12.0);
+                let width = f64::from(crate::design::text_width(&escaped, size as f32));
+                if width > w - 2.0 {
+                    size = (size * (w - 2.0) / width).max(3.0);
+                }
+                let width = f64::from(crate::design::text_width(&escaped, size as f32));
+                if width > w {
+                    continue;
+                }
+                let x = a[0] + (w - width) / 2.0;
+                let y = a[1] + (h - size * 0.72) / 2.0;
+                out.extend_from_slice(
+                    format!(
+                        "q {} {} {} {} re W n BT /{key} {} Tf {ink} {} {} Td ({escaped}) Tj ET Q\n",
+                        num(a[0]),
+                        num(a[1]),
+                        num(w),
+                        num(h),
+                        num(size),
+                        num(x),
+                        num(y)
+                    )
+                    .as_bytes(),
+                );
+            }
         }
         let stream = changes.add(Object::Stream(crate::dss::compressed(&out)));
         dict.set("Contents", Object::Ref(stream));

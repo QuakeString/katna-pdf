@@ -80,13 +80,14 @@ usage: katna-pdf-cli COMMAND [--json] ...
                                   (the default) brings pictures down to 150 dpi,
                                   strong to 96 dpi, lossless leaves them
   redact FILE -o OUT [--area PAGE:L,B,R,T]... [--find pan,aadhaar,phone,email]
-         [--words TEXT]... [--pages PAGES] [--scrub] [--no-fill]
+         [--words TEXT]... [--pages PAGES] [--scrub] [--no-fill] [--overlay TEXT]
                                   what lies under each box taken out of the file, not
                                   only covered: text (invisible text too), the pixels
                                   of pictures, shapes, annotations; boxes found from
                                   numbers or words on PAGES (all without it); a black
-                                  box drawn over each unless --no-fill; with --scrub,
-                                  the properties, scripts and attached files go too
+                                  box drawn over each unless --no-fill, with TEXT
+                                  written on it with --overlay; with --scrub, the
+                                  properties, scripts and attached files go too
   meta FILE -o OUT [--title T] [--author A] [--subject S] [--keywords K]
        [--creator C] [--producer P]
                                   the document's properties changed (`info` shows
@@ -226,6 +227,10 @@ usage: katna-pdf-cli COMMAND [--json] ...
                                   hidden, renamed and taken out (what was on one
                                   stays, shown always), and objects (as `objects`
                                   numbers them) put on a layer or on none
+  actions FILE                    every script and action the document carries
+                                  (none is run): the document's own scripts, what
+                                  happens when it opens, closes, is saved or printed,
+                                  when a page opens or closes, and what fields do
   annots FILE [--as-text] [--save DIR]
                                   the annotations, page by page; --as-text as comments
                                   to read, replies under what they answer; --save
@@ -307,6 +312,7 @@ fn main() -> ExitCode {
         "annots" => annots(rest, json),
         "attachments" => attachments(rest, json),
         "layers" => layers(rest, json),
+        "actions" => actions(rest, json),
         "library" => library(rest, json),
         "xfdf-export" => xfdf_export(rest, json),
         "xfdf-import" => xfdf_import(rest, json),
@@ -1647,6 +1653,7 @@ fn redact(args: &[String], json: bool) -> Done {
     let options = RedactOptions {
         fill: (!args.flag("--no-fill")).then_some([0.0; 3]),
         scrub: args.flag("--scrub"),
+        overlay: args.option("--overlay").map(str::to_owned),
     };
     let bytes = doc
         .redact(&areas, &options)
@@ -3544,6 +3551,78 @@ fn attachments(args: &[String], json: bool) -> Done {
 }
 
 /// Lists the document's layers, or changes them.
+fn actions(args: &[String], json: bool) -> Done {
+    use katna_pdf_cos::ActionPlace;
+    let args = Args::parse(args)?;
+    let [file] = args.words()?;
+    let doc = open(file)?;
+    let actions = doc.document_actions();
+    let place = |p: &ActionPlace| -> (String, Option<usize>, Option<String>) {
+        match p {
+            ActionPlace::Document(name) => ("document".into(), None, Some(name.clone())),
+            ActionPlace::Open => ("open".into(), None, None),
+            ActionPlace::DocumentEvent(e) => (e.name().into(), None, None),
+            ActionPlace::Page { page, opened } => (
+                if *opened { "page-open" } else { "page-close" }.into(),
+                Some(page + 1),
+                None,
+            ),
+            ActionPlace::Field { name, event } => {
+                (format!("field-{}", event.name()), None, Some(name.clone()))
+            }
+        }
+    };
+    if json {
+        let items: Vec<String> = actions
+            .iter()
+            .map(|a| {
+                let (when, page, name) = place(&a.place);
+                let mut item = format!("\"when\":{}", string(&when));
+                if let Some(page) = page {
+                    let _ = write!(item, ",\"page\":{page}");
+                }
+                if let Some(name) = name {
+                    let _ = write!(item, ",\"name\":{}", string(&name));
+                }
+                let _ = write!(
+                    item,
+                    ",\"kind\":{},\"detail\":{}",
+                    string(a.action.kind()),
+                    string(&a.action.detail())
+                );
+                format!("{{{item}}}")
+            })
+            .collect();
+        return Ok(format!("{{\"actions\":[{}]}}\n", items.join(",")));
+    }
+    let mut text = String::new();
+    for a in &actions {
+        let (when, page, name) = place(&a.place);
+        let mut at = when;
+        if let Some(page) = page {
+            let _ = write!(at, " {page}");
+        }
+        if let Some(name) = name {
+            let _ = write!(at, " {name}");
+        }
+        let detail = a.action.detail();
+        let mut lines = detail.lines();
+        let _ = writeln!(
+            text,
+            "{at}: {} {}",
+            a.action.kind(),
+            lines.next().unwrap_or_default()
+        );
+        for line in lines {
+            let _ = writeln!(text, "    {line}");
+        }
+    }
+    if actions.is_empty() {
+        text.push_str("no scripts or actions\n");
+    }
+    Ok(text)
+}
+
 fn layers(args: &[String], json: bool) -> Done {
     let args = Args::parse(args)?;
     let [file] = args.words()?;

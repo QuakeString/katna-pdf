@@ -75,7 +75,7 @@ impl Document {
         self.read_action(&action)
     }
 
-    fn read_action(&self, action: &Dict) -> Option<FieldAction> {
+    pub(crate) fn read_action(&self, action: &Dict) -> Option<FieldAction> {
         let names = |key: &str| -> Vec<String> {
             match self.resolve_key(action, key) {
                 Object::Array(items) => items
