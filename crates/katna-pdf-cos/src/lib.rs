@@ -42,6 +42,7 @@ mod optimize;
 mod outline;
 mod pages;
 mod parse;
+mod pdfa;
 mod present;
 pub mod ranges;
 mod redact;
@@ -91,6 +92,10 @@ pub use objects::{ObjectChange, ObjectCopy, ObjectKind, PageObject, PictureFile,
 pub use optimize::{ImageLimit, Optimize, OptimizeError, Optimized};
 pub use outline::{Destination, OutlineItem, text_string};
 pub use pages::{ComposeError, PageInfo, PageSource, blank_pdf, compose};
+pub use pdfa::{
+    FontFamily, FontWant, Issue as PdfaIssue, Pdfa, PdfaError, find_font, font_dirs, font_files,
+    srgb_profile, system_font,
+};
 pub use present::{PageShow, Transition, TransitionStyle};
 pub use redact::{Pattern, RedactError, RedactOptions};
 pub use report::text_pdf;

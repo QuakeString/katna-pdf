@@ -2179,50 +2179,7 @@ fn embed_truetype(update: &mut Update, tt: &TrueType, text: &str) -> (Dict, Ref)
         .map(|i| char::from(b'A' + ((hash >> (5 * i)) % 26) as u8))
         .collect();
     let base = format!("{tag}+{}", tt.postscript_name);
-    let scale = 1000.0 / tt.units_per_em;
-    let mut flags = 1 << 5;
-    if tt.fixed_pitch {
-        flags |= 1;
-    }
-    if tt.serif {
-        flags |= 1 << 1;
-    }
-    if tt.italic_angle != 0.0 {
-        flags |= 1 << 6;
-    }
-    if tt.weight >= 600 {
-        flags |= 1 << 18;
-    }
-    let stem = 50.0 + f64::from(tt.weight.clamp(100, 900) - 100) / 8.0;
-    let descriptor = Dict(vec![
-        (Name::new("Type"), Object::name("FontDescriptor")),
-        (Name::new("FontName"), Object::name(&base)),
-        (Name::new("Flags"), Object::Int(flags)),
-        (
-            Name::new("FontBBox"),
-            Object::Array(
-                tt.bbox
-                    .iter()
-                    .map(|v| number((f64::from(*v) * scale).round()))
-                    .collect(),
-            ),
-        ),
-        (Name::new("ItalicAngle"), number(tt.italic_angle)),
-        (
-            Name::new("Ascent"),
-            number((f64::from(tt.ascent) * scale).round()),
-        ),
-        (
-            Name::new("Descent"),
-            number((f64::from(tt.descent) * scale).round()),
-        ),
-        (
-            Name::new("CapHeight"),
-            number((f64::from(tt.cap_height) * scale).round()),
-        ),
-        (Name::new("StemV"), number(stem.round())),
-        (Name::new("FontFile2"), Object::Ref(file_ref)),
-    ]);
+    let descriptor = truetype_descriptor(tt, &base, file_ref);
     let descriptor_ref = update.add(Object::Dict(descriptor.clone()));
     // Widths as runs of glyphs in a row.
     let mut w = Vec::new();
@@ -2322,7 +2279,55 @@ fn embed_truetype(update: &mut Update, tt: &TrueType, text: &str) -> (Dict, Ref)
     (load, r)
 }
 
-fn number(v: f64) -> Object {
+/// The font descriptor of `tt` embedded as `file_ref`, called `base`.
+pub(crate) fn truetype_descriptor(tt: &TrueType, base: &str, file_ref: Ref) -> Dict {
+    let scale = 1000.0 / tt.units_per_em;
+    let mut flags = 1 << 5;
+    if tt.fixed_pitch {
+        flags |= 1;
+    }
+    if tt.serif {
+        flags |= 1 << 1;
+    }
+    if tt.italic_angle != 0.0 {
+        flags |= 1 << 6;
+    }
+    if tt.weight >= 600 {
+        flags |= 1 << 18;
+    }
+    let stem = 50.0 + f64::from(tt.weight.clamp(100, 900) - 100) / 8.0;
+    Dict(vec![
+        (Name::new("Type"), Object::name("FontDescriptor")),
+        (Name::new("FontName"), Object::name(base)),
+        (Name::new("Flags"), Object::Int(flags)),
+        (
+            Name::new("FontBBox"),
+            Object::Array(
+                tt.bbox
+                    .iter()
+                    .map(|v| number((f64::from(*v) * scale).round()))
+                    .collect(),
+            ),
+        ),
+        (Name::new("ItalicAngle"), number(tt.italic_angle)),
+        (
+            Name::new("Ascent"),
+            number((f64::from(tt.ascent) * scale).round()),
+        ),
+        (
+            Name::new("Descent"),
+            number((f64::from(tt.descent) * scale).round()),
+        ),
+        (
+            Name::new("CapHeight"),
+            number((f64::from(tt.cap_height) * scale).round()),
+        ),
+        (Name::new("StemV"), number(stem.round())),
+        (Name::new("FontFile2"), Object::Ref(file_ref)),
+    ])
+}
+
+pub(crate) fn number(v: f64) -> Object {
     if v.fract() == 0.0 && v.abs() < 1e9 {
         Object::Int(v as i64)
     } else {

@@ -90,6 +90,13 @@ usage: katna-pdf-cli COMMAND [--json] ...
                                   change), and areas of pages that draw differently;
                                   --overlay writes NEW's page PAGE over the OLD page
                                   it came from, red only in OLD, blue only in NEW
+  pdfa FILE [-o OUT]              what keeps the file from being PDF/A; with -o,
+                                  the file made PDF/A-2b: fonts the reader supplied
+                                  embedded from the computer's own (Liberation and
+                                  the like), an sRGB output intent and metadata
+                                  put in, scripts, actions on events and kept files
+                                  taken out, the password taken off (open with the
+                                  owner's, KATNA_PDF_OPEN_PASSWORD)
   compress FILE -o OUT [--level lossless|medium|strong]
                                   the file made smaller: unused objects left out,
                                   streams packed tighter, copies kept once; medium
@@ -312,6 +319,7 @@ fn main() -> ExitCode {
         "redact" => redact(rest, json),
         "unlock" => unlock(rest, json),
         "compress" => compress(rest, json),
+        "pdfa" => pdfa(rest, json),
         "flatten" => flatten(rest, json),
         "compare" => compare(rest, json),
         "export" => export(rest, json),
@@ -1746,6 +1754,77 @@ fn compare(args: &[String], json: bool) -> Done {
         "no changes\n".into()
     } else {
         out
+    })
+}
+
+/// Says what keeps a file from being PDF/A, or makes it so.
+fn pdfa(args: &[String], json: bool) -> Done {
+    let args = Args::parse(args)?;
+    let [file] = args.words()?;
+    let doc = open(file)?;
+    let issues_text = |issues: &[katna_pdf_cos::PdfaIssue]| -> String {
+        issues.iter().map(|i| format!("  {i}\n")).collect()
+    };
+    let issues_json = |issues: &[katna_pdf_cos::PdfaIssue]| -> String {
+        issues
+            .iter()
+            .map(|i| string(&i.to_string()))
+            .collect::<Vec<_>>()
+            .join(",")
+    };
+    let Some(out) = args.option("-o").map(PathBuf::from) else {
+        let issues = doc.pdfa_issues();
+        return Ok(if json {
+            format!(
+                "{{\"file\":{},\"pdfa\":{},\"issues\":[{}]}}\n",
+                string(file),
+                issues.is_empty(),
+                issues_json(&issues)
+            )
+        } else if issues.is_empty() {
+            format!("{file}: nothing keeps it from being PDF/A\n")
+        } else {
+            format!("{file}: not PDF/A\n{}", issues_text(&issues))
+        });
+    };
+    let files = katna_pdf_cos::font_files(&katna_pdf_cos::font_dirs());
+    let done = doc
+        .to_pdfa(&|want| katna_pdf_cos::find_font(&files, want))
+        .map_err(|e| failed(format!("{file}: {e}")))?;
+    write(&out, &done.bytes)?;
+    Ok(if json {
+        format!(
+            "{{\"file\":{},\"pdfa\":{},\"fonts_embedded\":[{}],\"scripts_removed\":{},\
+             \"attachments_removed\":{},\"left\":[{}]}}\n",
+            string(&out.display().to_string()),
+            done.left.is_empty(),
+            done.fonts_embedded
+                .iter()
+                .map(|f| string(f))
+                .collect::<Vec<_>>()
+                .join(","),
+            done.scripts_removed,
+            done.attachments_removed,
+            issues_json(&done.left)
+        )
+    } else {
+        let mut text = format!(
+            "{}: {} fonts embedded, {} scripts or actions and {} kept files taken out\n",
+            out.display(),
+            done.fonts_embedded.len(),
+            done.scripts_removed,
+            done.attachments_removed
+        );
+        for f in &done.fonts_embedded {
+            let _ = writeln!(text, "  embedded {f}");
+        }
+        if done.left.is_empty() {
+            text.push_str("PDF/A-2b\n");
+        } else {
+            text.push_str("still not PDF/A:\n");
+            text.push_str(&issues_text(&done.left));
+        }
+        text
     })
 }
 

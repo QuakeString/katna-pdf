@@ -78,7 +78,12 @@ cargo run --release -p katna-pdf-bench -- file.pdf
   (`layers.rs`: `/OCProperties` groups listed, shown and hidden, added,
   renamed and taken out; a page's objects put on one by wrapping their
   operators in `/OC /name BDC … EMC`, which `page_objects` reads back as
-  each object's `layer`), and files made smaller
+  each object's `layer`), files made PDF/A-2b (`pdfa.rs`: what keeps
+  a file from it listed; fonts the reader supplied embedded from the
+  computer's own TrueType files that match, Liberation first, with a
+  `cmap` made for them, an sRGB output intent and XMP `pdfaid` put in,
+  scripts, actions on events and kept files taken out, the lock taken
+  off, then written whole), and files made smaller
   (`optimize.rs`: unused objects dropped, streams packed tighter, copies
   kept once, object streams, pictures brought down to a resolution, the
   result checked to draw the same). No GPUI, no C.
@@ -127,7 +132,7 @@ cargo run --release -p katna-pdf-bench -- file.pdf
   the AppImage and Setup's Windows install, downloads, checks and installs
   it; builds without `KATNA_PDF_VERSION` never look.
 - `apps/katna-pdf-cli` — the command line: info, merge, split, pages,
-  rotate, crop, sign (and certify), add-field, ltv, tokens, token-check, verify (with `--report` as a PDF), text and edit-text (`--blocks` / `--block` for paragraphs), insert, stamp, background, marks (list and `--remove`), redact, compress, compare (with `--overlay` as a PNG), form (with `--detect`, looks, comb, limits and `--action`), form-data, fill (and `--reset`), flatten, meta, lock and unlock, objects and object, bookmarks, links, dests and labels, annotations and XFDF, attachments, layers, actions, export (PNG, JPEG, text, Word, a scanned copy), impose (booklet, n-up, poster), and library; `--json` for scripts and agents.
+  rotate, crop, sign (and certify), add-field, ltv, tokens, token-check, verify (with `--report` as a PDF), text and edit-text (`--blocks` / `--block` for paragraphs), insert, stamp, background, marks (list and `--remove`), redact, compress, compare (with `--overlay` as a PNG), form (with `--detect`, looks, comb, limits and `--action`), form-data, fill (and `--reset`), flatten, meta, lock and unlock, objects and object, bookmarks, links, dests and labels, annotations and XFDF, attachments, layers, actions, export (PNG, JPEG, text, Word, a scanned copy), pdfa (check, or -o to convert), impose (booklet, n-up, poster), and library; `--json` for scripts and agents.
 - `tools/katna-pdf-cos-check` — runs katna-pdf-cos over a folder of PDFs
   (loads, page counts against hayro, update round trips).
 - `vendor/hayro`, `vendor/hayro-interpret`, `vendor/hayro-syntax` — hayro with our patches

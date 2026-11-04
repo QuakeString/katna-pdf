@@ -519,6 +519,14 @@ properties-shrinking = Making the file smaller…
 properties-shrunk = Made smaller: { $before } → { $after }. Save to keep it.
 properties-shrink-none = This file is already as small as it can be made.
 properties-shrink-failed = The file could not be made smaller: { $error }
+pdfa-heading = PDF/A
+pdfa-is = This file says it is PDF/A, the archival form, and nothing found keeps it from that.
+pdfa-not = PDF/A is the archival form: self-contained and the same wherever it is opened. This file is not, because of:
+pdfa-save = Save a copy as PDF/A…
+pdfa-working = Making the PDF/A copy…
+pdfa-saved = Wrote { $name } as PDF/A-2b.
+pdfa-saved-left = Wrote { $name }, but it is still not PDF/A: { $left }
+pdfa-failed = The PDF/A copy could not be made: { $error }
 
 ## Find in the document
 search-placeholder = Find in the document
