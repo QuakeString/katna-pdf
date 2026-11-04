@@ -137,10 +137,13 @@ usage: katna-pdf-cli COMMAND [--json] ...
   objects FILE [--pages LIST]     the pictures, forms and shapes drawn on pages, numbered
                                   PAGE:OBJECT, with where each is
   object FILE PAGE:OBJECT -o OUT (--rect L,B,R,T | --delete | --turn | --front |
-         --back | --opacity 0..1 | --colour #RRGGBB | --image PICTURE)
+         --back | --opacity 0..1 | --line-opacity 0..1 | --cap butt|round|square |
+         --join miter|round|bevel | --colour #RRGGBB | --image PICTURE)
                                   a picture or shape moved and resized to fill the box,
                                   taken out of the page, turned a quarter right, drawn
-                                  over or under everything else, made see-through,
+                                  over or under everything else, made see-through (a
+                                  shape's inside with --opacity, its line with
+                                  --line-opacity), its line's ends and corners changed,
                                   coloured (a shape), or shown as another picture
   form FILE -o OUT [--add KIND:PAGE:L,B,R,T:NAME]... [--tip NAME=TEXT]...
        [--required NAME]... [--optional NAME]... [--read-only NAME]...
@@ -455,6 +458,9 @@ impl<'a> Args<'a> {
                     | "--creator"
                     | "--producer"
                     | "--opacity"
+                    | "--line-opacity"
+                    | "--cap"
+                    | "--join"
                     | "--margin"
                     | "--bates-prefix"
                     | "--bates-suffix"
@@ -2623,12 +2629,16 @@ fn object(args: &[String], json: bool) -> Done {
         args.flag("--front"),
         args.flag("--back"),
         args.option("--opacity").is_some(),
+        args.option("--line-opacity").is_some(),
+        args.option("--cap").is_some() || args.option("--join").is_some(),
         args.option("--colour").is_some(),
         args.option("--image").is_some(),
     ];
     if picked.iter().filter(|p| **p).count() != 1 {
         return Err(Failure::Usage(
-            "object takes one of --rect, --delete, --turn, --front, --back, --opacity, --colour and --image".into(),
+            "object takes one of --rect, --delete, --turn, --front, --back, --opacity, \
+             --line-opacity, --cap and --join, --colour and --image"
+                .into(),
         ));
     }
     let [l, b, r, t] = object.rect;
@@ -2649,7 +2659,51 @@ fn object(args: &[String], json: bool) -> Done {
         change(ObjectChange::Back)
     } else if args.option("--opacity").is_some() {
         let opacity = number_option(&args, "--opacity", 1.0, |v| (0.0..=1.0).contains(&v))?;
-        change(ObjectChange::Opacity(opacity))
+        if object.style.is_some() {
+            change(ObjectChange::Opacities {
+                fill: Some(opacity),
+                stroke: None,
+            })
+        } else {
+            change(ObjectChange::Opacity(opacity))
+        }
+    } else if args.option("--line-opacity").is_some() {
+        let opacity = number_option(&args, "--line-opacity", 1.0, |v| (0.0..=1.0).contains(&v))?;
+        change(ObjectChange::Opacities {
+            fill: None,
+            stroke: Some(opacity),
+        })
+    } else if args.option("--cap").is_some() || args.option("--join").is_some() {
+        let cap = match args.option("--cap") {
+            None => None,
+            Some("butt") => Some(0),
+            Some("round") => Some(1),
+            Some("square") => Some(2),
+            Some(other) => {
+                return Err(Failure::Usage(format!(
+                    "--cap {other}: butt, round or square"
+                )));
+            }
+        };
+        let join = match args.option("--join") {
+            None => None,
+            Some("miter") => Some(0),
+            Some("round") => Some(1),
+            Some("bevel") => Some(2),
+            Some(other) => {
+                return Err(Failure::Usage(format!(
+                    "--join {other}: miter, round or bevel"
+                )));
+            }
+        };
+        change(ObjectChange::Style {
+            fill: None,
+            stroke: None,
+            width: None,
+            dash: None,
+            cap,
+            join,
+        })
     } else if let Some(path) = args.option("--image") {
         let bytes = std::fs::read(path).map_err(|e| failed(format!("{path}: {e}")))?;
         let image =

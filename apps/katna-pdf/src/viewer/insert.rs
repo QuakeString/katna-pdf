@@ -264,7 +264,8 @@ impl Viewer {
         Some(
             div()
                 .id("object-tools")
-                .h(px(44.0))
+                .min_h(px(44.0))
+                .py(px(space::S1))
                 .flex_shrink_0()
                 .flex()
                 .items_center()
@@ -272,7 +273,6 @@ impl Viewer {
                 .px(px(space::S3))
                 .border_b_1()
                 .border_color(th.line)
-                .overflow_x_scroll()
                 .child(inspector)
                 .into_any_element(),
         )

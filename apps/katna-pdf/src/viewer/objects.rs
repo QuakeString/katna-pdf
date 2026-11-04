@@ -978,7 +978,11 @@ impl Viewer {
             ObjectChange::Backward => {
                 picked.indices = indices.iter().map(|&i| i.saturating_sub(1)).collect();
             }
-            ObjectChange::Opacity(o) => picked.opacity = o,
+            ObjectChange::Opacity(o)
+            | ObjectChange::Opacities {
+                fill: Some(o),
+                stroke: _,
+            } => picked.opacity = o,
             _ => {}
         }
         self.change_page(
@@ -1540,7 +1544,9 @@ impl Viewer {
         };
         let many = indices.len() > 1;
         let th = self.theme;
-        let mut row = div().flex().items_center().gap(px(space::S1));
+        // Wrapping to a second line in a narrow window, so no tool is
+        // out of reach.
+        let mut row = div().flex().flex_wrap().items_center().gap(px(space::S1));
         let style = one.as_ref().and_then(|o| o.style.clone());
         let labels = ["X", "Y", "W", "H", "∠", "─"];
         for (i, (field, label)) in picked.fields.iter().zip(labels).enumerate() {
@@ -1600,6 +1606,62 @@ impl Viewer {
                 .child(
                     toggle("object-dash", "dash", !style.dash.is_empty(), "object-dash")
                         .on_click(cx.listener(|this, _, _, cx| this.toggle_dash(cx))),
+                );
+            // Its line's ends and corners, each clicked round to the next.
+            let cap = ["object-cap-butt", "object-cap-round", "object-cap-square"];
+            let join = [
+                "object-join-miter",
+                "object-join-round",
+                "object-join-bevel",
+            ];
+            let next_cap = (style.cap + 1) % 3;
+            let next_join = (style.join + 1) % 3;
+            row = row
+                .child(
+                    tool(
+                        "object-cap",
+                        "line-cap",
+                        t(
+                            "object-cap",
+                            &[("how", &t(cap[usize::from(style.cap.min(2))], &[]))],
+                        ),
+                    )
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.style_picked(
+                            ObjectChange::Style {
+                                fill: None,
+                                stroke: None,
+                                width: None,
+                                dash: None,
+                                cap: Some(next_cap),
+                                join: None,
+                            },
+                            cx,
+                        )
+                    })),
+                )
+                .child(
+                    tool(
+                        "object-join",
+                        "line-join",
+                        t(
+                            "object-join",
+                            &[("how", &t(join[usize::from(style.join.min(2))], &[]))],
+                        ),
+                    )
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.style_picked(
+                            ObjectChange::Style {
+                                fill: None,
+                                stroke: None,
+                                width: None,
+                                dash: None,
+                                cap: None,
+                                join: Some(next_join),
+                            },
+                            cx,
+                        )
+                    })),
                 );
             if one.as_ref().is_some_and(|o| !o.points.is_empty()) {
                 row = row.child(
@@ -1662,23 +1724,66 @@ impl Viewer {
                     cx.listener(|this, _, _, cx| this.change_picked(ObjectChange::Back, cx)),
                 ),
             );
-        let percent = (picked.opacity * 100.0).round() as u32;
         // 100, 75, 50, 25, then fully again.
-        let next = if picked.opacity <= 0.3 {
-            1.0
-        } else {
-            picked.opacity - 0.25
-        };
+        let less = |opacity: f32| if opacity <= 0.3 { 1.0 } else { opacity - 0.25 };
+        let opacity = one.as_ref().map_or(picked.opacity, |o| o.opacity);
+        let percent = (opacity * 100.0).round() as u32;
+        let next = less(opacity);
+        // A shape's inside apart from its line; a picture, or many
+        // objects at once, as a whole.
+        let shape = one.as_ref().is_some_and(|o| o.style.is_some());
         row = row.child(
             tool(
                 "object-opacity",
                 "contrast",
-                t("object-opacity", &[("percent", &percent.to_string())]),
+                t(
+                    if shape {
+                        "object-fill-opacity"
+                    } else {
+                        "object-opacity"
+                    },
+                    &[("percent", &percent.to_string())],
+                ),
             )
             .on_click(cx.listener(move |this, _, _, cx| {
-                this.change_picked(ObjectChange::Opacity(next), cx)
+                this.change_picked(
+                    if shape {
+                        ObjectChange::Opacities {
+                            fill: Some(next),
+                            stroke: None,
+                        }
+                    } else {
+                        ObjectChange::Opacity(next)
+                    },
+                    cx,
+                )
             })),
         );
+        if let Some(stroke_opacity) = one
+            .as_ref()
+            .and_then(|o| o.style.as_ref())
+            .filter(|s| s.stroke.is_some())
+            .map(|s| s.stroke_opacity)
+        {
+            let percent = (stroke_opacity * 100.0).round() as u32;
+            let next = less(stroke_opacity);
+            row = row.child(
+                tool(
+                    "object-line-opacity",
+                    "line-opacity",
+                    t("object-line-opacity", &[("percent", &percent.to_string())]),
+                )
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.change_picked(
+                        ObjectChange::Opacities {
+                            fill: None,
+                            stroke: Some(next),
+                        },
+                        cx,
+                    )
+                })),
+            );
+        }
         if one.as_ref().is_some_and(|o| o.kind == ObjectKind::Picture) {
             row = row
                 .child(

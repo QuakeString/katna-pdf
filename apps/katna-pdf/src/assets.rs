@@ -271,6 +271,18 @@ const ICONS: &[(&str, &[u8])] = &[
     ("icons/fill.svg", include_bytes!("../icons/fill.svg")),
     ("icons/stroke.svg", include_bytes!("../icons/stroke.svg")),
     ("icons/dash.svg", include_bytes!("../icons/dash.svg")),
+    (
+        "icons/line-cap.svg",
+        include_bytes!("../icons/line-cap.svg"),
+    ),
+    (
+        "icons/line-join.svg",
+        include_bytes!("../icons/line-join.svg"),
+    ),
+    (
+        "icons/line-opacity.svg",
+        include_bytes!("../icons/line-opacity.svg"),
+    ),
     ("icons/points.svg", include_bytes!("../icons/points.svg")),
     ("icons/zoom-in.svg", include_bytes!("../icons/zoom-in.svg")),
     (

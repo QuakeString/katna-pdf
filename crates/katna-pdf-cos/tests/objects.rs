@@ -573,3 +573,56 @@ fn a_picture_comes_out_as_a_file_and_a_freehand_line_goes_in() {
     assert!((style.width - 2.5).abs() < 1e-3);
     assert_eq!((style.cap, style.join), (1, 1));
 }
+
+#[test]
+fn a_shapes_inside_and_line_fade_apart() {
+    use katna_pdf_cos::ObjectChange;
+    let doc = page();
+    let objects = doc.page_objects(0);
+    let shape = objects
+        .iter()
+        .position(|o| {
+            o.kind == ObjectKind::Path && o.style.as_ref().is_some_and(|s| s.stroke.is_some())
+        })
+        .expect("a lined shape");
+    assert_eq!(objects[shape].opacity, 1.0);
+    let changed = |doc: &Document, change: ObjectChange| {
+        Document::load(doc.change_object(0, shape, &change).unwrap()).unwrap()
+    };
+    let inside = changed(
+        &doc,
+        ObjectChange::Opacities {
+            fill: Some(0.5),
+            stroke: None,
+        },
+    );
+    let read = &inside.page_objects(0)[shape];
+    assert_eq!(read.opacity, 0.5);
+    assert_eq!(read.style.as_ref().unwrap().stroke_opacity, 1.0);
+    // The line fades too; the inside stays as it was.
+    let both = changed(
+        &inside,
+        ObjectChange::Opacities {
+            fill: None,
+            stroke: Some(0.25),
+        },
+    );
+    let read = &both.page_objects(0)[shape];
+    assert_eq!(read.opacity, 0.5);
+    assert_eq!(read.style.as_ref().unwrap().stroke_opacity, 0.25);
+    // Ends and corners, read back.
+    let ends = changed(
+        &both,
+        ObjectChange::Style {
+            fill: None,
+            stroke: None,
+            width: None,
+            dash: None,
+            cap: Some(1),
+            join: Some(2),
+        },
+    );
+    let style = ends.page_objects(0)[shape].style.clone().unwrap();
+    assert_eq!((style.cap, style.join), (1, 2));
+    assert_eq!(style.stroke_opacity, 0.25);
+}
