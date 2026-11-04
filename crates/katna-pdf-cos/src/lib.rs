@@ -50,6 +50,7 @@ mod report;
 mod scripts;
 mod sign;
 mod stamp;
+mod tables;
 mod write;
 mod xfdf;
 
@@ -105,5 +106,6 @@ pub use sign::{
     SigningInfo,
 };
 pub use stamp::{Background, Bates, MarkWhat, PageMark, Stamp, StampPlace};
+pub use tables::{Table, csv, tables};
 pub use write::{Update, UpdateError, write_object};
 pub use xfdf::{XfdfAnnotation, XfdfError, from_fdf, from_xfdf, to_fdf, to_xfdf};

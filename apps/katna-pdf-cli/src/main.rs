@@ -68,7 +68,7 @@ usage: katna-pdf-cli COMMAND [--json] ...
   unlock FILE -o OUT --owner PW   the password taken off, given the owner's
                                   (any command opens a locked file with the password
                                   in KATNA_PDF_OPEN_PASSWORD)
-  export FILE -o OUT --as png|jpeg|text|docx|scanned [--pages PAGES] [--dpi N]
+  export FILE -o OUT --as png|jpeg|text|docx|csv|scanned [--pages PAGES] [--dpi N]
          [--quality Q] [--grey]  the pages drawn to picture files in folder OUT
                                   (FILE-1.png…, at N dots to the inch, default 150;
                                   JPEG at quality Q, default 85); their text as plain
@@ -1629,6 +1629,14 @@ fn export(args: &[String], json: bool) -> Done {
             write(&out, &bytes)?;
             Ok(wrote(&[(out, pages.len())], json))
         }
+        "csv" | "tables" => {
+            let tables = katna_pdf_cos::tables(&doc, &pages);
+            if tables.is_empty() {
+                return Err(failed("no tables found on those pages"));
+            }
+            write(&out, katna_pdf_cos::csv(&tables).as_bytes())?;
+            Ok(wrote(&[(out, tables.len())], json))
+        }
         "scanned" => {
             let drawn = drawn()?;
             let grey = args.flag("--grey");
@@ -1656,7 +1664,7 @@ fn export(args: &[String], json: bool) -> Done {
             Ok(wrote(&[(out, n)], json))
         }
         other => Err(Failure::Usage(format!(
-            "--as {other}: png, jpeg, text, docx or scanned"
+            "--as {other}: png, jpeg, text, docx, csv or scanned"
         ))),
     }
 }
