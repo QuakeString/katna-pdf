@@ -72,7 +72,7 @@ pub use measure::Scale;
 pub use meta::Metadata;
 pub use nav::NavError;
 pub use object::{Dict, Name, Object, Ref, Stream};
-pub use objects::{ObjectChange, ObjectCopy, ObjectKind, PageObject};
+pub use objects::{ObjectChange, ObjectCopy, ObjectKind, PageObject, PictureFile, ShapeStyle};
 pub use optimize::{ImageLimit, Optimize, OptimizeError, Optimized};
 pub use outline::{Destination, OutlineItem, text_string};
 pub use pages::{ComposeError, PageInfo, PageSource, compose};

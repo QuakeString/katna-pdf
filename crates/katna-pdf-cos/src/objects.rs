@@ -64,6 +64,23 @@ pub enum ObjectKind {
     Path,
 }
 
+/// How a shape is painted.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ShapeStyle {
+    /// Its inside's colour (RGB, 0 to 1), when it is filled.
+    pub fill: Option<[f32; 3]>,
+    /// Its line's colour, when it is stroked.
+    pub stroke: Option<[f32; 3]>,
+    /// Its line's width, in points on the page.
+    pub width: f32,
+    /// Its line's dashes and gaps, in points: none for a solid line.
+    pub dash: Vec<f32>,
+    /// How its line ends: 0 cut off, 1 round, 2 squared off past the end.
+    pub cap: u8,
+    /// How its line turns corners: 0 pointed, 1 round, 2 cut off.
+    pub join: u8,
+}
+
 /// A picture or shape on a page.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PageObject {
@@ -74,6 +91,67 @@ pub struct PageObject {
     ops: RangeInclusive<usize>,
     /// The graphics state's matrix as it starts.
     ctm: Matrix,
+    /// How it is painted, for a shape.
+    pub style: Option<ShapeStyle>,
+    /// Whether a clipping path cuts it down.
+    pub clipped: bool,
+    /// A shape's corners and the points its curves end at, in the page's
+    /// own space, in order: the points that can be moved.
+    pub points: Vec<[f32; 2]>,
+    /// Where each of `points` is written: its operator, and the operand
+    /// its x is (`usize::MAX - 1` and `usize::MAX` for a rectangle's
+    /// corner and its opposite).
+    point_ops: Vec<(usize, usize)>,
+}
+
+/// The graphics state read along a page's content, as far as shapes are
+/// painted with it.
+#[derive(Clone)]
+struct Painting {
+    fill: [f32; 3],
+    stroke: [f32; 3],
+    width: f64,
+    dash: Vec<f64>,
+    cap: u8,
+    join: u8,
+    clipped: bool,
+}
+
+impl Default for Painting {
+    fn default() -> Self {
+        Painting {
+            fill: [0.0; 3],
+            stroke: [0.0; 3],
+            width: 1.0,
+            dash: Vec::new(),
+            cap: 0,
+            join: 0,
+            clipped: false,
+        }
+    }
+}
+
+/// A colour from a colour operator's numbers: gray, RGB or CMYK.
+fn colour_of(op: &Op) -> Option<[f32; 3]> {
+    let n: Vec<f32> = (0..op.operands.len())
+        .filter_map(|k| op.number(k))
+        .map(|v| v.clamp(0.0, 1.0) as f32)
+        .collect();
+    match n[..] {
+        [g] => Some([g, g, g]),
+        [r, g, b] => Some([r, g, b]),
+        [c, m, y, k] => Some([
+            (1.0 - c) * (1.0 - k),
+            (1.0 - m) * (1.0 - k),
+            (1.0 - y) * (1.0 - k),
+        ]),
+        _ => None,
+    }
+}
+
+/// How much a matrix scales lengths.
+fn scale_of(m: &Matrix) -> f64 {
+    (m[0] * m[3] - m[1] * m[2]).abs().sqrt().max(1e-9)
 }
 
 impl PageObject {
@@ -107,10 +185,14 @@ impl Document {
         let forms = self.form_boxes(page);
         let mut out = Vec::new();
         let mut ctm = IDENTITY;
+        let mut paint = Painting::default();
         let mut stack = Vec::new();
         let mut in_text = false;
         // The path being built: where it started and its points.
         let mut path: Option<OpenPath> = None;
+        // Its corners and curve ends, and where each is written.
+        let mut anchors: Vec<[f32; 2]> = Vec::new();
+        let mut anchor_ops: Vec<(usize, usize)> = Vec::new();
         let mut clipping = false;
         for (i, op) in read.ops.iter().enumerate() {
             let n = |k: usize| op.number(k).unwrap_or(0.0);
@@ -118,28 +200,59 @@ impl Document {
                 let (_, m, points) = path.get_or_insert((i, ctm, Vec::new()));
                 points.push(apply(m, x, y));
             };
+            let mut anchor = |x: f64, y: f64, k: usize| {
+                let (px, py) = apply(&ctm, x, y);
+                anchors.push([px as f32, py as f32]);
+                anchor_ops.push((i, k));
+            };
             match op.operator.as_slice() {
-                b"q" => stack.push(ctm),
-                b"Q" => ctm = stack.pop().unwrap_or(ctm),
+                b"q" => stack.push((ctm, paint.clone())),
+                b"Q" => (ctm, paint) = stack.pop().unwrap_or((ctm, paint)),
                 b"cm" if op.operands.len() == 6 => {
                     ctm = mul(&[n(0), n(1), n(2), n(3), n(4), n(5)], &ctm);
                 }
                 b"BT" => in_text = true,
                 b"ET" => in_text = false,
-                b"m" | b"l" => point(n(0), n(1), &mut path),
+                b"rg" | b"g" | b"k" | b"sc" | b"scn" => {
+                    if let Some(c) = colour_of(op) {
+                        paint.fill = c;
+                    }
+                }
+                b"RG" | b"G" | b"K" | b"SC" | b"SCN" => {
+                    if let Some(c) = colour_of(op) {
+                        paint.stroke = c;
+                    }
+                }
+                b"w" => paint.width = n(0),
+                b"J" => paint.cap = n(0) as u8,
+                b"j" => paint.join = n(0) as u8,
+                b"d" => {
+                    paint.dash = match op.operands.first() {
+                        Some(Object::Array(a)) => a.iter().filter_map(Object::as_number).collect(),
+                        _ => Vec::new(),
+                    };
+                }
+                b"m" | b"l" => {
+                    point(n(0), n(1), &mut path);
+                    anchor(n(0), n(1), 0);
+                }
                 b"c" => {
                     point(n(0), n(1), &mut path);
                     point(n(2), n(3), &mut path);
                     point(n(4), n(5), &mut path);
+                    anchor(n(4), n(5), 4);
                 }
                 b"v" | b"y" => {
                     point(n(0), n(1), &mut path);
                     point(n(2), n(3), &mut path);
+                    anchor(n(2), n(3), 2);
                 }
                 b"re" => {
                     let (x, y, w, h) = (n(0), n(1), n(2), n(3));
                     point(x, y, &mut path);
                     point(x + w, y + h, &mut path);
+                    anchor(x, y, usize::MAX - 1);
+                    anchor(x + w, y + h, usize::MAX);
                 }
                 b"W" | b"W*" => clipping = true,
                 b"S" | b"s" | b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*" | b"n" => {
@@ -148,13 +261,33 @@ impl Document {
                         && !op.is("n")
                         && !in_text
                     {
+                        let o = op.operator.as_slice();
+                        let filled = matches!(o, b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*");
+                        let stroked = matches!(o, b"S" | b"s" | b"B" | b"B*" | b"b" | b"b*");
+                        let scale = scale_of(&m);
                         out.push(PageObject {
                             kind: ObjectKind::Path,
                             rect: bounds(&points),
                             ops: start..=i,
                             ctm: m,
+                            style: Some(ShapeStyle {
+                                fill: filled.then_some(paint.fill),
+                                stroke: stroked.then_some(paint.stroke),
+                                width: (paint.width * scale) as f32,
+                                dash: paint.dash.iter().map(|d| (d * scale) as f32).collect(),
+                                cap: paint.cap,
+                                join: paint.join,
+                            }),
+                            clipped: paint.clipped,
+                            points: std::mem::take(&mut anchors),
+                            point_ops: std::mem::take(&mut anchor_ops),
                         });
                     }
+                    if clipping {
+                        paint.clipped = true;
+                    }
+                    anchors.clear();
+                    anchor_ops.clear();
                     clipping = false;
                 }
                 b"Do" if !in_text => {
@@ -176,6 +309,10 @@ impl Document {
                         rect: bounds(&corners),
                         ops: i..=i,
                         ctm,
+                        style: None,
+                        clipped: paint.clipped,
+                        points: Vec::new(),
+                        point_ops: Vec::new(),
                     });
                 }
                 b"BI" if !in_text => {
@@ -190,6 +327,10 @@ impl Document {
                         rect: bounds(&corners),
                         ops: i..=i,
                         ctm,
+                        style: None,
+                        clipped: paint.clipped,
+                        points: Vec::new(),
+                        point_ops: Vec::new(),
                     });
                 }
                 _ => {}
@@ -399,6 +540,10 @@ impl Document {
             let op = &read.ops[at - 1];
             let ours = op.is("rg")
                 || op.is("RG")
+                || op.is("w")
+                || op.is("d")
+                || op.is("J")
+                || op.is("j")
                 || (op.is("gs")
                     && op
                         .operands
@@ -417,7 +562,7 @@ impl Document {
                 .ops
                 .get(*object.ops.end() + 1)
                 .is_some_and(|op| op.is("Q"));
-        let wrap = |keep: &dyn Fn(&Op) -> bool, new: String| {
+        let wrap_edits = |keep: &dyn Fn(&Op) -> bool, new: String| {
             if wrapped {
                 let mut before = b"q ".to_vec();
                 for &i in own.iter().rev() {
@@ -428,16 +573,16 @@ impl Document {
                 }
                 before.extend_from_slice(new.as_bytes());
                 let from = read.ops[at - 1].span.start;
-                splice(&read.content, vec![(from..first, before)])
+                vec![(from..first, before)]
             } else {
-                splice(
-                    &read.content,
-                    vec![
-                        (first..first, format!("q {new}").into_bytes()),
-                        (last..last, b" Q".to_vec()),
-                    ],
-                )
+                vec![
+                    (first..first, format!("q {new}").into_bytes()),
+                    (last..last, b" Q".to_vec()),
+                ]
             }
+        };
+        let wrap = |keep: &dyn Fn(&Op) -> bool, new: String| {
+            splice(&read.content, wrap_edits(keep, new))
         };
         let content = match change {
             ObjectChange::Front | ObjectChange::Back => {
@@ -530,6 +675,155 @@ impl Document {
                 let key = add.opacity(&mut update, opacity.clamp(0.0, 1.0));
                 wrap(&|op| !op.is("gs"), format!("/{key} gs "))
             }
+            ObjectChange::Style {
+                fill,
+                stroke,
+                width,
+                dash,
+                cap,
+                join,
+            } => {
+                if object.kind != ObjectKind::Path {
+                    return Err(EditError::NoRun);
+                }
+                let n = crate::insert::num;
+                // Widths are in the page's points; the shape's own units
+                // may be scaled.
+                let scale = scale_of(&object.ctm) as f32;
+                let mut before = String::new();
+                if let Some(w) = width {
+                    before.push_str(&format!("{} w ", n(w.max(0.0) / scale)));
+                }
+                if let Some(d) = dash {
+                    let parts: Vec<String> = d.iter().map(|v| n(v.max(0.0) / scale)).collect();
+                    before.push_str(&format!("[{}] 0 d ", parts.join(" ")));
+                }
+                if let Some(c) = cap {
+                    before.push_str(&format!("{} J ", (*c).min(2)));
+                }
+                if let Some(j) = join {
+                    before.push_str(&format!("{} j ", (*j).min(2)));
+                }
+                let mut edits = wrap_edits(
+                    &|op| {
+                        !(width.is_some() && op.is("w")
+                            || dash.is_some() && op.is("d")
+                            || cap.is_some() && op.is("J")
+                            || join.is_some() && op.is("j"))
+                    },
+                    before,
+                );
+                if fill.is_some() || stroke.is_some() {
+                    let paint_op = &read.ops[*object.ops.end()];
+                    let o = paint_op.operator.as_slice();
+                    let style = object.style.as_ref();
+                    let filled = fill.unwrap_or(style.is_some_and(|s| s.fill.is_some()));
+                    let stroked = stroke.unwrap_or(style.is_some_and(|s| s.stroke.is_some()));
+                    let star = if o.ends_with(b"*") { "*" } else { "" };
+                    let closes = matches!(o, b"s" | b"b" | b"b*");
+                    let new = match (filled, stroked) {
+                        (true, true) => format!("{}{star}", if closes { "b" } else { "B" }),
+                        (true, false) => format!("f{star}"),
+                        (false, true) => (if closes { "s" } else { "S" }).to_string(),
+                        (false, false) => "n".to_string(),
+                    };
+                    edits.push((paint_op.span.clone(), new.into_bytes()));
+                }
+                splice(&read.content, edits)
+            }
+            ObjectChange::MovePoint { index, to } => {
+                let &(i, k) = object.point_ops.get(*index).ok_or(EditError::NoRun)?;
+                let inv = invert(&object.ctm).ok_or(EditError::NoRun)?;
+                let (x, y) = apply(&inv, f64::from(to[0]), f64::from(to[1]));
+                let op = &read.ops[i];
+                let n = |k: usize| op.number(k).unwrap_or(0.0);
+                let mut nums: Vec<f64> = (0..op.operands.len()).map(n).collect();
+                match k {
+                    k if k == usize::MAX - 1 && nums.len() == 4 => {
+                        // The corner moves; the opposite one stays.
+                        let (fx, fy) = (nums[0] + nums[2], nums[1] + nums[3]);
+                        nums = vec![x, y, fx - x, fy - y];
+                    }
+                    k if k == usize::MAX && nums.len() == 4 => {
+                        nums[2] = x - nums[0];
+                        nums[3] = y - nums[1];
+                    }
+                    k if k + 1 < nums.len() => {
+                        // A curve's end takes its last control point along,
+                        // so the curve keeps its shape there.
+                        if op.is("c") && k == 4 {
+                            nums[2] += x - nums[4];
+                            nums[3] += y - nums[5];
+                        }
+                        nums[k] = x;
+                        nums[k + 1] = y;
+                    }
+                    _ => return Err(EditError::NoRun),
+                }
+                let mut text = nums.iter().map(|v| number(*v)).collect::<Vec<_>>().join(" ");
+                text.push(' ');
+                text.push_str(&String::from_utf8_lossy(&op.operator));
+                splice(&read.content, vec![(op.span.clone(), text.into_bytes())])
+            }
+            ObjectChange::Unclip => {
+                let Some(level) = clip_level(&read.ops, start) else {
+                    return Ok(self.update()?.finish());
+                };
+                // Past the `Q` that ends the outermost clip in force; a
+                // clip set at the top level never ends.
+                let mut there = read.content.len();
+                if level > 0 {
+                    let mut depth = read.ops[..start].iter().fold(0usize, |d, op| {
+                        if op.is("q") {
+                            d + 1
+                        } else if op.is("Q") {
+                            d.saturating_sub(1)
+                        } else {
+                            d
+                        }
+                    });
+                    for op in &read.ops[*object.ops.end() + 1..] {
+                        if op.is("q") {
+                            depth += 1;
+                        } else if op.is("Q") {
+                            depth = depth.saturating_sub(1);
+                            if depth < level {
+                                there = op.span.end;
+                                break;
+                            }
+                        }
+                    }
+                }
+                let at = read
+                    .ops
+                    .iter()
+                    .position(|op| op.span.start >= there)
+                    .unwrap_or(read.ops.len());
+                let undo = invert(&ctm_at(&read.ops, at)).unwrap_or(IDENTITY);
+                let mut moved = b"\nq ".to_vec();
+                for v in undo {
+                    moved.extend_from_slice(number(v).as_bytes());
+                    moved.push(b' ');
+                }
+                moved.extend_from_slice(b"cm ");
+                for &i in &state_at_with(&read.ops, start, false) {
+                    moved.extend_from_slice(&read.content[read.ops[i].span.clone()]);
+                    moved.push(b' ');
+                }
+                moved.extend_from_slice(body);
+                moved.extend_from_slice(b" Q\n");
+                let mut kept = Vec::new();
+                for op in &read.ops[object.ops.clone()] {
+                    if !is_path_or_paint(op) && !op.is("Do") && !op.is("BI") {
+                        kept.extend_from_slice(&read.content[op.span.clone()]);
+                        kept.push(b' ');
+                    }
+                }
+                splice(
+                    &read.content,
+                    vec![(first..last, kept), (there..there, moved)],
+                )
+            }
             ObjectChange::Colours { fill, stroke } => {
                 let mut before = String::new();
                 let n = crate::insert::num;
@@ -589,6 +883,102 @@ impl Document {
         }
         let content = splice(&read.content, edits);
         self.write_page_content(page, &content)
+    }
+
+    /// Picture `index` of `page_objects(page)` as a file: a JPEG's bytes
+    /// as they are, or its samples. None for a drawing, a picture in the
+    /// page's own content, or one in a form this cannot read (JPEG 2000,
+    /// JBIG2, fax).
+    pub fn picture_file(&self, page: usize, index: usize) -> Option<PictureFile> {
+        let object = self.page_objects(page).into_iter().nth(index)?;
+        if object.kind != ObjectKind::Picture {
+            return None;
+        }
+        let read = self.page_content(page)?;
+        let op = &read.ops[*object.ops.start()];
+        if !op.is("Do") {
+            return None;
+        }
+        let name = op.operands.first()?.as_name()?;
+        let page_ref = *self.pages().get(page)?;
+        let dict = page_dict(self, page_ref);
+        let resources = match dict.get("Resources").map(|r| self.resolve(r)) {
+            Some(Object::Dict(d)) => d,
+            _ => Dict::new(),
+        };
+        let Object::Dict(xobjects) = self.resolve_key(&resources, "XObject") else {
+            return None;
+        };
+        let Object::Stream(image) = self.resolve(xobjects.get(&String::from_utf8_lossy(name))?)
+        else {
+            return None;
+        };
+        let d = &image.dict;
+        let width = u32::try_from(self.resolve_key(d, "Width").as_int()?).ok()?;
+        let height = u32::try_from(self.resolve_key(d, "Height").as_int()?).ok()?;
+        let filters: Vec<Vec<u8>> = match self.resolve_key(d, "Filter") {
+            Object::Name(n) => vec![n.as_bytes().to_vec()],
+            Object::Array(a) => a
+                .iter()
+                .filter_map(|f| self.resolve(f).as_name().map(<[u8]>::to_vec))
+                .collect(),
+            _ => Vec::new(),
+        };
+        match filters.last().map(Vec::as_slice) {
+            Some(b"DCTDecode" | b"DCT") => {
+                let last = filters.len() - 1;
+                if last == 0 {
+                    return Some(PictureFile::Jpeg(image.data.clone()));
+                }
+                let mut before = Dict::new();
+                before.set(
+                    "Filter",
+                    Object::Array(
+                        filters[..last]
+                            .iter()
+                            .map(|f| Object::name(&String::from_utf8_lossy(f)))
+                            .collect(),
+                    ),
+                );
+                if let Object::Array(params) = self.resolve_key(d, "DecodeParms")
+                    && params.len() == filters.len()
+                {
+                    before.set("DecodeParms", Object::Array(params[..last].to_vec()));
+                }
+                Some(PictureFile::Jpeg(decode(&before, &image.data).ok()?))
+            }
+            Some(b"JPXDecode" | b"JBIG2Decode" | b"CCITTFaxDecode" | b"JPX" | b"CCF") => None,
+            _ => {
+                let mask = matches!(self.resolve_key(d, "ImageMask"), Object::Bool(true));
+                let (components, bits) = if mask {
+                    (1, 1)
+                } else {
+                    let cs = self.resolve_key(d, "ColorSpace");
+                    let components =
+                        u8::try_from(crate::redact::components(self, &cs, Some(&resources))?)
+                            .ok()?;
+                    let bits = u8::try_from(self.resolve_key(d, "BitsPerComponent").as_int()?)
+                        .ok()?;
+                    (components, bits)
+                };
+                if !matches!(bits, 1 | 2 | 4 | 8 | 16) || !matches!(components, 1 | 3 | 4) {
+                    return None;
+                }
+                let data = decode(d, &image.data).ok()?;
+                let stride = (usize::from(components) * usize::from(bits) * width as usize)
+                    .div_ceil(8);
+                if data.len() < stride * height as usize {
+                    return None;
+                }
+                Some(PictureFile::Samples {
+                    width,
+                    height,
+                    components,
+                    bits,
+                    data,
+                })
+            }
+        }
     }
 
     pub(crate) fn page_content(&self, page: usize) -> Option<Content> {
@@ -709,12 +1099,82 @@ pub enum ObjectChange {
     },
     /// A picture shown in place of this one, in the same box.
     Picture(crate::insert::Image),
+    /// A shape painted another way, each part where given: filled or
+    /// not, its line drawn or not, so wide (in points), dashed so (none
+    /// for solid), its ends and corners as [`ShapeStyle`] says.
+    Style {
+        fill: Option<bool>,
+        stroke: Option<bool>,
+        width: Option<f32>,
+        dash: Option<Vec<f32>>,
+        cap: Option<u8>,
+        join: Option<u8>,
+    },
+    /// One of a shape's [`PageObject::points`] moved to a place in the
+    /// page's own space.
+    MovePoint { index: usize, to: [f32; 2] },
+    /// Drawn whole, out from under the clipping path that cuts it down:
+    /// it is drawn again where that clip ends, so may come over what
+    /// was drawn there since.
+    Unclip,
+}
+
+/// The bytes of a picture as they can be saved to a file.
+#[derive(Debug, Clone, PartialEq)]
+pub enum PictureFile {
+    /// A JPEG file's bytes as they are.
+    Jpeg(Vec<u8>),
+    /// Rows of samples, `components` per pixel (1 gray, 3 RGB, 4 CMYK)
+    /// of `bits` bits each, rows padded to whole bytes.
+    Samples {
+        width: u32,
+        height: u32,
+        components: u8,
+        bits: u8,
+        data: Vec<u8>,
+    },
 }
 
 /// The operators that set the graphics state in force at operator `at`:
 /// the matrix, colours, line style, graphics states and clipping, as
 /// `q` and `Q` leave them.
 fn state_at(ops: &[Op], at: usize) -> Vec<usize> {
+    state_at_with(ops, at, true)
+}
+
+/// The `q` level the outermost clipping path in force at operator `at`
+/// was set at (0 for the top level), if any.
+fn clip_level(ops: &[Op], at: usize) -> Option<usize> {
+    let mut base = false;
+    let mut stack: Vec<bool> = Vec::new();
+    let mut clipping = false;
+    for op in &ops[..at.min(ops.len())] {
+        match op.operator.as_slice() {
+            b"q" => stack.push(false),
+            b"Q" => {
+                stack.pop();
+            }
+            b"W" | b"W*" => clipping = true,
+            b"S" | b"s" | b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*" | b"n" => {
+                if clipping {
+                    match stack.last_mut() {
+                        Some(level) => *level = true,
+                        None => base = true,
+                    }
+                }
+                clipping = false;
+            }
+            _ => {}
+        }
+    }
+    if base {
+        return Some(0);
+    }
+    stack.iter().position(|set| *set).map(|i| i + 1)
+}
+
+/// As [`state_at`], the clipping paths left out when `clips` is false.
+fn state_at_with(ops: &[Op], at: usize, clips: bool) -> Vec<usize> {
     let mut stack: Vec<Vec<usize>> = Vec::new();
     let mut now: Vec<usize> = Vec::new();
     let mut path: Vec<usize> = Vec::new();
@@ -733,7 +1193,7 @@ fn state_at(ops: &[Op], at: usize) -> Vec<usize> {
             }
             b"m" | b"l" | b"c" | b"v" | b"y" | b"h" | b"re" => path.push(i),
             b"S" | b"s" | b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*" | b"n" => {
-                if clipping {
+                if clipping && clips {
                     now.append(&mut path);
                     now.push(i);
                 }

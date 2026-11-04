@@ -1364,7 +1364,7 @@ impl hayro_ccitt::Decoder for Bits {
 }
 
 /// How many components a colour in colour space `cs` has.
-fn components(doc: &Document, cs: &Object, resources: Option<&Dict>) -> Option<usize> {
+pub(crate) fn components(doc: &Document, cs: &Object, resources: Option<&Dict>) -> Option<usize> {
     let cs = doc.resolve(cs);
     let name = match &cs {
         Object::Name(n) => n.as_bytes().to_vec(),
