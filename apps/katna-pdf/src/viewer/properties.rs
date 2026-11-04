@@ -5,14 +5,16 @@
 //! to change its title, author, subject and keywords, showing what made
 //! it and when (`katna_pdf_cos::meta`), to put a password on it or
 //! take one off (`katna_pdf_cos::lock`, AES-256), and to make it smaller
-//! (`katna_pdf_cos::optimize`).
+//! (`katna_pdf_cos::optimize`), and to save a copy as PDF/A
+//! (`katna_pdf_cos::pdfa`).
 
+use std::path::Path;
 use std::sync::Arc;
 
 use gpui::{AnyElement, Context, Entity, Subscription, div, prelude::*};
 
 use katna_pdf_cos::{
-    ActionPlace, DocAction, DocEvent, FieldEvent, Metadata, Optimize, Permissions,
+    ActionPlace, DocAction, DocEvent, FieldEvent, Metadata, Optimize, PdfaIssue, Permissions,
 };
 use katna_ui::px;
 use katna_ui::text_input::{InputEvent, TextInput};
@@ -33,6 +35,8 @@ pub(super) struct Properties {
     size: Option<u64>,
     /// The scripts and actions the file carries, once read.
     actions: Option<Vec<DocAction>>,
+    /// What keeps the file from being PDF/A, once read (nothing: it is).
+    pdfa: Option<Vec<PdfaIssue>>,
     fields: [Entity<TextInput>; 4],
     /// A new password to put on: the one that opens the file, and the
     /// owner's, which opens it fully.
@@ -113,6 +117,7 @@ impl Viewer {
             locked: None,
             size: None,
             actions: None,
+            pdfa: None,
             fields,
             password,
             owner,
@@ -136,6 +141,7 @@ impl Viewer {
                             (d.is_encrypted(), d.opened_as_owner()),
                             size,
                             d.document_actions(),
+                            d.pdfa_issues(),
                         )
                     })
                 })
@@ -144,10 +150,11 @@ impl Viewer {
                 let Some(properties) = this.properties.as_mut() else {
                     return;
                 };
-                let (meta, locked, size, actions) = meta.unwrap_or_default();
+                let (meta, locked, size, actions, pdfa) = meta.unwrap_or_default();
                 properties.locked = Some(locked);
                 properties.size = Some(size);
                 properties.actions = Some(actions);
+                properties.pdfa = Some(pdfa);
                 let values = [&meta.title, &meta.author, &meta.subject, &meta.keywords];
                 for (field, value) in properties.fields.iter().zip(values) {
                     let value = value.clone().unwrap_or_default();
@@ -301,6 +308,69 @@ impl Viewer {
                         this.notice = Some(t("properties-shrink-failed", &[("error", &error)]))
                     }
                 }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Asks where to save the file as PDF/A, then writes it there: fonts
+    /// a reader supplies embedded from the computer's own, an sRGB
+    /// output intent and metadata put in, scripts and kept files taken
+    /// out. The file open stays as it is.
+    fn save_as_pdfa(&mut self, cx: &mut Context<Self>) {
+        self.properties = None;
+        let (Some(path), Content::Ready(_)) = (self.path.clone(), &self.content) else {
+            return;
+        };
+        let folder = path.parent().map(Path::to_path_buf).unwrap_or_default();
+        let name = format!(
+            "{}-pdfa.pdf",
+            path.file_stem()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "file".into())
+        );
+        let chosen = cx.prompt_for_new_path(&folder, Some(&name));
+        let current = self.unsaved();
+        let key = self.key.clone();
+        cx.spawn(async move |this, cx| {
+            let Ok(Ok(Some(target))) = chosen.await else {
+                return;
+            };
+            this.update(cx, |this, cx| {
+                this.notice = Some(t("pdfa-working", &[]));
+                cx.notify();
+            })
+            .ok();
+            let done = cx
+                .background_executor()
+                .spawn(async move {
+                    let bytes = match current {
+                        Some(bytes) => bytes.to_vec(),
+                        None => std::fs::read(&path).map_err(|e| e.to_string())?,
+                    };
+                    let doc = super::cos(bytes, key.as_deref()).map_err(|e| e.to_string())?;
+                    let fonts = katna_pdf_cos::font_files(&katna_pdf_cos::font_dirs());
+                    let done = doc
+                        .to_pdfa(&|want| katna_pdf_cos::find_font(&fonts, want))
+                        .map_err(|e| e.to_string())?;
+                    std::fs::write(&target, &done.bytes).map_err(|e| e.to_string())?;
+                    Ok::<_, String>((super::file_name(&target), done.left))
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                this.notice = Some(match done {
+                    Ok((name, left)) if left.is_empty() => t("pdfa-saved", &[("name", &name)]),
+                    Ok((name, left)) => {
+                        let left: Vec<String> = left.iter().map(ToString::to_string).collect();
+                        t(
+                            "pdfa-saved-left",
+                            &[("name", &name), ("left", &left.join("; "))],
+                        )
+                    }
+                    Err(error) => t("pdfa-failed", &[("error", &error)]),
+                });
                 cx.notify();
             })
             .ok();
@@ -603,6 +673,42 @@ impl Viewer {
                             ),
                         ),
                 );
+        }
+        if let Some(issues) = &properties.pdfa {
+            let mut section = div()
+                .child(
+                    div()
+                        .pt(px(space::S2))
+                        .text_size(px(text::BODY))
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .text_color(th.text)
+                        .child(t("pdfa-heading", &[])),
+                )
+                .child(div().text_size(px(text::SMALL)).text_color(th.dim).child(
+                    if issues.is_empty() {
+                        t("pdfa-is", &[])
+                    } else {
+                        t("pdfa-not", &[])
+                    },
+                ));
+            for issue in issues {
+                section = section.child(
+                    div()
+                        .pl(px(space::S2))
+                        .text_size(px(text::SMALL))
+                        .text_color(th.dim)
+                        .child(format!("• {issue}")),
+                );
+            }
+            if !issues.is_empty() {
+                section = section.child(
+                    div().pt(px(space::S1)).child(
+                        widgets::outlined_button("pdfa-save", t("pdfa-save", &[]), &th.katna)
+                            .on_click(cx.listener(|this, _, _, cx| this.save_as_pdfa(cx))),
+                    ),
+                );
+            }
+            card = card.child(section);
         }
         // The form, and the comments: tinted, reset, and drawn in for good.
         let fields = self.form.as_ref().map_or(0, |f| f.fields.len());

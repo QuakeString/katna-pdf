@@ -197,7 +197,7 @@ fn old_value(old: &str, name: &str) -> Option<String> {
 }
 
 /// A whole XMP packet saying `meta`.
-fn xmp(meta: &Metadata, created: Option<&str>, modified: &str, old: &str) -> String {
+pub(crate) fn xmp(meta: &Metadata, created: Option<&str>, modified: &str, old: &str) -> String {
     let mut fields = String::new();
     let mut alt = |name: &str, value: Option<&str>| {
         if let Some(v) = value.map(str::trim).filter(|v| !v.is_empty()) {

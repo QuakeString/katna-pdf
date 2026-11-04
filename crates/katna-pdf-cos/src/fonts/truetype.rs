@@ -246,6 +246,20 @@ impl TrueType {
     /// of, and glyph 0) keeping their outlines: the tables a reader
     /// needs for glyphs named by number, the rest left out.
     pub fn subset(&self, gids: &[u16]) -> Vec<u8> {
+        write_sfnt(self.subset_tables(gids))
+    }
+
+    /// `subset`, with a `cmap` table (Windows Unicode, format 4) mapping
+    /// each character in `chars` to its glyph, as a simple font a reader
+    /// looks glyphs up by character needs.
+    pub fn subset_with_cmap(&self, gids: &[u16], chars: &[(u32, u16)]) -> Vec<u8> {
+        let mut tables = self.subset_tables(gids);
+        tables.push((*b"cmap", cmap_format4(chars)));
+        tables.sort_by_key(|(tag, _)| *tag);
+        write_sfnt(tables)
+    }
+
+    fn subset_tables(&self, gids: &[u16]) -> Vec<([u8; 4], Vec<u8>)> {
         let mut keep: BTreeSet<u16> = BTreeSet::new();
         let mut pending: Vec<u16> = gids.to_vec();
         pending.push(0);
@@ -284,8 +298,87 @@ impl TrueType {
             }
         }
         out_tables.sort_by_key(|(tag, _)| *tag);
-        write_sfnt(out_tables)
+        out_tables
     }
+}
+
+/// A `cmap` table with one Windows Unicode BMP subtable in format 4
+/// mapping `chars` (code points below 0xFFFF) to glyphs.
+fn cmap_format4(chars: &[(u32, u16)]) -> Vec<u8> {
+    let mut pairs: Vec<(u16, u16)> = chars
+        .iter()
+        .filter_map(|(c, g)| {
+            u16::try_from(*c)
+                .ok()
+                .filter(|c| *c < 0xFFFF)
+                .map(|c| (c, *g))
+        })
+        .collect();
+    pairs.sort_unstable();
+    pairs.dedup_by_key(|p| p.0);
+    // Runs of consecutive codes, each a segment whose glyphs are listed.
+    let mut segments: Vec<(u16, u16, Vec<u16>)> = Vec::new();
+    for (c, g) in pairs {
+        match segments.last_mut() {
+            Some((_, end, glyphs)) if *end + 1 == c => {
+                *end = c;
+                glyphs.push(g);
+            }
+            _ => segments.push((c, c, vec![g])),
+        }
+    }
+    let seg_count = segments.len() + 1;
+    let mut starts = Vec::new();
+    let mut ends = Vec::new();
+    let mut deltas = Vec::new();
+    let mut offsets = Vec::new();
+    let mut glyph_ids: Vec<u16> = Vec::new();
+    for (i, (start, end, glyphs)) in segments.iter().enumerate() {
+        starts.push(*start);
+        ends.push(*end);
+        deltas.push(0u16);
+        // From this entry of the offsets to the glyphs' place.
+        offsets.push((2 * (seg_count - i) + 2 * glyph_ids.len()) as u16);
+        glyph_ids.extend(glyphs);
+    }
+    starts.push(0xFFFF);
+    ends.push(0xFFFF);
+    deltas.push(1);
+    offsets.push(0);
+    let mut sub = Vec::new();
+    let length = 16 + 8 * seg_count + 2 * glyph_ids.len();
+    let mut power = 1usize;
+    let mut log = 0u16;
+    while power * 2 <= seg_count {
+        power *= 2;
+        log += 1;
+    }
+    sub.extend_from_slice(&4u16.to_be_bytes());
+    sub.extend_from_slice(&(length as u16).to_be_bytes());
+    sub.extend_from_slice(&0u16.to_be_bytes());
+    sub.extend_from_slice(&((seg_count * 2) as u16).to_be_bytes());
+    sub.extend_from_slice(&((power * 2) as u16).to_be_bytes());
+    sub.extend_from_slice(&log.to_be_bytes());
+    sub.extend_from_slice(&(((seg_count - power) * 2) as u16).to_be_bytes());
+    for list in [&ends] {
+        for v in list.iter() {
+            sub.extend_from_slice(&v.to_be_bytes());
+        }
+    }
+    sub.extend_from_slice(&0u16.to_be_bytes());
+    for list in [&starts, &deltas, &offsets, &glyph_ids] {
+        for v in list.iter() {
+            sub.extend_from_slice(&v.to_be_bytes());
+        }
+    }
+    let mut out = Vec::new();
+    out.extend_from_slice(&0u16.to_be_bytes());
+    out.extend_from_slice(&1u16.to_be_bytes());
+    out.extend_from_slice(&3u16.to_be_bytes());
+    out.extend_from_slice(&1u16.to_be_bytes());
+    out.extend_from_slice(&12u32.to_be_bytes());
+    out.extend_from_slice(&sub);
+    out
 }
 
 /// Characters to glyphs from the best `cmap` subtable: full Unicode

@@ -530,6 +530,30 @@ pub(crate) fn stand_in(name: &str) -> (&'static str, &'static phf::Map<&'static 
     style(family, bold, italic)
 }
 
+/// An `/Encoding` saying the standard encoding in terms readers that
+/// know only WinAnsi follow: WinAnsi with the codes that differ listed,
+/// those the standard encoding leaves out as `.notdef`.
+pub(crate) fn standard_as_differences() -> crate::object::Dict {
+    use crate::object::{Dict, Object};
+    let mut differences = Vec::new();
+    let mut last: Option<u8> = None;
+    for code in 32..=255u8 {
+        let standard = standard::get(code);
+        if standard == win_ansi::get(code) {
+            continue;
+        }
+        if last != Some(code.wrapping_sub(1)) {
+            differences.push(Object::Int(i64::from(code)));
+        }
+        differences.push(Object::name(standard.unwrap_or(".notdef")));
+        last = Some(code);
+    }
+    let mut dict = Dict::new();
+    dict.set("BaseEncoding", Object::name("WinAnsiEncoding"));
+    dict.set("Differences", differences);
+    dict
+}
+
 /// `c` in WinAnsi encoding, with its glyph name.
 pub(crate) fn win_ansi_code(c: char) -> Option<(u8, &'static str)> {
     let name = glyph_names::get_reverse(c)?;
