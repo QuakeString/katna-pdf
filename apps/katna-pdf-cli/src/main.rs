@@ -214,6 +214,18 @@ usage: katna-pdf-cli COMMAND [--json] ...
                                   it, such as i, ii, 1, 2); with -o the pages numbered
                                   in ranges from page FROM: STYLE 1, i, I, a, A or
                                   none, after PREFIX, counting from START
+  attachments FILE [--save DIR] [-o OUT [--add PATH[:DESCRIPTION]]...
+              [--rename NAME=NEW]... [--remove NAME]...]
+                                  the files kept in the document (apart from any
+                                  page); --save writes them into DIR; with -o,
+                                  files added, renamed and taken out
+  layers FILE [-o OUT [--add NAME]... [--show NAME]... [--hide NAME]...
+         [--rename NAME=NEW]... [--remove NAME]... [--put PAGE:OBJECT,...=NAME|none]...]
+                                  the document's layers (optional content), each
+                                  shown or hidden; with -o, layers added, shown,
+                                  hidden, renamed and taken out (what was on one
+                                  stays, shown always), and objects (as `objects`
+                                  numbers them) put on a layer or on none
   annots FILE [--as-text] [--save DIR]
                                   the annotations, page by page; --as-text as comments
                                   to read, replies under what they answer; --save
@@ -293,6 +305,8 @@ fn main() -> ExitCode {
         "text" => text(rest, json),
         "edit-text" => edit_text(rest, json),
         "annots" => annots(rest, json),
+        "attachments" => attachments(rest, json),
+        "layers" => layers(rest, json),
         "library" => library(rest, json),
         "xfdf-export" => xfdf_export(rest, json),
         "xfdf-import" => xfdf_import(rest, json),
@@ -437,6 +451,9 @@ impl<'a> Args<'a> {
                     | "--level"
                     | "--file"
                     | "--save"
+                    | "--show"
+                    | "--hide"
+                    | "--put"
                     | "--stamp"
                     | "--note"
                     | "--overlay"
@@ -536,6 +553,11 @@ fn open(path: &str) -> Result<Document, Failure> {
         path,
         std::env::var("KATNA_PDF_OPEN_PASSWORD").ok().as_deref(),
     )
+}
+
+/// A changed file loaded again, for the next change.
+fn reload(bytes: Vec<u8>) -> Result<Document, Failure> {
+    Document::load(bytes).map_err(|e| failed(e.to_string()))
 }
 
 fn open_with(path: &str, password: Option<&str>) -> Result<Document, Failure> {
@@ -3382,6 +3404,258 @@ fn verify(args: &[String], json: bool) -> Done {
     } else {
         Ok(out)
     }
+}
+
+/// Lists the files kept in the document, saves them, or changes them.
+fn attachments(args: &[String], json: bool) -> Done {
+    let args = Args::parse(args)?;
+    let [file] = args.words()?;
+    let doc = open(file)?;
+    let kept = doc.attachments();
+    if let Some(dir) = args.option("--save") {
+        let dir = Path::new(dir);
+        std::fs::create_dir_all(dir).map_err(|e| failed(format!("{}: {e}", dir.display())))?;
+        let mut saved = Vec::new();
+        for a in &kept {
+            let Some(data) = doc.attachment_data(a) else {
+                continue;
+            };
+            let name = Path::new(&a.name)
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .filter(|n| !n.is_empty())
+                .unwrap_or_else(|| "attachment".into());
+            let target = dir.join(&name);
+            write(&target, &data)?;
+            saved.push((target, data.len()));
+        }
+        return Ok(if json {
+            format!(
+                "{{\"saved\":[{}]}}\n",
+                saved
+                    .iter()
+                    .map(|(p, n)| format!(
+                        "{{\"file\":{},\"bytes\":{n}}}",
+                        string(&p.to_string_lossy())
+                    ))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            )
+        } else {
+            let mut out = String::new();
+            for (p, n) in &saved {
+                let _ = writeln!(out, "{} ({n} bytes)", p.display());
+            }
+            out
+        });
+    }
+    let Some(out) = args.option("-o") else {
+        if json {
+            let items: Vec<String> = kept
+                .iter()
+                .map(|a| {
+                    format!(
+                        "{{\"name\":{},\"description\":{},\"size\":{},\"modified\":{}}}",
+                        string(&a.name),
+                        string(&a.description),
+                        a.size.map_or("null".into(), |n| n.to_string()),
+                        a.modified.as_deref().map_or("null".into(), string)
+                    )
+                })
+                .collect();
+            return Ok(format!("{{\"attachments\":[{}]}}\n", items.join(",")));
+        }
+        let mut text = String::new();
+        for a in &kept {
+            let _ = writeln!(
+                text,
+                "{:<30} {:>10} {}",
+                a.name,
+                a.size.map_or(String::new(), |n| format!("{n} bytes")),
+                a.description
+            );
+        }
+        return Ok(text);
+    };
+    let mut bytes = doc.bytes().to_vec();
+    let mut doc = doc;
+    let mut changed = false;
+    let mut files = Vec::new();
+    for add in args.all("--add") {
+        let (path, description) = match add.rsplit_once(':') {
+            Some((p, d)) if !p.is_empty() && !Path::new(add).exists() => (p, d),
+            _ => (add, ""),
+        };
+        let data = std::fs::read(path).map_err(|e| failed(format!("{path}: {e}")))?;
+        let name = Path::new(path)
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| path.to_owned());
+        files.push((name, data, description.to_owned()));
+    }
+    if !files.is_empty() {
+        bytes = doc
+            .attach_files(&files)
+            .map_err(|e| failed(format!("{file}: {e}")))?;
+        doc = reload(bytes.clone())?;
+        changed = true;
+    }
+    for rename in args.all("--rename") {
+        let (old, new) = rename
+            .split_once('=')
+            .ok_or_else(|| Failure::Usage(format!("--rename {rename}: NAME=NEW")))?;
+        let kept = doc.attachments();
+        let a = kept
+            .iter()
+            .find(|a| a.name == old)
+            .ok_or_else(|| Failure::Usage(format!("--rename {old}: no such file")))?;
+        bytes = doc
+            .rename_attachment(a, new, &a.description)
+            .map_err(|e| failed(format!("{file}: {e}")))?;
+        doc = reload(bytes.clone())?;
+        changed = true;
+    }
+    let remove: Vec<String> = args
+        .all("--remove")
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+    if !remove.is_empty() {
+        let kept = doc.attachments();
+        for name in &remove {
+            if !kept.iter().any(|a| a.name == *name) {
+                return Err(Failure::Usage(format!("--remove {name}: no such file")));
+            }
+        }
+        bytes = doc
+            .remove_attachments(&remove)
+            .map_err(|e| failed(format!("{file}: {e}")))?;
+        changed = true;
+    }
+    if !changed {
+        return Err(Failure::Usage(
+            "say what to change with --add, --rename or --remove".into(),
+        ));
+    }
+    let count = doc.pages().len();
+    let out = PathBuf::from(out);
+    write(&out, &bytes)?;
+    Ok(wrote(&[(out, count)], json))
+}
+
+/// Lists the document's layers, or changes them.
+fn layers(args: &[String], json: bool) -> Done {
+    let args = Args::parse(args)?;
+    let [file] = args.words()?;
+    let doc = open(file)?;
+    let Some(out) = args.option("-o") else {
+        let layers = doc.layers();
+        if json {
+            let items: Vec<String> = layers
+                .iter()
+                .map(|l| format!("{{\"name\":{},\"shown\":{}}}", string(&l.name), l.on))
+                .collect();
+            return Ok(format!("{{\"layers\":[{}]}}\n", items.join(",")));
+        }
+        let mut text = String::new();
+        for l in &layers {
+            let _ = writeln!(
+                text,
+                "{:<8} {}",
+                if l.on { "shown" } else { "hidden" },
+                l.name
+            );
+        }
+        return Ok(text);
+    };
+    let mut bytes = doc.bytes().to_vec();
+    let mut doc = doc;
+    let mut changed = false;
+    let find = |doc: &katna_pdf_cos::Document, name: &str, option: &str| {
+        doc.layers()
+            .into_iter()
+            .find(|l| l.name == name)
+            .ok_or_else(|| Failure::Usage(format!("{option} {name}: no such layer")))
+    };
+    for name in args.all("--add") {
+        (bytes, _) = doc
+            .add_layer(name)
+            .map_err(|e| failed(format!("{file}: {e}")))?;
+        doc = reload(bytes.clone())?;
+        changed = true;
+    }
+    for rename in args.all("--rename") {
+        let (old, new) = rename
+            .split_once('=')
+            .ok_or_else(|| Failure::Usage(format!("--rename {rename}: NAME=NEW")))?;
+        let layer = find(&doc, old, "--rename")?;
+        bytes = doc
+            .rename_layer(layer.id, new)
+            .map_err(|e| failed(format!("{file}: {e}")))?;
+        doc = reload(bytes.clone())?;
+        changed = true;
+    }
+    let mut shown = Vec::new();
+    for name in args.all("--show") {
+        shown.push((find(&doc, name, "--show")?.id, true));
+    }
+    for name in args.all("--hide") {
+        shown.push((find(&doc, name, "--hide")?.id, false));
+    }
+    if !shown.is_empty() {
+        bytes = doc
+            .show_layers(&shown)
+            .map_err(|e| failed(format!("{file}: {e}")))?;
+        doc = reload(bytes.clone())?;
+        changed = true;
+    }
+    for put in args.all("--put") {
+        let bad = || Failure::Usage(format!("--put {put}: PAGE:OBJECT,OBJECT=NAME or none"));
+        let (objects, name) = put.split_once('=').ok_or_else(bad)?;
+        let (page, indices) = objects.split_once(':').ok_or_else(bad)?;
+        let page = page
+            .parse::<usize>()
+            .ok()
+            .filter(|p| (1..=doc.pages().len()).contains(p))
+            .ok_or_else(bad)?
+            - 1;
+        let indices: Vec<usize> = indices
+            .split(',')
+            .map(|i| {
+                i.trim()
+                    .parse::<usize>()
+                    .ok()
+                    .and_then(|i| i.checked_sub(1))
+            })
+            .collect::<Option<_>>()
+            .ok_or_else(bad)?;
+        let layer = match name {
+            "none" => None,
+            name => Some(find(&doc, name, "--put")?.id),
+        };
+        bytes = doc
+            .put_on_layer(page, &indices, layer)
+            .map_err(|e| failed(format!("{file}: {e}")))?;
+        doc = reload(bytes.clone())?;
+        changed = true;
+    }
+    for name in args.all("--remove") {
+        let layer = find(&doc, name, "--remove")?;
+        bytes = doc
+            .remove_layer(layer.id)
+            .map_err(|e| failed(format!("{file}: {e}")))?;
+        doc = reload(bytes.clone())?;
+        changed = true;
+    }
+    if !changed {
+        return Err(Failure::Usage(
+            "say what to change with --add, --show, --hide, --rename, --put or --remove".into(),
+        ));
+    }
+    let count = doc.pages().len();
+    let out = PathBuf::from(out);
+    write(&out, &bytes)?;
+    Ok(wrote(&[(out, count)], json))
 }
 
 fn annots(args: &[String], json: bool) -> Done {

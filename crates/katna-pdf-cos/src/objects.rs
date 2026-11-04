@@ -88,13 +88,15 @@ pub struct PageObject {
     /// Where it is, in the page's own space: left, bottom, right, top.
     pub rect: [f32; 4],
     /// Its operators, by index.
-    ops: RangeInclusive<usize>,
+    pub(crate) ops: RangeInclusive<usize>,
     /// The graphics state's matrix as it starts.
     ctm: Matrix,
     /// How it is painted, for a shape.
     pub style: Option<ShapeStyle>,
     /// Whether a clipping path cuts it down.
     pub clipped: bool,
+    /// The layer it is on (`/OC` marked content), if any.
+    pub layer: Option<Ref>,
     /// A shape's corners and the points its curves end at, in the page's
     /// own space, in order: the points that can be moved.
     pub points: Vec<[f32; 2]>,
@@ -183,8 +185,11 @@ impl Document {
             return Vec::new();
         };
         let forms = self.form_boxes(page);
+        let properties = self.layer_properties(page);
         let mut out = Vec::new();
         let mut ctm = IDENTITY;
+        // The marked content open at this point: a layer for each `/OC`.
+        let mut marked: Vec<Option<Ref>> = Vec::new();
         let mut paint = Painting::default();
         let mut stack = Vec::new();
         let mut in_text = false;
@@ -205,7 +210,24 @@ impl Document {
                 anchors.push([px as f32, py as f32]);
                 anchor_ops.push((i, k));
             };
+            let layer = marked.iter().rev().find_map(|l| *l);
             match op.operator.as_slice() {
+                b"BDC" | b"BMC" => {
+                    let oc = op.operands.first().and_then(Object::as_name) == Some(b"OC");
+                    let name = op.operands.get(1).and_then(Object::as_name);
+                    marked.push(
+                        oc.then(|| {
+                            properties
+                                .iter()
+                                .find(|(k, _)| Some(k.as_slice()) == name)
+                                .map(|(_, id)| *id)
+                        })
+                        .flatten(),
+                    );
+                }
+                b"EMC" => {
+                    marked.pop();
+                }
                 b"q" => stack.push((ctm, paint.clone())),
                 b"Q" => (ctm, paint) = stack.pop().unwrap_or((ctm, paint)),
                 b"cm" if op.operands.len() == 6 => {
@@ -279,6 +301,7 @@ impl Document {
                                 join: paint.join,
                             }),
                             clipped: paint.clipped,
+                            layer,
                             points: std::mem::take(&mut anchors),
                             point_ops: std::mem::take(&mut anchor_ops),
                         });
@@ -311,6 +334,7 @@ impl Document {
                         ctm,
                         style: None,
                         clipped: paint.clipped,
+                        layer,
                         points: Vec::new(),
                         point_ops: Vec::new(),
                     });
@@ -329,6 +353,7 @@ impl Document {
                         ctm,
                         style: None,
                         clipped: paint.clipped,
+                        layer,
                         points: Vec::new(),
                         point_ops: Vec::new(),
                     });
@@ -982,6 +1007,11 @@ impl Document {
                 })
             }
         }
+    }
+
+    /// What page `page` draws, its content streams decoded and joined.
+    pub fn page_content_bytes(&self, page: usize) -> Option<Vec<u8>> {
+        self.page_content(page).map(|c| c.content)
     }
 
     pub(crate) fn page_content(&self, page: usize) -> Option<Content> {

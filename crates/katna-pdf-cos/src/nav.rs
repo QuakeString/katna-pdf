@@ -62,7 +62,7 @@ pub(crate) fn dest_array(pages: &[Ref], dest: &Destination) -> Result<Object, Na
     }))
 }
 
-fn catalog_ref(doc: &Document) -> Result<Ref, NavError> {
+pub(crate) fn catalog_ref(doc: &Document) -> Result<Ref, NavError> {
     doc.trailer()
         .get("Root")
         .and_then(Object::as_ref)
@@ -310,13 +310,28 @@ impl Document {
         seen: &mut HashSet<Ref>,
         out: &mut Vec<(Vec<u8>, Object)>,
     ) {
+        self.tree_pairs_raw(node, depth, seen, out);
+        for (_, value) in out.iter_mut() {
+            *value = self.resolve(value);
+        }
+    }
+
+    /// Every key and value of the name tree at `node`, the values as
+    /// stored (a reference stays one).
+    pub(crate) fn tree_pairs_raw(
+        &self,
+        node: &Dict,
+        depth: usize,
+        seen: &mut HashSet<Ref>,
+        out: &mut Vec<(Vec<u8>, Object)>,
+    ) {
         if depth > MAX_TREE_DEPTH || seen.len() > MAX_NODES {
             return;
         }
         if let Object::Array(pairs) = self.resolve_key(node, "Names") {
             for pair in pairs.as_chunks::<2>().0 {
                 if let Object::String { bytes, .. } = self.resolve(&pair[0]) {
-                    out.push((bytes, self.resolve(&pair[1])));
+                    out.push((bytes, pair[1].clone()));
                 }
             }
         }
@@ -325,7 +340,7 @@ impl Document {
                 if seen.insert(kid)
                     && let Some(Object::Dict(kid)) = self.get(kid)
                 {
-                    self.tree_pairs(&kid, depth + 1, seen, out);
+                    self.tree_pairs_raw(&kid, depth + 1, seen, out);
                 }
             }
         }
