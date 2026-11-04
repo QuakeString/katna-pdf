@@ -3962,7 +3962,11 @@ impl Render for Viewer {
         let numbering_card = self.numbering_card(cx);
         let setup_card = self.setup_card(cx);
         let design_card = self.design_card(cx);
-        let properties_card = self.properties_card(cx);
+        // The properties card scrolls when the window is shorter than it.
+        let card_height = unpx(window.viewport_size().height) * katna_ui::scale::scale()
+            - 48.0
+            - 4.0 * katna_ui::tokens::space::S3;
+        let properties_card = self.properties_card(card_height, cx);
         let find_bar = self.find_bar(cx);
         let notice = self.notice.clone().map(|notice| {
             div()

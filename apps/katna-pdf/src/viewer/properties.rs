@@ -11,7 +11,9 @@ use std::sync::Arc;
 
 use gpui::{AnyElement, Context, Entity, Subscription, div, prelude::*};
 
-use katna_pdf_cos::{Metadata, Optimize, Permissions};
+use katna_pdf_cos::{
+    ActionPlace, DocAction, DocEvent, FieldEvent, Metadata, Optimize, Permissions,
+};
 use katna_ui::px;
 use katna_ui::text_input::{InputEvent, TextInput};
 use katna_ui::tokens::{radius, space, text};
@@ -29,6 +31,8 @@ pub(super) struct Properties {
     locked: Option<(bool, bool)>,
     /// How large the file is, in bytes, once read.
     size: Option<u64>,
+    /// The scripts and actions the file carries, once read.
+    actions: Option<Vec<DocAction>>,
     fields: [Entity<TextInput>; 4],
     /// A new password to put on: the one that opens the file, and the
     /// owner's, which opens it fully.
@@ -108,6 +112,7 @@ impl Viewer {
             read: None,
             locked: None,
             size: None,
+            actions: None,
             fields,
             password,
             owner,
@@ -125,18 +130,24 @@ impl Viewer {
                         None => std::fs::read(&path).ok()?,
                     };
                     let size = bytes.len() as u64;
-                    super::cos(bytes, key.as_deref())
-                        .ok()
-                        .map(|d| (d.metadata(), (d.is_encrypted(), d.opened_as_owner()), size))
+                    super::cos(bytes, key.as_deref()).ok().map(|d| {
+                        (
+                            d.metadata(),
+                            (d.is_encrypted(), d.opened_as_owner()),
+                            size,
+                            d.document_actions(),
+                        )
+                    })
                 })
                 .await;
             this.update(cx, |this, cx| {
                 let Some(properties) = this.properties.as_mut() else {
                     return;
                 };
-                let (meta, locked, size) = meta.unwrap_or_default();
+                let (meta, locked, size, actions) = meta.unwrap_or_default();
                 properties.locked = Some(locked);
                 properties.size = Some(size);
+                properties.actions = Some(actions);
                 let values = [&meta.title, &meta.author, &meta.subject, &meta.keywords];
                 for (field, value) in properties.fields.iter().zip(values) {
                     let value = value.clone().unwrap_or_default();
@@ -298,7 +309,11 @@ impl Viewer {
     }
 
     /// The properties card, while it is open.
-    pub(super) fn properties_card(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+    pub(super) fn properties_card(
+        &self,
+        max_height: f32,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
         let properties = self.properties.as_ref()?;
         let th = self.theme;
         let label = |id: &str| {
@@ -313,6 +328,8 @@ impl Viewer {
             .top(px(space::S3))
             .right(px(space::S5))
             .w(px(360.0))
+            .max_h(px(max_height.max(200.0)))
+            .overflow_y_scroll()
             .p(px(space::S4))
             .flex()
             .flex_col()
@@ -487,6 +504,64 @@ impl Viewer {
                         ),
                 ),
             };
+        }
+        if let Some(actions) = properties.actions.as_ref() {
+            card = card.child(
+                div()
+                    .pt(px(space::S2))
+                    .text_size(px(text::BODY))
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .text_color(th.text)
+                    .child(t("properties-actions", &[])),
+            );
+            if actions.is_empty() {
+                card = card.child(label("properties-actions-none"));
+            } else {
+                card = card.child(label("properties-actions-tip"));
+            }
+            for (i, a) in actions.iter().enumerate() {
+                let detail = a.action.detail();
+                let first = detail.lines().next().unwrap_or_default();
+                let shown: String = if first.chars().count() > 60 {
+                    first.chars().take(58).chain("…".chars()).collect()
+                } else {
+                    first.to_owned()
+                };
+                let whole = detail.clone();
+                card = card.child(
+                    div()
+                        .id(("properties-action", i))
+                        .flex()
+                        .flex_col()
+                        .px(px(space::S2))
+                        .py(px(space::S1))
+                        .rounded(px(radius::SM))
+                        .cursor_pointer()
+                        .hover(move |s| s.bg(th.hover))
+                        .tip(t("properties-action-copy", &[]), &th.katna)
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            cx.write_to_clipboard(gpui::ClipboardItem::new_string(whole.clone()));
+                            this.notice = Some(t("properties-action-copied", &[]));
+                            cx.notify();
+                        }))
+                        .child(
+                            div()
+                                .text_size(px(text::SMALL))
+                                .text_color(th.text)
+                                .child(format!(
+                                    "{} · {}",
+                                    place_label(&a.place),
+                                    t(&format!("actions-kind-{}", a.action.kind()), &[])
+                                )),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(text::SMALL))
+                                .text_color(th.dim)
+                                .child(shown),
+                        ),
+                );
+            }
         }
         if let Some(size) = properties.size {
             card = card
@@ -691,6 +766,51 @@ fn shown_date(pdf: &str) -> Option<String> {
         }
     }
     Some(out)
+}
+
+/// Where an action is attached, as people read it.
+fn place_label(place: &ActionPlace) -> String {
+    match place {
+        ActionPlace::Document(name) => t("actions-place-document", &[("name", name)]),
+        ActionPlace::Open => t("actions-place-open", &[]),
+        ActionPlace::DocumentEvent(e) => t(
+            match e {
+                DocEvent::WillClose => "actions-place-will-close",
+                DocEvent::WillSave => "actions-place-will-save",
+                DocEvent::DidSave => "actions-place-did-save",
+                DocEvent::WillPrint => "actions-place-will-print",
+                DocEvent::DidPrint => "actions-place-did-print",
+            },
+            &[],
+        ),
+        ActionPlace::Page { page, opened } => t(
+            if *opened {
+                "actions-place-page-open"
+            } else {
+                "actions-place-page-close"
+            },
+            &[("page", &(page + 1).to_string())],
+        ),
+        ActionPlace::Field { name, event } => {
+            let event = t(
+                match event {
+                    FieldEvent::Click => "actions-event-click",
+                    FieldEvent::Keystroke => "actions-event-keystroke",
+                    FieldEvent::Format => "actions-event-format",
+                    FieldEvent::Validate => "actions-event-validate",
+                    FieldEvent::Calculate => "actions-event-calculate",
+                    FieldEvent::Focus => "actions-event-focus",
+                    FieldEvent::Blur => "actions-event-blur",
+                    FieldEvent::MouseEnter => "actions-event-mouse-enter",
+                    FieldEvent::MouseExit => "actions-event-mouse-exit",
+                    FieldEvent::MouseDown => "actions-event-mouse-down",
+                    FieldEvent::MouseUp => "actions-event-mouse-up",
+                },
+                &[],
+            );
+            t("actions-place-field", &[("name", name), ("event", &event)])
+        }
+    }
 }
 
 #[cfg(test)]
