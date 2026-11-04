@@ -1242,7 +1242,12 @@ impl Viewer {
         .detach();
     }
 
-    fn press(&mut self, event: &gpui::MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn press(
+        &mut self,
+        event: &gpui::MouseDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         // A press outside the field being typed in ends the typing.
         self.finish_typing(true, cx);
         window.focus(&self.focus, cx);
@@ -3975,8 +3980,10 @@ impl Render for Viewer {
                     cx.notify();
                 }
             }))
-            .on_drop(cx.listener(|_, paths: &ExternalPaths, _, cx| {
-                cx.emit(ViewerEvent::Dropped(paths.paths().to_vec()));
+            .on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| {
+                if !this.drop_picture(paths.paths(), window, cx) {
+                    cx.emit(ViewerEvent::Dropped(paths.paths().to_vec()));
+                }
             }))
             .flex_1()
             .min_h_0()
@@ -4079,7 +4086,7 @@ fn short_folder(folder: &Path) -> String {
     }
 }
 
-fn file_name(path: &Path) -> String {
+pub(super) fn file_name(path: &Path) -> String {
     path.file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| path.to_string_lossy().into_owned())

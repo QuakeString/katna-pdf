@@ -581,9 +581,8 @@ impl Document {
                 ]
             }
         };
-        let wrap = |keep: &dyn Fn(&Op) -> bool, new: String| {
-            splice(&read.content, wrap_edits(keep, new))
-        };
+        let wrap =
+            |keep: &dyn Fn(&Op) -> bool, new: String| splice(&read.content, wrap_edits(keep, new));
         let content = match change {
             ObjectChange::Front | ObjectChange::Back => {
                 // Moved, it takes along the state it was drawn in.
@@ -760,7 +759,11 @@ impl Document {
                     }
                     _ => return Err(EditError::NoRun),
                 }
-                let mut text = nums.iter().map(|v| number(*v)).collect::<Vec<_>>().join(" ");
+                let mut text = nums
+                    .iter()
+                    .map(|v| number(*v))
+                    .collect::<Vec<_>>()
+                    .join(" ");
                 text.push(' ');
                 text.push_str(&String::from_utf8_lossy(&op.operator));
                 splice(&read.content, vec![(op.span.clone(), text.into_bytes())])
@@ -957,16 +960,16 @@ impl Document {
                     let components =
                         u8::try_from(crate::redact::components(self, &cs, Some(&resources))?)
                             .ok()?;
-                    let bits = u8::try_from(self.resolve_key(d, "BitsPerComponent").as_int()?)
-                        .ok()?;
+                    let bits =
+                        u8::try_from(self.resolve_key(d, "BitsPerComponent").as_int()?).ok()?;
                     (components, bits)
                 };
                 if !matches!(bits, 1 | 2 | 4 | 8 | 16) || !matches!(components, 1 | 3 | 4) {
                     return None;
                 }
                 let data = decode(d, &image.data).ok()?;
-                let stride = (usize::from(components) * usize::from(bits) * width as usize)
-                    .div_ceil(8);
+                let stride =
+                    (usize::from(components) * usize::from(bits) * width as usize).div_ceil(8);
                 if data.len() < stride * height as usize {
                     return None;
                 }

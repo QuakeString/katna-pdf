@@ -161,10 +161,7 @@ fn objects_restack_fade_recolour_and_change_picture() {
     );
     let text = content(&red);
     assert_eq!(text.matches(" gs ").count(), 1, "{text}");
-    assert!(
-        text.contains("gs 1 0 0 RG 300 300 40 20 re S Q"),
-        "{text}"
-    );
+    assert!(text.contains("gs 1 0 0 RG 300 300 40 20 re S Q"), "{text}");
     assert!(!text.contains("0 1 0 RG"), "{text}");
     assert!(close(red.page_objects(0)[n - 1].rect, before[n - 1].rect));
 
@@ -413,7 +410,11 @@ fn shapes_say_how_they_are_painted_and_are_painted_another_way() {
     assert!((style.width - 3.0).abs() < 1e-3, "{style:?}");
     assert_eq!(style.dash, Vec::<f32>::new());
     assert_eq!(style.join, 2);
-    assert!(content(&out).contains("6 w [] 0 d 2 j"), "{}", content(&out));
+    assert!(
+        content(&out).contains("6 w [] 0 d 2 j"),
+        "{}",
+        content(&out)
+    );
     assert!(content(&out).contains("re B"), "{}", content(&out));
     let stroked = ObjectChange::Style {
         fill: Some(false),
@@ -440,7 +441,12 @@ fn shapes_say_how_they_are_painted_and_are_painted_another_way() {
     let again = Document::load(out.change_object(0, 0, &wider).unwrap()).unwrap();
     let style = again.page_objects(0)[0].style.clone().unwrap();
     assert!((style.width - 5.0).abs() < 1e-3, "{style:?}");
-    assert_eq!(content(&again).matches(" w ").count(), 2, "{}", content(&again));
+    assert_eq!(
+        content(&again).matches(" w ").count(),
+        2,
+        "{}",
+        content(&again)
+    );
 
     // A corner of the rectangle moved: the opposite one stays; the
     // curve's end moved.
@@ -451,7 +457,10 @@ fn shapes_say_how_they_are_painted_and_are_painted_another_way() {
     let out = Document::load(doc.change_object(0, 0, &moved).unwrap()).unwrap();
     let objects = out.page_objects(0);
     assert_eq!(objects[0].points, vec![[60.0, 40.0], [150.0, 100.0]]);
-    assert!(close(objects[0].rect, [60.0, 40.0, 150.0, 100.0]), "{objects:?}");
+    assert!(
+        close(objects[0].rect, [60.0, 40.0, 150.0, 100.0]),
+        "{objects:?}"
+    );
     let moved = ObjectChange::MovePoint {
         index: 1,
         to: [520.0, 320.0],
@@ -459,7 +468,11 @@ fn shapes_say_how_they_are_painted_and_are_painted_another_way() {
     let out = Document::load(doc.change_object(0, 1, &moved).unwrap()).unwrap();
     let objects = out.page_objects(0);
     assert_eq!(objects[1].points, vec![[300.0, 300.0], [520.0, 320.0]]);
-    assert!(content(&out).contains("470 420 520 320 c"), "{}", content(&out));
+    assert!(
+        content(&out).contains("470 420 520 320 c"),
+        "{}",
+        content(&out)
+    );
 }
 
 #[test]
@@ -480,7 +493,10 @@ fn a_clipped_picture_is_drawn_whole_again() {
     // Drawn where the clip ended: before the shape, the same size.
     assert_eq!(objects[0].kind, ObjectKind::Picture);
     assert!(!objects[0].clipped, "{}", content(&out));
-    assert!(close(objects[0].rect, [100.0, 100.0, 300.0, 200.0]), "{objects:?}");
+    assert!(
+        close(objects[0].rect, [100.0, 100.0, 300.0, 200.0]),
+        "{objects:?}"
+    );
     assert_eq!(objects[1].kind, ObjectKind::Path);
     // Nothing to do when it is not clipped.
     let same = Document::load(out.change_object(0, 0, &ObjectChange::Unclip).unwrap()).unwrap();
