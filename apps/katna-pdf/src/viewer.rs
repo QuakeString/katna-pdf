@@ -40,6 +40,7 @@ mod compare;
 mod crop;
 mod datepick;
 mod design;
+mod files;
 mod fonts;
 mod insert;
 mod linking;
@@ -268,6 +269,10 @@ enum PaneTab {
     Pages,
     Contents,
     Comments,
+    /// Files kept in the document.
+    Files,
+    /// The document's layers.
+    Layers,
     Signatures,
     /// What changed from another version, while comparing.
     Changes,
@@ -391,6 +396,8 @@ pub struct Viewer {
     contents: Option<Contents>,
     /// The bookmark being renamed.
     renaming: Option<bookmarks::Renaming>,
+    /// The Files and Layers panes.
+    extras: files::Extras,
     /// How the file numbers its pages, when not plainly.
     label_ranges: Vec<katna_pdf_cos::LabelRange>,
     /// The page to show once the file opens, instead of where it was
@@ -602,6 +609,7 @@ impl Viewer {
             revision: 0,
             contents: None,
             renaming: None,
+            extras: files::Extras::default(),
             label_ranges: Vec::new(),
             start_page: None,
             sign_after: None,
@@ -787,6 +795,7 @@ impl Viewer {
         self.band = None;
         self.forget_runs();
         self.signatures = None;
+        self.extras = files::Extras::default();
         self.signable = Arc::default();
         self.signing = None;
         self.anchor = None;
@@ -907,7 +916,7 @@ impl Viewer {
         let key = self.key.clone();
         let again = path.clone();
         cx.spawn(async move |this, cx| {
-            let (outline, show, links, form, annots, signatures, signable, ranges) = cx
+            let (outline, show, links, form, annots, signatures, signable, ranges, extras) = cx
                 .background_executor()
                 .spawn(async move {
                     let Some(doc) = std::fs::read(&path)
@@ -923,6 +932,7 @@ impl Viewer {
                             Vec::new(),
                             sign::Signable::default(),
                             Vec::new(),
+                            (Vec::new(), Vec::new()),
                         );
                     };
                     let show = doc
@@ -933,10 +943,11 @@ impl Viewer {
                     let ranges = doc.page_label_ranges();
                     let signatures = sign::check(&doc);
                     let signable = sign::signable(&doc);
+                    let extras = (doc.attachments(), doc.layers());
                     // The object layer's copy is kept only for a form.
                     let form = (!fields.is_empty()).then(|| (Arc::new(doc), fields));
                     (
-                        outline, show, links, form, annots, signatures, signable, ranges,
+                        outline, show, links, form, annots, signatures, signable, ranges, extras,
                     )
                 })
                 .await;
@@ -953,6 +964,7 @@ impl Viewer {
                     this.check_signatures_online(again, generation, cx);
                 }
                 this.signatures = Some(Arc::new(signatures));
+                this.extras.set(extras.0, extras.1);
                 this.signable = Arc::new(signable);
                 if links.iter().any(|l| !l.is_empty()) {
                     this.links = Some(Arc::new(links));
@@ -1732,10 +1744,13 @@ impl Viewer {
                 PaneTab::Pages
             }
             PaneTab::Changes if self.comparing.is_none() => PaneTab::Pages,
+            PaneTab::Layers if self.extras.layers.is_empty() => PaneTab::Pages,
             tab => tab,
         };
         let body = match (tab, self.contents.as_ref()) {
             (PaneTab::Comments, _) => self.comments(window, cx),
+            (PaneTab::Files, _) => self.files_list(cx),
+            (PaneTab::Layers, _) => self.layers_list(cx),
             (PaneTab::Signatures, _) => self.signatures_list(cx),
             (PaneTab::Changes, _) => self.changes_list(window, cx),
             (PaneTab::Contents, Some(contents)) if contents.items.is_empty() => div()
@@ -1808,8 +1823,9 @@ impl Viewer {
             }
         };
         // Four tabs only fit closer together.
-        let tabs = 2
+        let tabs = 3
             + usize::from(self.contents.is_some())
+            + usize::from(!self.extras.layers.is_empty())
             + usize::from(self.signatures.as_ref().is_some_and(|s| !s.is_empty()))
             + usize::from(self.comparing.is_some());
         let pad = if tabs > 3 { space::S2 } else { space::S4 };
@@ -1866,6 +1882,18 @@ impl Viewer {
             PaneTab::Comments,
             t("pane-comments", &[]),
         ));
+        header = header.child(tab_button(
+            "tab-files",
+            PaneTab::Files,
+            t("pane-files", &[]),
+        ));
+        if !self.extras.layers.is_empty() {
+            header = header.child(tab_button(
+                "tab-layers",
+                PaneTab::Layers,
+                t("pane-layers", &[]),
+            ));
+        }
         if self.signatures.as_ref().is_some_and(|s| !s.is_empty()) {
             header = header.child(tab_button(
                 "tab-signatures",
@@ -1884,6 +1912,8 @@ impl Viewer {
             PaneTab::Pages => Some(self.page_actions(cx)),
             PaneTab::Comments if self.annots.is_some() => Some(self.comment_actions(cx)),
             PaneTab::Contents if self.contents.is_some() => Some(self.outline_actions(cx)),
+            PaneTab::Files => Some(self.files_actions(cx)),
+            PaneTab::Layers => Some(self.layers_actions(cx)),
             PaneTab::Changes => self.compare_actions(cx),
             _ => None,
         };
@@ -2675,6 +2705,7 @@ impl Viewer {
         self.links = links.iter().any(|l| !l.is_empty()).then(|| Arc::new(links));
         self.annots = Some(Arc::new(cos.annotations()));
         self.signatures = Some(Arc::new(sign::check(&cos)));
+        self.extras.set(cos.attachments(), cos.layers());
         self.signable = Arc::new(sign::signable(&cos));
         self.chosen = None;
         self.comment = None;

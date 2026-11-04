@@ -134,7 +134,7 @@ impl Viewer {
     }
 
     /// The picked objects' page and places, those still on the page.
-    fn picked_indices(&self) -> Option<(usize, Vec<usize>)> {
+    pub(super) fn picked_indices(&self) -> Option<(usize, Vec<usize>)> {
         let picked = self.picked_object.as_ref()?;
         let count = self.runs.objects.get(&picked.page).map_or(0, |o| o.len());
         let indices: Vec<usize> = picked
@@ -1700,6 +1700,26 @@ impl Viewer {
                     .on_click(cx.listener(|this, _, _, cx| this.unclip_picked(cx))),
             );
         }
+        let layer = self.picked_layer();
+        let layer_tip = match layer.and_then(|id| self.extras.layers.iter().find(|l| l.id == id)) {
+            Some(l) => t("object-layer", &[("name", &l.name)]),
+            None => t("object-layer-none", &[]),
+        };
+        row = row.child(
+            widgets::icon_button_colored(
+                "object-layer",
+                "layers",
+                18.0,
+                if layer.is_some() {
+                    th.katna.accent
+                } else {
+                    th.katna.text_dim
+                },
+                &th.katna,
+            )
+            .tip(layer_tip, &th.katna)
+            .on_click(cx.listener(|this, _, _, cx| this.cycle_picked_layer(cx))),
+        );
         row = row.child(
             widgets::icon_button("object-delete", "trash", 18.0, &th.katna)
                 .tip(t("object-delete", &[]), &th.katna)

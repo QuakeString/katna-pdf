@@ -2262,7 +2262,9 @@ fn doc_line(doc: &Doc) -> String {
 
 pub(crate) fn size_text(bytes: u64) -> String {
     let kb = bytes as f64 / 1024.0;
-    if kb < 1024.0 {
+    if bytes < 1024 {
+        t("size-bytes", &[("n", &bytes.to_string())])
+    } else if kb < 1024.0 {
         t("size-kb", &[("n", &format!("{:.0}", kb.max(1.0)))])
     } else {
         t("size-mb", &[("n", &format!("{:.1}", kb / 1024.0))])

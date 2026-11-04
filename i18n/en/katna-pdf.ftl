@@ -133,6 +133,7 @@ library-mail-not-downloaded = { $size }, downloaded on opening
 library-mail-open-failed = Could not open it: { $error }
 library-mail-gone = Its mail is no longer in Katna Mail.
 library-mail-no-daemon = Katna Mail isn't running, so its mail can't be downloaded.
+size-bytes = { $n } bytes
 size-kb = { $n } KB
 size-mb = { $n } MB
 
@@ -485,6 +486,26 @@ bookmark-indent = Move in under the one above
 bookmark-delete = Delete the bookmark
 bookmark-failed = Couldn't change the bookmarks: { $error }
 pane-comments = Comments
+pane-files = Files
+pane-layers = Layers
+files-none = No files are kept in this document. Attach one with the button above; readers find it under Attachments.
+files-add = Attach a file…
+files-open = Open the file
+files-save = Save the file as…
+files-rename = Rename (or double-click it)
+files-delete = Take the file out of the document
+files-name = Name
+files-failed = The file could not be changed: { $error }
+layers-none = The document has no layers.
+layers-add = New layer
+layers-rename = Rename (or double-click it)
+layers-delete = Take the layer out (what was on it stays, shown always)
+layers-show = Show this layer
+layers-hide = Hide this layer
+layers-new-name = Layer { $n }
+layers-failed = The layers could not be changed: { $error }
+object-layer = On the layer { $name }: click for the next layer, or none
+object-layer-none = On no layer: click to put it on one
 
 ## Tabs
 tab-empty = New tab

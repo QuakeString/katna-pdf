@@ -566,6 +566,7 @@ impl Viewer {
         let links = cos.links();
         self.links = links.iter().any(|l| !l.is_empty()).then(|| Arc::new(links));
         self.set_label_ranges(cos.page_label_ranges());
+        self.extras.set(cos.attachments(), cos.layers());
         // The form's changes are in the file now.
         let fields = cos.form();
         self.form = crate::form::Form::new(Arc::new(cos), fields);

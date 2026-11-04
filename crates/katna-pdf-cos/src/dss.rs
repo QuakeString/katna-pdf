@@ -116,6 +116,16 @@ impl Document {
 }
 
 /// `data` in a stream of its own, compressed.
+/// `data` packed, with `dict`'s entries on the stream too.
+pub(crate) fn compressed_with(dict: Dict, data: &[u8]) -> Stream {
+    let mut stream = compressed(data);
+    for (k, v) in dict.0 {
+        stream.dict.0.retain(|(key, _)| *key != k);
+        stream.dict.0.push((k, v));
+    }
+    stream
+}
+
 pub(crate) fn compressed(data: &[u8]) -> Stream {
     let mut e = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
     let packed = e.write_all(data).and_then(|_| e.finish());

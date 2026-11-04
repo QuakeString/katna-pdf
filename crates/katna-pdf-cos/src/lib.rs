@@ -11,6 +11,7 @@
 
 mod actions;
 mod annots;
+mod attachments;
 mod calc;
 mod content;
 mod crypt;
@@ -26,6 +27,7 @@ mod formdata;
 mod forms;
 mod insert;
 mod labels;
+mod layers;
 mod links;
 mod lock;
 mod mdp;
@@ -53,6 +55,7 @@ pub use annots::{
     REVIEW_STATES, STAMPS, annotation_status, comments_text, custom_stamp, pdf_date,
     stamp_is_dynamic, stamp_label,
 };
+pub use attachments::Attachment;
 pub use calc::{
     CalcOp, Calculation, Format, Scripts, calculate, number, parse_date, show, write_date,
 };
@@ -71,6 +74,7 @@ pub use formdata::{
 pub use forms::{Border, Field, FieldKind, FieldValue, Look, Widget};
 pub use insert::{Image, Insert, ShapeKind};
 pub use labels::{LabelRange, LabelStyle, labels_of};
+pub use layers::Layer;
 pub use links::{Link, LinkTarget};
 pub use lock::LockError;
 pub use mdp::{Allowed, Change, Lock};
