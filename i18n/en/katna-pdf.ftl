@@ -266,6 +266,7 @@ object-saved-picture = Saved { $name }
 object-save-failed = The picture could not be saved: { $error }
 object-unclip = Drawn whole: a clipping path cuts it down
 text-edit-failed = The text could not be changed: { $error }
+text-edit-stood-in = { $font } has no “{ $chars }”; { $standin } stood in.
 page-marks = Page marks: headers, footers, watermarks, Bates numbers and backgrounds on many pages
 marks-title = Page marks
 marks-header = Header or footer

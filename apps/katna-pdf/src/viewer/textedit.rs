@@ -428,14 +428,41 @@ impl Viewer {
             return;
         };
         let runs = block.runs;
-        self.change_page(
+        self.change_page_told(
             typing.page,
             move |doc| {
-                doc.edit_block(typing.page, &runs, &text)
-                    .map_err(|e| e.to_string())
+                // Letters the font lacks are said, once the change shows.
+                let told = doc.missing_glyphs(typing.page, &runs, &text).map(|m| {
+                    t(
+                        "text-edit-stood-in",
+                        &[
+                            ("font", &m.font),
+                            ("chars", &m.chars),
+                            ("standin", m.stand_in.as_deref().unwrap_or("")),
+                        ],
+                    )
+                });
+                let bytes = doc
+                    .edit_block(typing.page, &runs, &text)
+                    .map_err(|e| e.to_string())?;
+                Ok((bytes, told))
             },
             cx,
         );
+    }
+
+    /// As [`Viewer::change_page`], with a notice to show once the change
+    /// does, when `change` gives one.
+    pub(super) fn change_page_told(
+        &mut self,
+        page: usize,
+        change: impl FnOnce(&katna_pdf_cos::Document) -> Result<(Vec<u8>, Option<String>), String>
+        + Send
+        + 'static,
+        cx: &mut Context<Self>,
+    ) {
+        let key = self.key.clone();
+        self.change_document_told(vec![page], "text-edit-failed", key, change, cx);
     }
 
     /// Changes page `page` with `change` on a background thread, from the
@@ -472,6 +499,27 @@ impl Viewer {
         change: impl FnOnce(&katna_pdf_cos::Document) -> Result<Vec<u8>, String> + Send + 'static,
         cx: &mut Context<Self>,
     ) {
+        self.change_document_told(
+            pages,
+            failed,
+            after,
+            move |doc| change(doc).map(|bytes| (bytes, None)),
+            cx,
+        );
+    }
+
+    /// As [`Viewer::change_document_keyed`], with a notice to show once
+    /// the change does, when `change` gives one.
+    fn change_document_told(
+        &mut self,
+        pages: Vec<usize>,
+        failed: &'static str,
+        after: Option<Arc<str>>,
+        change: impl FnOnce(&katna_pdf_cos::Document) -> Result<(Vec<u8>, Option<String>), String>
+        + Send
+        + 'static,
+        cx: &mut Context<Self>,
+    ) {
         let key = self.key.clone();
         let kept = after.clone();
         let (Some(path), Content::Ready(_)) = (self.path.clone(), &self.content) else {
@@ -491,13 +539,14 @@ impl Viewer {
                         None => std::fs::read(&path).map_err(|e| e.to_string())?,
                     };
                     let base = super::cos(bytes, key.as_deref()).map_err(|e| e.to_string())?;
-                    let out = Arc::new(change(&base)?);
+                    let (out, told) = change(&base)?;
+                    let out = Arc::new(out);
                     let doc = crate::engine::engine()
                         .open(out.clone(), after.as_deref().unwrap_or(""))
                         .map_err(|e| e.to_string())?;
                     let cos =
                         super::cos(out.to_vec(), after.as_deref()).map_err(|e| e.to_string())?;
-                    Ok::<_, String>((out, doc, cos))
+                    Ok::<_, String>((out, doc, cos, told))
                 })
                 .await;
             this.update(cx, |this, cx| {
@@ -507,8 +556,11 @@ impl Viewer {
                     return;
                 }
                 match written {
-                    Ok((bytes, doc, cos)) => {
+                    Ok((bytes, doc, cos, told)) => {
                         this.key = kept;
+                        if told.is_some() {
+                            this.notice = told;
+                        }
                         this.forget_runs();
                         let design = this
                             .designing
@@ -704,11 +756,17 @@ impl Viewer {
         // A line alone grows to a right margin as wide as its left one,
         // as `edit_block` wraps it; a little room for the face here being
         // a touch wider than the file's.
-        let wide = if block.runs.len() == 1 {
+        // A turned paragraph is typed in a box the right way up at the
+        // top left of where it is, as long as its lines run.
+        let turned = block.angle != 0.0;
+        let wide = if turned {
+            block.width * shown
+        } else if block.runs.len() == 1 {
             (b[2] - b[0]).max(page_width - 2.0 * b[0])
         } else {
             b[2] - b[0]
         } + 0.3 * size;
+        let top = if turned { b[1] } else { top };
         let pad = 2.0;
         let [r, g, bl] = self.page_colors().pixel(block.colour);
         let look = &typing.look;
