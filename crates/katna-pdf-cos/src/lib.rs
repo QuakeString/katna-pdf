@@ -9,6 +9,7 @@
 //! Locked files open with their password (an empty one is tried first);
 //! updates to them are locked with the same key.
 
+mod actions;
 mod annots;
 mod calc;
 mod content;
@@ -19,6 +20,7 @@ mod document;
 mod dss;
 mod edit;
 mod filter;
+mod flatten;
 mod fonts;
 mod formdata;
 mod forms;
@@ -45,6 +47,7 @@ mod stamp;
 mod write;
 mod xfdf;
 
+pub use actions::{FieldAction, SubmitFormat};
 pub use annots::{
     AnnotChanges, AnnotFlags, AnnotKind, Annotation, DYNAMIC_STAMPS, MarkupStyle, NOTE_SIZE,
     REVIEW_STATES, STAMPS, annotation_status, comments_text, custom_stamp, pdf_date,
@@ -60,11 +63,12 @@ pub use document::{Document, Entry, LoadError, XrefKind};
 pub use dss::Dss;
 pub use edit::{EditError, Layout, NewFont, TextAlign, TextBlock, TextRun};
 pub use filter::{FilterError, decode};
+pub use flatten::Flatten;
 pub use formdata::{
     FormDataError, data_from_csv, data_from_fdf, data_from_json, data_from_xfdf, data_to_csv,
     data_to_json, data_to_xfdf, read_data,
 };
-pub use forms::{Field, FieldKind, FieldValue, Widget};
+pub use forms::{Border, Field, FieldKind, FieldValue, Look, Widget};
 pub use insert::{Image, Insert, ShapeKind};
 pub use labels::{LabelRange, LabelStyle, labels_of};
 pub use links::{Link, LinkTarget};

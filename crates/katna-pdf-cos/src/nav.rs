@@ -48,7 +48,7 @@ impl From<UpdateError> for NavError {
 
 /// A destination as written: `[page /XYZ null top null]`, or the whole
 /// page (`/Fit`) when no height is given.
-fn dest_array(pages: &[Ref], dest: &Destination) -> Result<Object, NavError> {
+pub(crate) fn dest_array(pages: &[Ref], dest: &Destination) -> Result<Object, NavError> {
     let page = *pages.get(dest.page).ok_or(NavError::NoPage(dest.page))?;
     Ok(Object::Array(match dest.top {
         Some(top) => vec![

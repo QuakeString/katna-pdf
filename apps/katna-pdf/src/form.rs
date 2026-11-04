@@ -10,7 +10,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use gpui::{Entity, Subscription};
-use katna_pdf_cos::{Calculation, Document, Field, FieldKind, FieldValue, Format, Ref, Widget};
+use katna_pdf_cos::{
+    Calculation, Document, Field, FieldAction, FieldKind, FieldValue, Format, Ref, Widget,
+};
 use katna_ui::text_input::TextInput;
 
 pub struct Form {
@@ -24,6 +26,8 @@ pub struct Form {
     calculated: Vec<(usize, Calculation)>,
     /// Fields that hold a date, with how it is written (`dd/mm/yyyy`).
     dates: HashMap<usize, String>,
+    /// What buttons do when clicked.
+    actions: HashMap<usize, FieldAction>,
     /// Values changed since the file was opened or saved.
     pub changes: Vec<(Ref, FieldValue)>,
     /// The file with the changes made, once written.
@@ -48,12 +52,20 @@ impl Form {
     /// The form of `source`, if it has any field that can be filled.
     pub fn new(source: Arc<Document>, fields: Vec<Field>) -> Option<Self> {
         let mut on_page: HashMap<usize, Vec<(usize, usize)>> = HashMap::new();
+        let actions: HashMap<usize, FieldAction> = fields
+            .iter()
+            .enumerate()
+            .filter(|(_, f)| !f.read_only)
+            .filter_map(|(i, f)| Some((i, source.field_action(f)?)))
+            .collect();
         for (f, field) in fields.iter().enumerate() {
-            if !fillable(field) {
+            if !fillable(field) && !actions.contains_key(&f) {
                 continue;
             }
             for (w, widget) in field.widgets.iter().enumerate() {
-                on_page.entry(widget.page).or_default().push((f, w));
+                if !widget.hidden {
+                    on_page.entry(widget.page).or_default().push((f, w));
+                }
             }
         }
         let scripts = source.form_scripts(&fields);
@@ -78,6 +90,7 @@ impl Form {
             on_page,
             calculated,
             dates,
+            actions,
             changes: Vec::new(),
             filled: None,
             editing: None,
@@ -92,6 +105,11 @@ impl Form {
             .into_iter()
             .flatten()
             .map(|&(f, w)| (f, w, &self.fields[f].widgets[w]))
+    }
+
+    /// What field `field` does when clicked, if anything.
+    pub fn action(&self, field: usize) -> Option<&FieldAction> {
+        self.actions.get(&field)
     }
 
     /// How field `field` writes its date, if it holds one.
@@ -204,6 +222,7 @@ mod tests {
                     page: 0,
                     rect: [0.0; 4],
                     on: Some((*on).into()),
+                    hidden: false,
                 })
                 .collect(),
         }

@@ -253,7 +253,7 @@ fn base() -> String {
     std::env::var("KATNA_PDF_UPDATE_URL").unwrap_or_else(|_| format!("{RELEASES}/download"))
 }
 
-fn agent(timeout: Duration) -> ureq::Agent {
+pub(crate) fn agent(timeout: Duration) -> ureq::Agent {
     ureq::Agent::config_builder()
         .timeout_global(Some(timeout))
         .tls_config(
