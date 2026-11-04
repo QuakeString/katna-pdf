@@ -26,6 +26,7 @@ mod flatten;
 mod fonts;
 mod formdata;
 mod forms;
+mod impose;
 mod insert;
 mod labels;
 mod layers;
@@ -75,6 +76,7 @@ pub use formdata::{
     data_to_json, data_to_xfdf, read_data,
 };
 pub use forms::{Border, Field, FieldKind, FieldValue, Look, Widget};
+pub use impose::{Sheet, SheetLayout, impose};
 pub use insert::{Image, Insert, ShapeKind};
 pub use labels::{LabelRange, LabelStyle, labels_of};
 pub use layers::Layer;
