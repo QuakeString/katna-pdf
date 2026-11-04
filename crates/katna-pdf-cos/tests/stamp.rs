@@ -192,3 +192,70 @@ fn a_background_goes_under_each_page_and_shares_one_picture() {
     };
     assert_eq!(picture_of(0), picture_of(2));
 }
+
+#[test]
+fn marks_are_found_again_and_taken_off() {
+    use katna_pdf_cos::{Background, MarkWhat};
+    let lines: Vec<String> = (0..80).map(|i| format!("line {i}")).collect();
+    let doc = Document::load(text_pdf("Marks", &lines)).unwrap();
+    let pages = doc.pages().len();
+    assert!(pages >= 2);
+    let footer = Stamp {
+        text: "Page {page} of {pages}".into(),
+        place: StampPlace::BottomCentre,
+        font: "Helvetica".into(),
+        size: 9.0,
+        colour: [0.2, 0.2, 0.2],
+        opacity: 1.0,
+        margin: 30.0,
+        under: false,
+        bates: Some(Bates {
+            prefix: "K-".into(),
+            suffix: String::new(),
+            start: 7,
+            digits: 4,
+        }),
+    };
+    let all: Vec<usize> = (0..pages).collect();
+    let doc = Document::load(doc.stamp(&all, &footer).unwrap()).unwrap();
+    let watermark = Stamp {
+        text: "DRAFT".into(),
+        place: StampPlace::Across,
+        size: 60.0,
+        opacity: 0.3,
+        bates: None,
+        ..footer.clone()
+    };
+    let doc = Document::load(doc.stamp(&[0], &watermark).unwrap()).unwrap();
+    let background = Background {
+        colour: Some([1.0, 0.98, 0.9]),
+        image: None,
+        stretch: false,
+        opacity: 1.0,
+    };
+    let doc = Document::load(doc.background(&[1], &background).unwrap()).unwrap();
+    let marks = doc.page_marks();
+    assert_eq!(marks.len(), 3, "{marks:?}");
+    assert_eq!(marks[0].pages, all);
+    assert_eq!(marks[0].what, MarkWhat::Stamp(footer.clone()));
+    assert_eq!(marks[1].pages, [0]);
+    assert_eq!(marks[1].what, MarkWhat::Stamp(watermark));
+    assert_eq!(marks[2].pages, [1]);
+    assert_eq!(marks[2].what, MarkWhat::Background(background, None));
+    let ids: Vec<String> = marks.iter().map(|m| m.id.clone()).collect();
+    assert_eq!(ids, ["m1", "m2", "m3"]);
+    // The watermark comes off page 1; the footer stays everywhere.
+    let doc = Document::load(doc.remove_marks(&["m2".into()]).unwrap()).unwrap();
+    let marks = doc.page_marks();
+    assert_eq!(marks.len(), 2);
+    assert_eq!(marks[0].id, "m1");
+    assert_eq!(marks[0].pages, all);
+    let text = streams(&doc, 0).join("\n");
+    assert!(!text.contains("(DRAFT)"), "{text}");
+    assert!(text.contains("(Page 1 of"), "{text}");
+    assert!(!text.contains("/Watermark"), "{text}");
+    // The next mark takes the free id.
+    let doc = Document::load(doc.stamp(&[0], &footer).unwrap()).unwrap();
+    let ids: Vec<String> = doc.page_marks().into_iter().map(|m| m.id).collect();
+    assert_eq!(ids, ["m1", "m2", "m3"]);
+}

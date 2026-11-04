@@ -514,9 +514,13 @@ impl Viewer {
                             .designing
                             .is_some()
                             .then(|| super::design::read_form(&cos));
+                        let marks = this.marking.is_some().then(|| cos.page_marks());
                         this.show_annotated(bytes, doc, cos, &pages, None);
                         if let Some(read) = design {
                             this.design_changed(read, cx);
+                        }
+                        if let Some(marks) = marks {
+                            this.marks_changed(marks);
                         }
                     }
                     Err(error) => {

@@ -105,6 +105,11 @@ usage: katna-pdf-cli COMMAND [--json] ...
                                   a colour, a picture (fitted inside the page, or
                                   stretched over it), or both, under every page's
                                   own drawing (or LIST's)
+  marks FILE [-o OUT --remove ID|all]
+                                  the headers, footers, watermarks, Bates numbers
+                                  and backgrounds `stamp` and `background` put on,
+                                  by id; with -o the marks named taken off (to
+                                  change one, take it off and put it on again)
   objects FILE [--pages LIST]     the pictures, forms and shapes drawn on pages, numbered
                                   PAGE:OBJECT, with where each is
   object FILE PAGE:OBJECT -o OUT (--rect L,B,R,T | --delete | --turn | --front |
@@ -268,6 +273,7 @@ fn main() -> ExitCode {
         "insert" => insert(rest, json),
         "stamp" => stamp(rest, json),
         "background" => background(rest, json),
+        "marks" => marks(rest, json),
         "meta" => meta(rest, json),
         "lock" => lock(rest, json),
         "redact" => redact(rest, json),
@@ -1756,6 +1762,100 @@ fn stamp(args: &[String], json: bool) -> Done {
     let bytes = doc
         .stamp(&pages, &stamp)
         .map_err(|e| failed(format!("{file}: {e}")))?;
+    write(&out, &bytes)?;
+    Ok(wrote(&[(out, count)], json))
+}
+
+/// Lists the marks on pages, or takes some off.
+fn marks(args: &[String], json: bool) -> Done {
+    use katna_pdf_cos::MarkWhat;
+    let args = Args::parse(args)?;
+    let [file] = args.words()?;
+    let doc = open(file)?;
+    let count = doc.pages().len();
+    let found = doc.page_marks();
+    let Some(out) = args.option("-o") else {
+        if json {
+            let items: Vec<String> = found
+                .iter()
+                .map(|m| {
+                    let pages: Vec<String> = m.pages.iter().map(|p| (p + 1).to_string()).collect();
+                    let (kind, text) = match &m.what {
+                        MarkWhat::Stamp(s) => (
+                            if s.bates.is_some() {
+                                "bates"
+                            } else if matches!(
+                                s.place,
+                                katna_pdf_cos::StampPlace::Across
+                                    | katna_pdf_cos::StampPlace::Middle
+                            ) {
+                                "watermark"
+                            } else {
+                                "stamp"
+                            },
+                            string(&s.text),
+                        ),
+                        MarkWhat::Background(..) => ("background", "null".into()),
+                    };
+                    format!(
+                        "{{\"id\":{},\"kind\":\"{kind}\",\"text\":{text},\"pages\":[{}]}}",
+                        string(&m.id),
+                        pages.join(",")
+                    )
+                })
+                .collect();
+            return Ok(format!("{{\"marks\":[{}]}}\n", items.join(",")));
+        }
+        let mut text = String::new();
+        for m in &found {
+            let what = match &m.what {
+                MarkWhat::Stamp(s) => s.text.replace('\n', " "),
+                MarkWhat::Background(b, picture) => format!(
+                    "background{}{}",
+                    b.colour.map_or(String::new(), |c| format!(
+                        " #{:02X}{:02X}{:02X}",
+                        (c[0] * 255.0).round() as u8,
+                        (c[1] * 255.0).round() as u8,
+                        (c[2] * 255.0).round() as u8
+                    )),
+                    if picture.is_some() {
+                        " with a picture"
+                    } else {
+                        ""
+                    }
+                ),
+            };
+            let _ = writeln!(
+                text,
+                "{:<6} pages {:<12} {what}",
+                m.id,
+                katna_pdf_cos::ranges::format(&m.pages)
+            );
+        }
+        return Ok(text);
+    };
+    let remove = args
+        .option("--remove")
+        .ok_or_else(|| Failure::Usage("say which marks with --remove ID,ID or all".into()))?;
+    let ids: Vec<String> = if remove == "all" {
+        found.iter().map(|m| m.id.clone()).collect()
+    } else {
+        remove
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned)
+            .collect()
+    };
+    for id in &ids {
+        if !found.iter().any(|m| &m.id == id) {
+            return Err(Failure::Usage(format!("--remove {id}: no such mark")));
+        }
+    }
+    let bytes = doc
+        .remove_marks(&ids)
+        .map_err(|e| failed(format!("{file}: {e}")))?;
+    let out = PathBuf::from(out);
     write(&out, &bytes)?;
     Ok(wrote(&[(out, count)], json))
 }
