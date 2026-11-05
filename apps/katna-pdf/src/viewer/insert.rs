@@ -289,7 +289,7 @@ impl Viewer {
         }
         self.placing = None;
         self.picked_object = None;
-        self.moving = None;
+        self.end_moving();
         cx.notify();
     }
 

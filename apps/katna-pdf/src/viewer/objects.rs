@@ -19,9 +19,12 @@
 //! (`katna_pdf_cos::objects`).
 
 use std::path::Path;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
-use gpui::{AnyElement, Context, Entity, Focusable, Subscription, Window, div, prelude::*};
+use gpui::{
+    AnyElement, Context, Entity, Focusable, ImageSource, RenderImage, Subscription, Window, div,
+    img, prelude::*, svg,
+};
 use katna_pdf_cos::{ObjectChange, ObjectCopy, ObjectKind, PageObject, PictureFile, ShapeStyle};
 use katna_ui::px;
 use katna_ui::scale::desktop_px;
@@ -97,6 +100,19 @@ pub(super) struct Moving {
     from: [f32; 2],
     to: [f32; 2],
     shift: bool,
+    /// The objects' picture, to show them going along with the pointer.
+    lift: Option<Lift>,
+}
+
+/// The picked objects as drawn on the page, cut out to show them where
+/// they are dragged, sized or turned to before the file changes.
+pub(super) struct Lift {
+    image: Arc<RenderImage>,
+    /// Device pixels per point of the page shown, as the page was drawn.
+    scale: f32,
+    /// Turned as far as the handle has gone: the degrees, and the picture
+    /// turned so.
+    turned: Option<(f32, Arc<RenderImage>)>,
 }
 
 /// A drag over empty page picking what it runs over.
@@ -127,7 +143,7 @@ impl Viewer {
         Some((object, b))
     }
 
-    fn page_transform(&self, page: usize) -> Option<[f64; 6]> {
+    pub(super) fn page_transform(&self, page: usize) -> Option<[f64; 6]> {
         match &self.content {
             super::Content::Ready(opened) => opened.doc.page_transform(page),
             _ => None,
@@ -299,11 +315,17 @@ impl Viewer {
                 && point[1] <= b[3] + slack
         };
         let start = |this: &mut Self, grip: Grip, cx: &mut Context<Self>| {
+            this.end_moving();
+            let lift = match grip {
+                Grip::Point(_) => None,
+                _ => this.picked_box().and_then(|b| this.lift_picture(page, b)),
+            };
             this.moving = Some(Moving {
                 grip,
                 from: point,
                 to: point,
                 shift: event.modifiers.shift,
+                lift,
             });
             cx.notify();
             true
@@ -737,11 +759,82 @@ impl Viewer {
         if let Some(moving) = self.moving.as_mut() {
             moving.to = point;
             moving.shift = event.modifiers.shift;
+            self.turn_pointer = (moving.grip == Grip::Turn).then_some((page, point));
+            self.turn_lifted();
         } else if let Some(band) = self.band.as_mut() {
             band.to = point;
         }
         cx.notify();
         true
+    }
+
+    /// Keeps the lifted picture turned as far as the handle has gone.
+    fn turn_lifted(&mut self) {
+        let Some(degrees) = self.turned() else {
+            return;
+        };
+        let Some(lift) = self.moving.as_mut().and_then(|m| m.lift.as_mut()) else {
+            return;
+        };
+        if lift
+            .turned
+            .as_ref()
+            .is_some_and(|(was, _)| (was - degrees).abs() < 0.5)
+        {
+            return;
+        }
+        let turned = super::rotate_image(&lift.image, degrees);
+        let old = std::mem::replace(&mut lift.turned, turned.map(|t| (degrees, t)));
+        self.released.extend(old.map(|(_, image)| image));
+    }
+
+    /// The picked objects' picture cut from page `page` as drawn, under
+    /// `b` (their box on the page shown).
+    fn lift_picture(&self, page: usize, b: [f32; 4]) -> Option<Lift> {
+        let scale = self.pages.get(&page).map(|d| d.scale)?;
+        let image = self.cut_out(page, b)?;
+        Some(Lift {
+            image,
+            scale,
+            turned: None,
+        })
+    }
+
+    /// The part of page `page` as drawn under `b` (a box on the page
+    /// shown, in points), as a picture of its own.
+    pub(super) fn cut_out(&self, page: usize, b: [f32; 4]) -> Option<Arc<RenderImage>> {
+        let drawn = self.pages.get(&page)?;
+        if drawn.scale <= 0.0 {
+            return None;
+        }
+        super::crop_image(&drawn.image, b.map(|v| v * drawn.scale))
+    }
+
+    /// Ends a drag of the picked objects, its pictures freed.
+    pub(super) fn end_moving(&mut self) {
+        self.turn_pointer = None;
+        let lift = self.moving.take().and_then(|m| m.lift);
+        self.free_lift(lift);
+    }
+
+    /// Frees a lifted picture's bitmaps on the next frame.
+    fn free_lift(&mut self, lift: Option<Lift>) {
+        if let Some(lift) = lift {
+            self.released.push(lift.image);
+            self.released.extend(lift.turned.map(|(_, image)| image));
+        }
+    }
+
+    /// The pointer while the picked objects are dragged, sized or turned,
+    /// so it stays what the handle's was.
+    pub(super) fn moving_cursor(&self) -> Option<gpui::CursorStyle> {
+        Some(match self.moving.as_ref()?.grip {
+            Grip::Body => gpui::CursorStyle::ClosedHand,
+            Grip::Corner(0) | Grip::Corner(3) => gpui::CursorStyle::ResizeUpLeftDownRight,
+            Grip::Corner(_) => gpui::CursorStyle::ResizeUpRightDownLeft,
+            Grip::Turn => gpui::CursorStyle::ClosedHand,
+            Grip::Point(_) => gpui::CursorStyle::Crosshair,
+        })
     }
 
     /// The pointer let go: the picked objects go where they were dragged,
@@ -779,11 +872,14 @@ impl Viewer {
             return true;
         }
         let turned = self.turned();
-        let Some(new) = self.moved_box() else {
-            return self.moving.take().is_some();
-        };
-        let Some(moving) = self.moving.take() else {
+        let new = self.moved_box();
+        let Some(mut moving) = self.moving.take() else {
             return false;
+        };
+        self.turn_pointer = None;
+        self.free_lift(moving.lift.take());
+        let Some(new) = new else {
+            return true;
         };
         cx.notify();
         let dragged = (moving.to[0] - moving.from[0]).hypot(moving.to[1] - moving.from[1]);
@@ -1651,18 +1747,116 @@ impl Viewer {
                 }
             }
         }
-        out.extend([div()
-            .id(("object-frame", page))
-            .absolute()
-            .left(desktop_px(b[0] * shown - 1.0))
-            .top(desktop_px(b[1] * shown - 1.0))
-            .w(desktop_px((b[2] - b[0]) * shown + 2.0))
-            .h(desktop_px((b[3] - b[1]) * shown + 2.0))
-            .border_1()
-            .border_color(accent)
-            .cursor_move()
-            .on_mouse_down(gpui::MouseButton::Left, grab())
-            .into_any_element()]);
+        // While dragged, sized or turned: the objects' picture goes
+        // along, and where they were is washed out.
+        let degrees = self.turned();
+        if let Some(lift) = self.moving.as_ref().and_then(|m| m.lift.as_ref())
+            && let Some(o) = self.picked_box()
+        {
+            let mut wash = paper;
+            wash.a = 0.75;
+            out.push(
+                div()
+                    .absolute()
+                    .left(desktop_px(o[0] * shown))
+                    .top(desktop_px(o[1] * shown))
+                    .w(desktop_px((o[2] - o[0]) * shown))
+                    .h(desktop_px((o[3] - o[1]) * shown))
+                    .bg(wash)
+                    .into_any_element(),
+            );
+            let picture = match (degrees, lift.turned.as_ref()) {
+                (Some(_), Some((_, turned))) => {
+                    let size = turned.size(0);
+                    let w = size.width.0 as f32 / lift.scale * shown;
+                    let h = size.height.0 as f32 / lift.scale * shown;
+                    let (mx, my) = ((o[0] + o[2]) / 2.0 * shown, (o[1] + o[3]) / 2.0 * shown);
+                    Some((turned.clone(), [mx - w / 2.0, my - h / 2.0, w, h]))
+                }
+                (Some(_), None) => None,
+                (None, _) => Some((
+                    lift.image.clone(),
+                    [
+                        b[0] * shown,
+                        b[1] * shown,
+                        (b[2] - b[0]) * shown,
+                        (b[3] - b[1]) * shown,
+                    ],
+                )),
+            };
+            if let Some((image, [x, y, w, h])) = picture {
+                out.push(
+                    img(ImageSource::Render(image))
+                        .absolute()
+                        .left(desktop_px(x))
+                        .top(desktop_px(y))
+                        .w(desktop_px(w))
+                        .h(desktop_px(h))
+                        .object_fit(gpui::ObjectFit::Fill)
+                        .into_any_element(),
+                );
+            }
+        }
+        if let Some(degrees) = degrees {
+            // The frame turned with them, as four thin strips.
+            let (mx, my) = ((b[0] + b[2]) / 2.0 * shown, (b[1] + b[3]) / 2.0 * shown);
+            let (sin, cos) = degrees.to_radians().sin_cos();
+            let corner = |x: f32, y: f32| {
+                let (dx, dy) = (x * shown - mx, y * shown - my);
+                [mx + dx * cos + dy * sin, my - dx * sin + dy * cos]
+            };
+            let corners = [
+                corner(b[0], b[1]),
+                corner(b[2], b[1]),
+                corner(b[2], b[3]),
+                corner(b[0], b[3]),
+            ];
+            out.push(
+                gpui::canvas(
+                    |_, _, _| {},
+                    move |bounds, _, window, _| {
+                        for i in 0..4 {
+                            let (p0, p1) = (corners[i], corners[(i + 1) % 4]);
+                            let (dx, dy) = (p1[0] - p0[0], p1[1] - p0[1]);
+                            let len = dx.hypot(dy).max(1e-3);
+                            // Half a pixel to each side of the line.
+                            let (nx, ny) = (-dy / len * 0.5, dx / len * 0.5);
+                            let at = |x: f32, y: f32| {
+                                gpui::point(
+                                    bounds.left() + desktop_px(x),
+                                    bounds.top() + desktop_px(y),
+                                )
+                            };
+                            let mut path = gpui::Path::new(at(p0[0] + nx, p0[1] + ny));
+                            path.line_to(at(p1[0] + nx, p1[1] + ny));
+                            path.line_to(at(p1[0] - nx, p1[1] - ny));
+                            path.line_to(at(p0[0] - nx, p0[1] - ny));
+                            window.paint_path(path, accent);
+                        }
+                    },
+                )
+                .absolute()
+                .left_0()
+                .top_0()
+                .size_full()
+                .into_any_element(),
+            );
+        } else {
+            out.push(
+                div()
+                    .id(("object-frame", page))
+                    .absolute()
+                    .left(desktop_px(b[0] * shown - 1.0))
+                    .top(desktop_px(b[1] * shown - 1.0))
+                    .w(desktop_px((b[2] - b[0]) * shown + 2.0))
+                    .h(desktop_px((b[3] - b[1]) * shown + 2.0))
+                    .border_1()
+                    .border_color(accent)
+                    .cursor_move()
+                    .on_mouse_down(gpui::MouseButton::Left, grab())
+                    .into_any_element(),
+            );
+        }
         let size = 8.0;
         for (i, [x, y]) in [[b[0], b[1]], [b[2], b[1]], [b[0], b[3]], [b[2], b[3]]]
             .into_iter()
@@ -1743,9 +1937,50 @@ impl Viewer {
                 .border_1()
                 .border_color(accent)
                 .cursor_grab()
+                // The pointer over it gets a turning badge.
+                .on_mouse_move(
+                    cx.listener(move |this, event: &gpui::MouseMoveEvent, _, cx| {
+                        if this.moving.is_none()
+                            && let Some((p, point)) = this.page_point(event.position)
+                            && p == page
+                        {
+                            this.turn_pointer = Some((page, point));
+                            cx.notify();
+                        }
+                    }),
+                )
+                .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
+                    if !*hovered && this.moving.is_none() && this.turn_pointer.take().is_some() {
+                        cx.notify();
+                    }
+                }))
                 .on_mouse_down(gpui::MouseButton::Left, grab())
                 .into_any_element(),
         );
+        if let Some((_, [x, y])) = self.turn_pointer.filter(|(p, _)| *p == page) {
+            let badge = 18.0;
+            out.push(
+                div()
+                    .absolute()
+                    .left(desktop_px(x * shown + 10.0))
+                    .top(desktop_px(y * shown + 10.0))
+                    .size(desktop_px(badge))
+                    .rounded_full()
+                    .bg(paper)
+                    .border_1()
+                    .border_color(accent)
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(
+                        svg()
+                            .path("icons/rotate-cw.svg")
+                            .size(desktop_px(badge - 6.0))
+                            .text_color(accent),
+                    )
+                    .into_any_element(),
+            );
+        }
         if let Some(degrees) = self.turned() {
             let th = self.theme;
             out.push(

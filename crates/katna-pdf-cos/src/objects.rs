@@ -426,6 +426,14 @@ impl Document {
         for (index, matrix) in moves {
             let object = objects.get(index).ok_or(EditError::NoRun)?;
             let m = matrix.map(f64::from);
+            // A clipped object that would leave its clip goes out from
+            // under it, else it stays cut down to where it was.
+            if object.clipped
+                && let Some(escaped) = escape_clip(&read, &objects, object, &m)
+            {
+                edits.extend(escaped);
+                continue;
+            }
             // Inside, the object's points go through what is set there,
             // then `x`: so that is the start's matrix, then `m`, then
             // back.
@@ -434,11 +442,7 @@ impl Document {
             let first = read.ops[*object.ops.start()].span.start;
             let last = read.ops[*object.ops.end()].span.end;
             let mut before = b"q ".to_vec();
-            for v in x {
-                before.extend_from_slice(number(v).as_bytes());
-                before.push(b' ');
-            }
-            before.extend_from_slice(b"cm ");
+            before.extend_from_slice(cm_of(&x).as_bytes());
             edits.push((first..first, before));
             edits.push((last..last, b" Q".to_vec()));
         }
@@ -1523,6 +1527,184 @@ fn sets_up(op: &Op) -> bool {
             | b"h"
             | b"re"
     )
+}
+
+/// `m` written as a `cm` operator, with a space after.
+fn cm_of(m: &Matrix) -> String {
+    let mut out = String::new();
+    for v in m {
+        out.push_str(&number(*v));
+        out.push(' ');
+    }
+    out.push_str("cm ");
+    out
+}
+
+/// A clipping path in force: the operator of the `q` it was set in
+/// (none at the top level), and its box in the page's own space.
+struct Clip {
+    q: Option<usize>,
+    bbox: [f32; 4],
+}
+
+/// The clipping paths in force as operator `at` starts, the outermost
+/// first.
+fn clips_in_force(ops: &[Op], at: usize) -> Vec<Clip> {
+    let mut ctm = IDENTITY;
+    let mut stack: Vec<(Matrix, usize, Vec<Clip>)> = Vec::new();
+    let mut base: Vec<Clip> = Vec::new();
+    let mut path: Vec<(f64, f64)> = Vec::new();
+    let mut clipping = false;
+    for (i, op) in ops[..at.min(ops.len())].iter().enumerate() {
+        let n = |k: usize| op.number(k).unwrap_or(0.0);
+        match op.operator.as_slice() {
+            b"q" => stack.push((ctm, i, Vec::new())),
+            b"Q" => {
+                if let Some((m, _, _)) = stack.pop() {
+                    ctm = m;
+                }
+            }
+            b"cm" if op.operands.len() == 6 => {
+                ctm = mul(&[n(0), n(1), n(2), n(3), n(4), n(5)], &ctm);
+            }
+            b"m" | b"l" => path.push(apply(&ctm, n(0), n(1))),
+            b"c" => path.extend([
+                apply(&ctm, n(0), n(1)),
+                apply(&ctm, n(2), n(3)),
+                apply(&ctm, n(4), n(5)),
+            ]),
+            b"v" | b"y" => path.extend([apply(&ctm, n(0), n(1)), apply(&ctm, n(2), n(3))]),
+            b"re" => {
+                let (x, y, w, h) = (n(0), n(1), n(2), n(3));
+                path.extend([
+                    apply(&ctm, x, y),
+                    apply(&ctm, x + w, y),
+                    apply(&ctm, x, y + h),
+                    apply(&ctm, x + w, y + h),
+                ]);
+            }
+            b"W" | b"W*" => clipping = true,
+            b"S" | b"s" | b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*" | b"n" => {
+                if clipping {
+                    let bbox = bounds(&path);
+                    match stack.last_mut() {
+                        Some((_, q, clips)) => clips.push(Clip { q: Some(*q), bbox }),
+                        None => base.push(Clip { q: None, bbox }),
+                    }
+                }
+                path.clear();
+                clipping = false;
+            }
+            _ => {}
+        }
+    }
+    for (_, _, clips) in stack {
+        base.extend(clips);
+    }
+    base
+}
+
+/// Whether box `inner` lies within `outer`, give or take half a point.
+fn within(inner: [f32; 4], outer: [f32; 4]) -> bool {
+    const GIVE: f32 = 0.5;
+    inner[0] >= outer[0] - GIVE
+        && inner[1] >= outer[1] - GIVE
+        && inner[2] <= outer[2] + GIVE
+        && inner[3] <= outer[3] + GIVE
+}
+
+/// The operator that closes the `q` at `q`: the first `Q` after it that
+/// brings the depth back, or past the end.
+fn q_closes(ops: &[Op], q: usize) -> usize {
+    let mut depth = 0usize;
+    for (i, op) in ops.iter().enumerate().skip(q + 1) {
+        if op.is("q") {
+            depth += 1;
+        } else if op.is("Q") {
+            if depth == 0 {
+                return i;
+            }
+            depth -= 1;
+        }
+    }
+    ops.len()
+}
+
+/// The edits that move `object` by `m` (in the page's own space) out from
+/// under the clipping paths it would otherwise be cut down by, or `None`
+/// when it would stay inside them all. When the clip is its alone (set in
+/// a `q` … `Q` holding nothing else drawn), the clip goes along with it;
+/// else it is drawn again, moved, where the clip ends.
+fn escape_clip(
+    read: &Content,
+    objects: &[PageObject],
+    object: &PageObject,
+    m: &Matrix,
+) -> Option<Vec<(std::ops::Range<usize>, Vec<u8>)>> {
+    let ops = &read.ops;
+    let start = *object.ops.start();
+    let end = *object.ops.end();
+    let [l, b, r, t] = object.rect.map(f64::from);
+    let moved = bounds(&[
+        apply(m, l, b),
+        apply(m, r, b),
+        apply(m, l, t),
+        apply(m, r, t),
+    ]);
+    let clips = clips_in_force(ops, start);
+    let tight: Vec<&Clip> = clips.iter().filter(|c| !within(moved, c.bbox)).collect();
+    let outermost = tight.first()?;
+    let first = ops[start].span.start;
+    let last = ops[end].span.end;
+    // The clip's `q` holds only this object: the matrix goes in at its
+    // start, so the clip moves too.
+    if let Some(q) = outermost.q {
+        let close = q_closes(ops, q);
+        let others = objects
+            .iter()
+            .any(|o| *o.ops.start() != start && (q..close).contains(o.ops.start()));
+        let text = ops[q + 1..close.min(ops.len())]
+            .iter()
+            .any(|op| op.is("BT") || op.is("sh"));
+        if !others && !text && close > end {
+            let c = ctm_at(ops, q + 1);
+            let x = mul(&mul(&c, m), &invert(&c)?);
+            let at = ops[q].span.end;
+            let cm = format!(" {}", cm_of(&x).trim_end());
+            return Some(vec![(at..at, cm.into_bytes())]);
+        }
+    }
+    // Drawn again, moved, where the outermost clip it leaves ends (a
+    // clip set at the top level never ends).
+    let there = match outermost.q {
+        Some(q) => {
+            let close = q_closes(ops, q);
+            ops.get(close).map_or(read.content.len(), |op| op.span.end)
+        }
+        None => read.content.len(),
+    };
+    let at = ops
+        .iter()
+        .position(|op| op.span.start >= there)
+        .unwrap_or(ops.len());
+    let undo = invert(&ctm_at(ops, at)).unwrap_or(IDENTITY);
+    let mut drawn = b"\nq ".to_vec();
+    drawn.extend_from_slice(cm_of(&undo).as_bytes());
+    drawn.extend_from_slice(cm_of(m).as_bytes());
+    for &i in &state_at_with(ops, start, false) {
+        drawn.extend_from_slice(&read.content[ops[i].span.clone()]);
+        drawn.push(b' ');
+    }
+    drawn.extend_from_slice(&read.content[first..last]);
+    drawn.extend_from_slice(b" Q\n");
+    let mut kept = Vec::new();
+    for op in &ops[object.ops.clone()] {
+        if !is_path_or_paint(op) && !op.is("Do") && !op.is("BI") {
+            kept.extend_from_slice(&read.content[op.span.clone()]);
+            kept.push(b' ');
+        }
+    }
+    Some(vec![(first..last, kept), (there..there, drawn)])
 }
 
 /// The matrix in force as operator `at` starts.

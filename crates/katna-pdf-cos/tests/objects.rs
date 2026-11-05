@@ -667,3 +667,61 @@ fn a_paragraph_copies_to_another_page_and_file() {
     assert_eq!(after[0].font, runs[line].font);
     assert!(close(after[0].rect, runs[line].rect), "{after:?}");
 }
+
+#[test]
+fn a_clipped_picture_moves_out_from_under_its_clip() {
+    // A picture clipped to a box of its own (as Word writes them): moved
+    // off that box, the clip goes along, and it is still the first drawn.
+    let doc = drawn(
+        "q 100 100 100 100 re W n q 100 0 0 100 100 100 cm /Im1 Do Q Q \
+         0 0 1 rg 400 400 50 50 re f",
+    );
+    let m = [1.0, 0.0, 0.0, 1.0, 150.0, 0.0];
+    let moved = Document::load(doc.transform_object(0, 0, m).unwrap()).unwrap();
+    let objects = moved.page_objects(0);
+    assert_eq!(objects.len(), 2, "{}", content(&moved));
+    assert_eq!(objects[0].kind, ObjectKind::Picture);
+    assert!(
+        close(objects[0].rect, [250.0, 100.0, 350.0, 200.0]),
+        "{objects:?}"
+    );
+    // The clip moved with it: its box is still the picture's.
+    let text = content(&moved);
+    assert!(
+        text.starts_with("q 1 0 0 1 150 0 cm 100 100 100 100 re W n"),
+        "{text}"
+    );
+    // A move that stays inside the clip leaves the clip alone.
+    let small = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0];
+    let same = Document::load(doc.transform_object(0, 0, small).unwrap()).unwrap();
+    assert!(
+        content(&same)
+            .starts_with("q 100 100 100 100 re W n q 100 0 0 100 100 100 cm q 1 0 0 1 0 0 cm"),
+        "{}",
+        content(&same)
+    );
+    // Two pictures under one clip: the moved one is drawn again, whole,
+    // where the clip ends, after the other.
+    let doc = drawn(
+        "q 100 100 300 100 re W n q 100 0 0 100 100 100 cm /Im1 Do Q \
+         q 100 0 0 100 250 100 cm /Im1 Do Q Q 0 0 1 rg 400 400 50 50 re f",
+    );
+    let moved = Document::load(
+        doc.transform_object(0, 0, [1.0, 0.0, 0.0, 1.0, 0.0, 200.0])
+            .unwrap(),
+    )
+    .unwrap();
+    let objects = moved.page_objects(0);
+    assert_eq!(objects.len(), 3, "{}", content(&moved));
+    assert!(objects[0].clipped);
+    assert!(
+        close(objects[0].rect, [250.0, 100.0, 350.0, 200.0]),
+        "{objects:?}"
+    );
+    assert!(!objects[1].clipped, "{}", content(&moved));
+    assert!(
+        close(objects[1].rect, [100.0, 300.0, 200.0, 400.0]),
+        "{objects:?}"
+    );
+    assert_eq!(objects[2].kind, ObjectKind::Path);
+}
