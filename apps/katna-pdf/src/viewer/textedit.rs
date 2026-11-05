@@ -12,7 +12,10 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use gpui::{AnyElement, Context, Entity, Focusable, Subscription, Window, div, prelude::*};
+use gpui::{
+    AnyElement, Context, Entity, Focusable, ImageSource, RenderImage, Subscription, Window, div,
+    img, prelude::*,
+};
 use katna_pdf_cos::{Layout, PageObject, TextAlign, TextBlock};
 use katna_ui::px;
 use katna_ui::scale::desktop_px;
@@ -87,6 +90,9 @@ pub(super) struct TextMoving {
     block: usize,
     from: [f32; 2],
     to: [f32; 2],
+    /// The paragraph as drawn, to show it going along with the pointer,
+    /// and its box on the page shown.
+    lift: Option<(Arc<RenderImage>, [f32; 4])>,
 }
 
 /// A drag shorter than this, in points shown, is a click.
@@ -100,6 +106,21 @@ pub(super) struct Typing {
     _input: Subscription,
     /// The installed face nearest the paragraph's own font.
     look: Look,
+    /// The paragraph as it was when typing began or was last read, to
+    /// draw the box and the inspector while the page is read again.
+    block: Option<TextBlock>,
+    /// Kept open through a change to the paragraph (its face, size or
+    /// alignment): it goes to where the paragraph is once read again.
+    held: bool,
+}
+
+/// How a paragraph's lines line up, as GPUI lines text up.
+fn gpui_align(align: TextAlign) -> gpui::TextAlign {
+    match align {
+        TextAlign::Left => gpui::TextAlign::Left,
+        TextAlign::Center => gpui::TextAlign::Center,
+        TextAlign::Right => gpui::TextAlign::Right,
+    }
 }
 
 /// A face to type in: a family installed here, and its weight and slant.
@@ -220,7 +241,7 @@ impl Viewer {
     pub(super) fn toggle_text_edit(&mut self, cx: &mut Context<Self>) {
         self.finish_text_edit(true, cx);
         self.runs.next = None;
-        self.text_moving = None;
+        self.end_text_moving();
         self.text_editing = !self.text_editing;
         self.adding = None;
         self.redacting = None;
@@ -229,7 +250,7 @@ impl Viewer {
         self.designing = None;
         self.placing = None;
         self.picked_object = None;
-        self.moving = None;
+        self.end_moving();
         if self.text_editing {
             self.tools = false;
             self.tool = None;
@@ -246,7 +267,7 @@ impl Viewer {
     pub(super) fn leave_text_edit(&mut self, cx: &mut Context<Self>) {
         self.finish_text_edit(true, cx);
         self.runs.next = None;
-        self.text_moving = None;
+        self.end_text_moving();
         self.text_editing = false;
         self.adding = None;
         self.redacting = None;
@@ -255,7 +276,7 @@ impl Viewer {
         self.designing = None;
         self.placing = None;
         self.picked_object = None;
-        self.moving = None;
+        self.end_moving();
     }
 
     /// Forgets the runs read, as the file changed.
@@ -323,7 +344,11 @@ impl Viewer {
             .typing
             .as_ref()
             .is_some_and(|t| t.page == page && t.target == Target::Block(block))
+            && self.retarget_typing(page, block, cx)
         {
+            return;
+        }
+        if self.typing.as_ref().is_some_and(|t| t.held) && self.retarget_typing(page, block, cx) {
             return;
         }
         let clicked = self
@@ -362,21 +387,26 @@ impl Viewer {
         cx: &mut Context<Self>,
     ) {
         let accent = gpui::rgba(self.theme.katna.accent).into();
-        let look = match target {
+        let block = match target {
             Target::Block(i) => self
                 .runs
                 .pages
                 .get(&page)
                 .and_then(|blocks| blocks.get(i))
-                .map(|b| Look::of(&b.font, &cx.text_system().all_font_names()))
-                .unwrap_or_default(),
-            Target::New(_) => Look::default(),
+                .cloned(),
+            Target::New(_) => None,
         };
+        let look = block
+            .as_ref()
+            .map(|b| Look::of(&b.font, &cx.text_system().all_font_names()))
+            .unwrap_or_default();
+        let align = block.as_ref().map_or(TextAlign::Left, |b| b.align);
         let input = cx.new(|cx| {
             let mut input = TextArea::new("", cx);
             input.set_accent(accent);
             let end = text.len();
             input.set_text(text, end, cx);
+            input.set_align(gpui_align(align), cx);
             input
         });
         let sub = cx.subscribe(&input, |this, _, event, cx| match event {
@@ -395,8 +425,96 @@ impl Viewer {
             input,
             _input: sub,
             look,
+            block,
+            held: false,
         });
         cx.notify();
+    }
+
+    /// Keeps the paragraph being typed in open as the page is read again
+    /// after a change to it: its box, face and alignment are those of
+    /// paragraph `block`, where it is now.
+    fn retarget_typing(&mut self, page: usize, block: usize, cx: &mut Context<Self>) -> bool {
+        let Some(found) = self
+            .runs
+            .pages
+            .get(&page)
+            .and_then(|blocks| blocks.get(block))
+            .cloned()
+        else {
+            return false;
+        };
+        let names = cx.text_system().all_font_names();
+        let Some(typing) = self
+            .typing
+            .as_mut()
+            .filter(|t| t.page == page && t.block().is_some())
+        else {
+            return false;
+        };
+        typing.target = Target::Block(block);
+        typing.look = Look::of(&found.font, &names);
+        let align = gpui_align(found.align);
+        typing.input.update(cx, |input, cx| {
+            input.set_align(align, cx);
+            if input.text() != found.text {
+                let end = found.text.len();
+                input.set_text(found.text.clone(), end, cx);
+            }
+        });
+        typing.block = Some(found);
+        typing.held = false;
+        cx.notify();
+        true
+    }
+
+    /// Writes what was typed into the paragraph being typed in, if it
+    /// changed, keeping the box open for the change that follows.
+    fn write_typed(&mut self, cx: &mut Context<Self>) {
+        let Some(typing) = self.typing.as_mut() else {
+            return;
+        };
+        typing.held = true;
+        let text = typing.input.read(cx).text().to_owned();
+        let (page, Some(block)) = (typing.page, typing.block()) else {
+            return;
+        };
+        let Some(block) = self
+            .runs
+            .pages
+            .get(&page)
+            .and_then(|blocks| blocks.get(block))
+            .filter(|b| b.text != text)
+            .cloned()
+        else {
+            return;
+        };
+        self.edit_block(page, block.runs, text, cx);
+    }
+
+    /// Puts `text` into the paragraph of lines `runs` on page `page`.
+    fn edit_block(&mut self, page: usize, runs: Vec<usize>, text: String, cx: &mut Context<Self>) {
+        self.change_page_told(
+            page,
+            move |doc| {
+                // Letters the font lacks are said, once the change shows.
+                let told = doc.missing_glyphs(page, &runs, &text).map(|m| {
+                    t(
+                        "text-edit-stood-in",
+                        &[
+                            ("font", &m.font),
+                            ("chars", &m.chars),
+                            ("standin", m.stand_in.as_deref().unwrap_or("")),
+                        ],
+                    )
+                });
+                let bytes = doc
+                    .edit_block(page, &runs, &text)
+                    .map_err(|e| e.to_string())?;
+                Ok((bytes, told))
+            },
+            cx,
+        );
     }
 
     /// Ends typing in a paragraph, writing the change into the file or
@@ -427,28 +545,7 @@ impl Viewer {
         else {
             return;
         };
-        let runs = block.runs;
-        self.change_page_told(
-            typing.page,
-            move |doc| {
-                // Letters the font lacks are said, once the change shows.
-                let told = doc.missing_glyphs(typing.page, &runs, &text).map(|m| {
-                    t(
-                        "text-edit-stood-in",
-                        &[
-                            ("font", &m.font),
-                            ("chars", &m.chars),
-                            ("standin", m.stand_in.as_deref().unwrap_or("")),
-                        ],
-                    )
-                });
-                let bytes = doc
-                    .edit_block(typing.page, &runs, &text)
-                    .map_err(|e| e.to_string())?;
-                Ok((bytes, told))
-            },
-            cx,
-        );
+        self.edit_block(typing.page, block.runs, text, cx);
     }
 
     /// As [`Viewer::change_page`], with a notice to show once the change
@@ -604,7 +701,21 @@ impl Viewer {
         };
         let Some(blocks) = self.runs.pages.get(&page).cloned() else {
             self.read_runs(page, cx);
-            return Vec::new();
+            // The box being typed in stays where the paragraph was until
+            // the page is read again.
+            let held = self
+                .typing
+                .as_ref()
+                .filter(|t| t.page == page)
+                .and_then(|t| t.block.clone().map(|b| (t, b)));
+            return match held {
+                Some((typing, block)) => {
+                    let shown = self.shown;
+                    let b = katna_pdf_render::map_rect(transform, block.rect).map(|v| v * shown);
+                    vec![self.typing_box(&block, b, width * shown, typing, None, cx)]
+                }
+                None => Vec::new(),
+            };
         };
         if let Some((_, [x, y], next)) = self.runs.next.take_if(|(p, _, _)| *p == page)
             && let Some(i) = blocks.iter().position(|b| {
@@ -637,62 +748,90 @@ impl Viewer {
         } else {
             &blocks[..]
         };
-        let mut out: Vec<AnyElement> = listed
-            .iter()
-            .enumerate()
-            .map(|(i, block)| {
-                let b = katna_pdf_render::map_rect(transform, block.rect).map(|v| v * shown);
-                let typing = self
-                    .typing
-                    .as_ref()
-                    .filter(|t| t.page == page && t.target == Target::Block(i));
-                if let Some(typing) = typing {
-                    let by = dragging.filter(|(b, _)| *b == i).map(|(_, by)| by);
-                    return self.typing_box(block, b, width * shown, typing, by, cx);
-                }
-                // Outlined only under the pointer, on its own glyphs'
-                // area, so neighbours' boxes never cross.
-                div()
-                    .id(("text-run", page * 100_000 + i))
-                    .absolute()
-                    .left(desktop_px(b[0]))
-                    .top(desktop_px(b[1]))
-                    .w(desktop_px(b[2] - b[0]))
-                    .h(desktop_px(b[3] - b[1]))
-                    .rounded(px(radius::XS / 2.0))
-                    // Not lit under a paragraph being dragged over it.
-                    .when(dragging.is_none(), |d| {
-                        d.hover(move |s| {
-                            s.bg(gpui::rgba(accent | 0x14))
-                                .border_1()
-                                .border_color(gpui::rgba(accent | 0xaa))
-                        })
-                    })
-                    .cursor(gpui::CursorStyle::IBeam)
-                    .when_some(dragging.filter(|(b, _)| *b == i), |d, (_, [dx, dy])| {
-                        // Dragged: its box goes along with the pointer.
-                        d.left(desktop_px(b[0] + dx * shown))
-                            .top(desktop_px(b[1] + dy * shown))
+        let mut out: Vec<AnyElement> = Vec::new();
+        // A dragged paragraph's picture goes along with the pointer (the
+        // box being typed in carries its own text), and where it was is
+        // washed out.
+        if let Some((_, [dx, dy])) = dragging
+            && let Some((image, o)) = self.text_moving.as_ref().and_then(|m| m.lift.as_ref())
+        {
+            let mut wash = self.paper();
+            wash.a = 0.75;
+            let at = |d: gpui::Div, [x, y]: [f32; 2]| {
+                d.absolute()
+                    .left(desktop_px(x * shown))
+                    .top(desktop_px(y * shown))
+                    .w(desktop_px((o[2] - o[0]) * shown))
+                    .h(desktop_px((o[3] - o[1]) * shown))
+            };
+            out.push(at(div(), [o[0], o[1]]).bg(wash).into_any_element());
+            if self.typing.as_ref().is_none_or(|t| {
+                t.page != page || Some(t.target) != dragging.map(|(b, _)| Target::Block(b))
+            }) {
+                out.push(
+                    img(ImageSource::Render(image.clone()))
+                        .absolute()
+                        .left(desktop_px((o[0] + dx) * shown))
+                        .top(desktop_px((o[1] + dy) * shown))
+                        .w(desktop_px((o[2] - o[0]) * shown))
+                        .h(desktop_px((o[3] - o[1]) * shown))
+                        .object_fit(gpui::ObjectFit::Fill)
+                        .into_any_element(),
+                );
+            }
+        }
+        out.extend(listed.iter().enumerate().map(|(i, block)| {
+            let b = katna_pdf_render::map_rect(transform, block.rect).map(|v| v * shown);
+            let typing = self
+                .typing
+                .as_ref()
+                .filter(|t| t.page == page && t.target == Target::Block(i));
+            if let Some(typing) = typing {
+                let by = dragging.filter(|(b, _)| *b == i).map(|(_, by)| by);
+                return self.typing_box(block, b, width * shown, typing, by, cx);
+            }
+            // Outlined only under the pointer, on its own glyphs'
+            // area, so neighbours' boxes never cross.
+            div()
+                .id(("text-run", page * 100_000 + i))
+                .absolute()
+                .left(desktop_px(b[0]))
+                .top(desktop_px(b[1]))
+                .w(desktop_px(b[2] - b[0]))
+                .h(desktop_px(b[3] - b[1]))
+                .rounded(px(radius::XS / 2.0))
+                // Not lit under a paragraph being dragged over it.
+                .when(dragging.is_none(), |d| {
+                    d.hover(move |s| {
+                        s.bg(gpui::rgba(accent | 0x14))
                             .border_1()
-                            .border_color(gpui::rgba(accent | 0xcc))
-                            .bg(gpui::rgba(accent | 0x14))
-                            .cursor(gpui::CursorStyle::ClosedHand)
+                            .border_color(gpui::rgba(accent | 0xaa))
                     })
-                    .on_mouse_down(
-                        gpui::MouseButton::Left,
-                        cx.listener(move |this, event: &gpui::MouseDownEvent, _, cx| {
-                            // With Ctrl, the press picks objects under
-                            // the paragraph instead.
-                            if event.modifiers.control || event.modifiers.platform {
-                                return;
-                            }
-                            cx.stop_propagation();
-                            this.text_move_press(page, i, event.position, cx);
-                        }),
-                    )
-                    .into_any_element()
-            })
-            .collect();
+                })
+                .cursor(gpui::CursorStyle::IBeam)
+                .when_some(dragging.filter(|(b, _)| *b == i), |d, (_, [dx, dy])| {
+                    // Dragged: its box goes along with the pointer.
+                    d.left(desktop_px(b[0] + dx * shown))
+                        .top(desktop_px(b[1] + dy * shown))
+                        .border_1()
+                        .border_color(gpui::rgba(accent | 0xcc))
+                        .bg(gpui::rgba(accent | 0x14))
+                        .cursor(gpui::CursorStyle::ClosedHand)
+                })
+                .on_mouse_down(
+                    gpui::MouseButton::Left,
+                    cx.listener(move |this, event: &gpui::MouseDownEvent, _, cx| {
+                        // With Ctrl, the press picks objects under
+                        // the paragraph instead.
+                        if event.modifiers.control || event.modifiers.platform {
+                            return;
+                        }
+                        cx.stop_propagation();
+                        this.text_move_press(page, i, event.position, cx);
+                    }),
+                )
+                .into_any_element()
+        }));
         // New text being typed.
         if let Some(typing) = self.typing.as_ref().filter(|t| t.page == page)
             && let Target::New([x, y]) = typing.target
@@ -832,13 +971,33 @@ impl Viewer {
         let Some((_, at)) = self.page_point(position) else {
             return;
         };
+        self.end_text_moving();
+        // Its picture as drawn, to go along with the pointer.
+        let lift = self
+            .runs
+            .pages
+            .get(&page)
+            .and_then(|blocks| blocks.get(block))
+            .zip(self.page_transform(page))
+            .and_then(|(b, transform)| {
+                let shown = katna_pdf_render::map_rect(transform, b.rect);
+                Some((self.cut_out(page, shown)?, shown))
+            });
         self.text_moving = Some(TextMoving {
             page,
             block,
             from: at,
             to: at,
+            lift,
         });
         cx.notify();
+    }
+
+    /// Ends a drag of a paragraph, its picture freed.
+    pub(super) fn end_text_moving(&mut self) {
+        if let Some((image, _)) = self.text_moving.take().and_then(|m| m.lift) {
+            self.released.push(image);
+        }
     }
 
     pub(super) fn text_move_drag(
@@ -869,9 +1028,12 @@ impl Viewer {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        let Some(moving) = self.text_moving.take() else {
+        let Some(mut moving) = self.text_moving.take() else {
             return false;
         };
+        if let Some((image, _)) = moving.lift.take() {
+            self.released.push(image);
+        }
         cx.notify();
         let (page, block) = (moving.page, moving.block);
         if !moving.dragged() {
@@ -897,7 +1059,7 @@ impl Viewer {
             .and_then(|blocks| blocks.get(block))
             .map(|b| [(b.rect[0] + b.rect[2]) / 2.0, (b.rect[1] + b.rect[3]) / 2.0]);
         if typed {
-            self.finish_text_edit(true, cx);
+            self.write_typed(cx);
             if self.runs.pages.contains_key(&page) {
                 self.move_text(page, block, by, cx);
             } else if let Some(at) = at {
@@ -1010,7 +1172,11 @@ impl Viewer {
     fn typed_block(&self) -> Option<(usize, usize, &TextBlock)> {
         let typing = self.typing.as_ref()?;
         let block = typing.block()?;
-        let b = self.runs.pages.get(&typing.page)?.get(block)?;
+        // As last read, while the page is read again.
+        let b = match self.runs.pages.get(&typing.page) {
+            Some(blocks) => blocks.get(block)?,
+            None => typing.block.as_ref()?,
+        };
         Some((typing.page, block, b))
     }
 
@@ -1021,7 +1187,7 @@ impl Viewer {
             return;
         };
         let at = [(b.rect[0] + b.rect[2]) / 2.0, (b.rect[1] + b.rect[3]) / 2.0];
-        self.finish_text_edit(true, cx);
+        self.write_typed(cx);
         if self.runs.pages.contains_key(&page) {
             match what {
                 Next::Style(size, colour) => self.style_text(page, block, size, colour, cx),
@@ -1115,6 +1281,14 @@ impl Viewer {
     /// The paragraph being typed in lined up as `align` says.
     pub(super) fn align_typed(&mut self, align: TextAlign, cx: &mut Context<Self>) {
         if self.typed_block().is_some_and(|(_, _, b)| b.align != align) {
+            if let Some(typing) = self.typing.as_mut() {
+                typing
+                    .input
+                    .update(cx, |input, cx| input.set_align(gpui_align(align), cx));
+                if let Some(b) = typing.block.as_mut() {
+                    b.align = align;
+                }
+            }
             self.restyle_typed(
                 Next::Layout(Layout {
                     align: Some(align),

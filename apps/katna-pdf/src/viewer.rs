@@ -520,6 +520,9 @@ pub struct Viewer {
     designing: Option<design::Designing>,
     properties: Option<properties::Properties>,
     moving: Option<objects::Moving>,
+    /// Where the pointer is over the picked objects' turning handle, on
+    /// the page shown, to show it turns.
+    turn_pointer: Option<(usize, [f32; 2])>,
     /// A drag over empty page picking the objects it runs over.
     band: Option<objects::Band>,
     /// Whether a grid is drawn over the pages while Edit text is on, for
@@ -685,6 +688,7 @@ impl Viewer {
             designing: None,
             properties: None,
             moving: None,
+            turn_pointer: None,
             band: None,
             gridded: false,
             text_moving: None,
@@ -815,7 +819,7 @@ impl Viewer {
         self.designing = None;
         self.placing = None;
         self.picked_object = None;
-        self.moving = None;
+        self.end_moving();
         self.band = None;
         self.forget_runs();
         self.signatures = None;
@@ -2704,17 +2708,37 @@ impl Viewer {
             .copied()
             .unwrap_or_else(|| self.current_page())
             .min(count.saturating_sub(1));
-        self.forget_pages();
+        // The same pages, as after Undo: each stays on screen until
+        // drawn again, and the view stays put, so nothing flickers.
+        let same_pages = match &self.content {
+            Content::Ready(opened) => {
+                opened.doc.page_count() == count
+                    && (0..count).all(|p| opened.doc.page_size(p) == doc.page_size(p))
+            }
+            _ => false,
+        };
         self.forget_runs();
         self.revision += 1;
-        self.list.reset(self.spread.rows(count));
-        self.list.scroll_to(ListOffset {
-            item_ix: self.spread.row_of(page),
-            offset_in_item: px(0.0),
-        });
-        self.visible = page..page + 1;
-        let old = self.thumbs.reset(count);
-        self.released.extend(old);
+        if same_pages && picked.is_empty() {
+            for drawn in self.pages.values_mut() {
+                drawn.scale = 0.0;
+            }
+            self.drawing.clear();
+            self.queue.clear();
+            for p in 0..count {
+                self.released.extend(self.thumbs.forget(p));
+            }
+        } else {
+            self.forget_pages();
+            self.list.reset(self.spread.rows(count));
+            self.list.scroll_to(ListOffset {
+                item_ix: self.spread.row_of(page),
+                offset_in_item: px(0.0),
+            });
+            self.visible = page..page + 1;
+            let old = self.thumbs.reset(count);
+            self.released.extend(old);
+        }
         self.texts = Some(search::texts(count));
         if let Some(bar) = self.search.as_mut() {
             bar.generation.fetch_add(1, Ordering::Relaxed);
@@ -2793,7 +2817,7 @@ impl Viewer {
         let original = bytes.is_none();
         self.forget_runs();
         self.picked_object = None;
-        self.moving = None;
+        self.end_moving();
         self.band = None;
         self.chosen = None;
         cx.spawn(async move |this, cx| {
@@ -3286,7 +3310,9 @@ impl Viewer {
                 _ if self.adding.is_some_and(|a| a != insert::Adding::Text) => {
                     gpui::CursorStyle::Crosshair
                 }
-                _ if self.text_editing && self.adding.is_none() => gpui::CursorStyle::Arrow,
+                _ if self.text_editing && self.adding.is_none() => {
+                    self.moving_cursor().unwrap_or(gpui::CursorStyle::Arrow)
+                }
                 Some(tool) if tool.markup().is_none() => gpui::CursorStyle::Crosshair,
                 _ => gpui::CursorStyle::IBeam,
             })
@@ -4452,6 +4478,69 @@ fn is_dark(appearance: gpui::WindowAppearance) -> bool {
         appearance,
         gpui::WindowAppearance::Dark | gpui::WindowAppearance::VibrantDark
     )
+}
+
+/// The part of `image` inside `rect` (left, top, right, bottom, in its
+/// own pixels), as an image of its own.
+fn crop_image(image: &RenderImage, rect: [f32; 4]) -> Option<Arc<RenderImage>> {
+    let size = image.size(0);
+    let (iw, ih) = (size.width.0 as usize, size.height.0 as usize);
+    let l = (rect[0].floor().max(0.0) as usize).min(iw);
+    let t = (rect[1].floor().max(0.0) as usize).min(ih);
+    let r = (rect[2].ceil().max(0.0) as usize).clamp(l, iw);
+    let b = (rect[3].ceil().max(0.0) as usize).clamp(t, ih);
+    let (w, h) = (r - l, b - t);
+    if w == 0 || h == 0 {
+        return None;
+    }
+    let bytes = image.as_bytes(0)?;
+    let mut out = Vec::with_capacity(w * h * 4);
+    for y in t..b {
+        let row = (y * iw + l) * 4;
+        out.extend_from_slice(bytes.get(row..row + w * 4)?);
+    }
+    let image = RgbaImage::from_raw(w as u32, h as u32, out)?;
+    Some(Arc::new(RenderImage::new([Frame::new(image)])))
+}
+
+/// `image` turned `degrees` anticlockwise about its middle, in an image
+/// just big enough, clear where it has nothing.
+fn rotate_image(image: &RenderImage, degrees: f32) -> Option<Arc<RenderImage>> {
+    let size = image.size(0);
+    let (iw, ih) = (size.width.0 as usize, size.height.0 as usize);
+    if iw == 0 || ih == 0 {
+        return None;
+    }
+    let bytes = image.as_bytes(0)?;
+    // Down the screen is clockwise on the page: the angle is negated.
+    let (sin, cos) = (-degrees).to_radians().sin_cos();
+    let (fw, fh) = (iw as f32, ih as f32);
+    let ow = (fw * cos.abs() + fh * sin.abs()).ceil().max(1.0) as usize;
+    let oh = (fw * sin.abs() + fh * cos.abs()).ceil().max(1.0) as usize;
+    let (cx, cy) = (fw / 2.0, fh / 2.0);
+    let (ox, oy) = (ow as f32 / 2.0, oh as f32 / 2.0);
+    let mut out = vec![0u8; ow * oh * 4];
+    for y in 0..oh {
+        let dy = y as f32 + 0.5 - oy;
+        for x in 0..ow {
+            let dx = x as f32 + 0.5 - ox;
+            // Where this pixel came from: turned back.
+            let sx = dx * cos + dy * sin + cx;
+            let sy = -dx * sin + dy * cos + cy;
+            if sx < 0.0 || sy < 0.0 {
+                continue;
+            }
+            let (sx, sy) = (sx as usize, sy as usize);
+            if sx >= iw || sy >= ih {
+                continue;
+            }
+            let from = (sy * iw + sx) * 4;
+            let to = (y * ow + x) * 4;
+            out[to..to + 4].copy_from_slice(&bytes[from..from + 4]);
+        }
+    }
+    let image = RgbaImage::from_raw(ow as u32, oh as u32, out)?;
+    Some(Arc::new(RenderImage::new([Frame::new(image)])))
 }
 
 /// A drawn page as GPUI draws images: BGRA.
