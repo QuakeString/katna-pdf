@@ -163,7 +163,8 @@ const QUEUE: usize = 8;
 const KEEP: usize = 3;
 /// Zoom steps, as on Okular's and Acrobat's zoom menus.
 const STEPS: &[f32] = &[
-    0.12, 0.25, 0.33, 0.5, 0.67, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0, 4.0, 6.0, 8.0, 12.0, 16.0,
+    0.12, 0.25, 0.33, 0.5, 0.67, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0, 4.0, 6.0, 8.0, 12.0, 16.0, 24.0,
+    32.0, 48.0, 64.0, 100.0,
 ];
 /// Room beside the widest page at fit width, each side.
 const MARGIN: f32 = 24.0;
@@ -2002,7 +2003,7 @@ impl Viewer {
             }
             (_, _) => POINT,
         };
-        shown.clamp(0.05, 16.0 * POINT)
+        shown.clamp(0.05, STEPS[STEPS.len() - 1] * POINT)
     }
 
     /// Ctrl and the wheel (or a touchpad's two fingers) zoom smoothly.
