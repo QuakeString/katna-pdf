@@ -56,6 +56,7 @@ mod printing;
 mod properties;
 mod redact;
 mod setup;
+mod sharp;
 pub(crate) mod sign;
 mod speak;
 mod stamps;
@@ -476,6 +477,13 @@ pub struct Viewer {
     page_bounds: Rc<RefCell<HashMap<usize, gpui::Bounds<gpui::Pixels>>>>,
     /// The size of the pages' view, as laid out last frame.
     view_size: Rc<std::cell::Cell<Option<gpui::Size<gpui::Pixels>>>>,
+    /// Where the pages' view is in the window, as laid out this frame.
+    view_bounds: Rc<std::cell::Cell<Option<gpui::Bounds<gpui::Pixels>>>>,
+    /// Parts of pages drawn at full resolution where the whole page is
+    /// drawn smaller than shown ([`sharp`]), and those being drawn with
+    /// their scale and place.
+    sharp: HashMap<usize, sharp::Sharp>,
+    sharpening: HashMap<usize, (f32, [f32; 4])>,
     /// The pages picked in the pages pane, for page changes, and the one
     /// a Shift+click runs from.
     picked: BTreeSet<usize>,
@@ -661,6 +669,9 @@ impl Viewer {
             reading_text: Default::default(),
             page_bounds: Rc::default(),
             view_size: Rc::default(),
+            view_bounds: Rc::default(),
+            sharp: HashMap::new(),
+            sharpening: HashMap::new(),
             picked: BTreeSet::new(),
             anchor: None,
             edited: None,
@@ -1971,6 +1982,7 @@ impl Viewer {
             .extend(self.pages.drain().map(|(_, drawn)| drawn.image));
         self.drawing.clear();
         self.queue.clear();
+        self.forget_sharp(None);
         self.list.reset(0);
     }
 
@@ -3029,6 +3041,7 @@ impl Viewer {
             }
         }
         self.queue.retain(|p| keep.contains(p));
+        self.forget_sharp(Some(keep));
     }
 
     /// The pages whose bitmaps are kept: those on screen and a few
@@ -3143,6 +3156,7 @@ impl Viewer {
         let image = self.pages.get(&page).map(|d| d.image.clone());
         self.laid_out(page);
         self.want(page, device, cx);
+        let (sharp, wish) = self.sharp_part(page, device, cx);
         // The form's fields to fill in, and the one being typed in.
         let fields: Vec<AnyElement> = match (&self.form, transform) {
             (Some(form), Some(transform)) if self.designing.is_none() => {
@@ -3291,6 +3305,7 @@ impl Viewer {
                 _ => gpui::CursorStyle::IBeam,
             })
             .children(image.map(|image| img(ImageSource::Render(image)).size_full()))
+            .children(sharp)
             .children(marks)
             .children(self.compare_marks(page))
             .children(overlays)
@@ -3302,8 +3317,11 @@ impl Viewer {
                 let record = self.page_bounds.clone();
                 gpui::canvas(
                     |_, _, _| {},
-                    move |bounds, _, _, _| {
+                    move |bounds, _, _, cx| {
                         record.borrow_mut().insert(page, bounds);
+                        if let Some(wish) = &wish {
+                            wish.painted(bounds, cx);
+                        }
                     },
                 )
                 .absolute()
@@ -4057,10 +4075,12 @@ impl Render for Viewer {
                         // Notes the view's size, and zooms with Ctrl and
                         // the wheel before the list scrolls with it.
                         let size = self.view_size.clone();
+                        let view = self.view_bounds.clone();
                         let weak = cx.entity().downgrade();
                         gpui::canvas(
                             move |bounds, _, _| {
                                 size.set(Some(bounds.size));
+                                view.set(Some(bounds));
                                 bounds
                             },
                             move |_, bounds, window, _| {
