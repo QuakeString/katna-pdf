@@ -2641,7 +2641,7 @@ fn sign_one(
             name: Some(common_name(&id.certificate().tbs_certificate.subject)),
             reason: what.reason.clone(),
             location: what.location.clone(),
-            contact: None,
+            contact: crate::profile::Profile::load().contact(),
         },
     );
     request.time = time;

@@ -39,3 +39,39 @@ only used for JPX. For other images drawn far below their size,
 samples before expansion (k = the whole factor on both axes). For
 issue16263.pdf, a 151-megapixel one-bit soft mask shown at 1,178 px, this
 avoids a 151 MB expansion and the resampling pass."
+
+## Shadings inside small tiling patterns (src/pattern.rs)
+
+A tiling pattern's cell is interpreted in its own space: the pattern's
+bbox, scaled to the cell pixmap. `TilingPattern::interpret` gave the cell's
+context the clip box of the page that used the pattern, carried through the
+cell's transform. That box is in the page's device space, so carried into
+the cell it usually missed the cell. Paths were still drawn (they are not
+limited by it), but `sh` fills the context's box, and form XObjects
+intersect their bbox with it, so a shading in a cell drew nothing.
+
+Typst draws every gradient this way: a pattern whose bbox is the unit
+square, scaled up by `/Matrix`, whose cell draws a form XObject that does
+`sh`. A licence card exported from Typst lost its gradient logo, its
+gradient badge and its corner glows; PDFium, Poppler and browsers draw
+them. The cell's box is now the pattern's bbox in cell space, which is also
+the cell's clip path.
+
+Test: `a_gradient_in_a_small_tiling_pattern_is_drawn` in
+`crates/katna-pdf-render/tests/hayro.rs`.
+
+Upstream issue text, for hayro's tracker: "A shading painted with `sh`
+inside a tiling pattern's cell (directly or from a form XObject) draws
+nothing when the pattern is used away from the page origin.
+`TilingPattern::interpret` builds the cell's `Context` with
+`initial_transform * ctx_bbox`, where `ctx_bbox` is the using page's clip
+box in device space; in cell space it misses the cell, and `sh` fills only
+that box. Typst exports every gradient this way (a 1×1 BBox pattern whose
+cell does `/x0 Do` → `/s0 sh`). Using `initial_transform * self.bbox`
+instead fixes it."
+
+## Comments hidden (src/interpret/mod.rs)
+
+`InterpreterSettings::render_comments`, true by default: when false, the
+page's annotations are drawn only if they are form fields (`/Widget`), so
+the app's "Hide comments" shows the pages and forms without the comments.

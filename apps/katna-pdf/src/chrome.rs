@@ -24,8 +24,8 @@ use crate::settings::{self, Page};
 use crate::tabs::{Tabs, TopMenu};
 use crate::text::t;
 use crate::viewer::{
-    Compare, Export, Find, Present, Print, Properties, Quit, ReadAloud, Redo, Save, ShowLibrary,
-    Snapshot, ToggleContents, ToggleNight, Undo,
+    Compare, Export, Find, Present, Print, Properties, Quit, ReadAloud, Redo, Save, SendByEmail,
+    ShowLibrary, Snapshot, ToggleContents, ToggleNight, Undo,
 };
 
 /// The person's name, as the desktop knows it: the full name in their
@@ -450,11 +450,12 @@ impl Tabs {
     fn share_menu(&self, cx: &mut Context<Self>) -> AnyElement {
         let th = self.theme;
         type Run = fn() -> Box<dyn gpui::Action>;
-        let rows: [Option<(&str, &str, &str, Run)>; 12] = [
+        let rows: [Option<(&str, &str, &str, Run)>; 13] = [
             Some(("print", "share-print", "Ctrl P", || Box::new(Print))),
             Some(("upload", "share-export", "Ctrl Shift E", || {
                 Box::new(Export)
             })),
+            Some(("mail", "share-email", "", || Box::new(SendByEmail))),
             None,
             Some(("diff", "share-compare", "Ctrl Shift D", || {
                 Box::new(Compare)

@@ -359,12 +359,12 @@ comment.area-highlight	comment	Area highlight	reader	n	shipped	P1	#158	Highlight
 comment.attach-file-comment	comment	Attach a file as a comment	reader	y	shipped	P1	#105		acrobat
 comment.record-audio	comment	Sound comments	reader	n	skip	-	-		acrobat
 comment.image-comment	comment	Add an image as a comment	reader	n	todo	P2	-		acrobat
-comment.line-endings	comment	All ten line-ending styles and dashed/cloudy borders	reader	n	partial	P1	#32		acrobat
+comment.line-endings	comment	All ten line-ending styles and dashed/cloudy borders	reader	n	shipped	P1	#172		acrobat
 comment.properties-dialog	comment	Comment properties (appearance, author, subject)	reader	y	shipped	P0	#104 comments.rs		acrobat
-comment.properties-bar	comment	Comment properties bar	reader	y	partial	P1	colour dots		acrobat
+comment.properties-bar	comment	Comment properties bar	reader	y	shipped	P1	#172		acrobat
 comment.lock-comment	comment	Lock comments	reader	y	shipped	P2	#104		acrobat
 comment.default-properties	comment	Make current properties the tool default	reader	y	shipped	P1	#164		acrobat
-comment.author-identity	comment	Author name from identity preferences	reader	y	partial	P1	#104	author from the account name	acrobat
+comment.author-identity	comment	Author name from identity preferences	reader	y	shipped	P1	#172		acrobat
 comment.reply	comment	Reply to comments	reader	y	shipped	P1	#104		acrobat
 comment.set-status	comment	Set review status (accepted, rejected, cancelled, completed)	reader	y	shipped	P1	#104		acrobat
 comment.checkmark	comment	Mark comments with a checkmark	reader	n	todo	P2	-		acrobat
@@ -374,7 +374,7 @@ comment.copy-comment-text	comment	Copy comment text	reader	n	shipped	P1	#152	cop
 comment.filter-comments	comment	Filter comments (type, author, status, colour, checkmark)	reader	y	shipped	P1	#104		acrobat
 comment.sort-comments	comment	Sort comments (page, author, date, type, colour)	reader	n	shipped	P1	#155	Order chips in the comments filter	acrobat
 comment.search-comments	comment	Search comments	reader	y	shipped	P1	#140	Comments tab filter: words in comments, replies and authors, accents ignored	acrobat
-comment.show-hide-comments	comment	Show or hide all comments and pop-ups	reader	y	partial	P1	#104 hidden flag per comment		acrobat
+comment.show-hide-comments	comment	Show or hide all comments and pop-ups	reader	y	shipped	P1	#173		acrobat
 comment.popups	comment	Open and reposition comment pop-ups	reader	y	partial	P1	#32		acrobat
 comment.connector-lines	comment	Connector lines between markups and pop-ups	reader	n	todo	P2	-		acrobat
 comment.review-history	comment	Review history of state changes	reader	n	partial	P2	#104 status replies		acrobat
@@ -424,10 +424,10 @@ form.rich-text-fields	form	Rich-text field values	standard	n	todo	P2	-		acrobat
 form.af-number	form	Number and currency formatting (AFNumber)	reader	y	shipped	P1	#67 calc.rs		acrobat
 form.af-percent	form	Percentage formatting	reader	y	shipped	P1	#67		acrobat
 form.af-date-time	form	Date and time formatting and parsing	reader	y	shipped	P1	#67		acrobat
-form.af-special	form	Special formats (zip, phone, SSN, arbitrary mask)	reader	y	partial	P1	#67		acrobat
-form.af-range-validate	form	Range validation	reader	y	partial	P1	#67		acrobat
+form.af-special	form	Special formats (zip, phone, SSN, arbitrary mask)	reader	y	shipped	P1	#174		acrobat
+form.af-range-validate	form	Range validation	reader	y	shipped	P1	#174		acrobat
 form.af-simple-calculate	form	Sum, product, average, min, max calculations	reader	y	shipped	P1	#67		acrobat
-form.simplified-notation	form	Simplified field notation calculations	reader	n	partial	P1	#67		acrobat
+form.simplified-notation	form	Simplified field notation calculations	reader	n	shipped	P1	#174		acrobat
 form.custom-scripts	form	Custom format, keystroke, validate and calculate scripts	reader	y	shipped	P2	katna-pdf-js	boa sandbox; off in Settings > Editing	acrobat
 form.calculation-order	form	Calculation order	reader	y	shipped	P1	#67		acrobat
 form.event-order	form	Keystroke, validate, calculate, format event order	reader	y	partial	P2	#67		acrobat
@@ -834,7 +834,7 @@ a11y.set-title-display	a11y	Show the document title in the window	pro	n	partial	
 a11y.make-accessible-action	a11y	Make Accessible guided action	pro	n	todo	P2	-		acrobat
 a11y.setup-assistant	a11y	Accessibility setup assistant	reader	n	skip	-	-		acrobat
 a11y.read-aloud	a11y	Read out loud (platform TTS)	reader	n	shipped	P1	#85 Ctrl+Shift+Y		acrobat
-a11y.read-aloud-options	a11y	Read-aloud voice, pitch and speed	reader	n	partial	P1	#85 voice		acrobat
+a11y.read-aloud-options	a11y	Read-aloud voice, pitch and speed	reader	n	shipped	P1	#175		acrobat
 a11y.replace-page-colors	a11y	Replace page colours (high contrast)	reader	y	shipped	P0	#29 page colours		acrobat
 a11y.reflow-tagged	a11y	Reflow tagged content	reader	n	todo	P2	-		acrobat
 a11y.keyboard-selection-cursor	a11y	Always show the keyboard selection cursor	reader	n	todo	P2	-		acrobat
@@ -896,18 +896,18 @@ misc.flash-swf	misc	Flash/SWF content	reader	n	skip	-	-		acrobat
 misc.preferences-dialog	misc	Preferences dialog generated from a schema	reader	y	partial	P1	-	Settings window planned in the redesign	acrobat
 misc.prefs-general	misc	Preferences: general	reader	y	partial	P1	-		acrobat
 misc.prefs-page-display	misc	Preferences: page display	reader	y	partial	P1	-		acrobat
-misc.prefs-documents	misc	Preferences: documents (autosave interval, recent count)	reader	y	todo	P1	-		acrobat
-misc.prefs-commenting	misc	Preferences: commenting	reader	y	todo	P1	-		acrobat
-misc.prefs-forms	misc	Preferences: forms	reader	y	todo	P1	-		acrobat
-misc.prefs-identity	misc	Preferences: identity	reader	y	todo	P1	-		acrobat
-misc.prefs-full-screen	misc	Preferences: full screen	reader	n	todo	P1	-		acrobat
-misc.prefs-search	misc	Preferences: search	reader	n	todo	P1	-		acrobat
+misc.prefs-documents	misc	Preferences: documents (autosave interval, recent count)	reader	y	shipped	P1	#170		acrobat
+misc.prefs-commenting	misc	Preferences: commenting	reader	y	shipped	P1	#170		acrobat
+misc.prefs-forms	misc	Preferences: forms	reader	y	shipped	P1	#170		acrobat
+misc.prefs-identity	misc	Preferences: identity	reader	y	shipped	P1	#170		acrobat
+misc.prefs-full-screen	misc	Preferences: full screen	reader	n	shipped	P1	#170		acrobat
+misc.prefs-search	misc	Preferences: search	reader	n	shipped	P1	#170		acrobat
 misc.prefs-signatures	misc	Preferences: signatures	reader	y	partial	P1	sign card remembers		acrobat
 misc.prefs-security	misc	Preferences: security and trust	reader	y	partial	P1	trusted folder		acrobat
 misc.prefs-spelling	misc	Preferences: spelling	reader	n	todo	P2	-		acrobat
 misc.prefs-language	misc	Preferences: language	reader	y	partial	P1	follows the system		acrobat
 misc.prefs-reading	misc	Preferences: reading	reader	n	partial	P1	read-aloud voice		acrobat
-misc.prefs-accessibility	misc	Preferences: accessibility	reader	n	todo	P1	-		acrobat
+misc.prefs-accessibility	misc	Preferences: accessibility	reader	n	shipped	P1	#170		acrobat
 misc.prefs-color-management	misc	Preferences: colour management	reader	n	skip	-	-		acrobat
 misc.prefs-javascript	misc	Preferences: JavaScript	reader	y	shipped	-	settings.rs	one switch: Run forms' own scripts	acrobat
 misc.prefs-measuring	misc	Preferences: measuring	reader	n	partial	P1	#84		acrobat
@@ -921,8 +921,8 @@ misc.rtl-ui	misc	Right-to-left user interface	reader	n	todo	P2	-		acrobat
 misc.installers	misc	Signed installers for macOS, Windows and Linux	reader	y	shipped	P1	#87, #88 Arch, deb, rpm, AppImage, tarball, Windows Setup		acrobat
 misc.web-deploy	misc	Hosted web app deployment	-	n	skip	-	-		acrobat
 misc.performance-budgets	misc	Meet performance budgets on Tier-1 platforms	reader	n	shipped	P0	tools/katna-pdf-bench		acrobat
-misc.send-email	misc	Send the file by email (system mail client)	reader	y	todo	P1	-	Katna Mail could take it	acrobat
-misc.user-docs	misc	User documentation and keyboard reference	reader	y	todo	P1	-		acrobat
+misc.send-email	misc	Send the file by email (system mail client)	reader	y	shipped	P1	#168		acrobat
+misc.user-docs	misc	User documentation and keyboard reference	reader	y	shipped	P1	#171		acrobat
 misc.custom-shortcuts	misc	Change keyboard shortcuts	-	y	todo	P2	-		mpe
 misc.proxy-settings	misc	Network proxy settings	reader	y	todo	P2	-	uses the system's	mpe
 misc.log-file	misc	Write a log to a file	-	y	todo	P2	-		mpe

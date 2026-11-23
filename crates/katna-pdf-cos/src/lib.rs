@@ -56,13 +56,14 @@ mod xfdf;
 
 pub use actions::{FieldAction, SubmitFormat};
 pub use annots::{
-    AnnotChanges, AnnotFlags, AnnotKind, Annotation, DYNAMIC_STAMPS, MARKS, MarkupStyle, NOTE_SIZE,
-    REVIEW_STATES, STAMPS, annotation_status, comments_text, custom_stamp, pdf_date,
+    AnnotChanges, AnnotFlags, AnnotKind, Annotation, DYNAMIC_STAMPS, LineEnd, MARKS, MarkupStyle,
+    NOTE_SIZE, REVIEW_STATES, STAMPS, annotation_status, comments_text, custom_stamp, pdf_date,
     stamp_is_dynamic, stamp_is_mark, stamp_label,
 };
 pub use attachments::Attachment;
 pub use calc::{
-    CalcOp, Calculation, Format, Scripts, calculate, format, number, parse_date, show, write_date,
+    CalcOp, Calculation, Format, Range, Scripts, calculate, expression_fields, fit_mask, format,
+    number, parse_date, range, script_text, show, write_date,
 };
 pub use content::{Op, ops};
 pub use crypt::{Permissions, UnlockError};
@@ -99,7 +100,7 @@ pub use pdfa::{
 };
 pub use present::{PageShow, Transition, TransitionStyle};
 pub use redact::{Pattern, RedactError, RedactOptions};
-pub use report::text_pdf;
+pub use report::{text_pdf, text_pdf_outlined};
 pub use scripts::{ActionPlace, DocAction, DocEvent, FieldEvent};
 pub use sign::{
     CONTENTS_LEN, Coverage, Picture, Placement, Prepared, SignError, SignRequest, Signature,

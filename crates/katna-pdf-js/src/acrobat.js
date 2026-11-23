@@ -585,6 +585,9 @@ function AFSpecial_KeystrokeEx(mask) {
   if (!__maskFits(String(mask), String(event.value))) {
     app.alert("The value entered does not match the format of the field [ " + __fieldName() + " ]");
     event.rc = false;
+  } else {
+    // The mask's own characters put in where they were left out.
+    event.value = util.printx(String(mask), String(event.value));
   }
 }
 // Whether `value` fills `mask` (9 a digit, A a letter, X a letter or

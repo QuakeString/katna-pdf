@@ -134,14 +134,20 @@ impl Tabs {
         this
     }
 
-    /// Every [`crate::recovery::EVERY`] seconds, keeps a copy of each
-    /// tab's changes not saved.
+    /// Every few minutes, as Settings > Editing says, keeps a copy of
+    /// each tab's changes not saved.
     fn keep_changes(&mut self, cx: &mut Context<Self>) {
         cx.spawn(async move |this, cx| {
             let every = std::time::Duration::from_secs(crate::recovery::EVERY);
+            let mut minutes = 0;
             loop {
                 cx.background_executor().timer(every).await;
+                minutes += 1;
                 let kept = this.update(cx, |this, cx| {
+                    if minutes < cx.global::<crate::prefs::Prefs>().recovery_minutes {
+                        return;
+                    }
+                    minutes = 0;
                     for tab in &this.tabs {
                         tab.viewer.update(cx, |viewer, cx| viewer.keep_changes(cx));
                     }
@@ -812,6 +818,14 @@ impl Render for Tabs {
             .on_action(cx.listener(|_, _: &crate::viewer::ReportProblem, _, cx| {
                 cx.open_url("https://github.com/QuakeString/katna-pdf/issues/new")
             }))
+            .on_action(
+                cx.listener(|this, _: &crate::viewer::ShowGuide, window, cx| {
+                    match crate::guide::write() {
+                        Ok(path) => this.open_files(vec![path], window, cx),
+                        Err(err) => eprintln!("katna-pdf: writing the guide: {err}"),
+                    }
+                }),
+            )
             .on_action(cx.listener(|_, _: &crate::viewer::ShowAbout, _, cx| {
                 crate::settings::open(crate::settings::Page::About, cx)
             }))

@@ -56,6 +56,10 @@ impl Viewer {
 
     pub(super) fn pick_tool(&mut self, tool: Tool, cx: &mut Context<Self>) {
         self.tool = (self.tool != Some(tool)).then_some(tool);
+        // Comments drawn while hidden would not be seen: they come back.
+        if self.tool.is_some() && !katna_pdf_render::comments_shown() {
+            super::set_comments_shown(true, cx);
+        }
         self.colour_chosen = false;
         self.cropping = false;
         self.draft = None;
@@ -311,7 +315,8 @@ impl Viewer {
             // Markup tools select text, and mark it when let go.
             Some(_) => false,
             None => {
-                let hit = self.inverse(page).and_then(|inv| {
+                let shown = katna_pdf_render::comments_shown();
+                let hit = self.inverse(page).filter(|_| shown).and_then(|inv| {
                     let annots = self.annots.as_ref()?.get(page)?;
                     annots.get(annotate::at(annots, inv.map(point))?)?.id
                 });
@@ -328,7 +333,10 @@ impl Viewer {
         position: gpui::Point<gpui::Pixels>,
         cx: &mut Context<Self>,
     ) {
-        let hit = if self.tool.is_some() {
+        let hit = if self.tool.is_some()
+            || !cx.global::<crate::prefs::Prefs>().comment_hover
+            || !katna_pdf_render::comments_shown()
+        {
             None
         } else {
             self.page_point(position).and_then(|(page, point)| {
@@ -856,6 +864,8 @@ impl Viewer {
                 match written {
                     Ok((bytes, doc, cos)) => {
                         this.doing = what;
+                        let every = cx.global::<crate::prefs::Prefs>().comment_every;
+                        let new_on = new_on.map(|page| (page, every));
                         this.show_annotated(bytes, doc, cos, &pages, new_on)
                     }
                     Err(error) => {
@@ -876,20 +886,26 @@ impl Viewer {
     }
 
     /// Shows the file with its annotations changed, drawing `pages` again.
+    /// `new_on` is the page a comment was made on, and whether Settings
+    /// opens every new comment for typing.
     pub(super) fn show_annotated(
         &mut self,
         bytes: Arc<Vec<u8>>,
         doc: Arc<dyn Document>,
         cos: katna_pdf_cos::Document,
         pages: &[usize],
-        new_on: Option<usize>,
+        new_on: Option<(usize, bool)>,
     ) {
         let annots = cos.annotations();
-        // A new note or text box is chosen, its comment open for typing.
-        if let Some(page) = new_on
-            && std::mem::take(&mut self.comment_next)
+        // A new note or text box is chosen, its comment open for typing;
+        // every new comment when Settings asks.
+        let next = std::mem::take(&mut self.comment_next);
+        if let Some((page, every_open)) = new_on
+            && let Some(made) = annots.get(page).and_then(|a| a.last())
+            && (next
+                || every_open && made.reply_to.is_none() && made.measure.is_none() && !made.grouped)
         {
-            self.chosen = annots.get(page).and_then(|a| a.last()).and_then(|a| a.id);
+            self.chosen = made.id;
             self.open_comment = true;
         }
         self.annots = Some(Arc::new(annots));

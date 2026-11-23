@@ -46,6 +46,7 @@ mod crop;
 mod datepick;
 mod design;
 mod dock;
+mod email;
 mod export;
 mod files;
 mod find;
@@ -72,6 +73,7 @@ mod signatures;
 mod speak;
 mod stamps;
 mod start;
+mod strokes;
 mod textedit;
 mod watch;
 
@@ -96,10 +98,12 @@ actions!(
         NewWindow,
         OpenSettings,
         ShowAbout,
+        ShowGuide,
         ReportProblem,
         ReopenSession,
         Compare,
         Export,
+        SendByEmail,
         ReadAloud,
         Present,
         PresentNext,
@@ -136,6 +140,7 @@ actions!(
         ScrollDown,
         ToggleContents,
         ToggleNight,
+        ToggleComments,
         Find,
         CommandBox,
         FindNext,
@@ -417,6 +422,19 @@ enum PaneTab {
     Changes,
 }
 
+/// Whether the pages show their comments; every viewer draws its pages
+/// again when it changes (View > Comments, the Comments pane's menu).
+#[derive(Default)]
+pub struct CommentsShown(pub bool);
+
+impl gpui::Global for CommentsShown {}
+
+/// Shows or hides the comments in every window.
+pub(crate) fn set_comments_shown(on: bool, cx: &mut gpui::App) {
+    katna_pdf_render::show_comments(on);
+    cx.set_global(CommentsShown(on));
+}
+
 /// What a viewer asks of the tabs around it.
 pub enum ViewerEvent {
     /// The open button was pressed: choose files to open.
@@ -500,9 +518,6 @@ pub(super) enum PagesFrom {
     /// Picture files, a page each, at 96 pixels to the inch.
     Pictures(Vec<PathBuf>),
 }
-
-/// Recent files on the start screen.
-const RECENT: usize = 8;
 
 /// Points to logical pixels at 100%: 96 pixels to the inch, 72 points.
 const POINT: f32 = 96.0 / 72.0;
@@ -820,6 +835,9 @@ pub struct Viewer {
     comments_menu: bool,
     /// Whether the form's fields are tinted so they can be found.
     highlight_fields: bool,
+    /// Settings' tint for fields, which `highlight_fields` follows when
+    /// it changes.
+    field_tint: bool,
     /// The stamp the stamp tool puts on, and the ones typed in.
     stamp: String,
     custom_stamps: Vec<String>,
@@ -891,6 +909,7 @@ pub struct Viewer {
     _appearance: Subscription,
     _look: Subscription,
     _prefs: Subscription,
+    _comments: Subscription,
 }
 
 impl Viewer {
@@ -913,10 +932,24 @@ impl Viewer {
         let look = cx.observe_global_in::<crate::look::Look>(window, |this, window, cx| {
             this.restyle(window, cx);
         });
+        let comments_changed = cx.observe_global::<CommentsShown>(|this, cx| {
+            this.annot_hover = None;
+            if !cx.global::<CommentsShown>().0 {
+                this.chosen = None;
+                this.notice = Some(said("comments-hidden", &[]));
+            }
+            this.redraw_all();
+            cx.notify();
+        });
         let prefs_changed = cx.observe_global::<Prefs>(|this, cx| {
             let was = this.page_colors();
             this.night_pages = cx.global::<Prefs>().night_pages;
             this.form_scripts = cx.global::<Prefs>().form_scripts;
+            let tint = cx.global::<Prefs>().field_tint;
+            if tint != this.field_tint {
+                this.field_tint = tint;
+                this.highlight_fields = tint;
+            }
             if this.page_colors() != was {
                 this.redraw_thumbs();
             }
@@ -982,7 +1015,12 @@ impl Viewer {
             links: None,
             texts: None,
             search: None,
-            find_options: Default::default(),
+            find_options: katna_pdf_render::text::FindOptions {
+                match_case: prefs.find_case,
+                whole_words: prefs.find_words,
+                match_accents: prefs.find_accents,
+                ..Default::default()
+            },
             command: None,
             tools_more: false,
             find_list: false,
@@ -1054,7 +1092,8 @@ impl Viewer {
             reply: None,
             comment_filter: Default::default(),
             comments_menu: false,
-            highlight_fields: true,
+            highlight_fields: prefs.field_tint,
+            field_tint: prefs.field_tint,
             stamp: "Approved".into(),
             custom_stamps: stamps::load_custom(),
             stamp_input: None,
@@ -1096,6 +1135,7 @@ impl Viewer {
             _appearance: appearance,
             _look: look,
             _prefs: prefs_changed,
+            _comments: comments_changed,
         };
         if let Some(file) = file {
             this.open(file, cx);
@@ -2619,6 +2659,7 @@ impl Viewer {
             return;
         }
         self.finish_typing(true, cx);
+        let calendar = cx.global::<Prefs>().date_calendar;
         let Some(form) = self.form.as_mut() else {
             return;
         };
@@ -2644,6 +2685,7 @@ impl Viewer {
         window.focus(&input.focus_handle(cx), cx);
         let month = form
             .date_pattern(field)
+            .filter(|_| calendar)
             .map(|pattern| datepick::month_of(&form.fields[field].value, pattern));
         form.editing = Some(Editing {
             field,
@@ -2928,6 +2970,23 @@ impl Viewer {
             self.released.extend(self.thumbs.forget(*page));
         }
         self.texts = Some(search::texts(self.page_count()));
+    }
+
+    /// Draws every page and thumbnail again, as the comments were shown
+    /// or hidden.
+    fn redraw_all(&mut self) {
+        let Content::Ready(_) = &self.content else {
+            return;
+        };
+        self.revision += 1;
+        self.forget_runs();
+        for page in 0..self.page_count() {
+            if let Some(drawn) = self.pages.get_mut(&page) {
+                drawn.scale = 0.0;
+            }
+            self.drawing.remove(&page);
+            self.released.extend(self.thumbs.forget(page));
+        }
     }
 
     /// A click on page `page`'s thumbnail: picks it (Ctrl adds or takes
@@ -4786,6 +4845,9 @@ impl Render for Viewer {
             .on_action(cx.listener(|this, _: &Redo, _, cx| this.redo(cx)))
             .on_action(cx.listener(|this, _: &ToggleContents, _, cx| this.toggle_pane(cx)))
             .on_action(cx.listener(|this, _: &ToggleNight, _, cx| this.toggle_night(cx)))
+            .on_action(cx.listener(|_, _: &ToggleComments, _, cx| {
+                set_comments_shown(!katna_pdf_render::comments_shown(), cx)
+            }))
             .on_action(cx.listener(|this, _: &Find, window, cx| this.open_search(window, cx)))
             .on_action(cx.listener(|this, _: &CommandBox, window, cx| {
                 this.toggle_command(window, cx);
@@ -4843,6 +4905,7 @@ impl Render for Viewer {
             .on_action(cx.listener(|this, _: &Sign, _, cx| this.toggle_signing(cx)))
             .on_action(cx.listener(|this, _: &Properties, _, cx| this.toggle_properties(cx)))
             .on_action(cx.listener(|this, _: &Export, _, cx| this.toggle_exporting(cx)))
+            .on_action(cx.listener(|this, _: &SendByEmail, _, cx| this.send_by_email(cx)))
             .on_action(cx.listener(|this, _: &Revert, _, cx| this.revert(cx)))
             .on_action(cx.listener(|this, _: &PreviousView, _, cx| this.step_view(true, cx)))
             .on_action(cx.listener(|this, _: &NextView, _, cx| this.step_view(false, cx)))

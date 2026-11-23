@@ -13,12 +13,12 @@ use gpui::{
 use katna_ui::px;
 use katna_ui::scale::desktop_px;
 use katna_ui::text_input::{InputEvent, TextInput};
-use katna_ui::tokens::{space, text};
+use katna_ui::tokens::{radius, space, text};
 
-use crate::float::{self, avatar, button, icon, seg, seg_item};
+use crate::float::{self, avatar, button, icon, radio, seg, seg_item};
 use crate::look::{self, Look, Mine, Mode};
 use crate::menus::{MENUS, keys_text, plain};
-use crate::prefs::{self, Prefs, StartZoom, Units};
+use crate::prefs::{self, Motion, Prefs, StartZoom, Units};
 use crate::profile::Profile;
 use crate::spread::Spread;
 use crate::text::t;
@@ -95,6 +95,7 @@ pub struct Settings {
     short: Entity<TextInput>,
     title: Entity<TextInput>,
     organisation: Entity<TextInput>,
+    email: Entity<TextInput>,
     find: Entity<TextInput>,
     /// The timestamp server's address (Signing).
     server: Entity<TextInput>,
@@ -107,6 +108,9 @@ pub struct Settings {
     notice: Option<String>,
     /// Whether the menu of pages at night is open (X09).
     night_menu: bool,
+    /// The voices that can read aloud, once asked for (opening the
+    /// voice is slow, so done off the UI thread).
+    voices: Option<Vec<(String, String)>>,
     _subs: Vec<Subscription>,
 }
 
@@ -148,6 +152,7 @@ impl Settings {
         let short = input("settings-short-hint", &profile.short, cx);
         let title = input("settings-job-hint", &profile.title, cx);
         let organisation = input("settings-organisation-hint", &profile.organisation, cx);
+        let email = input("settings-email-hint", &profile.email, cx);
         let find = input("settings-find-shortcut", "", cx);
         let signing = crate::viewer::signing_defaults();
         let server = input("settings-server-hint", &signing.server, cx);
@@ -163,7 +168,7 @@ impl Settings {
                 }
             }),
         ];
-        for field in [&name, &short, &title, &organisation] {
+        for field in [&name, &short, &title, &organisation, &email] {
             subs.push(cx.subscribe(field, |this, _, event: &InputEvent, cx| {
                 if matches!(event, InputEvent::Changed) {
                     this.keep_profile(cx);
@@ -174,6 +179,21 @@ impl Settings {
             cx.set_global(Shown(None));
             true
         });
+        cx.spawn(async move |this, cx| {
+            let voices = cx
+                .background_spawn(async move {
+                    crate::speech::voice()
+                        .map(|v| v.voices())
+                        .unwrap_or_default()
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                this.voices = Some(voices);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
         Self {
             page,
             theme: Theme::current(window, cx.global()),
@@ -181,6 +201,7 @@ impl Settings {
             short,
             title,
             organisation,
+            email,
             find,
             server,
             signing,
@@ -188,6 +209,7 @@ impl Settings {
             editor: None,
             notice: None,
             night_menu: false,
+            voices: None,
             _subs: subs,
         }
     }
@@ -200,6 +222,7 @@ impl Settings {
             &self.short,
             &self.title,
             &self.organisation,
+            &self.email,
             &self.find,
             &self.server,
         ] {
@@ -215,6 +238,7 @@ impl Settings {
             short: self.short.read(cx).text().to_string(),
             title: self.title.read(cx).text().to_string(),
             organisation: self.organisation.read(cx).text().to_string(),
+            email: self.email.read(cx).text().to_string(),
         };
         if &profile != cx.global::<Profile>() {
             profile.save();
@@ -374,7 +398,8 @@ impl Settings {
                                     .child(div().flex_1().child(
                                         self.boxed("settings-organisation", &self.organisation),
                                     )),
-                            ),
+                            )
+                            .child(self.boxed("settings-email", &self.email)),
                     ),
             )
             .child(
@@ -451,6 +476,16 @@ impl Settings {
                     })),
             )
             .children(control)
+    }
+
+    /// A heading over the rows that follow it on a page.
+    fn group(&self, id: &str) -> impl IntoElement {
+        div()
+            .mt(px(space::S6))
+            .text_size(px(text::CAPTION))
+            .font_weight(FontWeight::SEMIBOLD)
+            .text_color(self.theme.dim)
+            .child(t(id, &[]))
     }
 
     fn appearance(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -888,6 +923,18 @@ impl Settings {
             |p, v| p.dock_labels = v,
             cx,
         );
+        let motion = self.choice(
+            "settings-motion",
+            prefs.motion,
+            &[
+                (Motion::Desktop, "settings-motion-desktop"),
+                (Motion::Less, "settings-motion-less"),
+                (Motion::Normal, "settings-motion-normal"),
+            ],
+            |p, v| p.motion = v,
+            cx,
+        );
+        let desktop_still = crate::prefs::desktop_motion().off();
         let follow = look::mail_config_file().map(|_| {
             let on = current.follow_mail;
             float::switch("settings-follow-mail", on, &th)
@@ -922,6 +969,19 @@ impl Settings {
                 None,
                 Some(t("settings-dock-labels-detail", &[])),
                 Some(labels),
+            ))
+            .child(self.row(
+                t("settings-motion", &[]),
+                Some(t(
+                    if desktop_still {
+                        "settings-motion-desktop-still"
+                    } else {
+                        "settings-motion-desktop-moving"
+                    },
+                    &[],
+                )),
+                Some(t("settings-motion-detail", &[])),
+                Some(motion),
             ))
             .children(follow.map(|follow| {
                 self.row(
@@ -1014,6 +1074,53 @@ impl Settings {
             cx,
         );
         let workers = self.toggle("settings-workers", prefs.workers, |p, v| p.workers = v, cx);
+        let recent = self.choice(
+            "settings-recent",
+            prefs.recent,
+            &[
+                (4, "settings-recent-4"),
+                (8, "settings-recent-8"),
+                (16, "settings-recent-16"),
+            ],
+            |p, v| p.recent = v,
+            cx,
+        );
+        let find_case = self.toggle(
+            "settings-find-case",
+            prefs.find_case,
+            |p, v| p.find_case = v,
+            cx,
+        );
+        let find_words = self.toggle(
+            "settings-find-words",
+            prefs.find_words,
+            |p, v| p.find_words = v,
+            cx,
+        );
+        let find_accents = self.toggle(
+            "settings-find-accents",
+            prefs.find_accents,
+            |p, v| p.find_accents = v,
+            cx,
+        );
+        let present_seconds = self.choice(
+            "settings-present-seconds",
+            prefs.present_seconds,
+            &[
+                (0, "settings-present-keys"),
+                (5, "settings-seconds-5"),
+                (10, "settings-seconds-10"),
+                (30, "settings-seconds-30"),
+            ],
+            |p, v| p.present_seconds = v,
+            cx,
+        );
+        let present_loop = self.toggle(
+            "settings-present-loop",
+            prefs.present_loop,
+            |p, v| p.present_loop = v,
+            cx,
+        );
         div()
             .flex()
             .flex_col()
@@ -1048,6 +1155,39 @@ impl Settings {
                 Some(t("settings-workers-detail", &[])),
                 Some(workers),
             ))
+            .child(self.row(
+                t("settings-recent", &[]),
+                None,
+                Some(t("settings-recent-detail", &[])),
+                Some(recent),
+            ))
+            .child(self.group("settings-group-find"))
+            .child(self.row(
+                t("settings-find-case", &[]),
+                None,
+                Some(t("settings-find-detail", &[])),
+                Some(find_case),
+            ))
+            .child(self.row(t("settings-find-words", &[]), None, None, Some(find_words)))
+            .child(self.row(
+                t("settings-find-accents", &[]),
+                None,
+                None,
+                Some(find_accents),
+            ))
+            .child(self.group("settings-group-present"))
+            .child(self.row(
+                t("settings-present-seconds", &[]),
+                None,
+                Some(t("settings-present-seconds-detail", &[])),
+                Some(present_seconds),
+            ))
+            .child(self.row(
+                t("settings-present-loop", &[]),
+                None,
+                None,
+                Some(present_loop),
+            ))
             .into_any_element()
     }
 
@@ -1078,6 +1218,41 @@ impl Settings {
             |p, v| p.recovery = v,
             cx,
         );
+        let every = self.choice(
+            "settings-recovery-every",
+            prefs.recovery_minutes,
+            &[
+                (1, "settings-minutes-1"),
+                (5, "settings-minutes-5"),
+                (10, "settings-minutes-10"),
+            ],
+            |p, v| p.recovery_minutes = v,
+            cx,
+        );
+        let hover = self.toggle(
+            "settings-comment-hover",
+            prefs.comment_hover,
+            |p, v| p.comment_hover = v,
+            cx,
+        );
+        let every_comment = self.toggle(
+            "settings-comment-every",
+            prefs.comment_every,
+            |p, v| p.comment_every = v,
+            cx,
+        );
+        let tint = self.toggle(
+            "settings-field-tint",
+            prefs.field_tint,
+            |p, v| p.field_tint = v,
+            cx,
+        );
+        let calendar = self.toggle(
+            "settings-date-calendar",
+            prefs.date_calendar,
+            |p, v| p.date_calendar = v,
+            cx,
+        );
         let folder = katna_core::Paths::from_env()
             .ok()
             .map(|p| p.state_dir().join("pdf"))
@@ -1098,17 +1273,42 @@ impl Settings {
                 Some(grid),
             ))
             .child(self.row(
+                t("settings-recovery", &[]),
+                None,
+                Some(t("settings-recovery-detail", &[])),
+                Some(recovery),
+            ))
+            .when(prefs.recovery, |d| {
+                d.child(self.row(t("settings-recovery-every", &[]), None, None, Some(every)))
+            })
+            .child(self.group("settings-group-comments"))
+            .child(self.row(
+                t("settings-comment-hover", &[]),
+                None,
+                Some(t("settings-comment-hover-detail", &[])),
+                Some(hover),
+            ))
+            .child(self.row(
+                t("settings-comment-every", &[]),
+                None,
+                Some(t("settings-comment-every-detail", &[])),
+                Some(every_comment),
+            ))
+            .child(self.group("settings-group-forms"))
+            .child(self.row(
                 t("settings-form-scripts", &[]),
                 None,
                 Some(t("settings-form-scripts-detail", &[])),
                 Some(scripts),
             ))
             .child(self.row(
-                t("settings-recovery", &[]),
+                t("settings-field-tint", &[]),
                 None,
-                Some(t("settings-recovery-detail", &[])),
-                Some(recovery),
+                Some(t("settings-field-tint-detail", &[])),
+                Some(tint),
             ))
+            .child(self.row(t("settings-date-calendar", &[]), None, None, Some(calendar)))
+            .child(self.group("settings-group-files"))
             .child(self.row(t("settings-own-files", &[]), None, None, folder))
             .into_any_element()
     }
@@ -1627,6 +1827,55 @@ impl Settings {
             |p, v| p.speed = v,
             cx,
         );
+        let pitch = self.choice(
+            "settings-pitch",
+            prefs.pitch,
+            &[
+                (-0.5, "settings-pitch-low"),
+                (0.0, "settings-pitch-normal"),
+                (0.5, "settings-pitch-high"),
+            ],
+            |p, v| p.pitch = v,
+            cx,
+        );
+        // The desktop's own voice first, then each the voice offers.
+        let own = (String::new(), t("settings-voice-own", &[]));
+        let voices: Vec<(String, String)> = std::iter::once(own)
+            .chain(self.voices.iter().flatten().cloned())
+            .collect();
+        let hover = th.hover;
+        let list = div()
+            .id("settings-voices")
+            .mt(px(space::S2))
+            .max_h(px(220.0))
+            .overflow_y_scroll()
+            .rounded(px(radius::MD))
+            .border_1()
+            .border_color(th.line_soft)
+            .py(px(space::S1))
+            .children(voices.into_iter().enumerate().map(|(i, (id, words))| {
+                let on = prefs.voice == id;
+                div()
+                    .id(("settings-voice-item", i))
+                    .h(px(30.0))
+                    .px(px(space::S3))
+                    .flex()
+                    .items_center()
+                    .gap(px(space::S2))
+                    .cursor_pointer()
+                    .hover(move |s| s.bg(hover))
+                    .child(radio(on, &th))
+                    .child(
+                        div()
+                            .text_size(px(text::BODY))
+                            .text_color(th.text)
+                            .child(words),
+                    )
+                    .on_click(cx.listener(move |_, _, _, cx| {
+                        let id = id.clone();
+                        Prefs::set(cx, move |p| p.voice = id);
+                    }))
+            }));
         let try_it = button(
             "settings-try-voice",
             t("settings-try-voice", &[]),
@@ -1655,7 +1904,14 @@ impl Settings {
                 Some(t("settings-voice-detail", &[])),
                 None,
             ))
+            .children(
+                self.voices
+                    .as_ref()
+                    .is_some_and(|v| !v.is_empty())
+                    .then_some(list),
+            )
             .child(self.row(t("settings-speed", &[]), None, None, Some(speed)))
+            .child(self.row(t("settings-pitch", &[]), None, None, Some(pitch)))
             .child(div().mt(px(space::S4)).flex().child(try_it))
             .into_any_element()
     }

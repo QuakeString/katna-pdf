@@ -488,7 +488,7 @@ impl Look {
 }
 
 /// The desktop's colours: KDE's scheme, GNOME's accent, Windows'.
-fn desktop_kind() -> DesktopKind {
+pub(crate) fn desktop_kind() -> DesktopKind {
     if cfg!(windows) {
         return DesktopKind::Windows;
     }

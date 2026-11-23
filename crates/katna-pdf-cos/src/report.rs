@@ -20,7 +20,19 @@ const LEADING: f64 = 14.0;
 /// space is a heading, in bold with space above it; an indented line
 /// wraps under its own indent. Empty lines are kept.
 pub fn text_pdf(title: &str, lines: &[String]) -> Vec<u8> {
+    pdf(title, lines, false)
+}
+
+/// [`text_pdf`] with its headings as the file's bookmarks, open beside
+/// the pages: for longer texts read on screen, such as the user guide.
+pub fn text_pdf_outlined(title: &str, lines: &[String]) -> Vec<u8> {
+    pdf(title, lines, true)
+}
+
+fn pdf(title: &str, lines: &[String], outlined: bool) -> Vec<u8> {
     let mut pages: Vec<String> = Vec::new();
+    // Each heading, the page it is on and how far up.
+    let mut headings: Vec<(String, usize, f64)> = Vec::new();
     let mut page = String::new();
     let mut y = HEIGHT - MARGIN - TITLE_SIZE;
     show(&mut page, "F2", TITLE_SIZE, MARGIN, y, title);
@@ -40,8 +52,17 @@ pub fn text_pdf(title: &str, lines: &[String]) -> Vec<u8> {
                 pages.push(std::mem::take(&mut page));
                 y = HEIGHT - MARGIN - SIZE;
             }
-            // Wrapped parts hang under the text, past a label's colon.
-            let hang = if i > 0 { SIZE } else { 0.0 };
+            if heading && i == 0 {
+                headings.push((line.clone(), pages.len(), y + LEADING));
+            }
+            // Wrapped parts hang under the text, past a label's colon or
+            // a bullet; a guide's paragraphs wrap flush.
+            let bullet = line.trim_start().starts_with('\u{2022}');
+            let hang = if i > 0 && (!outlined || bullet) {
+                SIZE
+            } else {
+                0.0
+            };
             show(&mut page, font, SIZE, x + hang, y, part);
             y -= LEADING;
         }
@@ -84,10 +105,48 @@ pub fn text_pdf(title: &str, lines: &[String]) -> Vec<u8> {
         kids.push(Object::Ref(Ref::new(objects.len() as u32, 0)));
     }
     let count = kids.len() as i64;
-    objects[0] = Object::Dict(Dict(vec![
+    let mut catalog = vec![
         (Name::new("Type"), Object::name("Catalog")),
         (Name::new("Pages"), Object::Ref(Ref::new(2, 0))),
-    ]));
+    ];
+    if outlined && !headings.is_empty() {
+        let root = objects.len() as u32 + 1;
+        let first = root + 1;
+        let last = root + headings.len() as u32;
+        objects.push(Object::Dict(Dict(vec![
+            (Name::new("Type"), Object::name("Outlines")),
+            (Name::new("First"), Object::Ref(Ref::new(first, 0))),
+            (Name::new("Last"), Object::Ref(Ref::new(last, 0))),
+            (Name::new("Count"), Object::Int(headings.len() as i64)),
+        ])));
+        for (i, (words, on, top)) in headings.iter().enumerate() {
+            let me = first + i as u32;
+            let mut item = Dict(vec![
+                (Name::new("Title"), crate::forms::text_object(words)),
+                (Name::new("Parent"), Object::Ref(Ref::new(root, 0))),
+                (
+                    Name::new("Dest"),
+                    Object::Array(vec![
+                        kids[*on].clone(),
+                        Object::name("XYZ"),
+                        Object::Null,
+                        Object::Real(*top),
+                        Object::Null,
+                    ]),
+                ),
+            ]);
+            if me > first {
+                item.set("Prev", Ref::new(me - 1, 0));
+            }
+            if me < last {
+                item.set("Next", Ref::new(me + 1, 0));
+            }
+            objects.push(Object::Dict(item));
+        }
+        catalog.push((Name::new("Outlines"), Object::Ref(Ref::new(root, 0))));
+        catalog.push((Name::new("PageMode"), Object::name("UseOutlines")));
+    }
+    objects[0] = Object::Dict(Dict(catalog));
     objects[1] = Object::Dict(Dict(vec![
         (Name::new("Type"), Object::name("Pages")),
         (Name::new("Kids"), Object::Array(kids)),
@@ -117,8 +176,41 @@ fn show(out: &mut String, font: &str, size: f64, x: f64, y: f64, text: &str) {
     let _ = writeln!(
         out,
         "BT /{font} {size} Tf {x:.2} {y:.2} Td {} Tj ET",
-        literal(text)
+        win_ansi(text)
     );
+}
+
+/// `text` as a PDF string in WinAnsi: Latin-1 as it is, and the
+/// punctuation WinAnsi keeps at 0x80 to 0x9f (bullets, dashes, curly
+/// quotes, the ellipsis) at its codes there; anything else is `?`.
+fn win_ansi(text: &str) -> String {
+    let mapped: String = text
+        .chars()
+        .map(|c| match c {
+            '\u{2022}' => '\u{95}',
+            '\u{2013}' => '\u{96}',
+            '\u{2014}' => '\u{97}',
+            '\u{2018}' => '\u{91}',
+            '\u{2019}' => '\u{92}',
+            '\u{201c}' => '\u{93}',
+            '\u{201d}' => '\u{94}',
+            '\u{2026}' => '\u{85}',
+            '\u{80}'..='\u{9f}' => '?',
+            c => c,
+        })
+        .collect();
+    let mut out = String::from("(");
+    for c in mapped.chars() {
+        match c {
+            '\u{80}'..='\u{9f}' => out.push_str(&format!("\\{:03o}", c as u32)),
+            c => {
+                let one = literal(&c.to_string());
+                out.push_str(&one[1..one.len() - 1]);
+            }
+        }
+    }
+    out.push(')');
+    out
 }
 
 /// `text` broken at spaces into lines no wider than `width` points; a
@@ -198,6 +290,27 @@ mod tests {
         let text = String::from_utf8_lossy(doc.bytes()).into_owned();
         assert!(text.contains("(Signature1: intact) Tj"));
         assert!(text.contains("(line 79 \\(\\351\\)) Tj"));
+    }
+
+    #[test]
+    fn headings_become_bookmarks() {
+        let mut lines = vec!["Opening".to_owned()];
+        lines.extend((0..70).map(|i| format!("  line {i}")));
+        lines.push("Signing".to_owned());
+        lines.push("  a line".to_owned());
+        let doc = Document::load(text_pdf_outlined("Guide", &lines)).unwrap();
+        let outline = doc.outline();
+        let titles: Vec<_> = outline.iter().map(|o| o.title.as_str()).collect();
+        assert_eq!(titles, ["Opening", "Signing"]);
+        let pages: Vec<_> = outline
+            .iter()
+            .map(|o| o.dest.as_ref().unwrap().page)
+            .collect();
+        assert_eq!(pages, [0, 1]);
+        let bullet = text_pdf_outlined("Guide", &["  \u{2022} one".to_owned()]);
+        assert!(String::from_utf8_lossy(&bullet).contains("(\\225 one) Tj"));
+        let plain = Document::load(text_pdf("Report", &lines)).unwrap();
+        assert!(plain.outline().is_empty());
     }
 
     #[test]

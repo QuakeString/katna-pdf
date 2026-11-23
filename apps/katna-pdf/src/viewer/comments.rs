@@ -523,6 +523,20 @@ impl Viewer {
                 t("comments-menu-head", &[]).to_uppercase(),
                 &th,
             ))
+            .child({
+                let shown = katna_pdf_render::comments_shown();
+                let id = if shown {
+                    "comments-menu-hide"
+                } else {
+                    "comments-menu-show"
+                };
+                item(id, if shown { "eyeoff" } else { "eye" }).on_click(cx.listener(
+                    move |this, _, _, cx| {
+                        close(this);
+                        super::set_comments_shown(!shown, cx);
+                    },
+                ))
+            })
             .child(item("comments-menu-filter", "filter").on_click(cx.listener(
                 move |this, _, _, cx| {
                     close(this);
@@ -1215,6 +1229,11 @@ impl Viewer {
                 );
             }
             open = open.child(chips);
+        }
+        if !a.flags.locked
+            && let Some(look) = self.comment_look_row(a, cx)
+        {
+            open = open.child(look);
         }
         let locked = a.flags.locked;
         let button = |id: &'static str, icon: &'static str, tip: &str, on: bool| {

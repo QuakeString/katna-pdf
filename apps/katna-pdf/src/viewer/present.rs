@@ -3,7 +3,8 @@
 //! Presenting (docs/PLAN.md §4.1, P1): the window full screen, one page
 //! at a time on black, in its own colours. Pages come on as their file
 //! says (`/Trans`: wipes, pushes, covers, splits, boxes and fades) and
-//! move on by themselves after the seconds it gives (`/Dur`). Keys,
+//! move on by themselves after the seconds it gives (`/Dur`), or Settings'
+//! seconds, round to the first page again when Settings says. Keys,
 //! clicks and typed page numbers move through them; B and W blank the
 //! screen; Esc ends.
 
@@ -44,6 +45,27 @@ pub(super) struct Presenting {
     /// When the mouse last moved: the controls show for two seconds
     /// after (R11).
     moved: Option<Instant>,
+    /// Settings' seconds a page shows when its file gives none.
+    every: Option<f32>,
+    /// Settings' start again at the first page after the last.
+    looping: bool,
+}
+
+impl Presenting {
+    /// The seconds page `page` shows before the next comes on: the
+    /// file's, else Settings'.
+    fn seconds(&self, page: usize) -> Option<f32> {
+        self.shows.get(page).and_then(|s| s.seconds).or(self.every)
+    }
+
+    /// The page after `page` of `count`, round to the first when looping.
+    fn after(&self, page: usize, count: usize) -> Option<usize> {
+        if page + 1 < count {
+            Some(page + 1)
+        } else {
+            (self.looping && count > 1).then_some(0)
+        }
+    }
 }
 
 /// How long the controls stay after the mouse stops.
@@ -64,6 +86,9 @@ impl Viewer {
             return;
         }
         let page = self.current_page();
+        let prefs = cx.global::<crate::prefs::Prefs>();
+        let every = (prefs.present_seconds > 0).then_some(prefs.present_seconds as f32);
+        let looping = prefs.present_loop;
         let was_full = window.is_fullscreen();
         if !was_full {
             window.toggle_fullscreen();
@@ -78,6 +103,8 @@ impl Viewer {
             step: 0,
             since: Instant::now(),
             moved: None,
+            every,
+            looping,
         });
         self.forget_far(page..page + 1);
         window.focus(&self.focus, cx);
@@ -161,11 +188,7 @@ impl Viewer {
         let Some(presenting) = self.presenting.as_ref() else {
             return;
         };
-        let Some(seconds) = presenting
-            .shows
-            .get(presenting.page)
-            .and_then(|s| s.seconds)
-        else {
+        let Some(seconds) = presenting.seconds(presenting.page) else {
             return;
         };
         let coming = presenting.leaving.map_or(0.0, |(_, _, t)| t.seconds);
@@ -177,9 +200,8 @@ impl Viewer {
                 if let Some(p) = this.presenting.as_ref()
                     && p.step == step
                     && p.blank.is_none()
-                    && p.page + 1 < this.page_count()
+                    && let Some(next) = p.after(p.page, this.page_count())
                 {
-                    let next = p.page + 1;
                     this.present_page(next, cx);
                 }
             })
@@ -192,8 +214,12 @@ impl Viewer {
         let Some(page) = self.presenting.as_ref().map(|p| p.page) else {
             return;
         };
+        let count = self.page_count();
         let to = if forward {
-            page + 1
+            self.presenting
+                .as_ref()
+                .and_then(|p| p.after(page, count))
+                .unwrap_or(page + 1)
         } else {
             page.saturating_sub(1)
         };
@@ -359,15 +385,13 @@ impl Viewer {
             .is_some_and(|at| at.elapsed() < CONTROLS_FOR)
             .then(|| {
                 let left = presenting
-                    .shows
-                    .get(page)
-                    .and_then(|s| s.seconds)
+                    .seconds(page)
                     .map(|s| {
                         (s - presenting.since.elapsed().as_secs_f32())
                             .ceil()
                             .max(0.0) as u32
                     })
-                    .filter(|_| page + 1 < self.page_count());
+                    .filter(|_| presenting.after(page, self.page_count()).is_some());
                 (left, blank.is_some())
             });
         if controls.is_some() {

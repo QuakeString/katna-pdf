@@ -670,3 +670,97 @@ fn stamps_attachments_and_fdf_round_trip() {
             .any(|a| a.contents == "Thanks" && a.reply_to == stamp.id)
     );
 }
+
+#[test]
+fn line_ends_and_dashes_are_written_and_read_back() {
+    use katna_pdf_cos::LineEnd;
+    let doc = two();
+    let mut line = Annotation::new(
+        1,
+        AnnotKind::Line {
+            from: [100.0, 100.0],
+            to: [300.0, 200.0],
+            arrow: true,
+        },
+    );
+    line.ends = [LineEnd::Circle, LineEnd::ClosedArrow];
+    line.dashed = true;
+    line.width = 2.0;
+    line.rect = line.bounds();
+    let mut poly = Annotation::new(
+        1,
+        AnnotKind::PolyLine(vec![[50.0, 50.0], [80.0, 90.0], [120.0, 60.0]]),
+    );
+    poly.ends = [LineEnd::Slash, LineEnd::Diamond];
+    poly.rect = poly.bounds();
+    // An arrow with no ends set still ends in an open arrow.
+    let arrow = Annotation::new(
+        1,
+        AnnotKind::Line {
+            from: [10.0, 10.0],
+            to: [40.0, 10.0],
+            arrow: true,
+        },
+    );
+    let out = doc
+        .annotate(&AnnotChanges {
+            put: vec![line, poly, arrow],
+            remove: vec![],
+        })
+        .unwrap();
+    let again = Document::load(out).unwrap();
+    let read = &again.annotations()[1];
+    assert_eq!(read[0].ends, [LineEnd::Circle, LineEnd::ClosedArrow]);
+    assert!(read[0].dashed && !read[1].dashed);
+    assert_eq!(read[1].ends, [LineEnd::Slash, LineEnd::Diamond]);
+    assert_eq!(read[2].ends, [LineEnd::None, LineEnd::OpenArrow]);
+    // The ends stick out of the line, so the rectangle takes them in.
+    assert!(read[0].rect[0] < 100.0 && read[0].rect[2] > 300.0);
+    let Some(Object::Dict(dict)) = again.get(read[0].id.unwrap()) else {
+        panic!();
+    };
+    let Object::Dict(ap) = again.resolve_key(&dict, "AP") else {
+        panic!();
+    };
+    let Object::Stream(n) = again.resolve_key(&ap, "N") else {
+        panic!();
+    };
+    let content = String::from_utf8_lossy(&n.data);
+    assert!(content.contains("[6.00 6.00] 0 d"), "{content}");
+    // The ends are drawn solid, and filled.
+    assert!(content.contains("[] 0 d") && content.contains(" B"));
+    // XFDF keeps them too.
+    let xml = katna_pdf_cos::to_xfdf(&again.annotations(), "a.pdf");
+    let back = katna_pdf_cos::from_xfdf(&xml).unwrap();
+    let lines: Vec<_> = back
+        .iter()
+        .map(|x| &x.annotation)
+        .filter(|a| a.page == 1)
+        .collect();
+    assert_eq!(lines[0].ends, [LineEnd::Circle, LineEnd::ClosedArrow]);
+    assert!(lines[0].dashed);
+    assert_eq!(lines[1].ends, [LineEnd::Slash, LineEnd::Diamond]);
+    // Changing only the ends draws the line again.
+    let mut changed = read[0].clone();
+    changed.ends = [LineEnd::Square, LineEnd::ClosedArrow];
+    let out = again
+        .annotate(&AnnotChanges {
+            put: vec![changed],
+            remove: vec![],
+        })
+        .unwrap();
+    let third = Document::load(out).unwrap();
+    let a = &third.annotations()[1][0];
+    let Some(Object::Dict(dict)) = third.get(a.id.unwrap()) else {
+        panic!();
+    };
+    let Object::Dict(ap) = third.resolve_key(&dict, "AP") else {
+        panic!();
+    };
+    let Object::Stream(n) = third.resolve_key(&ap, "N") else {
+        panic!();
+    };
+    // Four corners now, not a circle's curves.
+    let content = String::from_utf8_lossy(&n.data);
+    assert!(!content.contains(" c "), "{content}");
+}
