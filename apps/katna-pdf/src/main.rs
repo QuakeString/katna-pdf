@@ -151,6 +151,7 @@ fn main() -> ExitCode {
             cx.set_global(prefs);
             katna_ui::text_input::bind_keys(cx);
             katna_ui::text_area::bind_keys(cx);
+            katna_ui::rich::bind_keys(cx);
             viewer::bind_keys(cx);
             // Before the window opens, so it carries the menu's address.
             #[cfg(target_os = "linux")]

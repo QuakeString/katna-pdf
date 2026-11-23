@@ -459,6 +459,16 @@ pub(crate) fn standard_font(
     Some(style(family, bold, italic))
 }
 
+/// The standard font of `family` (Helvetica, Times or Courier) in a
+/// style, and its widths.
+pub(crate) fn standard_style(
+    family: &str,
+    bold: bool,
+    italic: bool,
+) -> (&'static str, &'static phf::Map<&'static str, f32>) {
+    style(family, bold, italic)
+}
+
 /// The standard font of `family` in a style, and its widths.
 fn style(
     family: &str,

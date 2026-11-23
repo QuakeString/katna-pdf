@@ -344,7 +344,7 @@ comment.squiggly	comment	Squiggly underline	reader	p	shipped	P0	#32		acrobat
 comment.replace-text	comment	Replace-text proposal (strikeout + caret)	reader	n	shipped	P1	#165		acrobat
 comment.insert-text	comment	Insert-text proposal (caret)	reader	n	shipped	P1	#165		acrobat
 comment.typewriter	comment	Add text comment (typewriter)	reader	y	shipped	P0	#103		acrobat
-comment.text-box	comment	Text box comment with rich text	reader	y	partial	P0	#32	plain free text; no rich text	acrobat
+comment.text-box	comment	Text box comment with rich text	reader	y	shipped	P0	#193		acrobat
 comment.callout	comment	Callout comment	reader	y	shipped	P1	#103		acrobat
 comment.pencil	comment	Freehand drawing (ink)	reader	y	shipped	P0	#32		acrobat
 comment.eraser	comment	Eraser for ink strokes	reader	n	shipped	P1	#157	Eraser tool beside the pen cuts strokes it crosses	acrobat

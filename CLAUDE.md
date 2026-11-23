@@ -68,7 +68,8 @@ cargo run --release -p katna-pdf-bench -- file.pdf
   fields a flat form asks for found from its blanks, boxes, grid cells
   and squares to tick (`detect.rs`), the outline, links and named
   destinations changed (`nav.rs`), page labels read and written
-  (`labels.rs`), how pages come on in a presentation (`present.rs`:
+  (`labels.rs`), rich text in text box comments read from and
+  written to `/RC` and drawn (`richtext.rs`), how pages come on in a presentation (`present.rs`:
   `/Trans`, `/Dur`), every script and action a file carries listed and
   none run (`scripts.rs`: the document's own, open, close, save, print,
   page and field events, `/Next` chains),

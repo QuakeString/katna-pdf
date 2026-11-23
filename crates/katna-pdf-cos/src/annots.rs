@@ -138,6 +138,10 @@ pub struct Annotation {
     pub ends: [LineEnd; 2],
     /// Drawn with a dashed line (`/BS /S /D`).
     pub dashed: bool,
+    /// A free text comment's words with their looks (`/RC`), when they
+    /// have any; `contents` holds the same words plain. Empty for plain
+    /// text.
+    pub rich: Vec<crate::richtext::RichPara>,
 }
 
 /// How a line ends (`/LE`): the ten shapes PDF names.
@@ -420,6 +424,7 @@ impl Annotation {
             grouped: false,
             ends: [LineEnd::None; 2],
             dashed: false,
+            rich: Vec::new(),
         };
         a.rect = a.bounds();
         a
@@ -768,8 +773,30 @@ impl Document {
             grouped: d.get("IRT").is_some() && d.name("RT") == Some(b"Group"),
             ends,
             dashed,
+            rich: match &kind {
+                AnnotKind::FreeText { .. } => self.rich_text(&d),
+                _ => Vec::new(),
+            },
             kind,
         })
+    }
+
+    /// A free text comment's rich text (`/RC`, a string or a stream),
+    /// when it says more than its plain words.
+    fn rich_text(&self, d: &Dict) -> Vec<crate::richtext::RichPara> {
+        let xml = match self.resolve_key(d, "RC") {
+            Object::String { bytes, .. } => text_string(&bytes),
+            Object::Stream(s) => crate::filter::decode(&s.dict, &s.data)
+                .map(|b| String::from_utf8_lossy(&b).into_owned())
+                .unwrap_or_default(),
+            _ => return Vec::new(),
+        };
+        let paras = crate::richtext::parse_rc(&xml);
+        if crate::richtext::is_styled(&paras) {
+            paras
+        } else {
+            Vec::new()
+        }
     }
 
     /// Page `page`'s list of annotations as it will be, read from the
@@ -898,7 +925,7 @@ impl Document {
                     && old.cloudy == annot.cloudy
                     && old.dashed == annot.dashed
                     && old.line_ends() == annot.line_ends()
-                    && (old.contents == annot.contents
+                    && ((old.contents == annot.contents && old.rich == annot.rich)
                         || !matches!(annot.kind, AnnotKind::FreeText { .. }))
             });
             if matches!(annot.kind, AnnotKind::Other(_)) && !looks_same {
@@ -1120,6 +1147,25 @@ pub(crate) fn write_dict(dict: &mut Dict, a: &Annotation, page: Ref) {
             );
             // The colour is the text's; the box has none.
             dict.remove("C");
+            // Its words with their looks, for readers that show them;
+            // plain words need none.
+            if a.rich.is_empty() {
+                dict.remove("RC");
+                dict.remove("DS");
+            } else {
+                dict.set(
+                    "RC",
+                    text_object(&crate::richtext::to_rc(&a.rich, *size, a.colour)),
+                );
+                let [r, g, b] = a.colour.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8);
+                dict.set(
+                    "DS",
+                    text_object(&format!(
+                        "font: Helvetica,sans-serif {size:.1}pt; text-align:left; \
+                         color:#{r:02x}{g:02x}{b:02x}"
+                    )),
+                );
+            }
             match a.callout {
                 Some(line) => {
                     dict.set("IT", Object::name("FreeTextCallout"));
@@ -1237,7 +1283,8 @@ pub(crate) fn appearance(a: &Annotation) -> Object {
     let fill = format!("{r:.3} {g:.3} {b:.3} rg");
     let stroke = format!("{r:.3} {g:.3} {b:.3} RG");
     let w = a.width;
-    let mut font = false;
+    // The standard fonts its words are drawn in.
+    let mut fonts: std::collections::BTreeSet<&'static str> = std::collections::BTreeSet::new();
     let mut multiply = false;
     if a.opacity < 1.0 {
         c.push_str("/GS0 gs\n");
@@ -1328,7 +1375,6 @@ pub(crate) fn appearance(a: &Annotation) -> Object {
             }
         }
         AnnotKind::FreeText { size } => {
-            font = true;
             let [x0, y0, x1, y1] = a.rect;
             if let Some([from, knee, to]) = a.callout {
                 // The line from what it points at to the box, with an
@@ -1355,23 +1401,26 @@ pub(crate) fn appearance(a: &Annotation) -> Object {
                     y1 - y0
                 );
             }
-            let leading = size * 1.2;
-            let _ = writeln!(
-                c,
-                "q {x0:.2} {y0:.2} {:.2} {:.2} re W n BT /Helv {size:.2} Tf {fill} {:.2} {:.2} Td \
-                 {leading:.2} TL",
-                x1 - x0,
-                y1 - y0,
-                x0 + 2.0,
-                y1 - 2.0 - size
-            );
-            for (i, line) in a.contents.lines().enumerate() {
-                if i > 0 {
-                    c.push_str("T* ");
-                }
-                let _ = writeln!(c, "{} Tj", literal(line));
-            }
-            c.push_str("ET Q\n");
+            // Plain words are one paragraph a line, in Helvetica.
+            let plain;
+            let paras = if a.rich.is_empty() {
+                plain = crate::richtext::plain_paras(
+                    &a.contents,
+                    &crate::richtext::SpanStyle::default(),
+                    crate::richtext::ParaAlign::Left,
+                );
+                &plain
+            } else {
+                &a.rich
+            };
+            fonts.extend(crate::richtext::draw(
+                &mut c,
+                paras,
+                [x0, y0, x1, y1],
+                2.0,
+                *size,
+                a.colour,
+            ));
         }
         AnnotKind::Ink(strokes) => {
             let _ = writeln!(c, "{stroke} {w:.2} w 1 J 1 j");
@@ -1492,7 +1541,7 @@ pub(crate) fn appearance(a: &Annotation) -> Object {
             }
         }
         AnnotKind::Stamp(name) => {
-            font = true;
+            fonts.extend(["Helvetica", "Helvetica-Bold"]);
             let [x0, y0, x1, y1] = a.rect;
             let (bw, bh) = (x1 - x0, y1 - y0);
             let label = stamp_label(name);
@@ -1580,7 +1629,7 @@ pub(crate) fn appearance(a: &Annotation) -> Object {
         AnnotKind::Other(_) => {}
     }
     if let Some([x0, y0, x1, y1]) = a.label_box() {
-        font = true;
+        fonts.extend(["Helvetica", "Helvetica-Bold"]);
         // On white, so it reads over the drawing.
         let _ = writeln!(
             c,
@@ -1610,8 +1659,8 @@ pub(crate) fn appearance(a: &Annotation) -> Object {
             c.insert_str(0, "/GS0 gs\n");
         }
     }
-    if font {
-        let helvetica = |base: &str| {
+    if !fonts.is_empty() {
+        let standard = |base: &str| {
             Object::Dict(Dict(vec![
                 (Name::new("Type"), Object::name("Font")),
                 (Name::new("Subtype"), Object::name("Type1")),
@@ -1621,10 +1670,17 @@ pub(crate) fn appearance(a: &Annotation) -> Object {
         };
         resources.set(
             "Font",
-            Dict(vec![
-                (Name::new("Helv"), helvetica("Helvetica")),
-                (Name::new("HeBo"), helvetica("Helvetica-Bold")),
-            ]),
+            Dict(
+                fonts
+                    .iter()
+                    .map(|base| {
+                        (
+                            Name::new(crate::richtext::resource_name(base)),
+                            standard(base),
+                        )
+                    })
+                    .collect(),
+            ),
         );
     }
     let data = c.into_bytes();

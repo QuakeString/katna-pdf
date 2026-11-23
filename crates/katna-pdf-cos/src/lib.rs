@@ -47,6 +47,7 @@ mod present;
 pub mod ranges;
 mod redact;
 mod report;
+mod richtext;
 mod scripts;
 mod sign;
 mod stamp;
@@ -103,6 +104,10 @@ pub use pdfa::{
 pub use present::{PageShow, Transition, TransitionStyle};
 pub use redact::{Pattern, RedactError, RedactOptions};
 pub use report::{text_pdf, text_pdf_outlined};
+pub use richtext::{
+    Family, ParaAlign, RichPara, RichSpan, SpanStyle, is_styled, parse_rc, plain_paras,
+    rich_plain_text, to_rc,
+};
 pub use scripts::{ActionPlace, DocAction, DocEvent, FieldEvent};
 pub use sign::{
     CONTENTS_LEN, Coverage, Picture, Placement, Prepared, SignError, SignRequest, Signature,
