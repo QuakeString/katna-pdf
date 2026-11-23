@@ -400,6 +400,7 @@ const FLOAT: &[(&str, &[u8])] = float_icons![
     "plus",
     "points",
     "polygon",
+    "polyline",
     "print",
     "radio",
     "redact",
