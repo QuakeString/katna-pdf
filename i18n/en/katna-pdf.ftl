@@ -1342,6 +1342,7 @@ menu-actual-size = _Actual Size
 menu-fit-width = Fit _Width
 menu-fit-page = Fit _Page
 menu-fit-height = Fit _Height
+menu-fit-visible = Fit _Visible
 menu-zoom-area = _Zoom to an Area
 menu-loupe = _Loupe
 menu-rotate-right = _Rotate View Clockwise
@@ -1730,3 +1731,6 @@ file-changed-kept = The file was changed by another program. Your changes here a
 
 # Read mode (Ctrl+H)
 read-mode-on = Read mode: just the pages. Ctrl+H or Escape brings the tools back.
+
+# Fit visible (Ctrl+5)
+fit-visible-blank = Nothing is drawn on this page, so the whole page is shown.

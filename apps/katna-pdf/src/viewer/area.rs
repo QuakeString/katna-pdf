@@ -285,7 +285,7 @@ impl Viewer {
 
     /// Zooms to `zoom` and brings `rect` on `page` into the middle of
     /// the view once the pages are laid out at the new size.
-    fn zoom_to(&mut self, page: usize, rect: [f32; 4], zoom: f32) {
+    pub(super) fn zoom_to(&mut self, page: usize, rect: [f32; 4], zoom: f32) {
         self.zoom = Zoom::Fixed(zoom);
         self.list.remeasure();
         self.list.scroll_to(gpui::ListOffset {
