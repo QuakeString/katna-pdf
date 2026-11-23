@@ -11,17 +11,21 @@
 
 mod annotate;
 mod assets;
+mod chrome;
 mod contents;
 mod drives;
 mod engine;
+mod float;
 mod form;
 mod history;
 mod ids;
 mod instance;
 mod library;
+mod look;
 mod mail;
 #[cfg(target_os = "linux")]
 mod menu;
+mod menus;
 mod organize;
 mod print;
 mod search;
@@ -110,6 +114,7 @@ fn main() -> ExitCode {
         .with_assets(assets::Assets)
         .run(move |cx: &mut App| {
             cx.set_global(history::History::load());
+            cx.set_global(look::Look::load());
             katna_ui::text_input::bind_keys(cx);
             katna_ui::text_area::bind_keys(cx);
             viewer::bind_keys(cx);

@@ -291,12 +291,155 @@ const ICONS: &[(&str, &[u8])] = &[
     ),
 ];
 
+/// Float's line icons (the redesign's storyboard, `docs/design/float.md`),
+/// served as `icons/f/NAME.svg`.
+macro_rules! float_icons {
+    ($($name:literal),* $(,)?) => {
+        &[$((
+            concat!("icons/f/", $name, ".svg"),
+            include_bytes!(concat!("../icons/float/", $name, ".svg")),
+        )),*]
+    };
+}
+
+const FLOAT: &[(&str, &[u8])] = float_icons![
+    "ac",
+    "aj",
+    "al",
+    "alert",
+    "ar",
+    "area",
+    "arrow",
+    "back",
+    "bell",
+    "bolt",
+    "book",
+    "bookmark",
+    "button",
+    "cal",
+    "callout",
+    "check",
+    "checkbox",
+    "chev",
+    "chevl",
+    "chevr",
+    "chevu",
+    "circ",
+    "clip",
+    "clock",
+    "cloud",
+    "cmd",
+    "combo",
+    "comment",
+    "copy",
+    "crop",
+    "cursor",
+    "database",
+    "diff",
+    "down",
+    "download",
+    "drag",
+    "drop",
+    "edit",
+    "expand",
+    "eye",
+    "eyeoff",
+    "file",
+    "filter",
+    "fit",
+    "fitw",
+    "flip",
+    "folder",
+    "form",
+    "front",
+    "gear",
+    "globe",
+    "grid",
+    "hand",
+    "help",
+    "img",
+    "info",
+    "init",
+    "kbd",
+    "key",
+    "layers",
+    "lib",
+    "line",
+    "link",
+    "list",
+    "listv",
+    "lock",
+    "magnet",
+    "mail",
+    "mark",
+    "max",
+    "menu",
+    "merge",
+    "min",
+    "minus",
+    "monitor",
+    "moon",
+    "more",
+    "multiline",
+    "note",
+    "page",
+    "pause",
+    "pen",
+    "perim",
+    "play",
+    "plus",
+    "polygon",
+    "print",
+    "radio",
+    "redact",
+    "redo",
+    "refresh",
+    "rot",
+    "rotl",
+    "ruler",
+    "scan",
+    "scissors",
+    "search",
+    "send",
+    "share",
+    "shield",
+    "shieldq",
+    "shieldx",
+    "side",
+    "sign",
+    "single",
+    "speak",
+    "sq",
+    "squig",
+    "stamp",
+    "star",
+    "stop",
+    "strike",
+    "sun",
+    "tabs",
+    "tag",
+    "text",
+    "trash",
+    "two",
+    "typew",
+    "under",
+    "undo",
+    "unlock",
+    "up",
+    "upload",
+    "usb",
+    "user",
+    "x",
+    "zip",
+];
+
 pub struct Assets;
 
 impl AssetSource for Assets {
     fn load(&self, path: &str) -> gpui::Result<Option<Cow<'static, [u8]>>> {
         Ok(ICONS
             .iter()
+            .chain(FLOAT)
             .find(|(name, _)| *name == path)
             .map(|(_, bytes)| Cow::Borrowed(*bytes)))
     }
@@ -304,6 +447,7 @@ impl AssetSource for Assets {
     fn list(&self, path: &str) -> gpui::Result<Vec<SharedString>> {
         Ok(ICONS
             .iter()
+            .chain(FLOAT)
             .filter(|(name, _)| name.starts_with(path))
             .map(|(name, _)| SharedString::from(*name))
             .collect())

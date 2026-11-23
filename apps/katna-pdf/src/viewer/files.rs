@@ -150,8 +150,8 @@ impl Viewer {
         let th = self.theme;
         let picked = self.extras.chosen_file.is_some();
         let button = |id: &'static str, icon: &'static str, tip: &str, enabled: bool| {
-            widgets::icon_button(id, icon, 18.0, &th.katna)
-                .size(px(32.0))
+            widgets::icon_button(id, icon, 16.0, &th.katna)
+                .size(px(28.0))
                 .tip(t(tip, &[]), &th.katna)
                 .when(!enabled, |b| b.opacity(0.4))
         };
@@ -163,7 +163,7 @@ impl Viewer {
             .justify_between()
             .px(px(space::S2))
             .border_b_1()
-            .border_color(th.line)
+            .border_color(th.line_soft)
             .child(
                 button("file-add", "upload", "files-add", true)
                     .on_click(cx.listener(|this, _, _, cx| this.add_attachments(cx))),
@@ -523,8 +523,8 @@ impl Viewer {
         let th = self.theme;
         let picked = self.extras.chosen_layer.is_some();
         let button = |id: &'static str, icon: &'static str, tip: &str, enabled: bool| {
-            widgets::icon_button(id, icon, 18.0, &th.katna)
-                .size(px(32.0))
+            widgets::icon_button(id, icon, 16.0, &th.katna)
+                .size(px(28.0))
                 .tip(t(tip, &[]), &th.katna)
                 .when(!enabled, |b| b.opacity(0.4))
         };
@@ -536,7 +536,7 @@ impl Viewer {
             .justify_between()
             .px(px(space::S2))
             .border_b_1()
-            .border_color(th.line)
+            .border_color(th.line_soft)
             .child(
                 button("layer-add", "plus", "layers-add", true)
                     .on_click(cx.listener(|this, _, _, cx| this.add_layer(None, cx))),

@@ -224,8 +224,6 @@ impl Viewer {
                 .items_center()
                 .gap(px(space::S2))
                 .px(px(space::S4))
-                .border_b_1()
-                .border_color(th.line)
                 .child(widgets::icon("speaker", th.katna.text_dim, 18.0))
                 .child(
                     div()

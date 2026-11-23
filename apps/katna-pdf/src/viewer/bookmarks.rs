@@ -165,8 +165,8 @@ impl Viewer {
         let th = self.theme;
         let picked = self.contents.as_ref().is_some_and(|c| c.chosen.is_some());
         let button = |id: &'static str, icon: &'static str, tip: &str, enabled: bool| {
-            widgets::icon_button(id, icon, 18.0, &th.katna)
-                .size(px(32.0))
+            widgets::icon_button(id, icon, 16.0, &th.katna)
+                .size(px(28.0))
                 .tip(t(tip, &[]), &th.katna)
                 .when(!enabled, |b| b.opacity(0.4))
         };
@@ -183,7 +183,7 @@ impl Viewer {
             .justify_between()
             .px(px(space::S2))
             .border_b_1()
-            .border_color(th.line)
+            .border_color(th.line_soft)
             .child(
                 button("bookmark-add", "bookmark-plus", "bookmark-add", true)
                     .on_click(cx.listener(|this, _, window, cx| this.add_bookmark(window, cx))),

@@ -111,7 +111,10 @@ cargo run --release -p katna-pdf-bench -- file.pdf
   as queries (`filter.rs`), copies by bytes or words, and many files
   merged, renamed from their properties, copied, tagged or made smaller (`bulk.rs`). Text and
   covers come through an `Engine`. No GPUI.
-- `apps/katna-pdf` — the app window; `drives.rs` asks `katna-daemon` over
+- `apps/katna-pdf` — the app window, in Float's look (`docs/design/float.md`:
+  `theme.rs` colours mixed from a scheme's five, `look.rs` mode and scheme,
+  `chrome.rs` title bar and its menus, `viewer/dock.rs` the dock, `float.rs`
+  the controls); `drives.rs` asks `katna-daemon` over
   D-Bus (`katna-dbus`) for the Google Drive and OneDrive of accounts signed
   in to Katna Mail, and `mail.rs` reads Katna Mail's store (`katna-store`,
   read-only) for PDFs attached to mail; the library browses and opens both
