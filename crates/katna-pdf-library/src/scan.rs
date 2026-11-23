@@ -283,12 +283,14 @@ fn read(engine: &dyn Engine, bytes: Vec<u8>) -> Facts {
     if let Ok(doc) = katna_pdf_cos::Document::load(bytes.to_vec()) {
         facts.locked = doc.is_locked();
         facts.pages = doc.pages().len();
+        // A locked file may still say what it is, when its lock left
+        // its metadata plain.
+        let meta = doc.metadata();
+        facts.title = meta.title;
+        facts.author = meta.author;
+        facts.subject = meta.subject;
+        facts.keywords = meta.keywords;
         if !facts.locked {
-            let meta = doc.metadata();
-            facts.title = meta.title;
-            facts.author = meta.author;
-            facts.subject = meta.subject;
-            facts.keywords = meta.keywords;
             facts.signed = doc.signatures().iter().any(|s| !s.contents.is_empty());
             facts.forms = !doc.form().is_empty();
         }

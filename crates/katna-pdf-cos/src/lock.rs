@@ -58,8 +58,52 @@ impl Document {
         owner: &str,
         permissions: Permissions,
     ) -> Result<Vec<u8>, LockError> {
-        let (dict, crypt) = new_lock(user, owner, permissions);
-        self.write_whole(NewLock::Set(dict, crypt), false, &BTreeMap::new())
+        self.lock_with(user, owner, permissions, false)
+    }
+
+    /// [`Document::lock`], and with `plain_metadata` its title, author,
+    /// subject and keywords left readable without the password, as an
+    /// XMP packet that is not encrypted (`/EncryptMetadata false`); one is
+    /// made from `/Info` when the file has none.
+    pub fn lock_with(
+        &self,
+        user: &str,
+        owner: &str,
+        permissions: Permissions,
+        plain_metadata: bool,
+    ) -> Result<Vec<u8>, LockError> {
+        let (dict, crypt) = new_lock(user, owner, permissions, !plain_metadata);
+        let mut changed = BTreeMap::new();
+        if plain_metadata
+            && let Some(Object::Ref(root)) = self.trailer().get("Root")
+            && let Some(Object::Dict(mut catalog)) = self.get(*root)
+            && !matches!(self.resolve_key(&catalog, "Metadata"), Object::Stream(_))
+        {
+            let meta = self.metadata();
+            let now = crate::annots::pdf_date(std::time::SystemTime::now());
+            let packet = crate::meta::xmp(&meta, meta.created.as_deref(), &now, "");
+            let num = self.size();
+            changed.insert(
+                num,
+                (
+                    0,
+                    Object::Stream(crate::object::Stream {
+                        dict: crate::object::Dict(vec![
+                            (crate::object::Name::new("Type"), Object::name("Metadata")),
+                            (crate::object::Name::new("Subtype"), Object::name("XML")),
+                            (
+                                crate::object::Name::new("Length"),
+                                Object::Int(packet.len() as i64),
+                            ),
+                        ]),
+                        data: packet.into_bytes(),
+                    }),
+                ),
+            );
+            catalog.set("Metadata", Object::Ref(Ref::new(num, 0)));
+            changed.insert(root.num, (root.generation, Object::Dict(catalog)));
+        }
+        self.write_whole(NewLock::Set(dict, crypt), false, &changed)
     }
 
     /// The file with no password.

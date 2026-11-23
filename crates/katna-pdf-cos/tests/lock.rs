@@ -43,6 +43,28 @@ fn a_locked_file_opens_only_with_its_password() {
 }
 
 #[test]
+fn plain_metadata_reads_without_the_password() {
+    let plain = letter();
+    // Locked as usual, nothing is said without the password.
+    let doc = Document::load(plain.lock("asha", "boss", Permissions::ALL).unwrap()).unwrap();
+    assert!(doc.is_locked() && !doc.metadata_plain());
+    assert_eq!(doc.metadata().title, None);
+    // With metadata left plain, the title reads; the text stays locked.
+    let locked = plain
+        .lock_with("asha", "boss", Permissions::ALL, true)
+        .unwrap();
+    assert!(!locked.windows(4).any(|w| w == b"Dear"));
+    let mut doc = Document::load(locked).unwrap();
+    assert!(doc.is_locked() && doc.metadata_plain());
+    assert_eq!(doc.metadata().title.as_deref(), Some("Letter"));
+    assert!(text(&doc).is_empty());
+    // And the password opens all of it as before.
+    doc.unlock("asha").unwrap();
+    assert_eq!(text(&doc), text(&plain));
+    assert_eq!(doc.metadata().title.as_deref(), Some("Letter"));
+}
+
+#[test]
 fn an_empty_user_password_opens_by_itself_with_its_permissions() {
     let only_print = Permissions {
         print: true,

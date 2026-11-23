@@ -675,7 +675,14 @@ impl Legacy<'_> {
 /// `user` password opens the file for anyone, with `permissions`; the
 /// `owner` password opens it fully. An empty owner password is made
 /// random, so the permissions hold.
-pub(crate) fn new_lock(user: &str, owner: &str, permissions: Permissions) -> (Dict, Crypt) {
+/// A new AES-256 lock; with `encrypt_metadata` false the XMP packet is
+/// left plain, so a library can read a title without the password.
+pub(crate) fn new_lock(
+    user: &str,
+    owner: &str,
+    permissions: Permissions,
+    encrypt_metadata: bool,
+) -> (Dict, Crypt) {
     let mut key = [0u8; 32];
     random(&mut key);
     let user = password_bytes(user, 6);
@@ -705,7 +712,7 @@ pub(crate) fn new_lock(user: &str, owner: &str, permissions: Permissions) -> (Di
     let mut perms = [0u8; 16];
     perms[..4].copy_from_slice(&p.to_le_bytes());
     perms[4..8].copy_from_slice(&[0xFF; 4]);
-    perms[8] = b'T';
+    perms[8] = if encrypt_metadata { b'T' } else { b'F' };
     perms[9..12].copy_from_slice(b"adb");
     random(&mut perms[12..]);
     let mut block = aes::Block::from(perms);
@@ -735,14 +742,14 @@ pub(crate) fn new_lock(user: &str, owner: &str, permissions: Permissions) -> (Di
         (Name::new("UE"), string(ue)),
         (Name::new("P"), Object::Int(i64::from(p))),
         (Name::new("Perms"), string(block.to_vec())),
-        (Name::new("EncryptMetadata"), Object::Bool(true)),
+        (Name::new("EncryptMetadata"), Object::Bool(encrypt_metadata)),
     ]);
     let crypt = Crypt {
         key: key.to_vec(),
         revision: 6,
         strings: Method::Aes256,
         streams: Method::Aes256,
-        encrypt_metadata: true,
+        encrypt_metadata,
         owner: true,
         permissions: Permissions::ALL,
         dict_ref: None,
@@ -815,7 +822,7 @@ mod tests {
 
     #[test]
     fn a_new_lock_opens_with_either_password() {
-        let (dict, made) = new_lock("asha", "boss", Permissions::ALL);
+        let (dict, made) = new_lock("asha", "boss", Permissions::ALL, true);
         let user = Crypt::unlock(&dict, None, b"", "asha").unwrap();
         assert!(!user.owner);
         assert_eq!(user.key, made.key);

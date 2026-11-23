@@ -734,6 +734,7 @@ properties-allow-copy = copy text
 properties-allow-comment = comment
 properties-allow-fill = fill forms
 properties-allow-assemble = add and take out pages
+properties-plain-meta = Let file managers and libraries read the title and author without the password
 properties-lock = Lock
 properties-password-on = This file is locked with a password.
 properties-unlock = Take the password off
