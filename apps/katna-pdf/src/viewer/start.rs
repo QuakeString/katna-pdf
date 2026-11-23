@@ -289,6 +289,7 @@ impl Viewer {
             .id("start")
             .flex_1()
             .size_full()
+            .relative()
             .flex()
             .items_center()
             .justify_center()
@@ -296,6 +297,162 @@ impl Viewer {
             .bg(th.page)
             .child(left)
             .when(any_recent, |d| d.child(right))
+            .children(self.crashed_card(cx))
             .into_any_element()
+    }
+
+    /// The card over the start screen when the app closed unexpectedly
+    /// last time (S11): where the report is, the files that were open,
+    /// and opening them again.
+    fn crashed_card(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if !cx.global::<crate::crashed::Crashed>().0 {
+            return None;
+        }
+        let th = self.theme;
+        let kept: Vec<std::path::PathBuf> = cx
+            .global::<crate::recovery::Left>()
+            .0
+            .iter()
+            .map(|k| k.path.clone())
+            .collect();
+        let files: Vec<String> = cx
+            .global::<History>()
+            .last_session()
+            .iter()
+            .map(|p| {
+                let name = file_name(p).trim_end_matches(".pdf").to_owned();
+                if kept.contains(p) {
+                    t("crashed-kept", &[("name", &name)])
+                } else {
+                    name
+                }
+            })
+            .collect();
+        let n = files.len();
+        let dismiss = |cx: &mut gpui::App| {
+            cx.global_mut::<crate::crashed::Crashed>().0 = false;
+            cx.refresh_windows();
+        };
+        let card = div()
+            .id("crashed-card")
+            .occlude()
+            .w(px(420.0))
+            .flex()
+            .flex_col()
+            .rounded(px(10.0))
+            .bg(th.card)
+            .shadow(th.lifted())
+            .when(th.dark, |d| d.border_1().border_color(th.line))
+            .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .child(
+                div()
+                    .p(px(space::S4))
+                    .flex()
+                    .flex_col()
+                    .gap(px(space::S3))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(space::S2))
+                            .child(float::icon(
+                                "alert",
+                                18.0,
+                                gpui::rgba(th.katna.warning).into(),
+                            ))
+                            .child(
+                                div()
+                                    .text_size(px(text::SUBTITLE))
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(th.text)
+                                    .child(t("crashed-title", &[])),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(text::SMALL))
+                            .text_color(th.dim)
+                            .child(t("crashed-detail", &[])),
+                    )
+                    .when(n > 0, |d| {
+                        d.child(
+                            div()
+                                .p(px(space::S3))
+                                .rounded(px(8.0))
+                                .bg(th.field)
+                                .flex()
+                                .flex_col()
+                                .gap(px(2.0))
+                                .child(
+                                    div()
+                                        .text_size(px(text::SMALL))
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .text_color(th.text)
+                                        .child(match n {
+                                            1 => t("crashed-one-open", &[]),
+                                            n => t("crashed-open", &[("n", &n.to_string())]),
+                                        }),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(px(text::CAPTION))
+                                        .text_color(th.dim)
+                                        .child(files.join(", ")),
+                                ),
+                        )
+                    }),
+            )
+            .child(
+                div()
+                    .px(px(space::S4))
+                    .py(px(space::S3))
+                    .flex()
+                    .items_center()
+                    .gap(px(space::S2))
+                    .border_t_1()
+                    .border_color(th.line_soft)
+                    .child(
+                        button("crashed-report", t("crashed-report", &[]), false, &th).on_click(
+                            |_, _, cx| {
+                                if let Some(dir) = crate::crashed::reports() {
+                                    cx.open_with_system(&dir);
+                                }
+                            },
+                        ),
+                    )
+                    .child(div().flex_1())
+                    .child(
+                        button("crashed-fresh", t("crashed-fresh", &[]), false, &th)
+                            .on_click(move |_, _, cx| dismiss(cx)),
+                    )
+                    .when(n > 0, |d| {
+                        d.child(
+                            button(
+                                "crashed-reopen",
+                                match n {
+                                    1 => t("crashed-reopen-one", &[]),
+                                    n => t("crashed-reopen", &[("n", &n.to_string())]),
+                                },
+                                true,
+                                &th,
+                            )
+                            .on_click(move |_, window, cx| {
+                                dismiss(cx);
+                                window.dispatch_action(Box::new(super::ReopenSession), cx);
+                            }),
+                        )
+                    }),
+            );
+        Some(
+            div()
+                .absolute()
+                .inset_0()
+                .bg(th.scrim)
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(float::appear("crashed-in", card, 8.0))
+                .into_any_element(),
+        )
     }
 }

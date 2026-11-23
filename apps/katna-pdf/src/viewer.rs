@@ -38,6 +38,7 @@ mod annots;
 mod area;
 mod autoscroll;
 mod bookmarks;
+mod command;
 mod comments;
 mod compare;
 mod crop;
@@ -128,6 +129,7 @@ actions!(
         ToggleContents,
         ToggleNight,
         Find,
+        CommandBox,
         FindNext,
         FindPrevious,
         CopyText,
@@ -315,6 +317,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("delete", DeleteAnnotation, Some(READING)),
         KeyBinding::new("escape", PutToolDown, Some(READING)),
         KeyBinding::new("ctrl-f", Find, None),
+        KeyBinding::new("ctrl-k", CommandBox, None),
         KeyBinding::new("f3", FindNext, None),
         KeyBinding::new("shift-f3", FindPrevious, None),
         KeyBinding::new("f7", ToggleContents, None),
@@ -619,6 +622,8 @@ pub struct Viewer {
     search: Option<SearchBar>,
     /// How the find bar matches, kept while the window is open.
     find_options: katna_pdf_render::text::FindOptions,
+    /// The command box (Ctrl+K), while open.
+    command: Option<command::CommandBox>,
     /// Whether the find bar lists every match.
     find_list: bool,
     /// Zoom to an area or Snapshot, while in hand.
@@ -911,6 +916,7 @@ impl Viewer {
             texts: None,
             search: None,
             find_options: Default::default(),
+            command: None,
             find_list: false,
             area: None,
             area_focus: None,
@@ -4426,6 +4432,7 @@ impl Render for Viewer {
         let design_card = self.design_card(side_room, cx);
         let find_bar = self.find_bar(cx);
         let compare_banner = self.compare_banner(cx);
+        let command_box = self.command_box(cx);
         let notice = self.notice.clone().map(|notice| {
             let (bg, fg, glyph, mark) = if notice.error {
                 (th.error_soft, th.error, "alert", th.error)
@@ -4626,6 +4633,9 @@ impl Render for Viewer {
             .on_action(cx.listener(|this, _: &ToggleContents, _, cx| this.toggle_pane(cx)))
             .on_action(cx.listener(|this, _: &ToggleNight, _, cx| this.toggle_night(cx)))
             .on_action(cx.listener(|this, _: &Find, window, cx| this.open_search(window, cx)))
+            .on_action(cx.listener(|this, _: &CommandBox, window, cx| {
+                this.toggle_command(window, cx);
+            }))
             .on_action(cx.listener(|this, _: &CopyText, _, cx| {
                 if !this.copy_picked_objects(cx) {
                     this.copy_text(cx);
@@ -4906,6 +4916,7 @@ impl Render for Viewer {
                     }),
                 )
             }))
+            .children(command_box)
             .into_any_element()
     }
 }

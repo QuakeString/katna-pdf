@@ -13,7 +13,7 @@ use gpui::{
     prelude::*,
 };
 use katna_ui::px;
-use katna_ui::tokens::{space, text};
+use katna_ui::tokens::{radius, space, text};
 
 use crate::history::History;
 use crate::library::{LibraryEvent, LibraryView};
@@ -291,66 +291,174 @@ impl Tabs {
         let (offer, step) = self.update.as_ref()?;
         let th = self.theme;
         let installs = offer.file.is_some();
-        let message = match step {
-            UpdateStep::Offered if installs => t("update-ready", &[]),
-            UpdateStep::Offered => t("update-out", &[]),
-            UpdateStep::Downloading(share) => t(
-                "update-downloading",
-                &[("percent", &format!("{:.0}", share * 100.0))],
-            ),
-            UpdateStep::Installing => t("update-installing", &[]),
-            UpdateStep::Unsaved => t("update-unsaved", &[]),
-            UpdateStep::Failed(err) => t("update-failed", &[("error", err)]),
-        };
-        let busy = matches!(step, UpdateStep::Downloading(_) | UpdateStep::Installing);
         let page = offer.package.page();
-        let action = (!busy).then(|| {
-            if installs {
-                let label = match step {
-                    UpdateStep::Failed(_) | UpdateStep::Unsaved => t("update-retry", &[]),
-                    _ => t("update-install", &[]),
-                };
-                katna_ui::widgets::filled_button("update-install", label, &th.katna)
-                    .on_click(cx.listener(|this, _, _, cx| this.install_update(cx)))
-            } else {
-                katna_ui::widgets::filled_button(
-                    "update-download",
-                    t("update-download", &[]),
-                    &th.katna,
-                )
-                .on_click(cx.listener(move |_, _, _, cx| cx.open_url(&page)))
-            }
-        });
-        let later = (!busy).then(|| {
-            katna_ui::widgets::button(
-                "update-later",
-                katna_ui::widgets::ButtonStyle::Text,
-                &th.katna,
-            )
-            .child(t("update-later", &[]))
-            .on_click(cx.listener(|this, _, _, cx| this.skip_update(cx)))
-        });
-        Some(
+        // A pill at the top (S10): the offer, or why it waits; and while
+        // it downloads, a card in the corner.
+        let pill = |id: &'static str, bg, fg, glyph: &'static str, words: String| {
             div()
-                .id("update-bar")
-                .flex_shrink_0()
+                .id(id)
+                .occlude()
+                .max_w(px(720.0))
                 .flex()
                 .items_center()
-                .gap(px(space::S2))
-                .px(px(space::S3))
+                .gap(px(space::S3))
+                .pl(px(space::S3))
+                .pr(px(space::S1))
                 .py(px(space::S1))
-                .border_b_1()
-                .border_color(th.line)
-                .bg(th.card)
+                .rounded(px(radius::MD))
+                .bg(bg)
+                .shadow(th.shadow())
                 .text_size(px(text::SMALL))
-                .text_color(if matches!(step, UpdateStep::Failed(_)) {
-                    th.error
-                } else {
-                    th.text
-                })
-                .child(div().flex_1().min_w_0().child(message))
-                .children(later)
-                .children(action),
+                .text_color(fg)
+                .child(crate::float::icon(glyph, 15.0, fg))
+                .child(div().flex_1().min_w_0().child(words))
+        };
+        let button = |id: &'static str, words: String| crate::float::button(id, words, false, &th);
+        let install = |words: String| {
+            button("update-install", words)
+                .on_click(cx.listener(|this, _, _, cx| this.install_update(cx)))
+        };
+        let later = || {
+            button("update-later", t("update-later", &[]))
+                .on_click(cx.listener(|this, _, _, cx| this.skip_update(cx)))
+        };
+        let mut top = Vec::new();
+        let mut corner = None;
+        match step {
+            UpdateStep::Offered if installs => top.push(
+                pill(
+                    "update-offer",
+                    th.accent_soft,
+                    th.accent_text,
+                    "info",
+                    t("update-ready", &[]),
+                )
+                .child(install(t("update-install", &[])))
+                .child(later()),
+            ),
+            UpdateStep::Offered => top.push(
+                pill(
+                    "update-offer",
+                    th.accent_soft,
+                    th.accent_text,
+                    "info",
+                    t("update-out", &[]),
+                )
+                .child(
+                    button("update-download", t("update-download", &[]))
+                        .on_click(cx.listener(move |_, _, _, cx| cx.open_url(&page))),
+                )
+                .child(later()),
+            ),
+            UpdateStep::Unsaved => {
+                top.push(
+                    pill(
+                        "update-offer",
+                        th.accent_soft,
+                        th.accent_text,
+                        "info",
+                        t("update-ready", &[]),
+                    )
+                    .child(install(t("update-install", &[]))),
+                );
+                top.push(
+                    pill(
+                        "update-wait",
+                        gpui::rgba(th.katna.warning & 0xffff_ff00 | 0x2e).into(),
+                        gpui::rgba(th.katna.warning).into(),
+                        "alert",
+                        t("update-unsaved", &[]),
+                    )
+                    .child(later()),
+                );
+            }
+            UpdateStep::Failed(err) => top.push(
+                pill(
+                    "update-failed",
+                    th.error_soft,
+                    th.error,
+                    "alert",
+                    t("update-failed", &[("error", err)]),
+                )
+                .child(install(t("update-retry", &[])))
+                .child(later()),
+            ),
+            UpdateStep::Downloading(_) | UpdateStep::Installing => {
+                let (title, share) = match step {
+                    UpdateStep::Downloading(share) => (
+                        t(
+                            "update-downloading",
+                            &[("percent", &format!("{:.0}", share * 100.0))],
+                        ),
+                        *share,
+                    ),
+                    _ => (t("update-installing", &[]), 1.0),
+                };
+                corner = Some(
+                    div()
+                        .id("update-progress")
+                        .occlude()
+                        .w(px(320.0))
+                        .p(px(space::S4))
+                        .flex()
+                        .flex_col()
+                        .gap(px(space::S2))
+                        .rounded(px(radius::MD))
+                        .bg(th.card)
+                        .shadow(th.lifted())
+                        .when(th.dark, |d| d.border_1().border_color(th.line))
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(px(space::S2))
+                                .text_size(px(text::BODY))
+                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                .text_color(th.text)
+                                .child(crate::float::icon("download", 15.0, th.accent))
+                                .child(title),
+                        )
+                        .child(
+                            div().h(px(6.0)).rounded(px(3.0)).bg(th.field).child(
+                                div()
+                                    .h_full()
+                                    .rounded(px(3.0))
+                                    .bg(th.accent)
+                                    .w(gpui::relative(share.clamp(0.0, 1.0))),
+                            ),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(text::CAPTION))
+                                .text_color(th.dim)
+                                .child(t("update-progress-detail", &[])),
+                        ),
+                );
+            }
+        }
+        Some(
+            div()
+                .absolute()
+                .inset_0()
+                .child(
+                    div()
+                        .absolute()
+                        .top(px(52.0))
+                        .left_0()
+                        .right_0()
+                        .flex()
+                        .flex_col()
+                        .items_center()
+                        .gap(px(space::S2))
+                        .children(top),
+                )
+                .children(corner.map(|card| {
+                    div()
+                        .absolute()
+                        .right(px(space::S5))
+                        .bottom(px(space::S5))
+                        .child(card)
+                })),
         )
     }
 
@@ -721,6 +829,7 @@ impl Render for Tabs {
                 cx.listener(|this, _: &ShowLibrary, window, cx| this.toggle_library(window, cx)),
             )
             .size_full()
+            .relative()
             .flex()
             .flex_col()
             .bg(th.page)
@@ -728,10 +837,10 @@ impl Render for Tabs {
             .font_family(".SystemUIFont")
             .child(self.title_bar(window, cx))
             .children(self.tab_menu(cx))
-            .children(self.update_bar(cx))
             .map(|d| match &self.library {
                 Some((library, _)) if self.in_library => d.child(library.clone()),
                 _ => d.child(self.viewer_entity().clone()),
             })
+            .children(self.update_bar(cx))
     }
 }

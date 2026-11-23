@@ -13,6 +13,7 @@ mod annotate;
 mod assets;
 mod chrome;
 mod contents;
+mod crashed;
 mod drives;
 mod engine;
 mod float;
@@ -128,7 +129,16 @@ fn main() -> ExitCode {
             cx.set_global(history::History::load());
             // Copies of changes left when the app last stopped, before
             // this run keeps any of its own.
-            cx.set_global(recovery::Left(recovery::copies()));
+            let left = recovery::copies();
+            let left_changes = !left.is_empty();
+            cx.set_global(recovery::Left(left));
+            // A comparison window is a run of its own, beside the app.
+            if compare.is_none() {
+                cx.set_global(crashed::Crashed(crashed::started(left_changes)));
+                cx.on_app_quit(|_| async { crashed::quit() }).detach();
+            } else {
+                cx.set_global(crashed::Crashed(false));
+            }
             cx.set_global(look::Look::load());
             look::watch_desktop(cx);
             cx.set_global(profile::Profile::load());
