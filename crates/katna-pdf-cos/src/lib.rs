@@ -99,7 +99,7 @@ pub use pdfa::{
 };
 pub use present::{PageShow, Transition, TransitionStyle};
 pub use redact::{Pattern, RedactError, RedactOptions};
-pub use report::text_pdf;
+pub use report::{text_pdf, text_pdf_outlined};
 pub use scripts::{ActionPlace, DocAction, DocEvent, FieldEvent};
 pub use sign::{
     CONTENTS_LEN, Coverage, Picture, Placement, Prepared, SignError, SignRequest, Signature,

@@ -18,6 +18,7 @@ mod drives;
 mod engine;
 mod float;
 mod form;
+mod guide;
 mod history;
 mod ids;
 mod instance;

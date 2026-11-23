@@ -818,6 +818,14 @@ impl Render for Tabs {
             .on_action(cx.listener(|_, _: &crate::viewer::ReportProblem, _, cx| {
                 cx.open_url("https://github.com/QuakeString/katna-pdf/issues/new")
             }))
+            .on_action(
+                cx.listener(|this, _: &crate::viewer::ShowGuide, window, cx| {
+                    match crate::guide::write() {
+                        Ok(path) => this.open_files(vec![path], window, cx),
+                        Err(err) => eprintln!("katna-pdf: writing the guide: {err}"),
+                    }
+                }),
+            )
             .on_action(cx.listener(|_, _: &crate::viewer::ShowAbout, _, cx| {
                 crate::settings::open(crate::settings::Page::About, cx)
             }))

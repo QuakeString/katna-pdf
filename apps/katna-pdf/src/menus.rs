@@ -12,8 +12,8 @@ use crate::viewer::{
     FitWidth, GoToPage, Loupe, NewWindow, NextPage, NextSpread, NextTab, NextView, Open,
     OpenSettings, Organize, Present, PreviousPage, PreviousTab, PreviousView, Print, Properties,
     Quit, ReadAloud, ReadMode, Redo, ReopenSession, ReportProblem, Revert, RotateViewLeft,
-    RotateViewRight, Save, SelectAll, SendByEmail, Shortcuts, ShowAbout, ShowLibrary, Sign,
-    Snapshot, ToggleContents, ToggleNight, Undo, ZoomIn, ZoomOut, ZoomToArea,
+    RotateViewRight, Save, SelectAll, SendByEmail, Shortcuts, ShowAbout, ShowGuide, ShowLibrary,
+    Sign, Snapshot, ToggleContents, ToggleNight, Undo, ZoomIn, ZoomOut, ZoomToArea,
 };
 
 /// An item: its id (and the id of its words), and its keys as
@@ -109,6 +109,7 @@ pub const MENUS: &[(&str, &[Entry])] = &[
         "menu-help",
         &[
             Some(("menu-settings", &["Control", ","])),
+            Some(("menu-guide", &[])),
             Some(("menu-shortcuts", &["F1"])),
             Some(("menu-report", &[])),
             None,
@@ -191,6 +192,7 @@ pub fn action(id: &str) -> Option<Box<dyn Action>> {
         "menu-previous-tab" => Box::new(PreviousTab),
         "menu-settings" => Box::new(OpenSettings),
         "menu-about" => Box::new(ShowAbout),
+        "menu-guide" => Box::new(ShowGuide),
         "menu-report" => Box::new(ReportProblem),
         _ => return None,
     })

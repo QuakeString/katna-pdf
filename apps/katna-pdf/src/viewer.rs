@@ -97,6 +97,7 @@ actions!(
         NewWindow,
         OpenSettings,
         ShowAbout,
+        ShowGuide,
         ReportProblem,
         ReopenSession,
         Compare,
