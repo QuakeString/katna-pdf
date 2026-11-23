@@ -144,6 +144,10 @@ pub(super) struct Printing {
     preview: Option<Preview>,
     /// Bumped with each change, so an older preview is dropped.
     asked: u64,
+    /// The card's keys: arrows, Home and End go through the sheets.
+    pub(super) focus: gpui::FocusHandle,
+    /// The wheel turned over the preview, not yet a whole sheet's worth.
+    wheel: f32,
     _sub: Subscription,
     _percent_sub: Subscription,
 }
@@ -232,6 +236,8 @@ impl Viewer {
             working: false,
             preview: None,
             asked: 0,
+            focus: cx.focus_handle(),
+            wheel: 0.0,
             _sub: sub,
         });
         self.preview_sheets(cx);
@@ -305,6 +311,31 @@ impl Viewer {
             .ok();
         })
         .detach();
+    }
+
+    /// Shows the next sheet in the preview, or the one before.
+    pub(super) fn step_preview(&mut self, forward: bool, cx: &mut Context<Self>) {
+        let Some(p) = self.printing.as_ref().and_then(|p| p.preview.as_ref()) else {
+            return;
+        };
+        let to = if forward {
+            p.sheet + 1
+        } else {
+            match p.sheet.checked_sub(1) {
+                Some(to) => to,
+                None => return,
+            }
+        };
+        self.preview_sheet(to, cx);
+    }
+
+    /// Shows the first sheet in the preview, or the last.
+    pub(super) fn end_of_preview(&mut self, last: bool, cx: &mut Context<Self>) {
+        let Some(p) = self.printing.as_ref().and_then(|p| p.preview.as_ref()) else {
+            return;
+        };
+        let to = if last { p.count.saturating_sub(1) } else { 0 };
+        self.preview_sheet(to, cx);
     }
 
     /// Shows sheet `sheet` in the preview.
@@ -667,6 +698,24 @@ impl Viewer {
             );
         let card = div()
             .id("print-card")
+            .track_focus(&printing.focus)
+            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
+                // Only the card's own keys, not a box's.
+                let Some(p) = this.printing.as_ref() else {
+                    return;
+                };
+                if !p.focus.is_focused(window) {
+                    return;
+                }
+                // Up, Down, Home, End, Page Up and Down come as the pages'
+                // own actions, which go to the sheets while the card is open.
+                match event.keystroke.key.as_str() {
+                    "right" => this.step_preview(true, cx),
+                    "left" => this.step_preview(false, cx),
+                    _ => return,
+                }
+                cx.stop_propagation();
+            }))
             .w(px(820.0))
             .h(px(540.0))
             .flex()
@@ -707,9 +756,36 @@ impl Viewer {
                 }))
         };
         div()
+            .id("print-preview")
             .w(px(380.0))
             .flex_none()
             .h_full()
+            // A click here gives the keys back to the card, from a box.
+            .on_mouse_down(
+                gpui::MouseButton::Left,
+                cx.listener(|this, _, window, cx| {
+                    if let Some(p) = this.printing.as_ref() {
+                        window.focus(&p.focus, cx);
+                    }
+                }),
+            )
+            // The wheel goes through the sheets, a sheet a notch.
+            .on_scroll_wheel(cx.listener(|this, event: &gpui::ScrollWheelEvent, _, cx| {
+                cx.stop_propagation();
+                let dy = match event.delta {
+                    gpui::ScrollDelta::Lines(l) => l.y * 48.0,
+                    gpui::ScrollDelta::Pixels(p) => katna_ui::unpx(p.y),
+                };
+                let Some(p) = this.printing.as_mut() else {
+                    return;
+                };
+                p.wheel += dy;
+                if p.wheel.abs() >= 48.0 {
+                    let forward = p.wheel < 0.0;
+                    p.wheel = 0.0;
+                    this.step_preview(forward, cx);
+                }
+            }))
             .flex()
             .flex_col()
             .items_center()

@@ -285,14 +285,34 @@ pub(crate) fn text_value(bytes: &[u8]) -> String {
             .iter()
             .map(|&c| u16::from_be_bytes(c))
             .collect();
-        String::from_utf16_lossy(&units)
+        without_language(&String::from_utf16_lossy(&units))
     } else if let Some(rest) = bytes.strip_prefix(&[0xef, 0xbb, 0xbf]) {
-        String::from_utf8_lossy(rest).into_owned()
+        // PDF 2.0's UTF-8 text strings.
+        without_language(&String::from_utf8_lossy(rest))
     } else {
         bytes.iter().map(|&b| pdf_doc_char(b)).collect()
     }
     .replace("\r\n", "\n")
     .replace('\r', "\n")
+}
+
+/// A Unicode text string without its language marks: an escape, a
+/// language code (and country), an escape (ISO 32000-2 §7.9.2.2).
+fn without_language(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut parts = text.split('\u{1b}');
+    if let Some(first) = parts.next() {
+        out.push_str(first);
+    }
+    // Between each pair of escapes is a code; after it, text again.
+    while let Some(code) = parts.next() {
+        match parts.next() {
+            Some(text) => out.push_str(text),
+            // An escape with no partner: keep what follows.
+            None => out.push_str(code),
+        }
+    }
+    out
 }
 
 /// PDFDocEncoding (Annex D.2): Latin-1, apart from 0x18–0x1F and
@@ -307,5 +327,30 @@ fn pdf_doc_char(b: u8) -> char {
         0x18..=0x1f => LOW[usize::from(b - 0x18)],
         0x80..=0xa0 => HIGH[usize::from(b - 0x80)],
         _ => char::from(b),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unicode_strings_lose_their_language_marks() {
+        // UTF-16BE, "\x1Ben\x1BHi".
+        let mut utf16 = vec![0xfe, 0xff];
+        for unit in "\u{1b}en\u{1b}Hi".encode_utf16() {
+            utf16.extend_from_slice(&unit.to_be_bytes());
+        }
+        assert_eq!(text_string(&utf16), "Hi");
+        // PDF 2.0's UTF-8, with a language and country, mid-string too.
+        let utf8 = [
+            &[0xef, 0xbb, 0xbf][..],
+            "नमस्ते \u{1b}hiIN\u{1b}दुनिया".as_bytes(),
+        ]
+        .concat();
+        assert_eq!(text_string(&utf8), "नमस्ते दुनिया");
+        assert_eq!(text_string(&[0xef, 0xbb, 0xbf, b'o', b'k']), "ok");
+        // A lone escape stays out of the way of the text.
+        assert_eq!(without_language("a\u{1b}b"), "ab");
     }
 }
