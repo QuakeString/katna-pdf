@@ -372,7 +372,7 @@ comment.delete-comment	comment	Delete comments	reader	y	shipped	P0	#32, #104		ac
 comment.edit-comment-text	comment	Edit comment text	reader	y	shipped	P0	#32		acrobat
 comment.copy-comment-text	comment	Copy comment text	reader	n	shipped	P1	#152	copy button on the chosen comment	acrobat
 comment.filter-comments	comment	Filter comments (type, author, status, colour, checkmark)	reader	y	shipped	P1	#104		acrobat
-comment.sort-comments	comment	Sort comments (page, author, date, type, colour)	reader	n	partial	P1	page order		acrobat
+comment.sort-comments	comment	Sort comments (page, author, date, type, colour)	reader	n	shipped	P1	#155	Order chips in the comments filter	acrobat
 comment.search-comments	comment	Search comments	reader	y	shipped	P1	#140	Comments tab filter: words in comments, replies and authors, accents ignored	acrobat
 comment.show-hide-comments	comment	Show or hide all comments and pop-ups	reader	y	partial	P1	#104 hidden flag per comment		acrobat
 comment.popups	comment	Open and reposition comment pop-ups	reader	y	partial	P1	#32		acrobat
