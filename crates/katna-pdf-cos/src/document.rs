@@ -195,6 +195,15 @@ impl Document {
         self.trailer.get("Encrypt").is_some()
     }
 
+    /// How the file is locked, when it is.
+    pub fn lock_kind(&self) -> Option<crate::crypt::LockKind> {
+        let encrypt = self.trailer.get("Encrypt")?;
+        match self.resolve(encrypt) {
+            Object::Dict(dict) => Some(crate::crypt::LockKind::of(&dict)),
+            _ => Some(crate::crypt::LockKind::Other(String::new())),
+        }
+    }
+
     /// One more than the highest object number in use (the trailer's
     /// `/Size`, or larger if the table says so).
     pub fn size(&self) -> u32 {

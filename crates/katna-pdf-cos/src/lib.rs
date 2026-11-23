@@ -66,7 +66,7 @@ pub use calc::{
     number, parse_date, range, script_text, show, write_date,
 };
 pub use content::{Op, ops};
-pub use crypt::{Permissions, UnlockError};
+pub use crypt::{LockKind, Permissions, UnlockError};
 pub use design::{FieldEdit, FieldSpec, FormDesign, FormError, NewField};
 pub use document::{Document, Entry, LoadError, XrefKind};
 pub use dss::Dss;

@@ -865,6 +865,10 @@ tab-empty = New tab
 ## Opening
 opening = Opening { $name }…
 error-encryption = { $name } is encrypted in a way Katna PDF cannot read yet.
+error-lock-certificates = { $name } is locked to certificates: only people holding the right digital ID can open it, and Katna PDF can't open such files yet. Ask whoever sent it for a copy locked with a password instead.
+error-lock-rights = { $name } is protected by { $service }, which decides online who may open it. Open it in the app that service names, or ask whoever sent it for an unprotected copy.
+error-lock-newer = { $name } is locked with a kind of password Katna PDF doesn't know. Ask whoever sent it to lock it again with AES-256, which every current PDF app reads.
+error-lock-other = { $name } is locked by "{ $handler }", a kind of lock Katna PDF doesn't know. Ask whoever sent it for a copy locked with a password, or none.
 locked-title = { $name } is protected
 locked-detail = Enter its password to open it.
 locked-wrong = That password did not open it. Try again.

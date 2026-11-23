@@ -19,7 +19,7 @@ core.permissions-enforced	core	Honour document permissions (print, modify, assem
 core.crypt-filters	core	Crypt filters (Identity, /StmF, /StrF)	reader	n	shipped	P0	cos crypt.rs		acrobat
 core.attachment-only-encryption	core	Attachment-only encryption (/EFF) opens without a password	reader	n	todo	P2	-		acrobat
 core.unencrypted-metadata	core	Leave XMP metadata readable when /EncryptMetadata is false	reader	n	partial	P1	cos crypt.rs		acrobat
-core.unsupported-handlers	core	Clear message for unsupported security handlers	reader	n	partial	P1	app error-encryption		acrobat
+core.unsupported-handlers	core	Clear message for unsupported security handlers	reader	n	shipped	P1	#184		acrobat
 core.open-public-key	core	Open certificate-encrypted (public-key handler) documents	reader	y	deferred	P2	-	certificate encryption deferred	acrobat
 core.incremental-save	core	Save as an incremental update (original bytes kept, atomic write)	reader	y	shipped	P0	cos write.rs		acrobat
 core.save-as-full-rewrite	core	Save as a new file with a full rewrite and garbage collection	standard	y	shipped	P0	cos write_whole		acrobat

@@ -1359,14 +1359,27 @@ impl Viewer {
                         )
                     });
                     // `None` when it asks for a password.
-                    let bytes = bytes.map_err(Some)?;
+                    let bytes = Arc::new(bytes.map_err(Some)?);
                     let doc = crate::engine::engine()
-                        .open(Arc::new(bytes), &password)
-                        .map_err(|err| match err {
-                            OpenError::Locked => None,
-                            OpenError::Invalid => Some(t("error-invalid", &[("name", &name)])),
-                            OpenError::Unsupported => {
-                                Some(t("error-encryption", &[("name", &name)]))
+                        .open(bytes.clone(), &password)
+                        .map_err(|err| {
+                            // A lock this can't open reads to the renderer
+                            // as damage, or as a password to ask for.
+                            let odd_lock = || {
+                                katna_pdf_cos::Document::load(bytes.to_vec())
+                                    .ok()
+                                    .and_then(|doc| doc.lock_kind())
+                                    .filter(|k| *k != katna_pdf_cos::LockKind::Password)
+                            };
+                            match err {
+                                OpenError::Locked => {
+                                    odd_lock().map(|kind| lock_message(&name, Some(kind)))
+                                }
+                                OpenError::Invalid => Some(match odd_lock() {
+                                    Some(kind) => lock_message(&name, Some(kind)),
+                                    None => t("error-invalid", &[("name", &name)]),
+                                }),
+                                OpenError::Unsupported => Some(lock_message(&name, odd_lock())),
                             }
                         })?;
                     Ok::<_, Option<String>>(Opened::new(name, doc, 0))
@@ -5547,6 +5560,24 @@ impl Render for Viewer {
             .children(self.picture_menu_element(cx))
             .children(self.side_menu_element(cx))
             .into_any_element()
+    }
+}
+
+/// Why a locked file can't be opened, and what to do, by how it is
+/// locked: to certificates, by a rights-management service, or with a
+/// password lock newer than this knows.
+fn lock_message(name: &str, kind: Option<katna_pdf_cos::LockKind>) -> String {
+    use katna_pdf_cos::LockKind;
+    match kind {
+        Some(LockKind::Certificates) => t("error-lock-certificates", &[("name", name)]),
+        Some(LockKind::RightsManagement(service)) => {
+            t("error-lock-rights", &[("name", name), ("service", service)])
+        }
+        Some(LockKind::NewerPassword) => t("error-lock-newer", &[("name", name)]),
+        Some(LockKind::Other(handler)) if !handler.is_empty() => {
+            t("error-lock-other", &[("name", name), ("handler", &handler)])
+        }
+        _ => t("error-encryption", &[("name", name)]),
     }
 }
 
