@@ -548,6 +548,7 @@ impl<'a> Args<'a> {
                 "--reset",
                 "--forms",
                 "--comments",
+                "--no-scripts",
             ]
             .contains(&a.as_str())
             {
