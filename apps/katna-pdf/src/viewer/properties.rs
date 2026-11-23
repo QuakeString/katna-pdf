@@ -19,9 +19,10 @@ use katna_pdf_cos::{
 use katna_ui::px;
 use katna_ui::text_input::{InputEvent, TextInput};
 use katna_ui::tokens::{radius, space, text};
-use katna_ui::widgets::{self, Tip};
+use katna_ui::widgets::Tip;
 
 use super::{Content, Viewer};
+use crate::float;
 use crate::text::t;
 
 /// The card's fields: title, author, subject, keywords.
@@ -44,6 +45,11 @@ pub(super) struct Properties {
     owner: Entity<TextInput>,
     /// What someone opening it without the owner's password may do.
     allow: Permissions,
+    /// The part shown.
+    part: Part,
+    /// How to make it smaller: the same look, pictures to 150 dpi, or
+    /// to 96 dpi.
+    shrink: usize,
     _fields: Vec<Subscription>,
 }
 
@@ -122,6 +128,8 @@ impl Viewer {
             password,
             owner,
             allow: Permissions::ALL,
+            part: Part::Description,
+            shrink: 0,
             _fields: subs,
         });
         let current = self.unsaved();
@@ -378,57 +386,202 @@ impl Viewer {
         .detach();
     }
 
-    /// The properties card, while it is open.
+    /// The properties card, while it is open (R14, R16): a heading
+    /// with a close button, a tab for each part, the part chosen in a
+    /// body that scrolls, and the buttons at the foot, always in view.
     pub(super) fn properties_card(
         &self,
         max_height: f32,
+        window: &gpui::Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         let properties = self.properties.as_ref()?;
         let th = self.theme;
-        let label = |id: &str| {
-            div()
-                .text_size(px(text::SMALL))
-                .text_color(th.dim)
-                .child(t(id, &[]))
+        let fields = self.form.as_ref().map_or(0, |f| f.fields.len());
+        let comments = self
+            .annots
+            .as_ref()
+            .map_or(0, |a| a.iter().map(Vec::len).sum::<usize>());
+        let tabs: Vec<Part> = Part::ALL
+            .into_iter()
+            .filter(|p| match p {
+                Part::Form => fields > 0,
+                Part::Comments => comments > 0,
+                _ => true,
+            })
+            .collect();
+        let part = if tabs.contains(&properties.part) {
+            properties.part
+        } else {
+            Part::Description
         };
-        let mut card = div()
-            .id("properties-card")
-            .w(px(520.0))
-            .max_h(px(max_height.max(200.0)))
-            .overflow_y_scroll()
-            .p(px(space::S4))
+        let tab_row = div()
+            .flex()
+            .flex_wrap()
+            .gap(px(space::S2))
+            .children(tabs.into_iter().map(|p| {
+                float::chip(
+                    ("properties-tab", p as usize),
+                    t(p.label(), &[]),
+                    p == part,
+                    &th,
+                )
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if let Some(properties) = this.properties.as_mut() {
+                        properties.part = p;
+                    }
+                    cx.notify();
+                }))
+            }));
+        let header = div()
             .flex()
             .flex_col()
+            .gap(px(space::S3))
+            .px(px(space::S5))
+            .pt(px(space::S4))
+            .pb(px(space::S3))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .child(
+                        div()
+                            .flex_1()
+                            .text_size(px(text::TITLE))
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .text_color(th.text)
+                            .child(t("properties-heading", &[])),
+                    )
+                    .child(
+                        float::ib(
+                            "properties-close",
+                            "x",
+                            t("properties-close", &[]),
+                            false,
+                            &th,
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.properties = None;
+                            cx.notify();
+                        })),
+                    ),
+            )
+            .child(tab_row);
+        let body = match part {
+            Part::Description => self.description_part(properties, window, cx),
+            Part::Password => self.password_part(properties, window, cx),
+            Part::Size => self.size_part(properties, cx),
+            Part::Pdfa => self.pdfa_part(properties, cx),
+            Part::Form => self.form_part(fields, cx),
+            Part::Comments => self.comments_part(comments, cx),
+            Part::Scripts => self.scripts_part(properties, cx),
+        };
+        let foot = div()
+            .flex()
+            .items_center()
             .gap(px(space::S2))
-            .rounded(px(10.0))
+            .px(px(space::S5))
+            .py(px(space::S3))
+            .border_t_1()
+            .border_color(th.line)
+            .child(
+                div()
+                    .flex_1()
+                    .text_size(px(text::CAPTION))
+                    .text_color(th.dim)
+                    .child(t("properties-foot", &[])),
+            )
+            .when(part == Part::Description, |d| {
+                d.child(
+                    float::button("properties-cancel", t("properties-cancel", &[]), false, &th)
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.properties = None;
+                            cx.notify();
+                        })),
+                )
+                .child(
+                    float::button("properties-keep", t("properties-keep", &[]), true, &th)
+                        .on_click(cx.listener(|this, _, _, cx| this.keep_properties(cx))),
+                )
+            })
+            .when(part != Part::Description, |d| {
+                d.child(
+                    float::button("properties-done", t("properties-close", &[]), false, &th)
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.properties = None;
+                            cx.notify();
+                        })),
+                )
+            });
+        let height = max_height.clamp(240.0, 560.0);
+        let card = div()
+            .id("properties-card")
+            .w(px(680.0))
+            .max_w(px(680.0))
+            .h(px(height))
+            .flex()
+            .flex_col()
+            .overflow_hidden()
+            .rounded(px(12.0))
             .bg(th.card)
             .shadow(th.lifted())
             .when(th.dark, |d| d.border_1().border_color(th.line))
             .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .child(header)
             .child(
                 div()
-                    .text_size(px(text::BODY))
-                    .font_weight(gpui::FontWeight::SEMIBOLD)
-                    .text_color(th.text)
-                    .child(t("properties-heading", &[])),
-            );
-        for (field, id) in properties.fields.iter().zip(LABELS) {
-            card = card.child(label(id)).child(
-                div()
-                    .h(px(36.0))
+                    .id("properties-body")
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .px(px(space::S5))
+                    .pb(px(space::S4))
                     .flex()
-                    .items_center()
-                    .px(px(space::S3))
-                    .rounded(px(radius::SM))
-                    .bg(th.field)
-                    .text_size(px(text::BODY))
-                    .text_color(th.text)
-                    .child(field.clone()),
-            );
+                    .flex_col()
+                    .gap(px(space::S3))
+                    .child(body),
+            )
+            .child(foot);
+        Some(card.into_any_element())
+    }
+
+    /// Title, author, subject and keywords, and what the file says of
+    /// itself (R14).
+    fn description_part(
+        &self,
+        properties: &Properties,
+        window: &gpui::Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let th = self.theme;
+        let field = |i: usize| {
+            div()
+                .flex()
+                .flex_col()
+                .flex_1()
+                .min_w_0()
+                .gap(px(space::S1))
+                .child(label(LABELS[i], th))
+                .child(float::input_box(&properties.fields[i], window, cx, &th))
+        };
+        let mut facts: Vec<(&str, String)> = Vec::new();
+        if let Some(path) = &self.path {
+            facts.push(("properties-file", path.display().to_string()));
+        }
+        if let Some(size) = properties.size {
+            facts.push((
+                "properties-size",
+                t(
+                    "properties-size-pages",
+                    &[
+                        ("size", &crate::library::size_text(size)),
+                        ("pages", &self.page_count().to_string()),
+                    ],
+                ),
+            ));
         }
         if let Some(read) = &properties.read {
-            let facts = [
+            let rows = [
                 ("properties-creator", read.creator.clone()),
                 ("properties-producer", read.producer.clone()),
                 (
@@ -439,326 +592,323 @@ impl Viewer {
                     "properties-modified",
                     read.modified.as_deref().and_then(shown_date),
                 ),
-                ("properties-pages", Some(self.page_count().to_string())),
             ];
-            for (id, value) in facts {
-                let Some(value) = value else {
-                    continue;
-                };
-                card = card.child(
-                    div()
-                        .flex()
-                        .gap(px(space::S2))
-                        .text_size(px(text::SMALL))
-                        .child(
-                            div()
-                                .w(px(96.0))
-                                .flex_none()
-                                .text_color(th.dim)
-                                .child(t(id, &[])),
-                        )
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .overflow_hidden()
-                                .text_ellipsis()
-                                .whitespace_nowrap()
-                                .text_color(th.text)
-                                .child(value),
-                        ),
-                );
-            }
+            facts.extend(rows.into_iter().filter_map(|(id, v)| v.map(|v| (id, v))));
         }
-        if let Some((locked, owner)) = properties.locked {
-            card = card.child(
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(space::S3))
+            .child(field(0))
+            .child(
                 div()
-                    .pt(px(space::S2))
-                    .text_size(px(text::BODY))
-                    .font_weight(gpui::FontWeight::SEMIBOLD)
-                    .text_color(th.text)
-                    .child(t("properties-password", &[])),
-            );
-            let field = |input: &Entity<TextInput>| {
-                div()
-                    .flex_1()
-                    .h(px(36.0))
                     .flex()
-                    .items_center()
-                    .px(px(space::S3))
-                    .rounded(px(radius::SM))
-                    .bg(th.field)
-                    .text_size(px(text::BODY))
-                    .text_color(th.text)
-                    .child(input.clone())
-            };
-            let mut allowed = div()
-                .flex()
-                .flex_wrap()
-                .gap_x(px(space::S3))
-                .gap_y(px(space::S1));
-            for (i, (id, get)) in ALLOWED.into_iter().enumerate() {
-                let mut allow = properties.allow;
-                let on = *get(&mut allow);
-                allowed = allowed.child(
-                    div()
-                        .id(("properties-allow", i))
-                        .flex()
-                        .items_center()
-                        .gap(px(space::S1))
-                        .cursor_pointer()
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            if let Some(p) = this.properties.as_mut() {
-                                let flag = get(&mut p.allow);
-                                *flag = !*flag;
-                            }
-                            cx.notify();
-                        }))
-                        .child(super::sign::check_box(on, th))
-                        .child(
-                            div()
-                                .text_size(px(text::SMALL))
-                                .text_color(th.text)
-                                .child(t(id, &[])),
-                        ),
-                );
-            }
-            card = match (locked, owner) {
-                (false, _) => card
-                    .child(label("properties-password-none"))
-                    .child(
+                    .gap(px(space::S3))
+                    .child(field(1))
+                    .child(field(2)),
+            )
+            .child(field(3))
+            .child(section(t("properties-about", &[]), th))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(space::S2))
+                    .children(facts.into_iter().map(|(id, value)| {
                         div()
                             .flex()
-                            .gap(px(space::S2))
-                            .child(field(&properties.password))
-                            .child(field(&properties.owner)),
-                    )
-                    .child(label("properties-allow"))
-                    .child(allowed)
-                    .child(
-                        div().flex().justify_end().child(
-                            widgets::outlined_button(
-                                "properties-lock",
-                                t("properties-lock", &[]),
-                                &th.katna,
+                            .gap(px(space::S3))
+                            .text_size(px(text::SMALL))
+                            .child(
+                                div()
+                                    .w(px(140.0))
+                                    .flex_none()
+                                    .text_color(th.dim)
+                                    .child(t(id, &[])),
                             )
-                            .on_click(cx.listener(|this, _, _, cx| this.lock_file(cx))),
-                        ),
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .overflow_hidden()
+                                    .text_ellipsis()
+                                    .whitespace_nowrap()
+                                    .text_color(th.text)
+                                    .child(value),
+                            )
+                    })),
+            )
+            .into_any_element()
+    }
+
+    /// Putting a password on, or taking it off.
+    fn password_part(
+        &self,
+        properties: &Properties,
+        window: &gpui::Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let th = self.theme;
+        let Some((locked, owner)) = properties.locked else {
+            return div().into_any_element();
+        };
+        let field = |input: &Entity<TextInput>| {
+            div()
+                .flex_1()
+                .min_w_0()
+                .child(float::input_box(input, window, cx, &th))
+        };
+        let mut allowed = div()
+            .flex()
+            .flex_wrap()
+            .gap_x(px(space::S4))
+            .gap_y(px(space::S2));
+        for (i, (id, get)) in ALLOWED.into_iter().enumerate() {
+            let mut allow = properties.allow;
+            let on = *get(&mut allow);
+            allowed = allowed.child(
+                div()
+                    .id(("properties-allow", i))
+                    .flex()
+                    .items_center()
+                    .gap(px(space::S2))
+                    .cursor_pointer()
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if let Some(p) = this.properties.as_mut() {
+                            let flag = get(&mut p.allow);
+                            *flag = !*flag;
+                        }
+                        cx.notify();
+                    }))
+                    .child(super::sign::check_box(on, th))
+                    .child(
+                        div()
+                            .text_size(px(text::SMALL))
+                            .text_color(th.text)
+                            .child(t(id, &[])),
                     ),
-                (true, true) => card.child(label("properties-password-on")).child(
-                    div().flex().child(
-                        widgets::outlined_button(
-                            "properties-unlock",
-                            t("properties-unlock", &[]),
-                            &th.katna,
-                        )
-                        .on_click(cx.listener(|this, _, _, cx| this.unlock_file(cx))),
-                    ),
-                ),
-                (true, false) => card.child(label("properties-password-owner")).child(
+            );
+        }
+        let part = div().flex().flex_col().gap(px(space::S3));
+        match (locked, owner) {
+            (false, _) => part
+                .child(note(t("properties-password-none", &[]), th))
+                .child(
                     div()
                         .flex()
-                        .gap(px(space::S2))
+                        .gap(px(space::S3))
+                        .child(field(&properties.password))
+                        .child(field(&properties.owner)),
+                )
+                .child(section(t("properties-allow", &[]), th))
+                .child(allowed)
+                .child(
+                    div().flex().justify_end().child(
+                        float::button("properties-lock", t("properties-lock", &[]), true, &th)
+                            .on_click(cx.listener(|this, _, _, cx| this.lock_file(cx))),
+                    ),
+                ),
+            (true, true) => part
+                .child(note(t("properties-password-on", &[]), th))
+                .child(
+                    div().flex().child(
+                        float::button("properties-unlock", t("properties-unlock", &[]), true, &th)
+                            .on_click(cx.listener(|this, _, _, cx| this.unlock_file(cx))),
+                    ),
+                ),
+            (true, false) => part
+                .child(note(t("properties-password-owner", &[]), th))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(space::S3))
                         .child(field(&properties.owner))
                         .child(
-                            widgets::outlined_button(
+                            float::button(
                                 "properties-unlock",
                                 t("properties-unlock", &[]),
-                                &th.katna,
+                                true,
+                                &th,
                             )
                             .on_click(cx.listener(|this, _, _, cx| this.unlock_file_with(cx))),
                         ),
                 ),
-            };
         }
-        if let Some(actions) = properties.actions.as_ref() {
-            card = card.child(
-                div()
-                    .pt(px(space::S2))
-                    .text_size(px(text::BODY))
-                    .font_weight(gpui::FontWeight::SEMIBOLD)
-                    .text_color(th.text)
-                    .child(t("properties-actions", &[])),
+        .into_any_element()
+    }
+
+    /// How large the file is, and making it smaller (R16).
+    fn size_part(&self, properties: &Properties, cx: &mut Context<Self>) -> AnyElement {
+        let th = self.theme;
+        let Some(size) = properties.size else {
+            return div().into_any_element();
+        };
+        let ways = [
+            ("properties-shrink-same", 0),
+            ("properties-shrink-150", 1),
+            ("properties-shrink-96", 2),
+        ];
+        let mut seg = float::seg(&th);
+        for (id, i) in ways {
+            seg = seg.child(
+                float::seg_item(
+                    ("properties-shrink-way", i),
+                    None,
+                    Some(t(id, &[]).into()),
+                    properties.shrink == i,
+                    &th,
+                )
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if let Some(p) = this.properties.as_mut() {
+                        p.shrink = i;
+                    }
+                    cx.notify();
+                })),
             );
-            if actions.is_empty() {
-                card = card.child(label("properties-actions-none"));
-            } else {
-                card = card.child(label("properties-actions-tip"));
-            }
-            for (i, a) in actions.iter().enumerate() {
-                let detail = a.action.detail();
-                let first = detail.lines().next().unwrap_or_default();
-                let shown: String = if first.chars().count() > 60 {
-                    first.chars().take(58).chain("…".chars()).collect()
-                } else {
-                    first.to_owned()
-                };
-                let whole = detail.clone();
-                card = card.child(
-                    div()
-                        .id(("properties-action", i))
-                        .flex()
-                        .flex_col()
-                        .px(px(space::S2))
-                        .py(px(space::S1))
-                        .rounded(px(radius::SM))
-                        .cursor_pointer()
-                        .hover(move |s| s.bg(th.hover))
-                        .tip(t("properties-action-copy", &[]), &th.katna)
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            cx.write_to_clipboard(gpui::ClipboardItem::new_string(whole.clone()));
-                            this.notice = Some(t("properties-action-copied", &[]));
-                            cx.notify();
-                        }))
-                        .child(
-                            div()
-                                .text_size(px(text::SMALL))
-                                .text_color(th.text)
-                                .child(format!(
-                                    "{} · {}",
-                                    place_label(&a.place),
-                                    t(&format!("actions-kind-{}", a.action.kind()), &[])
-                                )),
-                        )
-                        .child(
-                            div()
-                                .text_size(px(text::SMALL))
-                                .text_color(th.dim)
-                                .child(shown),
-                        ),
-                );
-            }
         }
-        if let Some(size) = properties.size {
-            card = card
-                .child(
-                    div()
-                        .pt(px(space::S2))
-                        .text_size(px(text::BODY))
-                        .font_weight(gpui::FontWeight::SEMIBOLD)
-                        .text_color(th.text)
-                        .child(t("properties-size", &[])),
-                )
-                .child(div().text_size(px(text::SMALL)).text_color(th.dim).child(t(
-                    "properties-size-now",
-                    &[("size", &crate::library::size_text(size))],
-                )))
-                .child(
-                    div()
-                        .flex()
-                        .flex_wrap()
-                        .gap(px(space::S2))
-                        .child(
-                            widgets::outlined_button(
-                                "properties-shrink",
-                                t("properties-shrink", &[]),
-                                &th.katna,
-                            )
-                            .on_click(
-                                cx.listener(|this, _, _, cx| this.shrink(Optimize::LOSSLESS, cx)),
-                            ),
-                        )
-                        .child(
-                            widgets::outlined_button(
-                                "properties-shrink-pictures",
-                                t("properties-shrink-pictures", &[]),
-                                &th.katna,
-                            )
-                            .on_click(
-                                cx.listener(|this, _, _, cx| this.shrink(Optimize::MEDIUM, cx)),
-                            ),
-                        ),
-                );
+        let how = properties.shrink;
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(space::S3))
+            .child(
+                div()
+                    .flex()
+                    .items_baseline()
+                    .gap(px(space::S2))
+                    .child(
+                        div()
+                            .text_size(px(text::TITLE))
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .text_color(th.text)
+                            .child(crate::library::size_text(size)),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(text::SMALL))
+                            .text_color(th.dim)
+                            .child(t("properties-size-label", &[])),
+                    ),
+            )
+            .child(note(t("properties-size-how", &[]), th))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(space::S3))
+                    .child(seg)
+                    .child(div().flex_1())
+                    .child(
+                        float::button("properties-shrink", t("properties-shrink", &[]), true, &th)
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                let way = match how {
+                                    0 => Optimize::LOSSLESS,
+                                    1 => Optimize::MEDIUM,
+                                    _ => Optimize::STRONG,
+                                };
+                                this.shrink(way, cx)
+                            })),
+                    ),
+            )
+            .into_any_element()
+    }
+
+    /// Whether the file is PDF/A, what stands in the way, and a copy
+    /// made PDF/A (R16).
+    fn pdfa_part(&self, properties: &Properties, cx: &mut Context<Self>) -> AnyElement {
+        let th = self.theme;
+        let Some(issues) = &properties.pdfa else {
+            return div().into_any_element();
+        };
+        if issues.is_empty() {
+            return note(t("pdfa-is", &[]), th).into_any_element();
         }
-        if let Some(issues) = &properties.pdfa {
-            let mut section = div()
-                .child(
-                    div()
-                        .pt(px(space::S2))
-                        .text_size(px(text::BODY))
-                        .font_weight(gpui::FontWeight::SEMIBOLD)
-                        .text_color(th.text)
-                        .child(t("pdfa-heading", &[])),
-                )
-                .child(div().text_size(px(text::SMALL)).text_color(th.dim).child(
-                    if issues.is_empty() {
-                        t("pdfa-is", &[])
-                    } else {
-                        t("pdfa-not", &[])
-                    },
-                ));
-            for issue in issues {
-                section = section.child(
-                    div()
-                        .pl(px(space::S2))
-                        .text_size(px(text::SMALL))
-                        .text_color(th.dim)
-                        .child(format!("• {issue}")),
-                );
-            }
-            if !issues.is_empty() {
-                section = section.child(
-                    div().pt(px(space::S1)).child(
-                        widgets::outlined_button("pdfa-save", t("pdfa-save", &[]), &th.katna)
+        let count = issues.len().to_string();
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(space::S3))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(space::S1))
+                    .p(px(space::S3))
+                    .rounded(px(radius::SM))
+                    .bg(th.error_soft)
+                    .child(
+                        div()
+                            .text_size(px(text::SMALL))
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .text_color(th.text)
+                            .child(t("pdfa-not-yet", &[("count", &count)])),
+                    )
+                    .children(issues.iter().map(|issue| {
+                        div()
+                            .text_size(px(text::SMALL))
+                            .text_color(th.text)
+                            .child(format!("• {issue}"))
+                    })),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(space::S3))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .child(note(t("pdfa-can-fix", &[]), th)),
+                    )
+                    .child(
+                        float::button("pdfa-save", t("pdfa-save", &[]), false, &th)
                             .on_click(cx.listener(|this, _, _, cx| this.save_as_pdfa(cx))),
                     ),
-                );
-            }
-            card = card.child(section);
-        }
-        // The form, and the comments: tinted, reset, and drawn in for good.
-        let fields = self.form.as_ref().map_or(0, |f| f.fields.len());
-        if fields > 0 {
-            let count = fields.to_string();
-            card = card
-                .child(
-                    div()
-                        .pt(px(space::S2))
-                        .text_size(px(text::BODY))
-                        .font_weight(gpui::FontWeight::SEMIBOLD)
-                        .text_color(th.text)
-                        .child(t("properties-form", &[])),
-                )
-                .child(
-                    div()
-                        .text_size(px(text::SMALL))
-                        .text_color(th.dim)
-                        .child(t("properties-form-fields", &[("count", &count)])),
-                )
-                .child(
-                    div()
-                        .id("form-highlight")
-                        .flex()
-                        .items_center()
-                        .gap(px(space::S2))
-                        .cursor_pointer()
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.highlight_fields = !this.highlight_fields;
-                            cx.notify();
-                        }))
-                        .child(super::sign::check_box(self.highlight_fields, th))
-                        .child(
-                            div()
-                                .text_size(px(text::BODY))
-                                .text_color(th.text)
-                                .child(t("form-highlight", &[])),
-                        ),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .flex_wrap()
-                        .gap(px(space::S2))
-                        .child(
-                            widgets::outlined_button("form-reset", t("form-reset", &[]), &th.katna)
-                                .on_click(cx.listener(|this, _, _, cx| this.reset_form(cx))),
-                        )
-                        .child(
-                            widgets::outlined_button(
-                                "form-flatten",
-                                t("form-flatten", &[]),
-                                &th.katna,
-                            )
+            )
+            .into_any_element()
+    }
+
+    /// The form: its fields tinted, reset, or drawn in for good.
+    fn form_part(&self, fields: usize, cx: &mut Context<Self>) -> AnyElement {
+        let th = self.theme;
+        let count = fields.to_string();
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(space::S3))
+            .child(note(t("properties-form-fields", &[("count", &count)]), th))
+            .child(
+                div()
+                    .id("form-highlight")
+                    .flex()
+                    .items_center()
+                    .gap(px(space::S2))
+                    .cursor_pointer()
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.highlight_fields = !this.highlight_fields;
+                        cx.notify();
+                    }))
+                    .child(super::sign::check_box(self.highlight_fields, th))
+                    .child(
+                        div()
+                            .text_size(px(text::BODY))
+                            .text_color(th.text)
+                            .child(t("form-highlight", &[])),
+                    ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .gap(px(space::S2))
+                    .child(
+                        float::button("form-reset", t("form-reset", &[]), false, &th)
+                            .on_click(cx.listener(|this, _, _, cx| this.reset_form(cx))),
+                    )
+                    .child(
+                        float::button("form-flatten", t("form-flatten", &[]), false, &th)
                             .tip(t("form-flatten-tip", &[]), &th.katna)
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.flatten(
@@ -769,37 +919,26 @@ impl Viewer {
                                     cx,
                                 )
                             })),
-                        ),
-                );
-        }
-        let comments = self
-            .annots
-            .as_ref()
-            .map_or(0, |a| a.iter().map(Vec::len).sum::<usize>());
-        if comments > 0 {
-            let count = comments.to_string();
-            card = card
-                .child(
-                    div()
-                        .pt(px(space::S2))
-                        .text_size(px(text::BODY))
-                        .font_weight(gpui::FontWeight::SEMIBOLD)
-                        .text_color(th.text)
-                        .child(t("properties-comments", &[])),
-                )
-                .child(
-                    div()
-                        .text_size(px(text::SMALL))
-                        .text_color(th.dim)
-                        .child(t("properties-comments-count", &[("count", &count)])),
-                )
-                .child(
-                    div().flex().child(
-                        widgets::outlined_button(
-                            "comments-flatten",
-                            t("comments-flatten", &[]),
-                            &th.katna,
-                        )
+                    ),
+            )
+            .into_any_element()
+    }
+
+    /// The comments: drawn in for good.
+    fn comments_part(&self, comments: usize, cx: &mut Context<Self>) -> AnyElement {
+        let th = self.theme;
+        let count = comments.to_string();
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(space::S3))
+            .child(note(
+                t("properties-comments-count", &[("count", &count)]),
+                th,
+            ))
+            .child(
+                div().flex().child(
+                    float::button("comments-flatten", t("comments-flatten", &[]), false, &th)
                         .tip(t("comments-flatten-tip", &[]), &th.katna)
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.flatten(
@@ -810,33 +949,153 @@ impl Viewer {
                                 cx,
                             )
                         })),
-                    ),
-                );
-        }
-        card = card.child(
-            div()
-                .pt(px(space::S2))
-                .flex()
-                .justify_end()
-                .gap(px(space::S2))
-                .child(
-                    widgets::outlined_button(
-                        "properties-cancel",
-                        t("properties-cancel", &[]),
-                        &th.katna,
-                    )
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.properties = None;
-                        cx.notify();
-                    })),
-                )
-                .child(
-                    widgets::filled_button("properties-keep", t("properties-keep", &[]), &th.katna)
-                        .on_click(cx.listener(|this, _, _, cx| this.keep_properties(cx))),
                 ),
-        );
-        Some(card.into_any_element())
+            )
+            .into_any_element()
     }
+
+    /// The file's scripts and actions, none of them run (R16).
+    fn scripts_part(&self, properties: &Properties, cx: &mut Context<Self>) -> AnyElement {
+        let th = self.theme;
+        let Some(actions) = properties.actions.as_ref() else {
+            return div().into_any_element();
+        };
+        if actions.is_empty() {
+            return note(t("properties-actions-none", &[]), th).into_any_element();
+        }
+        let list = div()
+            .flex()
+            .flex_col()
+            .rounded(px(radius::SM))
+            .border_1()
+            .border_color(th.line)
+            .overflow_hidden()
+            .children(actions.iter().enumerate().map(|(i, a)| {
+                let detail = a.action.detail();
+                let first = detail.lines().next().unwrap_or_default();
+                let shown: String = if first.chars().count() > 70 {
+                    first.chars().take(68).chain("…".chars()).collect()
+                } else {
+                    first.to_owned()
+                };
+                let whole = detail.clone();
+                div()
+                    .id(("properties-action", i))
+                    .flex()
+                    .items_center()
+                    .gap(px(space::S3))
+                    .px(px(space::S3))
+                    .py(px(space::S2))
+                    .when(i > 0, |d| d.border_t_1().border_color(th.line))
+                    .cursor_pointer()
+                    .hover(move |s| s.bg(th.hover))
+                    .tip(t("properties-action-copy", &[]), &th.katna)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        cx.write_to_clipboard(gpui::ClipboardItem::new_string(whole.clone()));
+                        this.notice = Some(t("properties-action-copied", &[]));
+                        cx.notify();
+                    }))
+                    .child(
+                        div()
+                            .flex_none()
+                            .px(px(space::S2))
+                            .py(px(2.0))
+                            .rounded(px(radius::XS))
+                            .bg(th.sunk)
+                            .text_size(px(text::CAPTION))
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .text_color(th.text)
+                            .child(format!(
+                                "{} · {}",
+                                place_label(&a.place),
+                                t(&format!("actions-kind-{}", a.action.kind()), &[])
+                            )),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .whitespace_nowrap()
+                            .font_family("monospace")
+                            .text_size(px(text::SMALL))
+                            .text_color(th.text)
+                            .child(shown),
+                    )
+            }));
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(space::S3))
+            .child(list)
+            .child(note(t("properties-actions-tip", &[]), th))
+            .into_any_element()
+    }
+}
+
+/// The card's parts, one a tab.
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+pub(super) enum Part {
+    #[default]
+    Description,
+    Password,
+    Size,
+    Pdfa,
+    Form,
+    Comments,
+    Scripts,
+}
+
+impl Part {
+    const ALL: [Part; 7] = [
+        Part::Description,
+        Part::Password,
+        Part::Size,
+        Part::Pdfa,
+        Part::Form,
+        Part::Comments,
+        Part::Scripts,
+    ];
+
+    fn label(self) -> &'static str {
+        match self {
+            Part::Description => "properties-tab-description",
+            Part::Password => "properties-password",
+            Part::Size => "properties-size",
+            Part::Pdfa => "pdfa-heading",
+            Part::Form => "properties-form",
+            Part::Comments => "properties-comments",
+            Part::Scripts => "properties-tab-scripts",
+        }
+    }
+}
+
+/// A field's name over it.
+fn label(id: &str, th: crate::theme::Theme) -> gpui::Div {
+    div()
+        .text_size(px(text::SMALL))
+        .font_weight(gpui::FontWeight::MEDIUM)
+        .text_color(th.dim)
+        .child(t(id, &[]))
+}
+
+/// A small heading in capitals between groups.
+fn section(words: String, th: crate::theme::Theme) -> gpui::Div {
+    div()
+        .pt(px(space::S2))
+        .text_size(px(text::MICRO))
+        .font_weight(gpui::FontWeight::SEMIBOLD)
+        .text_color(th.dim)
+        .child(words.to_uppercase())
+}
+
+/// Words that explain, in the dimmer colour.
+fn note(words: String, th: crate::theme::Theme) -> gpui::Div {
+    div()
+        .text_size(px(text::SMALL))
+        .text_color(th.dim)
+        .child(words)
 }
 
 /// A PDF date (`D:20261019103005+05'30'`) as people read it:

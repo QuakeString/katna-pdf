@@ -524,6 +524,7 @@ fn desktop_colors() -> SystemColors {
 /// the Settings portal's accent, read at once and whenever the portal
 /// says a setting changed, and the desktop's colour files (KDE's
 /// `kdeglobals`, GTK's style sheet) when they change.
+#[cfg(target_os = "linux")]
 pub fn watch_desktop(cx: &mut App) {
     use futures_lite::StreamExt;
     let kind = desktop_kind();
@@ -589,6 +590,10 @@ pub fn watch_desktop(cx: &mut App) {
     })
     .detach();
 }
+
+/// Elsewhere the desktop's colours are read once, as the window opens.
+#[cfg(not(target_os = "linux"))]
+pub fn watch_desktop(_cx: &mut App) {}
 
 #[cfg(test)]
 mod tests {

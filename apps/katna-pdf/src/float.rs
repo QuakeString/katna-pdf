@@ -526,6 +526,43 @@ pub fn appear_over(id: impl Into<ElementId>, el: impl IntoElement, rise: f32) ->
         .into_any_element()
 }
 
+/// A text field's box (`.input`): a line round it, the accent's line
+/// and a soft ring round that while it has the keys, so it reads as a
+/// place to type rather than a grey bar.
+pub fn input_box(
+    input: &gpui::Entity<katna_ui::text_input::TextInput>,
+    window: &gpui::Window,
+    cx: &gpui::App,
+    th: &Theme,
+) -> Div {
+    use gpui::Focusable;
+    let focused = input.focus_handle(cx).is_focused(window);
+    div()
+        .h(px(36.0))
+        .flex()
+        .items_center()
+        .px(px(space::S3))
+        .rounded(px(7.0))
+        .border_1()
+        .bg(if th.dark { th.field } else { th.card })
+        .text_size(px(text::BODY))
+        .text_color(th.text)
+        .map(|d| {
+            if focused {
+                d.border_color(th.accent).shadow(vec![gpui::BoxShadow {
+                    color: th.accent.opacity(0.22),
+                    offset: gpui::point(px(0.0), px(0.0)),
+                    blur_radius: px(0.0),
+                    spread_radius: px(3.0),
+                    inset: false,
+                }])
+            } else {
+                d.border_color(th.line)
+            }
+        })
+        .child(input.clone())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

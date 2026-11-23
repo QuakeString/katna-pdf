@@ -3691,7 +3691,7 @@ impl Render for Viewer {
         let card_height = unpx(window.viewport_size().height) * katna_ui::scale::scale()
             - 48.0
             - 4.0 * katna_ui::tokens::space::S3;
-        let properties_card = self.properties_card(card_height, cx);
+        let properties_card = self.properties_card(card_height, window, cx);
         // Cards at the top right stop short of the dock.
         let side_room = card_height - 120.0;
         let object_card = self.object_card(side_room, cx);

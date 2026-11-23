@@ -145,6 +145,9 @@ impl Theme {
             th.line_soft = c(0xeef0f3);
             th.text2 = c(0x3d434d);
             th.accent_text = c(0x1d4fd8);
+            // White on Float's blue, as the storyboard has it; black
+            // only just measures better there.
+            th.on_accent = c(0xffffff);
         }
         th
     }
