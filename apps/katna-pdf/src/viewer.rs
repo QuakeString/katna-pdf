@@ -848,6 +848,8 @@ pub struct Viewer {
     colors_menu: bool,
     /// Whether the list of fonts is open under the text inspector.
     font_menu: Option<textedit::FontMenu>,
+    /// The sizes or colours open under the paragraph's tools.
+    text_pop: Option<textedit::TextPop>,
     /// The spacing fields open under the text inspector.
     spacing_menu: Option<textedit::SpacingMenu>,
     colors_menu_closed: Option<std::time::Instant>,
@@ -1054,6 +1056,7 @@ impl Viewer {
             night_pages: prefs.night_pages,
             colors_menu: false,
             font_menu: None,
+            text_pop: None,
             spacing_menu: None,
             colors_menu_closed: None,
             zoom_card: false,
