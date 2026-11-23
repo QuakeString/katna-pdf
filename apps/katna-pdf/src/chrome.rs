@@ -699,19 +699,45 @@ impl Tabs {
                             ),
                     )
             });
-        let update = self.update.as_ref().map(|_| {
-            menu_item(
-                "profile-update",
-                Some("download"),
-                t("profile-updates", &[]),
-                Some(t("profile-update-ready", &[]).into()),
-                &th,
-            )
-            .on_click(cx.listener(|this, _, _, cx| {
-                this.close_menu(cx);
-                this.install_update(cx);
-            }))
-        });
+        let update = match &self.update {
+            Some(_) => Some(
+                menu_item(
+                    "profile-update",
+                    Some("download"),
+                    t("profile-updates", &[]),
+                    Some(t("profile-update-ready", &[]).into()),
+                    &th,
+                )
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.close_menu(cx);
+                    this.install_update(cx);
+                })),
+            ),
+            // Looking by hand; the menu stays open to say what it found.
+            None if crate::update::enabled() => {
+                let said = self.update_check.as_ref().map(|c| match c {
+                    crate::tabs::UpdateCheck::Looking => t("profile-update-looking", &[]),
+                    crate::tabs::UpdateCheck::Newest => t("profile-update-newest", &[]),
+                    crate::tabs::UpdateCheck::Failed(_) => t("profile-update-failed", &[]),
+                });
+                let tip = match &self.update_check {
+                    Some(crate::tabs::UpdateCheck::Failed(error)) => error.clone(),
+                    _ => t("profile-update-check-tip", &[]),
+                };
+                Some(
+                    menu_item(
+                        "profile-update-check",
+                        Some("refresh"),
+                        t("profile-update-check", &[]),
+                        said.map(Into::into),
+                        &th,
+                    )
+                    .ftip(tip, &th)
+                    .on_click(cx.listener(|this, _, _, cx| this.check_updates_now(cx))),
+                )
+            }
+            None => None,
+        };
         let name = self.person.clone();
         let named = !cx
             .global::<crate::profile::Profile>()
