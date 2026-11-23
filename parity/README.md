@@ -1,18 +1,112 @@
-# Feature checklist
+# Feature parity
 
-`features.tsv` is katna-pdf's feature checklist: 838 features of a full PDF workbench. Each one is mapped against [docs/PLAN.md](../docs/PLAN.md).
+`features.tsv` tracks every feature of Adobe Acrobat (Reader, Standard, Pro and
+the paid AI plans) and Master PDF Editor 5.9.99 next to what Katna PDF ships, plus
+Katna PDF's own features that neither has ([UNIQUE.md](UNIQUE.md)). It is the one
+list progress is measured from: change a row's `katna` column in the PR that ships
+the feature.
 
 | Column | Meaning |
 |---|---|
-| `id`, `title` | the feature |
-| `pdfcraft_tier` | priority in the source list |
-| `verdict` | `covered` (in our plan), `partial` (touched, not fully), `missing` (fits our goals, not yet in the plan), `skip` (Adobe cloud, prepress, 3D or otherwise outside our goals) |
-| `our_tier` | our priority: P0 MVP, P1 v1.0, P2 later |
-| `where` | plan section or phase |
-| `note` | why, when useful |
+| `id` | `area.name`, never renamed |
+| `area` | `core`, `view`, `edit`, `organize`, `comment`, `form`, `protect`, `sign`, `ocr`, `create`, `optimize`, `print`, `a11y`, `misc`, `library`, `idea` |
+| `feature` | what it does |
+| `adobe` | the cheapest Adobe plan that has it: `reader` (free), `standard`, `pro`, `studio` (Acrobat Studio or the AI Assistant add-on), `-` (Adobe has none) |
+| `mpe` | Master PDF Editor has it: `y`, `p` (partly), `n` |
+| `katna` | `shipped` (on main), `partial` (some of it on main; `note` says what is missing), `todo` (in scope, not built), `deferred` (the owner said later), `skip` (out of scope) |
+| `tier` | our priority: P0 first release, P1 v1.0, P2 later |
+| `where` | the PR, module or CLI command that has it |
+| `note` | what is missing, or why |
+| `source` | where the row came from: `acrobat` (the Acrobat Pro checklist below), `mpe` (Master PDF Editor's manual), `adobe` (Adobe's own pages, 2024–2026 additions), `katna` (ours) |
 
-Totals (2026-10-16): 272 covered, 214 partial, 238 missing, 114 skip. Plan §4.8 adds the missing and partial P0/P1 items to the plan.
+## Where we stand (2026-11-23, main at #120)
 
-As features ship, add a `status` (planned / partial / shipped) and the test that proves it, so progress is measured from this file.
+| Area | Features | Shipped | Partial | To do | Deferred | Skip |
+|---|---:|---:|---:|---:|---:|---:|
+| Files and saving (`core`) | 61 | 30 | 13 | 15 | 1 | 2 |
+| Viewing and navigation (`view`) | 106 | 54 | 13 | 34 | 0 | 5 |
+| Editing content (`edit`) | 83 | 52 | 11 | 16 | 1 | 3 |
+| Pages and document (`organize`) | 83 | 30 | 19 | 28 | 1 | 5 |
+| Comments and review (`comment`) | 77 | 39 | 11 | 19 | 0 | 8 |
+| Forms (`form`) | 89 | 48 | 16 | 11 | 4 | 10 |
+| Security and redaction (`protect`) | 46 | 20 | 9 | 10 | 2 | 5 |
+| Digital signatures (`sign`) | 59 | 40 | 2 | 14 | 0 | 3 |
+| Scanning and OCR (`ocr`) | 31 | 0 | 0 | 3 | 25 | 3 |
+| Create, convert and export (`create`) | 39 | 7 | 4 | 18 | 2 | 8 |
+| Optimise and standards (`optimize`) | 61 | 10 | 9 | 22 | 0 | 20 |
+| Printing (`print`) | 41 | 10 | 6 | 6 | 0 | 19 |
+| Accessibility (`a11y`) | 62 | 3 | 4 | 49 | 0 | 6 |
+| Compare, automation, settings, cloud (`misc`) | 101 | 14 | 20 | 34 | 2 | 31 |
+| Library (`library`, ours) | 9 | 9 | 0 | 0 | 0 | 0 |
+| Ideas (`idea`, ours, proposed) | 11 | 0 | 0 | 10 | 1 | 0 |
+| **All** | **959** | **366** | **137** | **289** | **39** | **128** |
 
-**Source and licence.** The feature ids and titles come from PdfCraft's Acrobat Pro parity checklist (`parity/acrobat-features.toml` in [storytold/pdfcraft](https://github.com/storytold/pdfcraft), © the PdfCraft contributors, MIT OR Apache-2.0). Only the list was used, no code. The verdicts, tiers and notes are katna-pdf's own.
+Against each product, counting only what is in scope (not `skip`):
+
+| Against | In scope | Shipped | Partial | To do | Deferred |
+|---|---:|---:|---:|---:|---:|
+| Acrobat Reader (free) | 332 | 175 (52 %) | 66 | 87 | 4 |
+| Acrobat Standard (Reader + Standard) | 552 | 283 (51 %) | 102 | 159 | 8 |
+| Acrobat Pro (everything below Studio) | 736 | 321 (43 %) | 128 | 252 | 35 |
+| Master PDF Editor | 436 | 275 (63 %) | 67 | 72 | 22 |
+| Only in Katna PDF | 59 | 29 | 5 | 23 | 2 |
+
+Many of Acrobat Pro's open rows are accessibility tagging (49 rows, nothing built
+yet) and OCR (25 rows, deferred by the owner on 2026-10-17). Without those two
+areas, Pro parity is 319 of 655 shipped (49 %), 68 % with partial rows counted.
+
+Out of scope (`skip`): Adobe's cloud services and accounts, shared reviews, Acrobat
+Sign requests, PDF Spaces and the generative AI features, prepress (separations,
+trapping, PDF/X, preflight fix-ups), 3D, Flash, dynamic XFA and the web app. Static XFA is deferred (owner, 2026-11-23). A
+private on-device assistant is proposed instead (`idea.local-ai`).
+
+To recount after editing the file:
+
+```sh
+awk -F'\t' 'NR>1{print $6}' parity/features.tsv | sort | uniq -c
+awk -F'\t' 'NR>1 && $4=="reader" && $6!="shipped" && $6!="skip"{print $6"\t"$1"\t"$3}' parity/features.tsv
+```
+
+## What to build next for parity
+
+**Acrobat Reader gaps people meet every day** (all `reader`, `todo`): find options
+(whole word, match case) and find in comments; rotate the view; marquee zoom,
+loupe and fit height; snapshot of an area; search comments, copy comment text,
+eraser, area highlight, insert/replace-text proposals; autosave and revert; close
+all; a keyboard shortcuts card and About; print in grayscale and from thumbnails;
+fonts list in Properties; signing with the Windows certificate store and macOS
+Keychain; self-signed digital IDs; the preferences window (identity, documents,
+commenting, forms, full screen, search); screen-reader support (AccessKit).
+
+**Master PDF Editor gaps** (`mpe` y, `katna` todo, 72 rows): autosave and backup
+on save; status bar; rotate view; snapshot; find options; spell check; object tree
+pane; edit inside form XObjects; links made from URLs in the text; a text box with
+several fonts; split by size; bookmarks for combined or inserted files; drag pages
+between files; scanner input (SANE / WIA); TIFF in and out, XPS, SVG; grayscale
+conversion; mono (JBIG2/CCITT) compression; choose the PDF version; manual duplex
+and print presets; custom shortcuts. Everything else MPE does, Katna PDF already
+does, and it adds timestamps, LTV, certification, FieldMDP and the library, which
+MPE lacks.
+
+## Sources
+
+- The 838 `acrobat` rows: ids and titles from PdfCraft's Acrobat Pro parity
+  checklist (`parity/acrobat-features.toml` in
+  [storytold/pdfcraft](https://github.com/storytold/pdfcraft), © the PdfCraft
+  contributors, MIT OR Apache-2.0). Only the list was used, no code. The tiers,
+  statuses and notes are ours.
+- Adobe: [compare versions](https://www.adobe.com/acrobat/pricing/compare-versions.html),
+  [Acrobat Reader](https://www.adobe.com/acrobat/pdf-reader.html),
+  [what's new on desktop](https://helpx.adobe.com/acrobat/desktop/whats-new/whats-new-acrobat-desktop.html),
+  [release notes](https://helpx.adobe.com/acrobat/desktop/whats-new/release-notes.html),
+  [Acrobat blog, January 2026](https://blog.adobe.com/en/publish/2026/01/21/work-smarter-acrobat-turn-docs-presentations-podcasts-edit-pdfs-ai),
+  [PDF Spaces sharing, May 2026](https://9to5mac.com/2026/05/06/adobe-acrobat-now-lets-users-turn-pdfs-into-shareable-ai-powered-workspaces/).
+  Adobe does not publish a per-feature tier table in text, so `adobe` is our
+  reading of those pages; Reader's commenting, filling, Fill & Sign, signing with
+  a digital ID, checking signatures, read aloud and printing are free, editing
+  and page tools start at Standard, and redaction, measuring, Bates, OCR,
+  compare, PDF/A and accessibility tools are Pro.
+- Master PDF Editor 5.9.99 (August 2026): its
+  [online manual](https://code-industry.net/masterpdfeditor-help/), summarised in
+  the project's `plan/master-pdf-editor-features.md`.
+- Katna PDF: `docs/PLAN.md` and the merged PRs named in `where`.
