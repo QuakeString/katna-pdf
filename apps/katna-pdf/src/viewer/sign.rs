@@ -54,6 +54,15 @@ pub(super) struct SigRow {
     /// The bytes of the file it signed, when the file was changed after
     /// it.
     pub revision: Option<usize>,
+    /// The signer's certificate, when the signature could be read.
+    pub certificate: Option<Arc<Certificate>>,
+    /// Who issued whom, from the signer up, and whether that ends in a
+    /// certificate that issued itself (else the last was not sent).
+    pub chain: (Vec<String>, bool),
+    /// How it is made, in a few words: "PAdES B-T · RSA 2048".
+    pub kind: String,
+    /// What was changed after it, in words; validation data left out.
+    pub later: Vec<String>,
 }
 
 /// What signing needs to know of the file.
@@ -103,7 +112,7 @@ pub(super) fn signable(doc: &katna_pdf_cos::Document) -> Signable {
 }
 
 /// The text id naming what a certification allows.
-fn allowed_id(allowed: Allowed) -> &'static str {
+pub(super) fn allowed_id(allowed: Allowed) -> &'static str {
     match allowed {
         Allowed::Nothing => "certify-nothing",
         Allowed::FormFilling => "certify-forms",
@@ -138,7 +147,7 @@ pub(super) enum Vouched {
 }
 
 impl SigRow {
-    fn unverified(&self) -> bool {
+    pub(super) fn unverified(&self) -> bool {
         self.intact && matches!(self.vouched, Some(Vouched::Not { .. }))
     }
 }
@@ -279,9 +288,51 @@ fn rows(checks: Vec<katna_pdf_sign::SignatureCheck>) -> Vec<SigRow> {
                     }
                     _ => None,
                 },
+                certificate: c.result.as_ref().ok().map(|r| Arc::new(r.signer.clone())),
+                chain: c
+                    .result
+                    .as_ref()
+                    .ok()
+                    .map(|r| katna_pdf_sign::chain_names(&r.signer, &r.certificates))
+                    .unwrap_or_default(),
+                kind: kind_text(&c),
+                later: c
+                    .later
+                    .iter()
+                    .filter(|l| **l != Change::Dss)
+                    .map(|l| t(change_id(*l), &[]))
+                    .collect(),
             }
         })
         .collect()
+}
+
+/// How a signature is made, in a few words: its format and level, then
+/// its key.
+fn kind_text(c: &katna_pdf_sign::SignatureCheck) -> String {
+    let mut parts = Vec::new();
+    if c.is_document_timestamp() {
+        parts.push(t("signature-kind-stamp", &[]));
+    } else if c.signature.sub_filter.starts_with("ETSI.CAdES") {
+        let stamped = c
+            .result
+            .as_ref()
+            .is_ok_and(|r| r.timestamp.as_ref().is_some_and(|s| s.valid));
+        let level = if c.later.contains(&Change::Dss) {
+            "B-LT"
+        } else if stamped {
+            "B-T"
+        } else {
+            "B-B"
+        };
+        parts.push(t("signature-kind-pades", &[("level", level)]));
+    } else {
+        parts.push(t("signature-kind-pkcs7", &[]));
+    }
+    if let Ok(r) = &c.result {
+        parts.push(katna_pdf_sign::key_text(&r.signer));
+    }
+    parts.join(" · ")
 }
 
 /// Where the signature goes.
@@ -324,6 +375,8 @@ struct Found {
     certificates: Vec<Arc<Certificate>>,
     /// The one to sign with.
     chosen: usize,
+    /// Whether each of them chains to a root trusted here.
+    trusted: Vec<bool>,
 }
 
 /// The tokens plugged in, as last looked for.
@@ -366,6 +419,8 @@ pub(super) struct Signing {
     /// Lock the form's fields: their values may not change after.
     lock: bool,
     error: Option<String>,
+    /// The token refused the PIN: asked again in a card of its own.
+    pin: Option<PinTrouble>,
     busy: bool,
     /// Put the keys in the password field on the next frame.
     focus: bool,
@@ -512,6 +567,7 @@ impl Viewer {
             certify: None,
             lock: false,
             error: None,
+            pin: None,
             busy: false,
             focus: false,
             _inputs: subs,
@@ -569,17 +625,26 @@ impl Viewer {
                         for token in module.tokens().unwrap_or_default() {
                             // The same token through two drivers: once.
                             if !found.iter().any(|f: &Found| f.token.serial == token.serial) {
-                                let certificates = module
+                                let certificates: Vec<Arc<Certificate>> = module
                                     .certificates(&token)
                                     .unwrap_or_default()
                                     .into_iter()
                                     .map(Arc::new)
+                                    .collect();
+                                let roots = roots();
+                                let now = std::time::SystemTime::now();
+                                let trusted = certificates
+                                    .iter()
+                                    .map(|c| {
+                                        katna_pdf_sign::trust::chain(c, &[], &roots, now).trusted()
+                                    })
                                     .collect();
                                 found.push(Found {
                                     module: path.clone(),
                                     token,
                                     certificates,
                                     chosen: 0,
+                                    trusted,
                                 });
                             }
                         }
@@ -898,6 +963,7 @@ impl Viewer {
                             signing.busy = false;
                             signing.focus = error.is_some();
                             signing.error = error;
+                            signing.pin = None;
                             cx.notify();
                         }
                     })
@@ -905,7 +971,26 @@ impl Viewer {
                 };
             let id = match opened {
                 Ok(id) => id,
-                Err(error) => return stop(this, Some(error), cx),
+                Err(Refused::Other(error)) => return stop(this, Some(error), cx),
+                Err(refused) => {
+                    this.update(cx, |this, cx| {
+                        if let Some(signing) = this.signing.as_mut() {
+                            signing.busy = false;
+                            signing.error = None;
+                            signing.focus = true;
+                            signing.pin = Some(match refused {
+                                Refused::Pin(words) => PinTrouble::Wrong(words),
+                                _ => PinTrouble::Locked,
+                            });
+                            signing
+                                .password
+                                .update(cx, |input, cx| input.set_text("", cx));
+                            cx.notify();
+                        }
+                    })
+                    .ok();
+                    return;
+                }
             };
             let Ok(chosen) = this.update(cx, |_, cx| {
                 if others.is_empty() {
@@ -1167,6 +1252,9 @@ impl Viewer {
         let signing = self.signing.as_ref()?;
         signing.placed.as_ref()?;
         let th = self.theme;
+        if let Some(trouble) = signing.pin.clone() {
+            return Some(self.pin_card(trouble, cx));
+        }
         let field = |input: &Entity<TextInput>| {
             div()
                 .h(px(34.0))
@@ -1543,6 +1631,140 @@ impl Viewer {
         )
     }
 
+    /// The token refused the PIN (G05): asked again in a small card, the
+    /// tries left told under it; or, once the token is locked, what to
+    /// do about it.
+    fn pin_card(&self, trouble: PinTrouble, cx: &mut Context<Self>) -> AnyElement {
+        let th = self.theme;
+        let busy = self.signing.as_ref().is_some_and(|s| s.busy);
+        let back = cx.listener(|this, _, _, cx| {
+            if let Some(signing) = this.signing.as_mut() {
+                signing.pin = None;
+                signing.focus = true;
+                cx.notify();
+            }
+        });
+        let (body, footer) = match trouble {
+            PinTrouble::Wrong(words) => {
+                let input = self.signing.as_ref().map(|s| s.password.clone());
+                let body = div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(space::S3))
+                    .child(
+                        div()
+                            .text_size(px(text::SUBTITLE))
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .text_color(th.text)
+                            .child(t("sign-pin-label", &[])),
+                    )
+                    .child(
+                        div()
+                            .h(px(34.0))
+                            .flex()
+                            .items_center()
+                            .gap(px(space::S3))
+                            .px(px(space::S3))
+                            .rounded(px(6.0))
+                            .border_1()
+                            .border_color(th.error)
+                            .bg(th.card)
+                            .text_size(px(text::BODY))
+                            .text_color(th.text)
+                            .child(float::icon("key", 16.0, th.dim))
+                            .child(div().flex_1().min_w_0().children(input)),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(text::SMALL))
+                            .text_color(th.error)
+                            .child(words),
+                    );
+                let footer = div()
+                    .flex()
+                    .justify_end()
+                    .gap(px(space::S2))
+                    .child(
+                        float::button("pin-cancel", t("sign-cancel", &[]), false, &th)
+                            .on_click(back),
+                    )
+                    .child(
+                        float::button(
+                            "pin-sign",
+                            t(if busy { "sign-busy" } else { "sign-pin-again" }, &[]),
+                            true,
+                            &th,
+                        )
+                        .when(busy, |b| b.opacity(0.6))
+                        .on_click(cx.listener(|this, _, _, cx| this.sign_now(cx))),
+                    );
+                (body, footer)
+            }
+            PinTrouble::Locked => {
+                let body = div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(space::S3))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(space::S3))
+                            .child(float::icon("lock", 18.0, th.error))
+                            .child(
+                                div()
+                                    .text_size(px(text::SUBTITLE))
+                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .text_color(th.text)
+                                    .child(t("sign-locked-title", &[])),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(text::SMALL))
+                            .text_color(th.text2)
+                            .child(t("sign-locked-detail", &[])),
+                    );
+                let footer = div().flex().justify_end().child(
+                    float::button("pin-close", t("signature-close", &[]), false, &th)
+                        .on_click(cx.listener(|this, _, _, cx| this.toggle_signing(cx))),
+                );
+                (body, footer)
+            }
+        };
+        div()
+            .id("signing-backdrop")
+            .absolute()
+            .inset_0()
+            .flex()
+            .items_center()
+            .justify_center()
+            .bg(gpui::black().opacity(if th.dark { 0.45 } else { 0.25 }))
+            .occlude()
+            .child(
+                div()
+                    .id("pin-dialog")
+                    .w(px(400.0))
+                    .flex()
+                    .flex_col()
+                    .rounded(px(12.0))
+                    .bg(th.card)
+                    .shadow(th.lifted())
+                    .when(th.dark, |d| d.border_1().border_color(th.line))
+                    .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .child(div().p(px(space::S5)).child(body))
+                    .child(
+                        div()
+                            .px(px(space::S5))
+                            .py(px(space::S4))
+                            .border_t_1()
+                            .border_color(th.line_soft)
+                            .child(footer),
+                    ),
+            )
+            .into_any_element()
+    }
+
     /// How the box will look (G02): the picture, if any, beside the
     /// words the signature writes, and the button to pick a picture.
     fn picture_row(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -1785,107 +2007,130 @@ impl Viewer {
                     .child(self.diagnosis(cx));
             }
             Tokens::Found(found) => {
+                // A card for each certificate a token holds (G02): the
+                // token and who, then the issuer and until when.
                 for (i, f) in found.iter().enumerate() {
-                    let chosen = i == signing.token;
                     let what = [f.token.manufacturer.as_str(), f.token.model.as_str()]
                         .iter()
                         .filter(|s| !s.is_empty())
                         .copied()
                         .collect::<Vec<_>>()
                         .join(" ");
-                    list = list.child(
-                        div()
-                            .id(("token", i))
-                            .px(px(space::S3))
-                            .py(px(space::S2))
-                            .rounded(px(radius::SM))
-                            .border_1()
-                            .border_color(if chosen {
-                                gpui::rgba(th.katna.accent).into()
+                    let cards: Vec<(Option<usize>, String, String, bool)> = if f
+                        .certificates
+                        .is_empty()
+                        || f.token.locked
+                    {
+                        vec![(
+                            None,
+                            f.token.label.clone(),
+                            if f.token.locked {
+                                t("sign-pin-locked", &[])
                             } else {
-                                th.line
-                            })
-                            .cursor_pointer()
-                            .hover(move |s| s.bg(th.hover))
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                if let Some(signing) = this.signing.as_mut() {
-                                    signing.token = i;
-                                    signing.focus = true;
-                                    cx.notify();
-                                }
-                            }))
-                            .child(
-                                div()
-                                    .text_size(px(text::BODY))
-                                    .text_color(th.text)
-                                    .child(f.token.label.clone()),
-                            )
-                            .child(
-                                div()
-                                    .text_size(px(text::SMALL))
-                                    .text_color(if f.token.locked { th.error } else { th.dim })
-                                    .child(if f.token.locked {
-                                        t("sign-pin-locked", &[])
-                                    } else {
-                                        what
-                                    }),
-                            )
-                            .children(f.certificates.iter().enumerate().map(|(c, cert)| {
+                                what
+                            },
+                            false,
+                        )]
+                    } else {
+                        f.certificates
+                            .iter()
+                            .enumerate()
+                            .map(|(c, cert)| {
                                 let tbs = &cert.tbs_certificate;
-                                let picked = chosen && c == f.chosen;
-                                let line = t(
-                                    "sign-token-certificate",
-                                    &[
-                                        ("name", &common_name(&tbs.subject)),
-                                        ("issuer", &common_name(&tbs.issuer)),
-                                        (
-                                            "until",
-                                            // The day is enough.
-                                            katna_pdf_sign::shown_date(
-                                                tbs.validity.not_after.to_system_time(),
-                                            )
-                                            .split(' ')
-                                            .next()
-                                            .unwrap_or_default(),
+                                // The day is enough.
+                                let until = katna_pdf_sign::shown_date(
+                                    tbs.validity.not_after.to_system_time(),
+                                )
+                                .split(' ')
+                                .next()
+                                .unwrap_or_default()
+                                .to_owned();
+                                (
+                                    Some(c),
+                                    t(
+                                        "sign-token-who",
+                                        &[
+                                            ("token", &f.token.label),
+                                            ("name", &common_name(&tbs.subject)),
+                                        ],
+                                    ),
+                                    t(
+                                        "sign-token-issuer",
+                                        &[("issuer", &common_name(&tbs.issuer)), ("until", &until)],
+                                    ),
+                                    f.trusted.get(c).copied().unwrap_or(false),
+                                )
+                            })
+                            .collect()
+                    };
+                    for (c, title, detail, trusted) in cards {
+                        let picked = i == signing.token && c.is_none_or(|c| c == f.chosen);
+                        let locked = f.token.locked;
+                        let valid: gpui::Hsla = gpui::rgba(th.valid).into();
+                        list = list.child(
+                            div()
+                                .id(("token", i * 64 + c.unwrap_or(0)))
+                                .flex()
+                                .items_center()
+                                .gap(px(space::S4))
+                                .px(px(space::S4))
+                                .py(px(space::S3))
+                                .rounded(px(radius::SM))
+                                .border_1()
+                                .border_color(if picked { th.accent } else { th.line })
+                                .cursor_pointer()
+                                .hover(move |s| s.bg(th.hover))
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    if let Some(signing) = this.signing.as_mut() {
+                                        signing.token = i;
+                                        if let (Some(c), Tokens::Found(found)) =
+                                            (c, &mut signing.tokens)
+                                            && let Some(f) = found.get_mut(i)
+                                        {
+                                            f.chosen = c;
+                                        }
+                                        signing.focus = true;
+                                        cx.notify();
+                                    }
+                                }))
+                                .child(float::icon("usb", 18.0, th.text2))
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .flex()
+                                        .flex_col()
+                                        .gap(px(2.0))
+                                        .child(
+                                            div()
+                                                .truncate()
+                                                .text_size(px(text::BODY))
+                                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                                .text_color(th.text)
+                                                .child(title),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_size(px(text::CAPTION))
+                                                .text_color(if locked { th.error } else { th.dim })
+                                                .child(detail),
                                         ),
-                                    ],
-                                );
-                                let many = f.certificates.len() > 1;
-                                div()
-                                    .id(("token-certificate", i * 64 + c))
-                                    .mt(px(space::S1))
-                                    .flex()
-                                    .items_start()
-                                    .gap(px(space::S2))
-                                    .when(many, |d| {
-                                        d.cursor_pointer().on_click(cx.listener(
-                                            move |this, _, _, cx| {
-                                                cx.stop_propagation();
-                                                if let Some(signing) = this.signing.as_mut() {
-                                                    signing.token = i;
-                                                    if let Tokens::Found(found) =
-                                                        &mut signing.tokens
-                                                        && let Some(f) = found.get_mut(i)
-                                                    {
-                                                        f.chosen = c;
-                                                    }
-                                                    signing.focus = true;
-                                                    cx.notify();
-                                                }
-                                            },
-                                        ))
-                                    })
-                                    .when(many, |d| d.child(radio(picked, th)))
-                                    .child(
+                                )
+                                .when(trusted, |d| {
+                                    d.child(
                                         div()
-                                            .flex_1()
-                                            .min_w_0()
-                                            .text_size(px(text::SMALL))
-                                            .text_color(th.text)
-                                            .child(line),
+                                            .px(px(space::S3))
+                                            .py(px(2.0))
+                                            .rounded(px(radius::XS))
+                                            .bg(valid.opacity(0.14))
+                                            .text_size(px(text::CAPTION))
+                                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                                            .text_color(valid)
+                                            .child(t("sign-token-trusted", &[])),
                                     )
-                            })),
-                    );
+                                }),
+                        );
+                    }
                 }
             }
         }
@@ -2020,220 +2265,44 @@ impl Viewer {
         })
         .detach();
     }
-
-    /// The line over the pages of a signed file: whether its signatures
-    /// hold, with a button to list them.
-    pub(super) fn signatures_line(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let all = self.signatures.as_ref().filter(|r| !r.is_empty())?;
-        // Document timestamps vouch for the others; they are not counted
-        // as signatures, unless they do not hold.
-        let rows: Vec<&SigRow> = all.iter().filter(|r| !r.stamp_only).collect();
-        if rows.is_empty() {
-            return None;
-        }
-        let th = self.theme;
-        let bad = all.iter().filter(|r| r.problem.is_some()).count();
-        let unverified = rows.iter().any(|r| r.unverified());
-        // Changed after the last signature: none covers the whole file
-        // (the form may list them in any order).
-        let changed = !rows.iter().any(|r| r.whole);
-        let count = rows.len().to_string();
-        let message = match (bad, rows.len(), &rows[0].signer) {
-            (0, 1, Some(signer)) if unverified => t("signed-by-unverified", &[("name", signer)]),
-            (0, _, _) if unverified => t("signed-unverified", &[("count", &count)]),
-            (0, 1, Some(signer)) if !changed => t("signed-by", &[("name", signer)]),
-            (0, _, _) if !changed => t("signed-all", &[("count", &count)]),
-            (0, _, _) => t("signed-changed", &[("count", &count)]),
-            _ if bad == 1 => t("signed-bad-one", &[]),
-            _ => t("signed-bad", &[("count", &bad.to_string())]),
-        };
-        let (icon, colour) = if bad == 0 && unverified {
-            ("shield-check", th.katna.warning)
-        } else if bad == 0 {
-            ("shield-check", th.valid)
-        } else {
-            ("shield-alert", th.katna.error)
-        };
-        Some(
-            div()
-                .flex_shrink_0()
-                .flex()
-                .items_center()
-                .gap(px(space::S2))
-                .px(px(space::S3))
-                .py(px(space::S1))
-                .child(widgets::icon(icon, colour, 18.0))
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .text_size(px(text::SMALL))
-                        .text_color(th.text)
-                        .child(message),
-                )
-                .child(
-                    float::button("signatures-show", t("signatures-show", &[]), false, &th)
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.pane = true;
-                            this.tab = PaneTab::Signatures;
-                            cx.notify();
-                        })),
-                )
-                .into_any_element(),
-        )
-    }
-
-    /// The side pane's list of signatures.
-    pub(super) fn signatures_list(&self, cx: &mut Context<Self>) -> AnyElement {
-        let th = self.theme;
-        let mut list = div()
-            .id("signatures-list")
-            .size_full()
-            .overflow_y_scroll()
-            .py(px(space::S2))
-            .flex()
-            .flex_col()
-            .gap(px(space::S1));
-        let rows = self.signatures.clone().unwrap_or_default();
-        for (i, row) in rows.iter().enumerate() {
-            let (icon, colour, state) = match &row.problem {
-                Some(_) => ("shield-alert", th.katna.error, state(row)),
-                None => {
-                    let state = state(row);
-                    let colour = if row.unverified() {
-                        th.katna.warning
-                    } else {
-                        th.valid
-                    };
-                    ("shield-check", colour, state)
-                }
-            };
-            let (identity, root) = match (&row.vouched, row.problem.is_none()) {
-                (Some(Vouched::By(root)), true) => (
-                    Some((t("signer-vouched", &[("root", root)]), th.valid)),
-                    None,
-                ),
-                (Some(Vouched::Not { why, root }), true) => {
-                    (Some((why.clone(), th.katna.warning)), root.clone())
-                }
-                _ => (None, None),
-            };
-            let details = details(row);
-            let page = row.page;
-            let signer = row.signer.clone().unwrap_or_else(|| row.name.clone());
-            list = list.child(
-                div()
-                    .id(("signature", i))
-                    .mx(px(space::S2))
-                    .px(px(space::S3))
-                    .py(px(space::S2))
-                    .rounded(px(radius::SM))
-                    .flex()
-                    .gap(px(space::S2))
-                    .when(page.is_some(), |d| d.cursor_pointer())
-                    .hover(move |s| s.bg(th.hover))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        if let Some(page) = page {
-                            this.go_to(katna_pdf_cos::Destination { page, top: None }, cx);
-                        }
-                    }))
-                    .child(widgets::icon(icon, colour, 18.0))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .flex()
-                            .flex_col()
-                            .gap(px(space::S1))
-                            .child(
-                                div()
-                                    .text_size(px(text::SMALL))
-                                    .font_weight(gpui::FontWeight::SEMIBOLD)
-                                    .text_color(th.text)
-                                    .child(signer),
-                            )
-                            .child(
-                                div()
-                                    .text_size(px(text::SMALL))
-                                    .text_color(if row.intact { th.text } else { th.error })
-                                    .child(state),
-                            )
-                            .children(identity.map(|(line, colour)| {
-                                div()
-                                    .text_size(px(text::SMALL))
-                                    .text_color(gpui::rgba(colour))
-                                    .child(line)
-                            }))
-                            .children(root.map(|root| {
-                                let name = common_name(&root.tbs_certificate.subject);
-                                div().flex().child(
-                                    widgets::outlined_button(
-                                        ("trust-root", i),
-                                        t("signer-trust-root", &[("root", &name)]),
-                                        &th.katna,
-                                    )
-                                    .on_click(cx.listener(
-                                        move |this, _, _, cx| {
-                                            cx.stop_propagation();
-                                            this.trust(&root, cx);
-                                        },
-                                    )),
-                                )
-                            }))
-                            .children(details.into_iter().map(|d| {
-                                div().text_size(px(text::SMALL)).text_color(th.dim).child(d)
-                            }))
-                            .children(row.revision.map(|end| {
-                                let signer = row.signer.clone().unwrap_or_else(|| row.name.clone());
-                                div().flex().child(
-                                    widgets::outlined_button(
-                                        ("signed-version", i),
-                                        t("signature-signed-version", &[]),
-                                        &th.katna,
-                                    )
-                                    .tip(t("signature-signed-version-tip", &[]), &th.katna)
-                                    .on_click(cx.listener(
-                                        move |this, _, _, cx| {
-                                            cx.stop_propagation();
-                                            this.show_signed_version(end, &signer, cx);
-                                        },
-                                    )),
-                                )
-                            })),
-                    ),
-            );
-        }
-        if !rows.is_empty() {
-            list = list.child(
-                div().px(px(space::S4)).pt(px(space::S2)).flex().child(
-                    float::button("signatures-report", t("signatures-report", &[]), false, &th)
-                        .tip(t("signatures-report-tip", &[]), &th.katna)
-                        .on_click(cx.listener(|this, _, _, cx| this.save_report(cx))),
-                ),
-            );
-        }
-        let folder = trusted_folder()
-            .map(|f| f.display().to_string())
-            .unwrap_or_default();
-        list = list.child(
-            div()
-                .px(px(space::S4))
-                .py(px(space::S3))
-                .text_size(px(text::SMALL))
-                .text_color(th.dim)
-                .child(t("signatures-roots", &[("folder", &folder)])),
-        );
-        list.into_any_element()
-    }
 }
 
 impl Viewer {
     /// Opens the file as it was when it was signed by `signer`, its
     /// first `end` bytes, in a tab of its own.
-    fn show_signed_version(&mut self, end: usize, signer: &str, cx: &mut Context<Self>) {
-        let Some(path) = self.path.clone() else {
-            return;
-        };
+    pub(super) fn show_signed_version(&mut self, end: usize, signer: &str, cx: &mut Context<Self>) {
+        match self.signed_version(end, signer) {
+            Some(Ok(file)) => cx.emit(super::ViewerEvent::Dropped(vec![file])),
+            Some(Err(e)) => {
+                self.notice = Some(super::Notice::error(e.to_string()));
+                cx.notify();
+            }
+            None => {}
+        }
+    }
+
+    /// Compares the file with what `signer` signed, its first `end`
+    /// bytes.
+    pub(super) fn compare_signed_version(
+        &mut self,
+        end: usize,
+        signer: &str,
+        cx: &mut Context<Self>,
+    ) {
+        match self.signed_version(end, signer) {
+            Some(Ok(file)) => self.compare_with(file, cx),
+            Some(Err(e)) => {
+                self.notice = Some(super::Notice::error(e.to_string()));
+                cx.notify();
+            }
+            None => {}
+        }
+    }
+
+    /// The file as `signer` signed it, its first `end` bytes, written to
+    /// a file of its own.
+    fn signed_version(&self, end: usize, signer: &str) -> Option<std::io::Result<PathBuf>> {
+        let path = self.path.clone()?;
         let stem = path
             .file_stem()
             .map(|s| s.to_string_lossy().into_owned())
@@ -2252,18 +2321,12 @@ impl Viewer {
             std::fs::write(&file, bytes)?;
             Ok(file)
         });
-        match shown {
-            Ok(file) => cx.emit(super::ViewerEvent::Dropped(vec![file])),
-            Err(e) => {
-                self.notice = Some(super::Notice::error(e.to_string()));
-                cx.notify();
-            }
-        }
+        Some(shown)
     }
 
     /// Asks where, then writes what was found checking the signatures
     /// as a PDF, to keep or send on.
-    fn save_report(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn save_report(&mut self, cx: &mut Context<Self>) {
         let (Some(path), Some(rows)) = (self.path.clone(), self.signatures.clone()) else {
             return;
         };
@@ -2304,7 +2367,7 @@ impl Viewer {
     }
 
     /// Trusts `root` from now on, and so every signer it vouches for.
-    fn trust(&mut self, root: &Certificate, cx: &mut Context<Self>) {
+    pub(super) fn trust(&mut self, root: &Certificate, cx: &mut Context<Self>) {
         if let Err(e) = trust_root(root) {
             self.notice = Some(super::said(
                 "signer-trust-failed",
@@ -2334,7 +2397,7 @@ impl Viewer {
 }
 
 /// What a signature's state is, in a line.
-fn state(row: &SigRow) -> String {
+pub(super) fn state(row: &SigRow) -> String {
     match &row.problem {
         Some(problem) => t("signature-bad", &[("problem", problem)]),
         None if row.whole => t("signature-intact", &[]),
@@ -2434,26 +2497,44 @@ fn report_lines(name: &str, rows: &[SigRow]) -> Vec<String> {
 
 /// The key to sign with, unlocked: from certificate file `file`, or on
 /// token `found`, with `secret`, its password or PIN.
-fn unlock(file: Option<PathBuf>, found: Option<Found>, secret: &str) -> Result<Key, String> {
+/// Why a key was not unlocked.
+#[derive(Debug, Clone)]
+enum Refused {
+    /// The token's PIN is wrong: what it says of the tries left.
+    Pin(String),
+    /// The token is locked after too many wrong PINs.
+    Locked,
+    Other(String),
+}
+
+/// What the token said of the PIN just tried (G05).
+#[derive(Debug, Clone)]
+enum PinTrouble {
+    Wrong(String),
+    Locked,
+}
+
+fn unlock(file: Option<PathBuf>, found: Option<Found>, secret: &str) -> Result<Key, Refused> {
     use katna_pdf_sign::Signer as _;
     if let Some(found) = found {
-        let module = pkcs11::Module::load(&found.module).map_err(|e| e.to_string())?;
+        let module =
+            pkcs11::Module::load(&found.module).map_err(|e| Refused::Other(e.to_string()))?;
         let token = module
             .tokens()
-            .map_err(|e| e.to_string())?
+            .map_err(|e| Refused::Other(e.to_string()))?
             .into_iter()
             .find(|t| t.serial == found.token.serial && t.label == found.token.label)
-            .ok_or_else(|| t("sign-token-gone", &[]))?;
+            .ok_or_else(|| Refused::Other(t("sign-token-gone", &[])))?;
         let ids = module.open(&token, secret).map_err(|e| match e {
             pkcs11::TokenError::Pin => match module.pin_tries(&token) {
-                pkcs11::PinTries::Last => t("sign-wrong-pin-last", &[]),
-                pkcs11::PinTries::Few => t("sign-wrong-pin-few", &[]),
-                pkcs11::PinTries::Locked => t("sign-pin-locked", &[]),
-                pkcs11::PinTries::Unknown => t("sign-wrong-pin", &[]),
+                pkcs11::PinTries::Last => Refused::Pin(t("sign-wrong-pin-last", &[])),
+                pkcs11::PinTries::Few => Refused::Pin(t("sign-wrong-pin-few", &[])),
+                pkcs11::PinTries::Locked => Refused::Locked,
+                pkcs11::PinTries::Unknown => Refused::Pin(t("sign-wrong-pin", &[])),
             },
-            pkcs11::TokenError::Locked => t("sign-pin-locked", &[]),
-            pkcs11::TokenError::Gone => t("sign-token-gone", &[]),
-            e => e.to_string(),
+            pkcs11::TokenError::Locked => Refused::Locked,
+            pkcs11::TokenError::Gone => Refused::Other(t("sign-token-gone", &[])),
+            e => Refused::Other(e.to_string()),
         })?;
         // The certificate chosen, else the likeliest.
         let wanted = found.certificates.get(found.chosen);
@@ -2463,16 +2544,19 @@ fn unlock(file: Option<PathBuf>, found: Option<Found>, secret: &str) -> Result<K
             .position(|id| wanted.is_some_and(|w| **w == *id.certificate()))
             .unwrap_or(0);
         if ids.is_empty() {
-            return Err(t("sign-no-key", &[]));
+            return Err(Refused::Other(t("sign-no-key", &[])));
         }
         let id = ids.swap_remove(at);
         return Ok(Box::new(id));
     }
-    let file = file.ok_or_else(|| t("sign-no-certificate", &[]))?;
-    let p12 = std::fs::read(&file).map_err(|e| format!("{}: {e}", file_name(&file)))?;
-    let id = katna_pdf_sign::p12::open(&p12, secret).map_err(|e| match e {
-        katna_pdf_sign::P12Error::Password => t("sign-wrong-password", &[]),
-        e => e.to_string(),
+    let file = file.ok_or_else(|| Refused::Other(t("sign-no-certificate", &[])))?;
+    let p12 =
+        std::fs::read(&file).map_err(|e| Refused::Other(format!("{}: {e}", file_name(&file))))?;
+    let id = katna_pdf_sign::p12::open(&p12, secret).map_err(|e| {
+        Refused::Other(match e {
+            katna_pdf_sign::P12Error::Password => t("sign-wrong-password", &[]),
+            e => e.to_string(),
+        })
     })?;
     Ok(Box::new(id))
 }
@@ -2498,31 +2582,6 @@ pub(super) fn check_box(on: bool, th: super::Theme) -> gpui::Div {
                 th.katna.on_accent,
                 14.0,
             ))
-        })
-}
-
-/// One choice among several, picked or not.
-fn radio(on: bool, th: super::Theme) -> gpui::Div {
-    div()
-        .size(px(16.0))
-        .flex_none()
-        .flex()
-        .items_center()
-        .justify_center()
-        .rounded(px(radius::FULL))
-        .border_2()
-        .border_color(gpui::rgba(if on {
-            th.katna.accent
-        } else {
-            th.katna.text_dim
-        }))
-        .when(on, |d| {
-            d.child(
-                div()
-                    .size(px(8.0))
-                    .rounded(px(radius::FULL))
-                    .bg(gpui::rgba(th.katna.accent)),
-            )
         })
 }
 

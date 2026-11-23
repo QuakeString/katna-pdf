@@ -68,6 +68,7 @@ mod redact;
 mod setup;
 mod sharp;
 pub(crate) mod sign;
+mod signatures;
 mod speak;
 mod stamps;
 mod start;
@@ -823,6 +824,10 @@ pub struct Viewer {
     /// The file's signatures, checked, once read; and signing, while
     /// under way (`sign.rs`).
     signatures: Option<sign::Rows>,
+    /// The signature whose card is open beside the pane.
+    sig_open: Option<usize>,
+    /// Whether that card shows the signer's certificate.
+    sig_certificate: bool,
     /// What signing needs to know of the file.
     signable: Arc<sign::Signable>,
     signing: Option<sign::Signing>,
@@ -1036,6 +1041,8 @@ impl Viewer {
             crop_which: crop::Which::default(),
             crop_finding: false,
             signatures: None,
+            sig_open: None,
+            sig_certificate: false,
             signable: Arc::default(),
             signing: None,
             grid: gpui::ScrollHandle::new(),
@@ -1181,6 +1188,7 @@ impl Viewer {
         self.band = None;
         self.forget_runs();
         self.signatures = None;
+        self.sig_open = None;
         self.extras = files::Extras::default();
         self.signable = Arc::default();
         self.signing = None;
@@ -4490,6 +4498,8 @@ impl Render for Viewer {
         let initials_bar = self.initials_bar(cx);
         let reading_bar = self.reading_bar(cx);
         let signatures_line = self.signatures_line(cx);
+        let signature_card = self.signature_card(cx);
+        let card_top = space::S2 + if signatures_line.is_some() { 52.0 } else { 0.0 };
         let signing_card = self.signing_card(cx);
         let marks_card = self.marks_card(window, cx);
         let unsaved_card = self.unsaved_card(cx);
@@ -4873,6 +4883,15 @@ impl Render for Viewer {
                     .gap(px(space::S3))
                     .children(signatures_line.map(floating(th))),
             )
+            .children(signature_card.map(|card| {
+                div()
+                    .absolute()
+                    .top(px(card_top))
+                    .left(px(pane_room + float::GAP))
+                    .right(px(float::GAP))
+                    .child(float::appear("signature-card-in", card, -4.0))
+                    .into_any_element()
+            }))
             .children(compare_banner.map(|banner| {
                 div()
                     .absolute()
