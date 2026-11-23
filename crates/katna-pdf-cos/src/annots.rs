@@ -258,13 +258,30 @@ pub const REVIEW_STATES: [&str; 4] = ["Accepted", "Rejected", "Cancelled", "Comp
 /// The review state of annotation `id`: that of its latest state reply,
 /// if any sets one.
 pub fn annotation_status(all: &[Vec<Annotation>], id: Ref) -> Option<&str> {
+    latest_state(all, id, false).filter(|s| *s != "None")
+}
+
+/// Whether annotation `id` is marked with a check mark: its latest
+/// marked-model state reply says `Marked`. The mark is the reader's own
+/// note to themselves, apart from the review status.
+pub fn annotation_marked(all: &[Vec<Annotation>], id: Ref) -> bool {
+    latest_state(all, id, true) == Some("Marked")
+}
+
+/// The latest state a reply to `id` sets, of the marked model or of
+/// the review model.
+fn latest_state(all: &[Vec<Annotation>], id: Ref, marked: bool) -> Option<&str> {
     all.iter()
         .flatten()
         .filter(|a| a.reply_to == Some(id))
         .filter_map(|a| Some((a.modified.as_deref().unwrap_or(""), a.state.as_deref()?)))
-        .filter(|(_, s)| *s != "None")
+        .filter(|(_, s)| is_marked_state(s) == marked)
         .max_by(|a, b| a.0.cmp(b.0))
         .map(|(_, s)| s)
+}
+
+fn is_marked_state(state: &str) -> bool {
+    state == "Marked" || state == "Unmarked"
 }
 
 /// The comments as text to read or paste: page by page, each
@@ -1106,7 +1123,7 @@ pub(crate) fn write_dict(dict: &mut Dict, a: &Annotation, page: Ref) {
             dict.set("State", Object::string(state));
             dict.set(
                 "StateModel",
-                Object::name(if state == "Marked" || state == "Unmarked" {
+                Object::name(if is_marked_state(state) {
                     "Marked"
                 } else {
                     "Review"

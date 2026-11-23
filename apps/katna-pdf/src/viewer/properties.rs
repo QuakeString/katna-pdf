@@ -42,6 +42,8 @@ pub(super) struct Properties {
     fonts: Option<Vec<katna_pdf_cos::FontUse>>,
     /// What was wrong with the file, when it had to be repaired.
     repairs: Vec<katna_pdf_cos::Repair>,
+    /// How much text each page holds, once counted.
+    counts: Option<Vec<katna_pdf_cos::TextCount>>,
     /// Each time the file was saved by adding to it.
     revisions: Vec<katna_pdf_cos::Revision>,
     fields: [Entity<TextInput>; 4],
@@ -134,6 +136,7 @@ impl Viewer {
             pdfa: None,
             fonts: None,
             repairs: Vec::new(),
+            counts: None,
             revisions: Vec::new(),
             fields,
             password,
@@ -146,6 +149,7 @@ impl Viewer {
         });
         let current = self.unsaved();
         let key = self.key.clone();
+        self.count_words(path.clone(), current.clone(), cx);
         cx.spawn(async move |this, cx| {
             let meta = cx
                 .background_executor()
@@ -194,6 +198,42 @@ impl Viewer {
         })
         .detach();
         cx.notify();
+    }
+
+    /// Counts the words of every page apart from reading the rest, since
+    /// a long file takes a while.
+    fn count_words(
+        &mut self,
+        path: std::path::PathBuf,
+        current: Option<Arc<Vec<u8>>>,
+        cx: &mut Context<Self>,
+    ) {
+        let key = self.key.clone();
+        cx.spawn(async move |this, cx| {
+            let counts = cx
+                .background_executor()
+                .spawn(async move {
+                    let bytes = match current {
+                        Some(bytes) => bytes.to_vec(),
+                        None => std::fs::read(&path).ok()?,
+                    };
+                    let doc = super::cos(bytes, key.as_deref()).ok()?;
+                    Some(
+                        (0..doc.pages().len())
+                            .map(|p| katna_pdf_cos::text_count(&doc, &[p]))
+                            .collect::<Vec<_>>(),
+                    )
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                if let Some(properties) = this.properties.as_mut() {
+                    properties.counts = Some(counts.unwrap_or_default());
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// Writes the card's fields into the file, when they changed.
@@ -610,6 +650,20 @@ impl Viewer {
                     ],
                 ),
             ));
+        }
+        if let Some(counts) = &properties.counts {
+            let mut all = katna_pdf_cos::TextCount::default();
+            for c in counts {
+                all.words += c.words;
+                all.characters += c.characters;
+                all.letters += c.letters;
+            }
+            facts.push(("properties-words", count_text(all)));
+            if counts.len() > 1
+                && let Some(page) = counts.get(self.current_page())
+            {
+                facts.push(("properties-words-page", count_text(*page)));
+            }
         }
         if let Some(read) = &properties.read {
             let rows = [
@@ -1346,6 +1400,31 @@ impl Part {
 }
 
 /// A field's name over it.
+/// A count of words and characters, as the card shows it.
+fn count_text(c: katna_pdf_cos::TextCount) -> String {
+    t(
+        "properties-words-count",
+        &[
+            ("words", &grouped(c.words)),
+            ("characters", &grouped(c.characters)),
+            ("letters", &grouped(c.letters)),
+        ],
+    )
+}
+
+/// `n` with its thousands set apart.
+fn grouped(n: usize) -> String {
+    let digits = n.to_string();
+    let mut out = String::new();
+    for (i, d) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(d);
+    }
+    out
+}
+
 fn label(id: &str, th: crate::theme::Theme) -> gpui::Div {
     div()
         .text_size(px(text::SMALL))
@@ -1450,7 +1529,14 @@ fn place_label(place: &ActionPlace) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::shown_date;
+    use super::{grouped, shown_date};
+
+    #[test]
+    fn counts_are_grouped() {
+        assert_eq!(grouped(0), "0");
+        assert_eq!(grouped(999), "999");
+        assert_eq!(grouped(1234567), "1,234,567");
+    }
 
     #[test]
     fn dates_read_as_people_write_them() {

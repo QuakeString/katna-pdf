@@ -231,10 +231,11 @@ usage: katna-pdf-cli COMMAND [--json] ...
                                   with --online, missing issuers are fetched and
                                   revocation is asked of OCSP responders and CRLs;
                                   with --report, the same written as a PDF to keep or send
-  text FILE [--pages PAGES] [--blocks]
+  text FILE [--pages PAGES] [--blocks | --count]
                                   the text each page draws, in runs (a line's worth
                                   in one font), numbered PAGE:RUN, with font and place;
-                                  with --blocks, in paragraphs, numbered PAGE:BLOCK
+                                  with --blocks, in paragraphs, numbered PAGE:BLOCK;
+                                  with --count, how many words and characters
   find FILE QUERY [--pages PAGES] [--case] [--words] [--accents] [--fuzzy]
                                   where QUERY is on the pages, with the words around
                                   it; ignores case and accents unless asked, --words
@@ -559,6 +560,7 @@ impl<'a> Args<'a> {
                 "--ltv",
                 "--lta",
                 "--blocks",
+                "--count",
                 "--fill",
                 "--delete",
                 "--turn",
@@ -4654,7 +4656,12 @@ fn annots(args: &[String], json: bool) -> Done {
         let kind = a.kind.label();
         let status =
             a.id.and_then(|id| katna_pdf_cos::annotation_status(&all, id));
+        let checked =
+            a.id.is_some_and(|id| katna_pdf_cos::annotation_marked(&all, id));
         let mut marks = Vec::new();
+        if checked {
+            marks.push("checked");
+        }
         if a.flags.hidden {
             marks.push("hidden");
         }
@@ -4667,7 +4674,7 @@ fn annots(args: &[String], json: bool) -> Done {
         if json {
             items.push(format!(
                 "{{\"page\":{},\"kind\":{},\"rect\":[{}],\"author\":{},\"contents\":{},\"modified\":{},\
-                 \"hidden\":{},\"print\":{},\"locked\":{},\"reply\":{},\"grouped\":{},\"state\":{},\"status\":{}}}",
+                 \"hidden\":{},\"print\":{},\"locked\":{},\"reply\":{},\"grouped\":{},\"state\":{},\"status\":{},\"checked\":{checked}}}",
                 a.page + 1,
                 string(&kind),
                 a.rect.iter().map(|v| num(*v)).collect::<Vec<_>>().join(","),
@@ -4771,6 +4778,29 @@ fn text(args: &[String], json: bool) -> Done {
     };
     let mut out = String::new();
     let mut items = Vec::new();
+    if args.flag("--count") {
+        let c = katna_pdf_cos::text_count(&doc, &pages);
+        if json {
+            let _ = writeln!(
+                out,
+                "{{\"pages\":{},\"words\":{},\"characters\":{},\"without_spaces\":{}}}",
+                pages.len(),
+                c.words,
+                c.characters,
+                c.letters
+            );
+        } else {
+            let _ = writeln!(
+                out,
+                "words {}, characters {} ({} without spaces), pages {}",
+                c.words,
+                c.characters,
+                c.letters,
+                pages.len()
+            );
+        }
+        return Ok(out);
+    }
     if args.flag("--blocks") {
         for page in pages {
             for (i, block) in doc.text_blocks(page).iter().enumerate() {
