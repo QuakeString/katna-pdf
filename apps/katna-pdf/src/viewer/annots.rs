@@ -62,6 +62,13 @@ impl Viewer {
         if tool.clicks_points() {
             self.start_measuring(cx);
         }
+        // Highlighting tells the text from the space around it.
+        if self.tool == Some(Tool::Highlight) {
+            let page = self.current_page();
+            for p in page.saturating_sub(1)..(page + 2).min(self.page_count()) {
+                self.read_text(p, cx);
+            }
+        }
         // Marking text that is already selected marks it now.
         if let Some(style) = tool.markup()
             && self.tool.is_some()
@@ -170,6 +177,27 @@ impl Viewer {
         ))
     }
 
+    /// Whether `point` (points from page `page`'s top left) is on or
+    /// next to its text; taken as yes while the text is still being read
+    /// (and the reading started).
+    fn on_text(&mut self, page: usize, point: [f32; 2], cx: &mut Context<Self>) -> bool {
+        let Some(texts) = self.texts.clone() else {
+            return true;
+        };
+        let Some(text) = texts.get(page).and_then(|t| t.get()) else {
+            self.read_text(page, cx);
+            return true;
+        };
+        const NEAR: f32 = 3.0;
+        text.boxes.iter().any(|b| {
+            b[2] > b[0]
+                && point[0] >= b[0] - NEAR
+                && point[0] <= b[2] + NEAR
+                && point[1] >= b[1] - NEAR
+                && point[1] <= b[3] + NEAR
+        })
+    }
+
     /// The map from page `page` shown back to its own space.
     pub(super) fn inverse(&self, page: usize) -> Option<Inverse> {
         let Content::Ready(opened) = &self.content else {
@@ -189,8 +217,11 @@ impl Viewer {
         let Some((page, point)) = self.page_point(position) else {
             return false;
         };
+        let area = self.tool == Some(Tool::Highlight) && !self.on_text(page, point, cx);
         match self.tool {
-            Some(tool) if tool.markup().is_none() => {
+            // Highlighting away from the text marks the area dragged
+            // over, as on a scanned page.
+            Some(tool) if tool.markup().is_none() || area => {
                 self.choose(None, cx);
                 self.selection = None;
                 self.draft = Some(Draft {
@@ -835,6 +866,24 @@ impl Viewer {
                     .left_0()
                     .size_full()
                     .into_any_element(),
+                );
+            }
+            Some(Tool::Highlight) => {
+                let (Some(from), Some(to)) = (draft.path.first(), draft.path.last()) else {
+                    return out;
+                };
+                let (x0, y0) = (from[0].min(to[0]), from[1].min(to[1]));
+                let (x1, y1) = (from[0].max(to[0]), from[1].max(to[1]));
+                out.push(
+                    div()
+                        .absolute()
+                        .left(desktop_px(x0 * shown))
+                        .top(desktop_px(y0 * shown))
+                        .w(desktop_px((x1 - x0) * shown))
+                        .h(desktop_px((y1 - y0) * shown))
+                        .bg(colour)
+                        .opacity(0.35)
+                        .into_any_element(),
                 );
             }
             Some(

@@ -1542,7 +1542,7 @@ impl Viewer {
     }
 
     /// Reads page `page`'s text on a background thread, if not read yet.
-    fn read_text(&mut self, page: usize, cx: &mut Context<Self>) {
+    pub(super) fn read_text(&mut self, page: usize, cx: &mut Context<Self>) {
         let (Some(texts), Content::Ready(opened)) = (self.texts.clone(), &self.content) else {
             return;
         };
