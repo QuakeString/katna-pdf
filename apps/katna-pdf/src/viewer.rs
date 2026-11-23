@@ -190,12 +190,42 @@ enum CloseAnswer {
 pub(crate) struct Notice {
     words: String,
     error: bool,
+    /// Something to look at, in the warning's colours.
+    warn: bool,
+    /// What its button does, if it has one, and the button's words.
+    action: Option<(String, NoticeAction)>,
+}
+
+/// What a notice's button does.
+#[derive(Debug, Clone, PartialEq)]
+pub(super) enum NoticeAction {
+    /// Puts paragraph `block` of page `page` in `font` (E04).
+    Refont {
+        page: usize,
+        block: usize,
+        font: textedit::FontChoice,
+    },
 }
 
 impl Notice {
     /// Something that went wrong, in words not from an id.
     pub(crate) fn error(words: String) -> Self {
-        Notice { words, error: true }
+        Notice {
+            words,
+            error: true,
+            warn: false,
+            action: None,
+        }
+    }
+
+    /// Something to look at, with a button that sees to it.
+    pub(super) fn warning(words: String, action: Option<(String, NoticeAction)>) -> Self {
+        Notice {
+            words,
+            error: false,
+            warn: true,
+            action,
+        }
     }
 }
 
@@ -216,6 +246,8 @@ pub(super) fn said(id: &str, args: &[(&str, &str)]) -> Notice {
     Notice {
         words: t(id, args),
         error: WRONG.iter().any(|w| id.contains(w)),
+        warn: false,
+        action: None,
     }
 }
 
@@ -1077,6 +1109,8 @@ impl Viewer {
         self.notice = Some(Notice {
             words,
             error: false,
+            warn: false,
+            action: None,
         });
         cx.notify();
     }
@@ -4529,11 +4563,24 @@ impl Render for Viewer {
         let compare_banner = self.compare_banner(cx);
         let command_box = self.command_box(cx);
         let notice = self.notice.clone().map(|notice| {
+            let warning: gpui::Hsla = gpui::rgba(th.katna.warning).into();
             let (bg, fg, glyph, mark) = if notice.error {
                 (th.error_soft, th.error, "alert", th.error)
+            } else if notice.warn {
+                (
+                    over(
+                        gpui::rgba(th.katna.warning & 0xffff_ff00 | if th.dark { 0x33 } else { 0x24 })
+                            .into(),
+                        th.card,
+                    ),
+                    warning,
+                    "alert",
+                    warning,
+                )
             } else {
                 (th.card, th.text, "info", th.accent)
             };
+            let action = notice.action.clone();
             div()
                 .id("notice")
                 .occlude()
@@ -4552,6 +4599,14 @@ impl Render for Viewer {
                 .when(!notice.error, |d| d.border_1().border_color(th.line))
                 .child(float::icon(glyph, 15.0, mark))
                 .child(div().flex_1().min_w_0().child(notice.words))
+                .children(action.map(|(words, action)| {
+                    float::button("notice-action", words, false, &th)
+                        .h(px(28.0))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.notice = None;
+                            this.notice_action(action.clone(), cx);
+                        }))
+                }))
                 .child(icon_button(
                     "notice-close",
                     "close",
@@ -5072,6 +5127,19 @@ fn dialog(
 
 /// A bar that floats over the pages: the card's colour, rounded, with
 /// a shadow, never wider than the room it has.
+/// Colour `top`, see-through as it is, laid over `under`: solid.
+fn over(top: gpui::Hsla, under: gpui::Hsla) -> gpui::Hsla {
+    let (t, u) = (gpui::Rgba::from(top), gpui::Rgba::from(under));
+    let mix = |a: f32, b: f32| a * t.a + b * (1.0 - t.a);
+    gpui::Rgba {
+        r: mix(t.r, u.r),
+        g: mix(t.g, u.g),
+        b: mix(t.b, u.b),
+        a: 1.0,
+    }
+    .into()
+}
+
 fn floating(th: Theme) -> impl Fn(AnyElement) -> AnyElement {
     move |bar| {
         div()

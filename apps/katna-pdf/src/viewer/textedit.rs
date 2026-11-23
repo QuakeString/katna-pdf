@@ -80,7 +80,7 @@ const SPACING_STEP: [f32; 3] = [0.1, 0.1, 0.05];
 /// A face chosen for a paragraph: a family installed here (or a
 /// standard one) and its weight and slant.
 #[derive(Clone, Debug, PartialEq)]
-pub(super) struct FontChoice {
+pub(crate) struct FontChoice {
     pub family: String,
     pub bold: bool,
     pub italic: bool,
@@ -229,6 +229,15 @@ impl Typing {
 }
 
 impl Viewer {
+    /// What a notice's button does.
+    pub(super) fn notice_action(&mut self, action: super::NoticeAction, cx: &mut Context<Self>) {
+        match action {
+            super::NoticeAction::Refont { page, block, font } => {
+                self.font_text(page, block, font, cx);
+            }
+        }
+    }
+
     /// Turns Edit text on or off; other tools are put down.
     pub(super) fn toggle_text_edit(&mut self, cx: &mut Context<Self>) {
         if !self.text_editing && !self.allows(super::Allow::Change, cx) {
@@ -435,6 +444,7 @@ impl Viewer {
             }
             Target::Block(block) => block,
         };
+        let index = block;
         let Some(block) = self
             .runs
             .pages
@@ -451,14 +461,36 @@ impl Viewer {
             move |doc| {
                 // Letters the font lacks are said, once the change shows.
                 let told = doc.missing_glyphs(typing.page, &runs, &text).map(|m| {
-                    t(
-                        "text-edit-stood-in",
-                        &[
-                            ("font", &m.font),
-                            ("chars", &m.chars),
-                            ("standin", m.stand_in.as_deref().unwrap_or("")),
-                        ],
-                    )
+                    let words = |id: &str, standin: &str| {
+                        t(
+                            id,
+                            &[
+                                ("font", &m.font),
+                                ("chars", &m.chars),
+                                ("standin", standin),
+                            ],
+                        )
+                    };
+                    match &m.stand_in {
+                        // The whole paragraph can be put in the font that
+                        // stood in (E04).
+                        Some(standin) => {
+                            let font = stand_in_choice(standin);
+                            let shown = font.family.clone();
+                            super::Notice::warning(
+                                words("text-edit-stood-in", &shown),
+                                Some((
+                                    words("text-edit-use-standin", &shown),
+                                    super::NoticeAction::Refont {
+                                        page: typing.page,
+                                        block: index,
+                                        font,
+                                    },
+                                )),
+                            )
+                        }
+                        None => super::Notice::warning(words("text-edit-no-standin", ""), None),
+                    }
                 });
                 let bytes = doc
                     .edit_block(typing.page, &runs, &text)
@@ -474,7 +506,7 @@ impl Viewer {
     pub(super) fn change_page_told(
         &mut self,
         page: usize,
-        change: impl FnOnce(&katna_pdf_cos::Document) -> Result<(Vec<u8>, Option<String>), String>
+        change: impl FnOnce(&katna_pdf_cos::Document) -> Result<(Vec<u8>, Option<super::Notice>), String>
         + Send
         + 'static,
         cx: &mut Context<Self>,
@@ -533,7 +565,7 @@ impl Viewer {
         pages: Vec<usize>,
         failed: &'static str,
         after: Option<Arc<str>>,
-        change: impl FnOnce(&katna_pdf_cos::Document) -> Result<(Vec<u8>, Option<String>), String>
+        change: impl FnOnce(&katna_pdf_cos::Document) -> Result<(Vec<u8>, Option<super::Notice>), String>
         + Send
         + 'static,
         cx: &mut Context<Self>,
@@ -578,7 +610,7 @@ impl Viewer {
                     Ok((bytes, doc, cos, told)) => {
                         this.key = kept;
                         if let Some(told) = told {
-                            this.notice = Some(super::Notice::error(told));
+                            this.notice = Some(told);
                         }
                         this.forget_runs();
                         let design = this
@@ -1934,6 +1966,18 @@ impl Viewer {
         }
         self.finish_text_edit(true, cx);
         true
+    }
+}
+
+/// The face a standard font stands for: `Times-BoldItalic` as Times,
+/// bold and italic.
+fn stand_in_choice(name: &str) -> FontChoice {
+    let lower = name.to_ascii_lowercase();
+    let family = name.split('-').next().unwrap_or(name);
+    FontChoice {
+        family: family.to_owned(),
+        bold: lower.contains("bold"),
+        italic: lower.contains("italic") || lower.contains("oblique"),
     }
 }
 
