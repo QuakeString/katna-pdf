@@ -385,6 +385,21 @@ pub(crate) enum Verdict {
     Unreadable(String),
 }
 
+/// A folder as people read it, the home folder as ~.
+fn home_short(folder: &Path) -> String {
+    match std::env::var_os("HOME").map(PathBuf::from) {
+        Some(home) if folder.starts_with(&home) && !home.as_os_str().is_empty() => {
+            let rest = folder.strip_prefix(&home).unwrap_or(folder);
+            if rest.as_os_str().is_empty() {
+                "~".into()
+            } else {
+                format!("~/{}", rest.display())
+            }
+        }
+        _ => folder.display().to_string(),
+    }
+}
+
 /// The signatures of the file at `path`, checked offline.
 pub(crate) fn verdict(path: &Path) -> Verdict {
     let doc = match std::fs::read(path)
@@ -1229,39 +1244,88 @@ impl Viewer {
             )
             .child(self.source_switch(cx))
             .when(signing.source == Source::File, |d| {
-                d.child(label("sign-certificate")).child(
+                let folder = signing
+                    .certificate
+                    .as_deref()
+                    .and_then(Path::parent)
+                    .map(home_short);
+                d.child(
                     div()
                         .flex()
                         .items_center()
-                        .gap(px(space::S2))
+                        .gap(px(space::S3))
+                        .px(px(space::S3))
+                        .py(px(space::S3))
+                        .rounded(px(radius::SM))
+                        .border_1()
+                        .border_color(th.line)
+                        .child(float::icon("file", 18.0, th.text2))
                         .child(
                             div()
                                 .flex_1()
                                 .min_w_0()
-                                .overflow_hidden()
-                                .text_ellipsis()
-                                .whitespace_nowrap()
-                                .text_size(px(text::BODY))
-                                .text_color(if signing.certificate.is_some() {
-                                    th.text
-                                } else {
-                                    th.dim
-                                })
-                                .child(certificate),
+                                .flex()
+                                .flex_col()
+                                .gap(px(2.0))
+                                .child(
+                                    div()
+                                        .truncate()
+                                        .text_size(px(text::BODY))
+                                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                                        .text_color(if signing.certificate.is_some() {
+                                            th.text
+                                        } else {
+                                            th.dim
+                                        })
+                                        .child(certificate),
+                                )
+                                .child(
+                                    div()
+                                        .truncate()
+                                        .text_size(px(text::CAPTION))
+                                        .text_color(th.dim)
+                                        .child(
+                                            folder.unwrap_or_else(|| t("sign-certificate", &[])),
+                                        ),
+                                ),
                         )
                         .child(
-                            float::button("sign-choose", t("sign-choose", &[]), false, &th)
-                                .ftip(t("sign-choose-tip", &[]), &th)
-                                .on_click(
-                                    cx.listener(|this, _, _, cx| this.choose_certificate(cx)),
+                            float::button(
+                                "sign-choose",
+                                t(
+                                    if signing.certificate.is_some() {
+                                        "sign-change"
+                                    } else {
+                                        "sign-choose"
+                                    },
+                                    &[],
                                 ),
+                                false,
+                                &th,
+                            )
+                            .ftip(t("sign-choose-tip", &[]), &th)
+                            .on_click(cx.listener(|this, _, _, cx| this.choose_certificate(cx))),
                         ),
                 )
             })
             .when(signing.source == Source::Token, |d| {
                 d.child(self.token_list(cx))
             })
-            .child(labelled(secret_label, &signing.password))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(space::S1))
+                    .child(label(secret_label))
+                    .child(
+                        field(&signing.password)
+                            .gap(px(space::S2))
+                            .border_color(th.accent)
+                            .child(float::icon("key", 15.0, th.dim))
+                            .flex_row_reverse()
+                            .justify_end(),
+                    ),
+            )
             .child(
                 div()
                     .flex()
@@ -1274,16 +1338,32 @@ impl Viewer {
                     .child(self.picture_row(cx))
             })
             .child(
-                switch_row("sign-timestamp", "sign-timestamp", signing.timestamp).on_click(
-                    cx.listener(|this, _, _, cx| {
-                        if let Some(signing) = this.signing.as_mut() {
-                            signing.timestamp = !signing.timestamp;
-                            cx.notify();
-                        }
-                    }),
-                ),
+                div()
+                    .min_h(px(36.0))
+                    .flex()
+                    .items_center()
+                    .gap(px(space::S3))
+                    .child(
+                        div()
+                            .flex_1()
+                            .text_size(px(text::BODY))
+                            .text_color(th.text)
+                            .child(t("sign-timestamp", &[])),
+                    )
+                    .when(signing.timestamp, |d| {
+                        d.child(field(&signing.server).w(px(220.0)).h(px(30.0)))
+                    })
+                    .child(
+                        float::switch(("sign-timestamp", 0usize), signing.timestamp, &th).on_click(
+                            cx.listener(|this, _, _, cx| {
+                                if let Some(signing) = this.signing.as_mut() {
+                                    signing.timestamp = !signing.timestamp;
+                                    cx.notify();
+                                }
+                            }),
+                        ),
+                    ),
             )
-            .when(signing.timestamp, |d| d.child(field(&signing.server)))
             .child(
                 switch_row("sign-long-term", "sign-long-term", signing.long_term)
                     .ftip(t("sign-long-term-tip", &[]), &th)
@@ -1306,7 +1386,9 @@ impl Viewer {
                         })),
                 )
             })
-            .when(!self.signable.signed, |d| d.child(self.certify_choice(cx)))
+            .when(!self.signable.signed && signing.certify.is_some(), |d| {
+                d.child(self.certify_choice(cx))
+            })
             .child(
                 div()
                     .flex()
@@ -1367,14 +1449,46 @@ impl Viewer {
                     .text_color(th.error)
                     .child(error)
             }));
+        let certifying = signing.certify.is_some();
         let footer = div()
             .px(px(space::S5))
             .py(px(space::S4))
             .flex()
-            .justify_end()
+            .items_center()
             .gap(px(space::S2))
             .border_t_1()
             .border_color(th.line_soft)
+            .when(!self.signable.signed, |d| {
+                d.child(
+                    float::button(
+                        "sign-certify-instead",
+                        t(
+                            if certifying {
+                                "sign-plain-instead"
+                            } else {
+                                "sign-certify-instead"
+                            },
+                            &[],
+                        ),
+                        false,
+                        &th,
+                    )
+                    .border_color(gpui::transparent_black())
+                    .bg(gpui::transparent_black())
+                    .ftip(t("sign-certify", &[]), &th)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if let Some(signing) = this.signing.as_mut() {
+                            signing.certify = if certifying {
+                                None
+                            } else {
+                                Some(Allowed::FormFilling)
+                            };
+                            cx.notify();
+                        }
+                    })),
+                )
+            })
+            .child(div().flex_1())
             .child(
                 float::button("sign-back", t("sign-cancel", &[]), false, &th)
                     .on_click(cx.listener(|this, _, _, cx| this.toggle_signing(cx))),
@@ -1393,6 +1507,9 @@ impl Viewer {
                     true,
                     &th,
                 )
+                .child(float::icon("sign", 14.0, th.on_accent))
+                .flex_row_reverse()
+                .gap(px(space::S2))
                 .when(busy, |b| b.opacity(0.6))
                 .on_click(cx.listener(|this, _, _, cx| this.sign_now(cx))),
             );
@@ -1426,10 +1543,52 @@ impl Viewer {
         )
     }
 
-    /// The picture shown in the box: none, or a file, to choose or drop.
+    /// How the box will look (G02): the picture, if any, beside the
+    /// words the signature writes, and the button to pick a picture.
     fn picture_row(&self, cx: &mut Context<Self>) -> AnyElement {
         let th = self.theme;
-        let picture = self.signing.as_ref().and_then(|s| s.picture.clone());
+        let Some(signing) = self.signing.as_ref() else {
+            return div().into_any_element();
+        };
+        let picture = signing.picture.clone();
+        // Who signs, when the token tells; a file tells once unlocked.
+        let who = match &signing.tokens {
+            Tokens::Found(found) if signing.source == Source::Token => found
+                .get(signing.token)
+                .and_then(|f| f.certificates.get(f.chosen))
+                .map(|c| common_name(&c.tbs_certificate.subject)),
+            _ => None,
+        };
+        let by = match who {
+            Some(name) => t("sign-preview-by", &[("name", &name)]),
+            None => t("sign-preview-by-you", &[]),
+        };
+        let place = signing.location.read(cx).text().trim().to_owned();
+        let mut when = jiff::Zoned::now().strftime("%d.%m.%Y %H:%M %Z").to_string();
+        if !place.is_empty() {
+            when = format!("{when} · {place}");
+        }
+        let mark = match &picture {
+            Some(file) => div()
+                .w(px(72.0))
+                .h(px(40.0))
+                .flex_none()
+                .child(
+                    gpui::img(file.clone())
+                        .size_full()
+                        .object_fit(gpui::ObjectFit::Contain),
+                )
+                .into_any_element(),
+            None => div()
+                .w(px(72.0))
+                .h(px(40.0))
+                .flex_none()
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(float::icon("sign", 30.0, th.text2))
+                .into_any_element(),
+        };
         div()
             .flex()
             .items_center()
@@ -1438,37 +1597,73 @@ impl Viewer {
                 div()
                     .flex_1()
                     .min_w_0()
-                    .overflow_hidden()
-                    .text_ellipsis()
-                    .whitespace_nowrap()
-                    .text_size(px(text::SMALL))
-                    .text_color(if picture.is_some() { th.text } else { th.dim })
-                    .child(match &picture {
-                        Some(file) => t("sign-picture", &[("name", &file_name(file))]),
-                        None => t("sign-picture-none", &[]),
-                    }),
+                    .flex()
+                    .items_center()
+                    .gap(px(space::S3))
+                    .px(px(space::S3))
+                    .py(px(space::S2))
+                    .rounded(px(radius::SM))
+                    .border_1()
+                    .border_color(th.line)
+                    .child(mark)
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .flex_col()
+                            .gap(px(2.0))
+                            .child(
+                                div()
+                                    .truncate()
+                                    .text_size(px(text::SMALL))
+                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .text_color(th.text)
+                                    .child(by),
+                            )
+                            .child(
+                                div()
+                                    .truncate()
+                                    .text_size(px(text::CAPTION))
+                                    .text_color(th.dim)
+                                    .child(when),
+                            ),
+                    ),
             )
-            .when(picture.is_some(), |d| {
-                d.child(
-                    float::button(
-                        "sign-picture-clear",
-                        t("sign-picture-clear", &[]),
-                        false,
-                        &th,
-                    )
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        if let Some(signing) = this.signing.as_mut() {
-                            signing.picture = None;
-                            write_note("picture", "");
-                            cx.notify();
-                        }
-                    })),
-                )
-            })
             .child(
-                float::button("sign-picture-choose", t("sign-choose", &[]), false, &th)
-                    .tip(t("sign-picture-tip", &[]), &th.katna)
-                    .on_click(cx.listener(|this, _, _, cx| this.choose_picture(cx))),
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(space::S1))
+                    .child(
+                        float::button(
+                            "sign-picture-choose",
+                            t("sign-picture-button", &[]),
+                            false,
+                            &th,
+                        )
+                        .tip(t("sign-picture-tip", &[]), &th.katna)
+                        .on_click(cx.listener(|this, _, _, cx| this.choose_picture(cx))),
+                    )
+                    .when(picture.is_some(), |d| {
+                        d.child(
+                            float::button(
+                                "sign-picture-clear",
+                                t("sign-picture-clear", &[]),
+                                false,
+                                &th,
+                            )
+                            .border_color(gpui::transparent_black())
+                            .bg(gpui::transparent_black())
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                if let Some(signing) = this.signing.as_mut() {
+                                    signing.picture = None;
+                                    write_note("picture", "");
+                                    cx.notify();
+                                }
+                            })),
+                        )
+                    }),
             )
             .into_any_element()
     }
@@ -1541,10 +1736,12 @@ impl Viewer {
         let th = self.theme;
         let on = self.signing.as_ref().map(|s| s.source);
         let button = |id: &'static str, source: Source, label: String| {
-            float::seg_item(id, None, Some(label.into()), on == Some(source), &th)
+            float::chip(id, label, on == Some(source), &th)
                 .on_click(cx.listener(move |this, _, _, cx| this.set_source(source, cx)))
         };
-        float::seg(&th)
+        div()
+            .flex()
+            .gap(px(space::S1))
             .child(button(
                 "sign-from-token",
                 Source::Token,

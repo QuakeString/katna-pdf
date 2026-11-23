@@ -134,9 +134,58 @@ pub fn click(
     }
 }
 
+/// The pages of each file a split of `count` pages makes, given the
+/// pages that start a file (from 0, any order; the first page always
+/// starts one).
+pub fn split_at(count: usize, starts: &[usize]) -> Vec<std::ops::Range<usize>> {
+    let mut starts: BTreeSet<usize> = starts.iter().copied().filter(|&p| p < count).collect();
+    if count == 0 {
+        return Vec::new();
+    }
+    starts.insert(0);
+    let starts: Vec<usize> = starts.into_iter().collect();
+    starts
+        .iter()
+        .enumerate()
+        .map(|(i, &start)| start..starts.get(i + 1).copied().unwrap_or(count))
+        .collect()
+}
+
+/// The pages starting each file when every file holds `every` pages.
+pub fn every_starts(count: usize, every: usize) -> Vec<usize> {
+    (0..count).step_by(every.max(1)).collect()
+}
+
+/// A split file's name from the pattern people write: `{name}` the
+/// file's own name, `{n}` the part's number; `.pdf` added when missing.
+pub fn split_name(pattern: &str, name: &str, n: usize) -> String {
+    let pattern = match pattern.trim() {
+        "" => "{name} — part {n}.pdf",
+        p => p,
+    };
+    let mut out = pattern
+        .replace("{name}", name)
+        .replace("{n}", &n.to_string())
+        .replace(['/', '\\'], "-");
+    if !out.to_lowercase().ends_with(".pdf") {
+        out.push_str(".pdf");
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn splits_start_where_asked() {
+        assert_eq!(split_at(7, &every_starts(7, 3)), vec![0..3, 3..6, 6..7]);
+        assert_eq!(split_at(5, &[3, 1, 9]), vec![0..1, 1..3, 3..5]);
+        assert_eq!(split_at(0, &[0]), Vec::<std::ops::Range<usize>>::new());
+        assert_eq!(split_name("", "Tender", 2), "Tender — part 2.pdf");
+        assert_eq!(split_name("{name}-{n}", "a", 1), "a-1.pdf");
+        assert_eq!(split_name("x/{n}.PDF", "a", 3), "x-3.PDF");
+    }
 
     fn set(pages: &[usize]) -> BTreeSet<usize> {
         pages.iter().copied().collect()

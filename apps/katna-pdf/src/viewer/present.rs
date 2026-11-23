@@ -39,7 +39,15 @@ pub(super) struct Presenting {
     was_full: bool,
     /// Bumped on each change of page, so a page's timer ends with it.
     step: u64,
+    /// When the page shown came on, for the countdown to the next.
+    since: Instant,
+    /// When the mouse last moved: the controls show for two seconds
+    /// after (R11).
+    moved: Option<Instant>,
 }
+
+/// How long the controls stay after the mouse stops.
+const CONTROLS_FOR: Duration = Duration::from_secs(2);
 
 impl Viewer {
     pub fn presenting(&self) -> bool {
@@ -68,6 +76,8 @@ impl Viewer {
             typed: String::new(),
             was_full,
             step: 0,
+            since: Instant::now(),
+            moved: None,
         });
         self.forget_far(page..page + 1);
         window.focus(&self.focus, cx);
@@ -140,6 +150,7 @@ impl Viewer {
             .map(|t| (old, Instant::now(), t));
         presenting.page = page;
         presenting.step += 1;
+        presenting.since = Instant::now();
         self.forget_far(page..page + 1);
         self.time_page(cx);
         cx.notify();
@@ -221,6 +232,114 @@ impl Viewer {
         }
     }
 
+    /// The controls along the bottom while the mouse moves (R11): pages,
+    /// the countdown to the next, blank and stop.
+    fn present_controls(
+        &self,
+        page: usize,
+        left: Option<u32>,
+        blanked: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let fg = gpui::rgb(0xe5e7eb);
+        let dim = gpui::rgb(0x9ca3af);
+        let hover = gpui::rgba(0xffffff1a);
+        let button = |id: &'static str| {
+            div()
+                .id(id)
+                .h(px(32.0))
+                .min_w(px(32.0))
+                .px(px(space::S2))
+                .flex()
+                .items_center()
+                .justify_center()
+                .gap(px(6.0))
+                .rounded(px(radius::SM))
+                .text_size(px(text::SMALL))
+                .text_color(fg)
+                .cursor_pointer()
+                .hover(move |s| s.bg(hover))
+        };
+        let sep = || {
+            div()
+                .w(px(1.0))
+                .h(px(20.0))
+                .mx(px(space::S1))
+                .bg(gpui::rgba(0xffffff26))
+        };
+        let bar = div()
+            .id("present-controls")
+            .flex()
+            .items_center()
+            .gap(px(2.0))
+            .p(px(space::S1))
+            .rounded(px(radius::MD))
+            .bg(gpui::rgb(0x1f2228))
+            .border_1()
+            .border_color(gpui::rgba(0xffffff1f))
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_mouse_down(MouseButton::Right, |_, _, cx| cx.stop_propagation())
+            .child(
+                button("present-back")
+                    .child(crate::float::icon("chevl", 16.0, fg.into()))
+                    .on_click(cx.listener(|this, _, _, cx| this.present_step(false, cx))),
+            )
+            .child(
+                div()
+                    .px(px(space::S2))
+                    .flex()
+                    .gap(px(4.0))
+                    .text_size(px(text::SMALL))
+                    .child(div().text_color(fg).child((page + 1).to_string()))
+                    .child(
+                        div()
+                            .text_color(dim)
+                            .child(format!("/ {}", self.page_count())),
+                    ),
+            )
+            .child(
+                button("present-on")
+                    .child(crate::float::icon("chevr", 16.0, fg.into()))
+                    .on_click(cx.listener(|this, _, _, cx| this.present_step(true, cx))),
+            )
+            .child(sep())
+            .when_some(left, |d, left| {
+                d.child(
+                    div()
+                        .px(px(space::S2))
+                        .flex()
+                        .items_center()
+                        .gap(px(6.0))
+                        .text_size(px(text::SMALL))
+                        .text_color(fg)
+                        .child(crate::float::icon("clock", 14.0, fg.into()))
+                        .child(t("present-next-in", &[("s", &left.to_string())])),
+                )
+            })
+            .child(
+                button("present-blank")
+                    .when(blanked, |d| d.bg(gpui::rgba(0xffffff26)))
+                    .child(t("present-blank-key", &[]))
+                    .on_click(cx.listener(|this, _, _, cx| this.present_blank(false, cx))),
+            )
+            .child(sep())
+            .child(
+                button("present-esc")
+                    .child(crate::float::icon("x", 14.0, fg.into()))
+                    .child(t("present-esc", &[]))
+                    .on_click(cx.listener(|this, _, window, cx| this.stop_presenting(window, cx))),
+            );
+        div()
+            .absolute()
+            .left_0()
+            .right_0()
+            .bottom(px(space::S6))
+            .flex()
+            .justify_center()
+            .child(bar)
+            .into_any_element()
+    }
+
     /// The window while presenting.
     pub(super) fn render_presenting(
         &mut self,
@@ -235,6 +354,26 @@ impl Viewer {
             return div().into_any_element();
         };
         let (page, blank, typed) = (presenting.page, presenting.blank, presenting.typed.clone());
+        let controls = presenting
+            .moved
+            .is_some_and(|at| at.elapsed() < CONTROLS_FOR)
+            .then(|| {
+                let left = presenting
+                    .shows
+                    .get(page)
+                    .and_then(|s| s.seconds)
+                    .map(|s| {
+                        (s - presenting.since.elapsed().as_secs_f32())
+                            .ceil()
+                            .max(0.0) as u32
+                    })
+                    .filter(|_| page + 1 < self.page_count());
+                (left, blank.is_some())
+            });
+        if controls.is_some() {
+            // Until they hide, and for the countdown.
+            window.request_animation_frame();
+        }
         let going = presenting.leaving;
         let viewport = window.viewport_size();
         let (vw, vh) = (unpx(viewport.width), unpx(viewport.height));
@@ -310,6 +449,12 @@ impl Viewer {
                 MouseButton::Right,
                 cx.listener(|this, _: &MouseDownEvent, _, cx| this.present_step(false, cx)),
             )
+            .on_mouse_move(cx.listener(|this, _: &gpui::MouseMoveEvent, _, cx| {
+                if let Some(p) = this.presenting.as_mut() {
+                    p.moved = Some(Instant::now());
+                    cx.notify();
+                }
+            }))
             .size_full()
             .relative()
             .flex()
@@ -330,6 +475,9 @@ impl Viewer {
                     .inset_0()
                     .bg(if white { gpui::white() } else { gpui::black() })
             }))
+            .children(
+                controls.map(|(left, blanked)| self.present_controls(page, left, blanked, cx)),
+            )
             .when(!typed.is_empty(), |d| {
                 d.child(
                     div()

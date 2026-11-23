@@ -76,6 +76,9 @@ enum Place {
     All,
     Recent,
     Starred,
+    Signed,
+    Forms,
+    Scans,
     Folder(PathBuf),
     Tag(String),
     Collection(String),
@@ -180,6 +183,9 @@ struct Counts {
     all: usize,
     recent: usize,
     starred: usize,
+    signed: usize,
+    forms: usize,
+    scans: usize,
     copies: usize,
     missing: usize,
 }
@@ -447,6 +453,9 @@ impl LibraryView {
             Place::All => {}
             Place::Recent => filter.sort = Sort::Opened,
             Place::Starred => filter.rating = Some(filter.rating.unwrap_or(1).max(1)),
+            Place::Signed => filter.signed = Some(true),
+            Place::Forms => filter.forms = Some(true),
+            Place::Scans => filter.scanned = Some(true),
             Place::Folder(path) => filter.folder = Some(path.to_string_lossy().into_owned()),
             Place::Tag(tag) => filter.tags.push(tag.clone()),
             Place::Collection(name) => {
@@ -533,6 +542,9 @@ impl LibraryView {
             all: all.len(),
             recent: all.iter().filter(|d| d.opened.is_some()).count(),
             starred: all.iter().filter(|d| d.rating > 0).count(),
+            signed: all.iter().filter(|d| d.signed).count(),
+            forms: all.iter().filter(|d| d.forms).count(),
+            scans: all.iter().filter(|d| d.scanned).count(),
             copies: lib.duplicates().map_or(0, |g| g.iter().map(Vec::len).sum()),
             missing: lib
                 .docs(&Filter {
@@ -1054,6 +1066,9 @@ impl LibraryView {
             Place::All => t("library-all", &[]),
             Place::Recent => t("library-recent", &[]),
             Place::Starred => t("library-starred", &[]),
+            Place::Signed => t("library-signed", &[]),
+            Place::Forms => t("library-forms", &[]),
+            Place::Scans => t("library-scans", &[]),
             Place::Folder(path) => folder_name(path),
             Place::Tag(tag) => tag.clone(),
             Place::Collection(name) => name.clone(),
@@ -1174,6 +1189,24 @@ impl LibraryView {
                 "star",
                 t("library-starred", &[]),
                 self.counts.starred,
+            ),
+            (
+                Place::Signed,
+                "shield",
+                t("library-signed", &[]),
+                self.counts.signed,
+            ),
+            (
+                Place::Forms,
+                "form",
+                t("library-forms", &[]),
+                self.counts.forms,
+            ),
+            (
+                Place::Scans,
+                "scan",
+                t("library-scans", &[]),
+                self.counts.scans,
             ),
         ];
         for (i, (place, icon, name, n)) in counts.into_iter().enumerate() {
@@ -1431,6 +1464,19 @@ impl LibraryView {
                     .font_weight(FontWeight::BOLD)
                     .child(self.title()),
             )
+            .when(!elsewhere, |d| {
+                d.child(
+                    div()
+                        .flex_none()
+                        .pt(px(4.0))
+                        .text_size(px(text::SMALL))
+                        .text_color(th.dim)
+                        .child(t(
+                            "library-sorted",
+                            &[("sort", &t(&sort_name, &[]).to_lowercase())],
+                        )),
+                )
+            })
             .children(progress)
             .child(div().flex_1())
             .child(
@@ -1832,18 +1878,10 @@ impl LibraryView {
                             .px(px(6.0))
                             .py(px(1.0))
                             .rounded(px(4.0))
-                            .bg(if doc.missing {
-                                th.error_soft
-                            } else {
-                                th.accent_soft
-                            })
+                            .bg(mark_colours(marks[0].0, &th).1)
                             .text_size(px(text::MICRO))
                             .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(if doc.missing {
-                                th.error
-                            } else {
-                                th.accent_text
-                            })
+                            .text_color(mark_colours(marks[0].0, &th).0)
                             .child(mark.clone())
                     })),
             )
@@ -2294,14 +2332,55 @@ fn snippet(snippet: &str, th: Theme) -> impl IntoElement {
 }
 
 /// What a document is, in a line: its pages and size.
+/// Under a cover: when it was last opened (or changed) and its pages.
 fn doc_line(doc: &Doc) -> String {
-    let size = size_text(doc.size);
+    let when = day_name(doc.opened.unwrap_or(doc.modified));
     let id = if doc.pages == 1 {
         "library-doc-line-one"
     } else {
         "library-doc-line"
     };
-    t(id, &[("pages", &doc.pages.to_string()), ("size", &size)])
+    t(id, &[("pages", &doc.pages.to_string()), ("when", &when)])
+}
+
+/// A day as people say it: today, yesterday, the weekday this week,
+/// else the date.
+fn day_name(secs: i64) -> String {
+    let tz = jiff::tz::TimeZone::system();
+    let Ok(then) = jiff::Timestamp::from_second(secs).map(|t| t.to_zoned(tz.clone())) else {
+        return String::new();
+    };
+    let today = jiff::Zoned::now().date();
+    let days = (today - then.date()).get_days();
+    match days {
+        0 => t("library-today", &[]),
+        1 => t("library-yesterday", &[]),
+        2..=6 => then.strftime("%a").to_string(),
+        _ if then.year() == today.year() => then.strftime("%-d %b").to_string(),
+        _ => then.strftime("%-d %b %Y").to_string(),
+    }
+}
+
+/// The words and the ground of a cover's mark, by kind.
+fn mark_colours(id: &str, th: &Theme) -> (gpui::Hsla, gpui::Hsla) {
+    let hue = match id {
+        "library-mark-missing" => return (th.error, th.error_soft),
+        "library-mark-locked" => return (th.accent_text, th.accent_soft),
+        "library-mark-signed" => 0.39,
+        "library-mark-form" => 0.11,
+        _ => return (th.text2, th.sunk),
+    };
+    if th.dark {
+        (
+            gpui::hsla(hue, 0.7, 0.7, 1.0),
+            gpui::hsla(hue, 0.6, 0.5, 0.2),
+        )
+    } else {
+        (
+            gpui::hsla(hue, 0.75, 0.3, 1.0),
+            gpui::hsla(hue, 0.8, 0.55, 0.2),
+        )
+    }
 }
 
 pub(crate) fn size_text(bytes: u64) -> String {
@@ -2333,6 +2412,9 @@ fn glyph(icon: &str) -> &'static str {
         "search" => "filter",
         "copies" => "copy",
         "shield-alert" => "alert",
+        "shield" => "shield",
+        "form" => "form",
+        "scan" => "scan",
         _ => "file",
     }
 }
