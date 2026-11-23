@@ -96,7 +96,7 @@ view.full-screen	view	Full screen mode	reader	y	shipped	P1	#86 F5		acrobat
 view.full-screen-presentation	view	Full-screen presentation options (auto-advance, loop, click to advance)	reader	n	shipped	P1	#86 present.rs	/Trans, /Dur, black/white screen	acrobat
 view.reflow	view	Reflow text to the window width	reader	n	todo	P2	-		acrobat
 view.page-navigation	view	Page navigation (next, previous, first, last, go to page)	reader	y	shipped	P0	Phase 1		acrobat
-view.goto-page-label	view	Go to a page by its label (logical page numbers)	reader	n	partial	P1	#73	labels shown; typing a label to go there not yet	acrobat
+view.goto-page-label	view	Go to a page by its label (logical page numbers)	reader	n	shipped	P1	#151	Ctrl+G Go to page takes a number or a label	acrobat
 view.view-history	view	Previous view / next view	reader	y	shipped	P0	Phase 1, #143	Alt+Left/Alt+Right, Go menu, mouse back/forward buttons; zoom too	acrobat
 view.follow-links	view	Follow links and destinations	reader	y	shipped	P0	Phase 1		acrobat
 view.annotation-hover	view	Show comment text on hover	reader	n	todo	P1	-		acrobat
