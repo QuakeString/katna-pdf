@@ -50,6 +50,12 @@ app carries it out.
   line with switches and see-through, width, dashes, ends, corners,
   edit points, arrange (line up, turn, flip, fit, order), layer, delete.
   Notices and the signatures line float at the top, Find at the top right.
+- **Library** (`library.rs`, L01): the places are a card floating clear
+  of the window's edges (headed Library, with a close button), rows
+  rounded with the accent's wash for the place shown and section names
+  in small capitals; the covers are cards with a shadow and a badge at
+  the top right; the chosen file's strip and the strip for many chosen
+  float at the bottom.
 - **Profile menu**: the person, Mode (System, Day, Night), the colour
   schemes, the pages' colours, the app menu, an update when one is ready,
   Quit.
@@ -79,7 +85,7 @@ line icons (`icons/float/`, served as `icons/f/NAME.svg`), 1.7 px strokes.
 
 ## Still to come
 
-One PR per area of the storyboard: the library (L), and the Settings
+The Settings
 window with the Profile page and the scheme editor (X, T). The signing
 card as a step-by-step dialog (G02-G05) and the token status in the
 profile menu (S14) come with Settings.
