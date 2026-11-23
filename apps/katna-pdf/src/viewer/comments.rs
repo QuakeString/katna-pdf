@@ -1216,6 +1216,11 @@ impl Viewer {
             }
             open = open.child(chips);
         }
+        if !a.flags.locked
+            && let Some(look) = self.comment_look_row(a, cx)
+        {
+            open = open.child(look);
+        }
         let locked = a.flags.locked;
         let button = |id: &'static str, icon: &'static str, tip: &str, on: bool| {
             float::sized_ib(id, icon, 28.0, 15.0, t(tip, &[]), on, &th)

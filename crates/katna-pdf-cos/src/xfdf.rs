@@ -8,7 +8,7 @@
 use std::collections::HashMap;
 use std::fmt::Write as _;
 
-use crate::annots::{AnnotChanges, AnnotFlags, AnnotKind, Annotation, MarkupStyle};
+use crate::annots::{AnnotChanges, AnnotFlags, AnnotKind, Annotation, LineEnd, MarkupStyle};
 use crate::document::Document;
 use crate::forms::text_object;
 use crate::object::{Dict, Name, Object, Ref};
@@ -86,18 +86,27 @@ pub fn to_xfdf(annots: &[Vec<Annotation>], file: &str) -> String {
                         .unwrap_or_default()
                 ),
             ),
-            AnnotKind::Line { from, to, arrow } => (
+            AnnotKind::Line { from, to, .. } => (
                 "line",
                 format!(
-                    " start=\"{}\" end=\"{}\" head=\"None\" tail=\"{}\" width=\"{}\"",
+                    " start=\"{}\" end=\"{}\" head=\"{}\" tail=\"{}\" width=\"{}\"",
                     numbers(from),
                     numbers(to),
-                    if *arrow { "OpenArrow" } else { "None" },
+                    a.line_ends()[0].name(),
+                    a.line_ends()[1].name(),
                     num(a.width)
                 ),
             ),
             AnnotKind::Polygon(_) => ("polygon", format!(" width=\"{}\"", num(a.width))),
-            AnnotKind::PolyLine(_) => ("polyline", format!(" width=\"{}\"", num(a.width))),
+            AnnotKind::PolyLine(_) => (
+                "polyline",
+                format!(
+                    " width=\"{}\" head=\"{}\" tail=\"{}\"",
+                    num(a.width),
+                    a.ends[0].name(),
+                    a.ends[1].name()
+                ),
+            ),
             AnnotKind::Stamp(name) => ("stamp", format!(" icon=\"{}\"", escape(name))),
             AnnotKind::Caret => ("caret", String::from(" symbol=\"None\"")),
             // The file itself does not go in XML.
@@ -115,6 +124,9 @@ pub fn to_xfdf(annots: &[Vec<Annotation>], file: &str) -> String {
         }
         if a.cloudy {
             out.push_str(" style=\"cloudy\" intensity=\"1\"");
+        } else if a.dashed {
+            let d = num(crate::annots::dash_length(a.width));
+            let _ = write!(out, " style=\"dash\" dashes=\"{d},{d}\"");
         }
         let flags: Vec<&str> = [
             (a.flags.hidden, "hidden"),
@@ -294,6 +306,11 @@ pub fn from_xfdf(xml: &str) -> Result<Vec<XfdfAnnotation>, XfdfError> {
             a.callout = Some([[x1, y1], [x2, y2], [x3, y3]]);
         }
         a.cloudy = attr("style") == Some("cloudy");
+        a.dashed = attr("style") == Some("dash");
+        if matches!(a.kind, AnnotKind::Line { .. } | AnnotKind::PolyLine(_)) {
+            let end = |key: &str| attr(key).map_or(LineEnd::None, LineEnd::from_name);
+            a.ends = [end("head"), end("tail")];
+        }
         if let Some(flags) = attr("flags") {
             let has = |name: &str| flags.split(',').any(|f| f.trim() == name);
             a.flags = AnnotFlags {

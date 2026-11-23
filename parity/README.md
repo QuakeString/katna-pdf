@@ -27,7 +27,7 @@ the feature.
 | Viewing and navigation (`view`) | 108 | 73 | 7 | 23 | 0 | 5 |
 | Editing content (`edit`) | 83 | 52 | 12 | 16 | 0 | 3 |
 | Pages and document (`organize`) | 83 | 31 | 19 | 27 | 1 | 5 |
-| Comments and review (`comment`) | 77 | 48 | 9 | 12 | 0 | 8 |
+| Comments and review (`comment`) | 77 | 51 | 6 | 12 | 0 | 8 |
 | Forms (`form`) | 89 | 52 | 14 | 11 | 2 | 10 |
 | Security and redaction (`protect`) | 46 | 20 | 9 | 10 | 2 | 5 |
 | Digital signatures (`sign`) | 59 | 40 | 2 | 14 | 0 | 3 |
@@ -39,21 +39,21 @@ the feature.
 | Compare, automation, settings, cloud (`misc`) | 101 | 24 | 20 | 25 | 2 | 30 |
 | Library (`library`, ours) | 9 | 9 | 0 | 0 | 0 | 0 |
 | Ideas (`idea`, ours, proposed) | 11 | 0 | 0 | 10 | 1 | 0 |
-| **All** | **961** | **425** | **120** | **253** | **36** | **127** |
+| **All** | **961** | **428** | **117** | **253** | **36** | **127** |
 
 Against each product, counting only what is in scope (not `skip`):
 
 | Against | In scope | Shipped | Partial | To do | Deferred |
 |---|---:|---:|---:|---:|---:|
-| Acrobat Reader (free) | 333 | 231 (69 %) | 48 | 52 | 2 |
-| Acrobat Standard (Reader + Standard) | 553 | 339 (61 %) | 85 | 123 | 6 |
-| Acrobat Pro (everything below Studio) | 737 | 377 (51 %) | 111 | 216 | 33 |
-| Master PDF Editor | 437 | 302 (69 %) | 59 | 57 | 19 |
+| Acrobat Reader (free) | 333 | 234 (70 %) | 45 | 52 | 2 |
+| Acrobat Standard (Reader + Standard) | 553 | 342 (61 %) | 82 | 123 | 6 |
+| Acrobat Pro (everything below Studio) | 737 | 380 (51 %) | 108 | 216 | 33 |
+| Master PDF Editor | 437 | 304 (69 %) | 57 | 57 | 19 |
 | Only in Katna PDF | 61 | 32 | 5 | 22 | 2 |
 
 Many of Acrobat Pro's open rows are accessibility tagging (49 rows, nothing built
 yet) and OCR (25 rows, deferred by the owner on 2026-10-17). Without those two
-areas, Pro parity is 375 of 656 shipped (57 %), 73 % with partial rows counted.
+areas, Pro parity is 378 of 656 shipped (57 %), 73 % with partial rows counted.
 
 Out of scope (`skip`): Adobe's cloud services and accounts, shared reviews, Acrobat
 Sign requests, PDF Spaces and the generative AI features, prepress (separations,

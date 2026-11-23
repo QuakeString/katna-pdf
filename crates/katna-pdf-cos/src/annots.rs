@@ -133,6 +133,66 @@ pub struct Annotation {
     /// Part of the annotation `reply_to` names rather than a reply to it
     /// (`/RT /Group`): a replacement's strike-out, grouped to its caret.
     pub grouped: bool,
+    /// What a line or an open shape ends in, at its start and its end
+    /// (`/LE`). A line with `arrow` and none set ends in an open arrow.
+    pub ends: [LineEnd; 2],
+    /// Drawn with a dashed line (`/BS /S /D`).
+    pub dashed: bool,
+}
+
+/// How a line ends (`/LE`): the ten shapes PDF names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LineEnd {
+    #[default]
+    None,
+    Square,
+    Circle,
+    Diamond,
+    OpenArrow,
+    ClosedArrow,
+    Butt,
+    ROpenArrow,
+    RClosedArrow,
+    Slash,
+}
+
+impl LineEnd {
+    pub const ALL: [LineEnd; 10] = [
+        LineEnd::None,
+        LineEnd::OpenArrow,
+        LineEnd::ClosedArrow,
+        LineEnd::ROpenArrow,
+        LineEnd::RClosedArrow,
+        LineEnd::Square,
+        LineEnd::Circle,
+        LineEnd::Diamond,
+        LineEnd::Butt,
+        LineEnd::Slash,
+    ];
+
+    /// Its name in a file.
+    pub fn name(self) -> &'static str {
+        match self {
+            LineEnd::None => "None",
+            LineEnd::Square => "Square",
+            LineEnd::Circle => "Circle",
+            LineEnd::Diamond => "Diamond",
+            LineEnd::OpenArrow => "OpenArrow",
+            LineEnd::ClosedArrow => "ClosedArrow",
+            LineEnd::Butt => "Butt",
+            LineEnd::ROpenArrow => "ROpenArrow",
+            LineEnd::RClosedArrow => "RClosedArrow",
+            LineEnd::Slash => "Slash",
+        }
+    }
+
+    /// The end a file names; `None` for a name it doesn't know.
+    pub fn from_name(name: &str) -> Self {
+        Self::ALL
+            .into_iter()
+            .find(|e| e.name() == name)
+            .unwrap_or_default()
+    }
 }
 
 /// An annotation's flags (`/F`): whether it is shown, printed and may
@@ -358,9 +418,22 @@ impl Annotation {
             flags: AnnotFlags::default(),
             state: None,
             grouped: false,
+            ends: [LineEnd::None; 2],
+            dashed: false,
         };
         a.rect = a.bounds();
         a
+    }
+
+    /// What a line ends in at its start and end: `ends`, or for an arrow
+    /// with none set, an open arrow at its end.
+    pub fn line_ends(&self) -> [LineEnd; 2] {
+        match self.kind {
+            AnnotKind::Line { arrow: true, .. } if self.ends == [LineEnd::None; 2] => {
+                [LineEnd::None, LineEnd::OpenArrow]
+            }
+            _ => self.ends,
+        }
     }
 
     /// The box the annotation takes on the page: its `rect`, and for a
@@ -410,7 +483,11 @@ impl Annotation {
         }
         let grow = match self.kind {
             AnnotKind::Markup(..) => 1.0,
-            AnnotKind::Line { arrow: true, .. } => self.width * 0.5 + arrow_size(self.width),
+            AnnotKind::Line { .. } | AnnotKind::PolyLine(_)
+                if self.line_ends() != [LineEnd::None; 2] =>
+            {
+                self.width * 0.5 + arrow_size(self.width)
+            }
             AnnotKind::Polygon(_) if self.cloudy => self.width * 0.5 + cloud_radius(self.width),
             _ => self.width * 0.5 + 1.0,
         };
@@ -632,6 +709,23 @@ impl Document {
             Object::Dict(be) => be.name("S") == Some(b"C"),
             _ => false,
         };
+        let dashed = match self.resolve_key(&d, "BS") {
+            Object::Dict(bs) => bs.name("S") == Some(b"D"),
+            _ => false,
+        };
+        let ends = match (&kind, self.resolve_key(&d, "LE")) {
+            (AnnotKind::Line { .. } | AnnotKind::PolyLine(_), Object::Array(le)) => {
+                let end = |i: usize| {
+                    le.get(i)
+                        .and_then(Object::as_name)
+                        .map_or(LineEnd::None, |n| {
+                            LineEnd::from_name(&String::from_utf8_lossy(n))
+                        })
+                };
+                [end(0), end(1)]
+            }
+            _ => [LineEnd::None; 2],
+        };
         let mut rect = match numbers("Rect").as_slice() {
             [a, b, c, d] => normal([*a, *b, *c, *d]),
             _ => [0.0; 4],
@@ -672,6 +766,8 @@ impl Document {
             ),
             state: text("State").filter(|_| d.get("IRT").is_some()),
             grouped: d.get("IRT").is_some() && d.name("RT") == Some(b"Group"),
+            ends,
+            dashed,
             kind,
         })
     }
@@ -799,6 +895,9 @@ impl Document {
                     && old.colour == annot.colour
                     && old.opacity == annot.opacity
                     && old.width == annot.width
+                    && old.cloudy == annot.cloudy
+                    && old.dashed == annot.dashed
+                    && old.line_ends() == annot.line_ends()
                     && (old.contents == annot.contents
                         || !matches!(annot.kind, AnnotKind::FreeText { .. }))
             });
@@ -993,10 +1092,16 @@ pub(crate) fn write_dict(dict: &mut Dict, a: &Annotation, page: Ref) {
         }
     }
     let border = |dict: &mut Dict| {
-        dict.set(
-            "BS",
-            Dict(vec![(Name::new("W"), Object::Real(f64::from(a.width)))]),
-        );
+        let mut bs = vec![(Name::new("W"), Object::Real(f64::from(a.width)))];
+        if a.dashed {
+            let dash = f64::from(dash_length(a.width));
+            bs.push((Name::new("S"), Object::name("D")));
+            bs.push((
+                Name::new("D"),
+                Object::Array(vec![Object::Real(dash), Object::Real(dash)]),
+            ));
+        }
+        dict.set("BS", Dict(bs));
     };
     match &a.kind {
         AnnotKind::Markup(_, quads) => {
@@ -1048,19 +1153,28 @@ pub(crate) fn write_dict(dict: &mut Dict, a: &Annotation, page: Ref) {
             }
             border(dict);
         }
-        AnnotKind::Line { from, to, arrow } => {
+        AnnotKind::Line { from, to, .. } => {
             dict.set("L", reals(&[from[0], from[1], to[0], to[1]]));
+            let [start, end] = a.line_ends();
             dict.set(
                 "LE",
-                vec![
-                    Object::name("None"),
-                    Object::name(if *arrow { "OpenArrow" } else { "None" }),
-                ],
+                vec![Object::name(start.name()), Object::name(end.name())],
             );
             border(dict);
         }
         AnnotKind::Polygon(points) | AnnotKind::PolyLine(points) => {
             dict.set("Vertices", reals(points.as_flattened()));
+            if matches!(a.kind, AnnotKind::PolyLine(_)) && a.ends != [LineEnd::None; 2] {
+                dict.set(
+                    "LE",
+                    vec![
+                        Object::name(a.ends[0].name()),
+                        Object::name(a.ends[1].name()),
+                    ],
+                );
+            } else {
+                dict.remove("LE");
+            }
             border(dict);
         }
         AnnotKind::Stamp(name) => {
@@ -1127,6 +1241,10 @@ pub(crate) fn appearance(a: &Annotation) -> Object {
     let mut multiply = false;
     if a.opacity < 1.0 {
         c.push_str("/GS0 gs\n");
+    }
+    if a.dashed && !matches!(a.kind, AnnotKind::Markup(..) | AnnotKind::Stamp(_)) {
+        let d = dash_length(w);
+        let _ = writeln!(c, "[{d:.2} {d:.2}] 0 d");
     }
     match &a.kind {
         AnnotKind::Markup(style, quads) => {
@@ -1292,23 +1410,19 @@ pub(crate) fn appearance(a: &Annotation) -> Object {
             }
             c.push_str(if inside.is_some() { " B\n" } else { " S\n" });
         }
-        AnnotKind::Line { from, to, arrow } => {
+        AnnotKind::Line { from, to, .. } => {
             let _ = writeln!(
                 c,
                 "{stroke} {w:.2} w 1 J 1 j {} m {} l S",
                 pt(*from),
                 pt(*to)
             );
-            if *arrow {
-                let len = dist(*from, *to).max(0.001);
-                let d = [(to[0] - from[0]) / len, (to[1] - from[1]) / len];
-                let n = [-d[1], d[0]];
-                let s = arrow_size(w);
-                let back = [to[0] - d[0] * s, to[1] - d[1] * s];
-                let left = [back[0] + n[0] * s * 0.5, back[1] + n[1] * s * 0.5];
-                let right = [back[0] - n[0] * s * 0.5, back[1] - n[1] * s * 0.5];
-                let _ = writeln!(c, "{} m {} l {} l S", pt(left), pt(*to), pt(right));
+            let [start, end] = a.line_ends();
+            if a.dashed && (start, end) != (LineEnd::None, LineEnd::None) {
+                c.push_str("[] 0 d\n");
             }
+            line_end(&mut c, &fill, start, *from, *to, w);
+            line_end(&mut c, &fill, end, *to, *from, w);
         }
         AnnotKind::Polygon(points) if a.cloudy && points.len() >= 3 => {
             let _ = write!(c, "{stroke} {w:.2} w 1 J 1 j ");
@@ -1325,6 +1439,14 @@ pub(crate) fn appearance(a: &Annotation) -> Object {
             } else {
                 " S\n"
             });
+            if let (AnnotKind::PolyLine(_), [first, second, ..]) = (&a.kind, points.as_slice()) {
+                let [last, before] = [points[points.len() - 1], points[points.len() - 2]];
+                if a.dashed && a.ends != [LineEnd::None; 2] {
+                    c.push_str("[] 0 d\n");
+                }
+                line_end(&mut c, &fill, a.ends[0], *first, *second, w);
+                line_end(&mut c, &fill, a.ends[1], last, before, w);
+            }
         }
         AnnotKind::Stamp(name) if stamp_is_mark(name) => {
             let [x0, y0, x1, y1] = a.rect;
@@ -1547,6 +1669,74 @@ pub fn stamp_label(name: &str) -> String {
 
 fn arrow_size(width: f32) -> f32 {
     (width * 4.0).max(6.0)
+}
+
+/// The dashes and gaps of a dashed line `width` wide.
+pub(crate) fn dash_length(width: f32) -> f32 {
+    (width * 3.0).max(3.0)
+}
+
+/// Draws `end` at `at`, the end of a line coming from `from`, in the
+/// stroke colour already set and `fill` for the filled shapes.
+fn line_end(c: &mut String, fill: &str, end: LineEnd, at: [f32; 2], from: [f32; 2], w: f32) {
+    if end == LineEnd::None {
+        return;
+    }
+    let len = dist(at, from).max(0.001);
+    // Along the line towards its end, and across it.
+    let d = [(at[0] - from[0]) / len, (at[1] - from[1]) / len];
+    let n = [-d[1], d[0]];
+    let s = arrow_size(w);
+    let p = |along: f32, across: f32| {
+        pt([
+            at[0] + d[0] * along + n[0] * across,
+            at[1] + d[1] * along + n[1] * across,
+        ])
+    };
+    let h = s * 0.5;
+    let _ = match end {
+        LineEnd::None => Ok(()),
+        LineEnd::OpenArrow => writeln!(c, "{} m {} l {} l S", p(-s, h), p(0.0, 0.0), p(-s, -h)),
+        LineEnd::ClosedArrow => writeln!(
+            c,
+            "{fill} {} m {} l {} l h B",
+            p(-s, h),
+            p(0.0, 0.0),
+            p(-s, -h)
+        ),
+        LineEnd::ROpenArrow => writeln!(c, "{} m {} l {} l S", p(s, h), p(0.0, 0.0), p(s, -h)),
+        LineEnd::RClosedArrow => writeln!(
+            c,
+            "{fill} {} m {} l {} l h B",
+            p(s, h),
+            p(0.0, 0.0),
+            p(s, -h)
+        ),
+        LineEnd::Square => writeln!(
+            c,
+            "{fill} {} m {} l {} l {} l h B",
+            p(-h, -h),
+            p(h, -h),
+            p(h, h),
+            p(-h, h)
+        ),
+        LineEnd::Diamond => writeln!(
+            c,
+            "{fill} {} m {} l {} l {} l h B",
+            p(-h, 0.0),
+            p(0.0, -h),
+            p(h, 0.0),
+            p(0.0, h)
+        ),
+        LineEnd::Circle => {
+            let [x, y] = at;
+            let _ = write!(c, "{fill} ");
+            ellipse(c, [x - h, y - h, x + h, y + h]);
+            writeln!(c, " B")
+        }
+        LineEnd::Butt => writeln!(c, "{} m {} l S", p(0.0, h), p(0.0, -h)),
+        LineEnd::Slash => writeln!(c, "{} m {} l S", p(-h * 0.6, -h), p(h * 0.6, h)),
+    };
 }
 
 /// A quadrilateral's corners: top left, top right, bottom left, bottom
