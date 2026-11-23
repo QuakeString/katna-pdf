@@ -4045,6 +4045,7 @@ dependencies = [
  "jpeg-encoder",
  "katna-pdf-cos",
  "similar",
+ "unicode-normalization",
 ]
 
 [[package]]

@@ -24,7 +24,7 @@ the feature.
 | Area | Features | Shipped | Partial | To do | Deferred | Skip |
 |---|---:|---:|---:|---:|---:|---:|
 | Files and saving (`core`) | 61 | 30 | 13 | 15 | 1 | 2 |
-| Viewing and navigation (`view`) | 106 | 54 | 13 | 34 | 0 | 5 |
+| Viewing and navigation (`view`) | 108 | 58 | 12 | 33 | 0 | 5 |
 | Editing content (`edit`) | 83 | 52 | 12 | 16 | 0 | 3 |
 | Pages and document (`organize`) | 83 | 30 | 19 | 28 | 1 | 5 |
 | Comments and review (`comment`) | 77 | 39 | 11 | 19 | 0 | 8 |
@@ -39,21 +39,21 @@ the feature.
 | Compare, automation, settings, cloud (`misc`) | 101 | 15 | 20 | 34 | 2 | 30 |
 | Library (`library`, ours) | 9 | 9 | 0 | 0 | 0 | 0 |
 | Ideas (`idea`, ours, proposed) | 11 | 0 | 0 | 10 | 1 | 0 |
-| **All** | **959** | **369** | **138** | **289** | **36** | **127** |
+| **All** | **961** | **373** | **137** | **288** | **36** | **127** |
 
 Against each product, counting only what is in scope (not `skip`):
 
 | Against | In scope | Shipped | Partial | To do | Deferred |
 |---|---:|---:|---:|---:|---:|
-| Acrobat Reader (free) | 333 | 178 (53 %) | 66 | 87 | 2 |
-| Acrobat Standard (Reader + Standard) | 553 | 286 (51 %) | 103 | 158 | 6 |
-| Acrobat Pro (everything below Studio) | 737 | 324 (43 %) | 129 | 251 | 33 |
-| Master PDF Editor | 437 | 278 (63 %) | 68 | 72 | 19 |
-| Only in Katna PDF | 59 | 29 | 5 | 23 | 2 |
+| Acrobat Reader (free) | 333 | 180 (54 %) | 65 | 86 | 2 |
+| Acrobat Standard (Reader + Standard) | 553 | 288 (52 %) | 102 | 157 | 6 |
+| Acrobat Pro (everything below Studio) | 737 | 326 (44 %) | 128 | 250 | 33 |
+| Master PDF Editor | 437 | 280 (64 %) | 67 | 71 | 19 |
+| Only in Katna PDF | 61 | 31 | 5 | 23 | 2 |
 
 Many of Acrobat Pro's open rows are accessibility tagging (49 rows, nothing built
 yet) and OCR (25 rows, deferred by the owner on 2026-10-17). Without those two
-areas, Pro parity is 322 of 656 shipped (49 %), 68 % with partial rows counted.
+areas, Pro parity is 324 of 656 shipped (49 %), 68 % with partial rows counted.
 
 Out of scope (`skip`): Adobe's cloud services and accounts, shared reviews, Acrobat
 Sign requests, PDF Spaces and the generative AI features, prepress (separations,
@@ -69,8 +69,8 @@ awk -F'\t' 'NR>1 && $4=="reader" && $6!="shipped" && $6!="skip"{print $6"\t"$1"\
 
 ## What to build next for parity
 
-**Acrobat Reader gaps people meet every day** (all `reader`, `todo`): find options
-(whole word, match case) and find in comments; rotate the view; marquee zoom,
+**Acrobat Reader gaps people meet every day** (all `reader`, `todo`): find in
+comments; rotate the view; marquee zoom,
 loupe and fit height; snapshot of an area; search comments, copy comment text,
 eraser, area highlight, insert/replace-text proposals; autosave and revert; close
 all; a keyboard shortcuts card and About; print in grayscale and from thumbnails;
@@ -78,8 +78,8 @@ fonts list in Properties; signing with the Windows certificate store and macOS
 Keychain; self-signed digital IDs; the preferences window (identity, documents,
 commenting, forms, full screen, search); screen-reader support (AccessKit).
 
-**Master PDF Editor gaps** (`mpe` y, `katna` todo, 72 rows): autosave and backup
-on save; status bar; rotate view; snapshot; find options; spell check; object tree
+**Master PDF Editor gaps** (`mpe` y, `katna` todo, 71 rows): autosave and backup
+on save; status bar; rotate view; snapshot; spell check; object tree
 pane; edit inside form XObjects; links made from URLs in the text; a text box with
 several fonts; split by size; bookmarks for combined or inserted files; drag pages
 between files; scanner input (SANE / WIA); TIFF in and out, XPS, SVG; grayscale
