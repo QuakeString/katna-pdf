@@ -612,22 +612,7 @@ pub fn common_name(name: &x509_cert::name::Name) -> String {
     let mut org = None;
     for rdn in name.0.iter() {
         for atv in rdn.0.iter() {
-            let text = atv
-                .value
-                .decode_as::<String>()
-                .ok()
-                .or_else(|| {
-                    atv.value
-                        .decode_as::<der::asn1::PrintableStringRef<'_>>()
-                        .ok()
-                        .map(|s| s.as_str().to_owned())
-                })
-                .or_else(|| {
-                    atv.value
-                        .decode_as::<der::asn1::Ia5StringRef<'_>>()
-                        .ok()
-                        .map(|s| s.as_str().to_owned())
-                });
+            let text = name_text(atv);
             if atv.oid == oid::COMMON_NAME
                 && let Some(text) = text
             {
@@ -639,4 +624,23 @@ pub fn common_name(name: &x509_cert::name::Name) -> String {
         }
     }
     org.unwrap_or_else(|| name.to_string())
+}
+
+/// The text of one part of a name, as UTF-8, printable or IA5.
+pub(crate) fn name_text(atv: &x509_cert::attr::AttributeTypeAndValue) -> Option<String> {
+    atv.value
+        .decode_as::<String>()
+        .ok()
+        .or_else(|| {
+            atv.value
+                .decode_as::<der::asn1::PrintableStringRef<'_>>()
+                .ok()
+                .map(|s| s.as_str().to_owned())
+        })
+        .or_else(|| {
+            atv.value
+                .decode_as::<der::asn1::Ia5StringRef<'_>>()
+                .ok()
+                .map(|s| s.as_str().to_owned())
+        })
 }

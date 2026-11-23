@@ -892,6 +892,8 @@ pub struct Viewer {
     sig_open: Option<usize>,
     /// Whether that card shows the signer's certificate.
     sig_certificate: bool,
+    /// Which certificate of the chain the certificate view shows.
+    sig_cert_pick: usize,
     /// A copy of a signed file saved to edit (E16): no warning there.
     signed_copy: Option<PathBuf>,
     /// What signing needs to know of the file.
@@ -1138,6 +1140,7 @@ impl Viewer {
             signatures: None,
             sig_open: None,
             sig_certificate: false,
+            sig_cert_pick: 0,
             signed_copy: None,
             signable: Arc::default(),
             signing: None,
@@ -2179,7 +2182,10 @@ impl Viewer {
             self.exporting = None;
         } else if self.marking.is_some() {
             self.marking = None;
-        } else if !self.close_redact_confirm() {
+        } else if self.close_redact_confirm() {
+        } else if self.sig_open.is_some() && self.pane_shown() && self.tab == PaneTab::Signatures {
+            self.close_signature_card(cx);
+        } else {
             return false;
         }
         cx.notify();
@@ -4687,8 +4693,15 @@ impl Render for Viewer {
         let initials_bar = self.initials_bar(cx);
         let reading_bar = self.reading_bar(cx);
         let signatures_line = self.signatures_line(cx);
-        let signature_card = self.signature_card(cx);
         let card_top = space::S2 + if signatures_line.is_some() { 52.0 } else { 0.0 };
+        // The signature card stops short of the dock, and scrolls.
+        let signature_card = self.signature_card(
+            unpx(window.viewport_size().height) * katna_ui::scale::scale()
+                - 48.0
+                - card_top
+                - 104.0,
+            cx,
+        );
         let signing_card = self.signing_card(cx);
         let marks_card = self.marks_card(window, cx);
         let unsaved_card = self.unsaved_card(cx);

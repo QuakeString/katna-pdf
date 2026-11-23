@@ -9,6 +9,7 @@
 //! this crate makes and reads the CMS. Trust in the signer (the chain up
 //! to a root such as CCA India's, revocation) is not checked yet.
 
+pub mod certview;
 mod cms;
 mod keys;
 mod oid;

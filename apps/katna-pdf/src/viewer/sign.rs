@@ -56,6 +56,9 @@ pub(super) struct SigRow {
     pub revision: Option<usize>,
     /// The signer's certificate, when the signature could be read.
     pub certificate: Option<Arc<Certificate>>,
+    /// The signer's certificate and those that issued it, as far as
+    /// they were sent with the signature.
+    pub certificates: Vec<Arc<Certificate>>,
     /// Who issued whom, from the signer up, and whether that ends in a
     /// certificate that issued itself (else the last was not sent).
     pub chain: (Vec<String>, bool),
@@ -289,6 +292,16 @@ fn rows(checks: Vec<katna_pdf_sign::SignatureCheck>) -> Vec<SigRow> {
                     _ => None,
                 },
                 certificate: c.result.as_ref().ok().map(|r| Arc::new(r.signer.clone())),
+                certificates: c
+                    .result
+                    .as_ref()
+                    .map(|r| {
+                        katna_pdf_sign::certview::chain_certificates(&r.signer, &r.certificates)
+                            .into_iter()
+                            .map(Arc::new)
+                            .collect()
+                    })
+                    .unwrap_or_default(),
                 chain: c
                     .result
                     .as_ref()
