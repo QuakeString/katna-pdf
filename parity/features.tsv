@@ -896,18 +896,18 @@ misc.flash-swf	misc	Flash/SWF content	reader	n	skip	-	-		acrobat
 misc.preferences-dialog	misc	Preferences dialog generated from a schema	reader	y	partial	P1	-	Settings window planned in the redesign	acrobat
 misc.prefs-general	misc	Preferences: general	reader	y	partial	P1	-		acrobat
 misc.prefs-page-display	misc	Preferences: page display	reader	y	partial	P1	-		acrobat
-misc.prefs-documents	misc	Preferences: documents (autosave interval, recent count)	reader	y	todo	P1	-		acrobat
-misc.prefs-commenting	misc	Preferences: commenting	reader	y	todo	P1	-		acrobat
-misc.prefs-forms	misc	Preferences: forms	reader	y	todo	P1	-		acrobat
-misc.prefs-identity	misc	Preferences: identity	reader	y	todo	P1	-		acrobat
-misc.prefs-full-screen	misc	Preferences: full screen	reader	n	todo	P1	-		acrobat
-misc.prefs-search	misc	Preferences: search	reader	n	todo	P1	-		acrobat
+misc.prefs-documents	misc	Preferences: documents (autosave interval, recent count)	reader	y	shipped	P1	#170		acrobat
+misc.prefs-commenting	misc	Preferences: commenting	reader	y	shipped	P1	#170		acrobat
+misc.prefs-forms	misc	Preferences: forms	reader	y	shipped	P1	#170		acrobat
+misc.prefs-identity	misc	Preferences: identity	reader	y	shipped	P1	#170		acrobat
+misc.prefs-full-screen	misc	Preferences: full screen	reader	n	shipped	P1	#170		acrobat
+misc.prefs-search	misc	Preferences: search	reader	n	shipped	P1	#170		acrobat
 misc.prefs-signatures	misc	Preferences: signatures	reader	y	partial	P1	sign card remembers		acrobat
 misc.prefs-security	misc	Preferences: security and trust	reader	y	partial	P1	trusted folder		acrobat
 misc.prefs-spelling	misc	Preferences: spelling	reader	n	todo	P2	-		acrobat
 misc.prefs-language	misc	Preferences: language	reader	y	partial	P1	follows the system		acrobat
 misc.prefs-reading	misc	Preferences: reading	reader	n	partial	P1	read-aloud voice		acrobat
-misc.prefs-accessibility	misc	Preferences: accessibility	reader	n	todo	P1	-		acrobat
+misc.prefs-accessibility	misc	Preferences: accessibility	reader	n	shipped	P1	#170		acrobat
 misc.prefs-color-management	misc	Preferences: colour management	reader	n	skip	-	-		acrobat
 misc.prefs-javascript	misc	Preferences: JavaScript	reader	y	shipped	-	settings.rs	one switch: Run forms' own scripts	acrobat
 misc.prefs-measuring	misc	Preferences: measuring	reader	n	partial	P1	#84		acrobat

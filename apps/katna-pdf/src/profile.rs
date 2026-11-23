@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! The person using the app (X00): their name, a short name, job title
-//! and organisation, kept in the state folder (`pdf/profile.txt`) on
+//! organisation and email, kept in the state folder (`pdf/profile.txt`) on
 //! this computer only. Comments carry the short name (or the name), and
-//! the title bar's picture shows the name's initials.
+//! the title bar's picture shows the name's initials; signatures give
+//! the email as how to reach the signer (`/ContactInfo`).
 
 use std::path::PathBuf;
 
@@ -16,6 +17,7 @@ pub struct Profile {
     pub short: String,
     pub title: String,
     pub organisation: String,
+    pub email: String,
 }
 
 fn file() -> Option<PathBuf> {
@@ -46,6 +48,7 @@ impl Profile {
                 "short" => profile.short = value,
                 "title" => profile.title = value,
                 "organisation" => profile.organisation = value,
+                "email" => profile.email = value,
                 _ => {}
             }
         }
@@ -56,11 +59,12 @@ impl Profile {
         // One line each, so a line break typed in is kept out.
         let one = |s: &str| s.replace(['\n', '\r'], " ");
         format!(
-            "name={}\nshort={}\ntitle={}\norganisation={}\n",
+            "name={}\nshort={}\ntitle={}\norganisation={}\nemail={}\n",
             one(&self.name),
             one(&self.short),
             one(&self.title),
-            one(&self.organisation)
+            one(&self.organisation),
+            one(&self.email)
         )
     }
 
@@ -92,6 +96,11 @@ impl Profile {
             .find(|s| !s.is_empty())
             .map(str::to_owned)
     }
+
+    /// The email signatures give as how to reach the signer, if any.
+    pub fn contact(&self) -> Option<String> {
+        Some(self.email.trim().to_owned()).filter(|e| !e.is_empty())
+    }
 }
 
 #[cfg(test)]
@@ -105,11 +114,13 @@ mod tests {
             short: "M. Hossain".into(),
             title: "Purchase officer".into(),
             organisation: "District office,\nKolkata".into(),
+            email: "officer@example.org".into(),
         };
         let back = Profile::parse(&p.text());
         assert_eq!(back.name, p.name);
         assert_eq!(back.short, p.short);
         assert_eq!(back.organisation, "District office, Kolkata");
+        assert_eq!(back.email, p.email);
         assert_eq!(back.author().as_deref(), Some("M. Hossain"));
         assert_eq!(Profile::default().author(), None);
     }

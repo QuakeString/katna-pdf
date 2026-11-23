@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Copies of changes not yet saved, kept every little while in the state
+//! Copies of changes not yet saved, kept every minute or few (Settings > Editing) in the state
 //! folder (`pdf/recovery/`), so a crash or a power cut loses at most a
 //! minute or two. Each file changed has its copy (`NAME.pdf`, the file as
 //! changed) and the path it belongs to (`NAME.txt`). A copy goes when its
@@ -13,7 +13,8 @@
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-/// How often changes are copied, in seconds.
+/// How often the app looks whether changes are due a copy, in seconds;
+/// Settings > Editing says every how many of these minutes one is kept.
 pub const EVERY: u64 = 60;
 
 /// The folder the copies are kept in.

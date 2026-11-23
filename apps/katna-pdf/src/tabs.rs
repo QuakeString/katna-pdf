@@ -134,14 +134,20 @@ impl Tabs {
         this
     }
 
-    /// Every [`crate::recovery::EVERY`] seconds, keeps a copy of each
-    /// tab's changes not saved.
+    /// Every few minutes, as Settings > Editing says, keeps a copy of
+    /// each tab's changes not saved.
     fn keep_changes(&mut self, cx: &mut Context<Self>) {
         cx.spawn(async move |this, cx| {
             let every = std::time::Duration::from_secs(crate::recovery::EVERY);
+            let mut minutes = 0;
             loop {
                 cx.background_executor().timer(every).await;
+                minutes += 1;
                 let kept = this.update(cx, |this, cx| {
+                    if minutes < cx.global::<crate::prefs::Prefs>().recovery_minutes {
+                        return;
+                    }
+                    minutes = 0;
                     for tab in &this.tabs {
                         tab.viewer.update(cx, |viewer, cx| viewer.keep_changes(cx));
                     }
