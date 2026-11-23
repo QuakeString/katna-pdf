@@ -286,7 +286,9 @@ impl Viewer {
                             cx,
                         );
                     }
-                    Err(error) => this.notice = Some(t("attach-failed", &[("error", &error)])),
+                    Err(error) => {
+                        this.notice = Some(super::said("attach-failed", &[("error", &error)]))
+                    }
                 }
                 cx.notify();
             })
@@ -334,11 +336,11 @@ impl Viewer {
                 .await;
             this.update(cx, |this, cx| {
                 this.notice = Some(match written {
-                    Ok(target) => t(
+                    Ok(target) => super::said(
                         "comment-saved-file",
                         &[("name", &super::file_name(&target))],
                     ),
-                    Err(error) => t("comments-failed", &[("error", &error)]),
+                    Err(error) => super::said("comments-failed", &[("error", &error)]),
                 });
                 cx.notify();
             })

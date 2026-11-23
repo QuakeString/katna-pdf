@@ -401,7 +401,10 @@ impl Viewer {
             match katna_pdf_cos::ranges::parse(&spec, count) {
                 Ok(pages) => pages,
                 Err(error) => {
-                    self.notice = Some(t("export-failed", &[("error", &error.to_string())]));
+                    self.notice = Some(super::said(
+                        "export-failed",
+                        &[("error", &error.to_string())],
+                    ));
                     cx.notify();
                     return;
                 }
@@ -483,9 +486,9 @@ impl Viewer {
                 this.exporting = None;
                 this.notice = Some(match written {
                     Ok((name, n)) => {
-                        t("export-done", &[("name", &name), ("count", &n.to_string())])
+                        super::said("export-done", &[("name", &name), ("count", &n.to_string())])
                     }
-                    Err(error) => t("export-failed", &[("error", &error)]),
+                    Err(error) => super::said("export-failed", &[("error", &error)]),
                 });
                 cx.notify();
             })

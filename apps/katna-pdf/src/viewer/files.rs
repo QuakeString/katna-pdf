@@ -341,13 +341,15 @@ impl Viewer {
                         if open {
                             cx.open_url(&target.to_string_lossy());
                         } else {
-                            this.notice = Some(t(
+                            this.notice = Some(super::said(
                                 "comment-saved-file",
                                 &[("name", &super::file_name(&target))],
                             ));
                         }
                     }
-                    Err(error) => this.notice = Some(t("files-failed", &[("error", &error)])),
+                    Err(error) => {
+                        this.notice = Some(super::said("files-failed", &[("error", &error)]))
+                    }
                 }
                 cx.notify();
             })

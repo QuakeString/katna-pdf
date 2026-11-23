@@ -298,11 +298,11 @@ impl Viewer {
                 .await;
             this.update(cx, |this, cx| {
                 this.notice = Some(match written {
-                    Ok(target) => t(
+                    Ok(target) => super::said(
                         "comments-text-saved",
                         &[("name", &super::file_name(&target))],
                     ),
-                    Err(error) => t("comments-failed", &[("error", &error)]),
+                    Err(error) => super::said("comments-failed", &[("error", &error)]),
                 });
                 cx.notify();
             })

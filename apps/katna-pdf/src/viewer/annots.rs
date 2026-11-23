@@ -511,7 +511,7 @@ impl Viewer {
                     Ok((bytes, doc, cos)) => this.show_annotated(bytes, doc, cos, &pages, new_on),
                     Err(error) => {
                         this.comment_next = false;
-                        this.notice = Some(t("annotate-failed", &[("error", &error)]));
+                        this.notice = Some(super::said("annotate-failed", &[("error", &error)]));
                     }
                 }
                 // What was asked for meanwhile.
@@ -707,8 +707,10 @@ impl Viewer {
                 .await;
             this.update(cx, |this, cx| {
                 this.notice = Some(match written {
-                    Ok(target) => t("comments-exported", &[("name", &super::file_name(&target))]),
-                    Err(error) => t("comments-failed", &[("error", &error)]),
+                    Ok(target) => {
+                        super::said("comments-exported", &[("name", &super::file_name(&target))])
+                    }
+                    Err(error) => super::said("comments-failed", &[("error", &error)]),
                 });
                 cx.notify();
             })
@@ -762,10 +764,12 @@ impl Viewer {
                 }
                 match read {
                     Ok(changes) if changes.put.is_empty() => {
-                        this.notice = Some(t("comments-import-none", &[]));
+                        this.notice = Some(super::said("comments-import-none", &[]));
                     }
                     Ok(changes) => this.change_annotations(changes, cx),
-                    Err(error) => this.notice = Some(t("comments-failed", &[("error", &error)])),
+                    Err(error) => {
+                        this.notice = Some(super::said("comments-failed", &[("error", &error)]))
+                    }
                 }
                 cx.notify();
             })

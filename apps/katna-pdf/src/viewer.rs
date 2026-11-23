@@ -155,6 +155,41 @@ actions!(
 );
 
 /// Our object layer's copy of `bytes`, a locked file opened with `key`.
+/// A line in the notice bar, and whether it tells of something that
+/// went wrong (in the error's colours) or only what happened.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Notice {
+    words: String,
+    error: bool,
+}
+
+impl Notice {
+    /// Something that went wrong, in words not from an id.
+    pub(crate) fn error(words: String) -> Self {
+        Notice { words, error: true }
+    }
+}
+
+/// The notice message `id` says, with `args`: an error when its id says
+/// something failed, was refused or is missing.
+pub(super) fn said(id: &str, args: &[(&str, &str)]) -> Notice {
+    const WRONG: [&str; 9] = [
+        "failed",
+        "-bad",
+        "-no-",
+        "gone",
+        "unsupported",
+        "-there",
+        "partial",
+        "unsaved",
+        "error",
+    ];
+    Notice {
+        words: t(id, args),
+        error: WRONG.iter().any(|w| id.contains(w)),
+    }
+}
+
 pub(crate) fn cos(bytes: Vec<u8>, key: Option<&str>) -> Result<katna_pdf_cos::Document, String> {
     let mut doc = katna_pdf_cos::Document::load(bytes).map_err(|e| e.to_string())?;
     // A file anyone can open is open already, but only its owner's
@@ -488,7 +523,7 @@ pub struct Viewer {
     key: Option<Arc<str>>,
     /// A line shown under the toolbar until dismissed, such as why
     /// printing failed.
-    notice: Option<String>,
+    notice: Option<Notice>,
     /// The form's changes the person was told closing would lose.
     close_warned: Option<u64>,
     /// The text selected with the pointer, and whether it is being
@@ -825,7 +860,10 @@ impl Viewer {
     /// The file shown or being opened.
     /// Shows `words` in the notice bar.
     pub(crate) fn tell(&mut self, words: String, cx: &mut Context<Self>) {
-        self.notice = Some(words);
+        self.notice = Some(Notice {
+            words,
+            error: false,
+        });
         cx.notify();
     }
 
@@ -2243,7 +2281,7 @@ impl Viewer {
                     "FirstPage" => 0,
                     "LastPage" => last,
                     _ => {
-                        self.notice = Some(t("form-action-unsupported", &[("what", &name)]));
+                        self.notice = Some(said("form-action-unsupported", &[("what", &name)]));
                         cx.notify();
                         return;
                     }
@@ -2256,7 +2294,7 @@ impl Viewer {
                 } else {
                     "JavaScript (Settings > Editing)"
                 };
-                self.notice = Some(t("form-action-unsupported", &[("what", what)]));
+                self.notice = Some(said("form-action-unsupported", &[("what", what)]));
                 cx.notify();
             }
         }
@@ -2271,7 +2309,7 @@ impl Viewer {
     ) {
         let lower = url.trim().to_ascii_lowercase();
         if !lower.starts_with("https://") && !lower.starts_with("http://") {
-            self.notice = Some(t("form-send-failed", &[("error", &url)]));
+            self.notice = Some(said("form-send-failed", &[("error", &url)]));
             cx.notify();
             return;
         }
@@ -2282,7 +2320,7 @@ impl Viewer {
         let current = self.unsaved();
         let key = self.key.clone();
         let name = file_name(&path);
-        self.notice = Some(t("form-sending", &[]));
+        self.notice = Some(said("form-sending", &[]));
         cx.notify();
         cx.spawn(async move |this, cx| {
             let sent = cx
@@ -2305,9 +2343,9 @@ impl Viewer {
                 .await;
             this.update(cx, |this, cx| {
                 this.notice = Some(match sent {
-                    Ok(status) if (200..300).contains(&status) => t("form-sent", &[]),
-                    Ok(status) => t("form-send-failed", &[("error", &status.to_string())]),
-                    Err(error) => t("form-send-failed", &[("error", &error)]),
+                    Ok(status) if (200..300).contains(&status) => said("form-sent", &[]),
+                    Ok(status) => said("form-send-failed", &[("error", &status.to_string())]),
+                    Err(error) => said("form-send-failed", &[("error", &error)]),
                 });
                 cx.notify();
             })
@@ -2358,7 +2396,7 @@ impl Viewer {
             self.refill(field, cx);
         }
         if !done.alerts.is_empty() {
-            self.notice = Some(t("form-says", &[("message", &done.alerts.join(" "))]));
+            self.notice = Some(said("form-says", &[("message", &done.alerts.join(" "))]));
             cx.notify();
         }
         for request in done.requests {
@@ -2418,7 +2456,7 @@ impl Viewer {
                         this.swap_doc(doc, &pages);
                     }
                     Err(error) => {
-                        this.notice = Some(t("form-failed", &[("error", &error)]));
+                        this.notice = Some(said("form-failed", &[("error", &error)]));
                     }
                 }
                 cx.notify();
@@ -2634,8 +2672,8 @@ impl Viewer {
                 .await;
             this.update(cx, |this, cx| {
                 this.notice = Some(match written {
-                    Ok(target) => t("pages-extracted", &[("name", &file_name(&target))]),
-                    Err(error) => t("pages-failed", &[("error", &error)]),
+                    Ok(target) => said("pages-extracted", &[("name", &file_name(&target))]),
+                    Err(error) => said("pages-failed", &[("error", &error)]),
                 });
                 cx.notify();
             })
@@ -2756,7 +2794,7 @@ impl Viewer {
                 this.changing_pages = false;
                 match changed {
                     Ok((bytes, doc, cos)) => this.show_changed(name, bytes, doc, cos, picked),
-                    Err(error) => this.notice = Some(t("pages-failed", &[("error", &error)])),
+                    Err(error) => this.notice = Some(said("pages-failed", &[("error", &error)])),
                 }
                 cx.notify();
             })
@@ -2927,7 +2965,7 @@ impl Viewer {
                             this.edited = None;
                         }
                     }
-                    Err(error) => this.notice = Some(t("undo-failed", &[("error", &error)])),
+                    Err(error) => this.notice = Some(said("undo-failed", &[("error", &error)])),
                 }
                 cx.notify();
             })
@@ -2962,7 +3000,7 @@ impl Viewer {
             return true;
         }
         self.close_warned = Some(mark);
-        self.notice = Some(t("unsaved-close", &[]));
+        self.notice = Some(said("unsaved-close", &[]));
         cx.notify();
         false
     }
@@ -3008,7 +3046,7 @@ impl Viewer {
                         this.notice = None;
                         back = true;
                     }
-                    Err(error) => this.notice = Some(t("save-failed", &[("error", &error)])),
+                    Err(error) => this.notice = Some(said("save-failed", &[("error", &error)])),
                 }
                 cx.notify();
             })
@@ -3030,7 +3068,7 @@ impl Viewer {
         origin: crate::drives::Origin,
         cx: &mut Context<Self>,
     ) {
-        self.notice = Some(t("drive-saving", &[]));
+        self.notice = Some(said("drive-saving", &[]));
         cx.notify();
         cx.spawn(async move |this, cx| {
             let done = cx
@@ -3042,9 +3080,9 @@ impl Viewer {
                 .await;
             this.update(cx, |this, cx| {
                 let notice = match done {
-                    (Ok(()), drive) => t("drive-saved", &[("drive", &drive)]),
+                    (Ok(()), drive) => said("drive-saved", &[("drive", &drive)]),
                     (Err(error), drive) => {
-                        t("drive-save-failed", &[("drive", &drive), ("error", &error)])
+                        said("drive-save-failed", &[("drive", &drive), ("error", &error)])
                     }
                 };
                 this.notice = Some(notice);
@@ -3065,9 +3103,9 @@ impl Viewer {
             let printed = crate::print::print(&title, &path).await;
             let notice = match printed {
                 crate::print::Printed::Done => None,
-                crate::print::Printed::NoDialog => Some(t("print-no-dialog", &[])),
+                crate::print::Printed::NoDialog => Some(said("print-no-dialog", &[])),
                 crate::print::Printed::Failed(error) => {
-                    Some(t("print-failed", &[("error", &error)]))
+                    Some(said("print-failed", &[("error", &error)]))
                 }
             };
             this.update(cx, |this, cx| {
@@ -3707,7 +3745,7 @@ impl Render for Viewer {
         let print_card = self.print_card(window, cx);
         let link_card = self.link_card(window, cx);
         let numbering_card = self.numbering_card(window, cx);
-        let paste_many_card = self.paste_many_card(cx);
+        let paste_many_card = self.paste_many_card(window, cx);
         let setup_card = self.setup_card(cx);
         // The properties card scrolls when the window is shorter than it.
         let card_height = unpx(window.viewport_size().height) * katna_ui::scale::scale()
@@ -3722,6 +3760,11 @@ impl Render for Viewer {
         let design_card = self.design_card(side_room, cx);
         let find_bar = self.find_bar(cx);
         let notice = self.notice.clone().map(|notice| {
+            let (bg, fg, glyph) = if notice.error {
+                (th.error_soft, th.error, "alert")
+            } else {
+                (th.inverse, th.on_inverse, "info")
+            };
             div()
                 .id("notice")
                 .occlude()
@@ -3733,12 +3776,12 @@ impl Render for Viewer {
                 .pr(px(space::S2))
                 .py(px(space::S1))
                 .rounded(px(radius::SM))
-                .bg(th.error_soft)
+                .bg(bg)
                 .shadow(th.shadow())
                 .text_size(px(12.5))
-                .text_color(th.error)
-                .child(float::icon("alert", 15.0, th.error))
-                .child(div().flex_1().min_w_0().child(notice))
+                .text_color(fg)
+                .child(float::icon(glyph, 15.0, fg))
+                .child(div().flex_1().min_w_0().child(notice.words))
                 .child(icon_button(
                     "notice-close",
                     "close",
@@ -4126,7 +4169,15 @@ impl Render for Viewer {
                     }),
                 )
             }))
-            .children(paste_many_card.map(|c| float::appear_over("paste_many_card", c, -6.0)))
+            .children(paste_many_card.map(|card| {
+                dialog(
+                    th,
+                    card,
+                    cx.listener(|this, _, window, cx| {
+                        this.toggle_paste_many(window, cx);
+                    }),
+                )
+            }))
             .children(setup_card.map(|card| {
                 dialog(
                     th,

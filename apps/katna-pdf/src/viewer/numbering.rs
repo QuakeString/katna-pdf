@@ -164,7 +164,7 @@ impl Viewer {
         let ranges = match self.numbering_ranges(cx) {
             Ok(ranges) => ranges,
             Err(message) => {
-                self.notice = Some(message);
+                self.notice = Some(super::Notice::error(message));
                 cx.notify();
                 return;
             }

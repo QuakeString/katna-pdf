@@ -1755,8 +1755,10 @@ impl Viewer {
                 .await;
             this.update(cx, |this, cx| {
                 this.notice = Some(match written {
-                    Ok(target) => t("form-exported", &[("name", &super::file_name(&target))]),
-                    Err(error) => t("form-design-failed", &[("error", &error)]),
+                    Ok(target) => {
+                        super::said("form-exported", &[("name", &super::file_name(&target))])
+                    }
+                    Err(error) => super::said("form-design-failed", &[("error", &error)]),
                 });
                 cx.notify();
             })

@@ -753,7 +753,7 @@ impl Viewer {
         let pages = match self.mark_pages(marking, cx) {
             Ok(pages) => pages,
             Err(error) => {
-                self.notice = Some(t("marks-failed", &[("error", &error)]));
+                self.notice = Some(super::said("marks-failed", &[("error", &error)]));
                 cx.notify();
                 return;
             }

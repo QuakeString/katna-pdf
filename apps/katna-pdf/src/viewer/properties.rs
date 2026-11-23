@@ -276,7 +276,7 @@ impl Viewer {
         };
         let current = self.unsaved();
         let key = self.key.clone();
-        self.notice = Some(t("properties-shrinking", &[]));
+        self.notice = Some(super::said("properties-shrinking", &[]));
         cx.notify();
         cx.spawn(async move |this, cx| {
             let done = cx
@@ -303,7 +303,7 @@ impl Viewer {
                             move |_| Ok(bytes),
                             cx,
                         );
-                        this.notice = Some(t(
+                        this.notice = Some(super::said(
                             "properties-shrunk",
                             &[
                                 ("before", &crate::library::size_text(before)),
@@ -311,9 +311,12 @@ impl Viewer {
                             ],
                         ));
                     }
-                    Ok(_) => this.notice = Some(t("properties-shrink-none", &[])),
+                    Ok(_) => this.notice = Some(super::said("properties-shrink-none", &[])),
                     Err(error) => {
-                        this.notice = Some(t("properties-shrink-failed", &[("error", &error)]))
+                        this.notice = Some(super::said(
+                            "properties-shrink-failed",
+                            &[("error", &error)],
+                        ))
                     }
                 }
                 cx.notify();
@@ -347,7 +350,7 @@ impl Viewer {
                 return;
             };
             this.update(cx, |this, cx| {
-                this.notice = Some(t("pdfa-working", &[]));
+                this.notice = Some(super::said("pdfa-working", &[]));
                 cx.notify();
             })
             .ok();
@@ -369,15 +372,17 @@ impl Viewer {
                 .await;
             this.update(cx, |this, cx| {
                 this.notice = Some(match done {
-                    Ok((name, left)) if left.is_empty() => t("pdfa-saved", &[("name", &name)]),
+                    Ok((name, left)) if left.is_empty() => {
+                        super::said("pdfa-saved", &[("name", &name)])
+                    }
                     Ok((name, left)) => {
                         let left: Vec<String> = left.iter().map(ToString::to_string).collect();
-                        t(
+                        super::said(
                             "pdfa-saved-left",
                             &[("name", &name), ("left", &left.join("; "))],
                         )
                     }
-                    Err(error) => t("pdfa-failed", &[("error", &error)]),
+                    Err(error) => super::said("pdfa-failed", &[("error", &error)]),
                 });
                 cx.notify();
             })
@@ -992,7 +997,7 @@ impl Viewer {
                     .tip(t("properties-action-copy", &[]), &th.katna)
                     .on_click(cx.listener(move |this, _, _, cx| {
                         cx.write_to_clipboard(gpui::ClipboardItem::new_string(whole.clone()));
-                        this.notice = Some(t("properties-action-copied", &[]));
+                        this.notice = Some(super::said("properties-action-copied", &[]));
                         cx.notify();
                     }))
                     .child(

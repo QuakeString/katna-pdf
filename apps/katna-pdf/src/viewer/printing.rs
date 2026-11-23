@@ -560,7 +560,7 @@ impl Viewer {
             return None;
         }
         if let Err(error) = self.chosen_pages(cx) {
-            self.notice = Some(t("print-failed", &[("error", &error)]));
+            self.notice = Some(super::said("print-failed", &[("error", &error)]));
             cx.notify();
             return None;
         }
@@ -625,7 +625,7 @@ impl Viewer {
                         if let Some(p) = this.printing.as_mut() {
                             p.working = false;
                         }
-                        this.notice = Some(t("print-failed", &[("error", &error)]));
+                        this.notice = Some(super::said("print-failed", &[("error", &error)]));
                         cx.notify();
                     })
                     .ok();
@@ -644,13 +644,16 @@ impl Viewer {
                 return;
             }
             let notice = if save_is(&target) {
-                Some(t("print-saved", &[("name", &super::file_name(&target))]))
+                Some(super::said(
+                    "print-saved",
+                    &[("name", &super::file_name(&target))],
+                ))
             } else {
                 match crate::print::print(&title, &target).await {
                     crate::print::Printed::Done => None,
-                    crate::print::Printed::NoDialog => Some(t("print-no-dialog", &[])),
+                    crate::print::Printed::NoDialog => Some(super::said("print-no-dialog", &[])),
                     crate::print::Printed::Failed(error) => {
-                        Some(t("print-failed", &[("error", &error)]))
+                        Some(super::said("print-failed", &[("error", &error)]))
                     }
                 }
             };

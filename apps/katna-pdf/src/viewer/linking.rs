@@ -237,7 +237,7 @@ impl Viewer {
         };
         let typed = linking.target.read(cx).text().to_owned();
         let Some(target) = parse_target(&typed, count) else {
-            self.notice = Some(t("link-bad", &[("pages", &count.to_string())]));
+            self.notice = Some(super::said("link-bad", &[("pages", &count.to_string())]));
             cx.notify();
             return;
         };

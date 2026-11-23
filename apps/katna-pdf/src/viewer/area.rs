@@ -11,7 +11,6 @@ use katna_ui::px;
 use katna_ui::scale::desktop_px;
 
 use super::{Content, POINT, STEPS, Viewer, Zoom};
-use crate::text::t;
 
 /// What an area tool does with the area.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -207,9 +206,9 @@ impl Viewer {
                             ImageFormat::Png,
                             png,
                         )));
-                        t("snapshot-copied", &[])
+                        super::said("snapshot-copied", &[])
                     }
-                    None => t("snapshot-failed", &[]),
+                    None => super::said("snapshot-failed", &[]),
                 });
                 cx.notify();
             })

@@ -481,7 +481,7 @@ impl Viewer {
             this.update(cx, |this, cx| match read {
                 Ok(image) => this.add_picture(page, boxed, at, image, PICTURE_WIDTH, cx),
                 Err(error) => {
-                    this.notice = Some(t("text-edit-failed", &[("error", &error)]));
+                    this.notice = Some(super::said("text-edit-failed", &[("error", &error)]));
                     cx.notify();
                 }
             })
@@ -583,7 +583,7 @@ impl Viewer {
                     this.add_picture(page, None, at, image, PICTURE_WIDTH, cx);
                 }
                 Err(error) => {
-                    this.notice = Some(t("text-edit-failed", &[("error", &error)]));
+                    this.notice = Some(super::said("text-edit-failed", &[("error", &error)]));
                     cx.notify();
                 }
             })
@@ -630,7 +630,7 @@ impl Viewer {
             this.update(cx, |this, cx| match read {
                 Ok(image) => this.add_picture(page, None, at, image, PICTURE_WIDTH, cx),
                 Err(error) => {
-                    this.notice = Some(t("text-edit-failed", &[("error", &error)]));
+                    this.notice = Some(super::said("text-edit-failed", &[("error", &error)]));
                     cx.notify();
                 }
             })

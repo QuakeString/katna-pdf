@@ -561,8 +561,8 @@ impl Viewer {
                 match written {
                     Ok((bytes, doc, cos, told)) => {
                         this.key = kept;
-                        if told.is_some() {
-                            this.notice = told;
+                        if let Some(told) = told {
+                            this.notice = Some(super::Notice::error(told));
                         }
                         this.forget_runs();
                         let design = this
@@ -579,7 +579,7 @@ impl Viewer {
                         }
                     }
                     Err(error) => {
-                        this.notice = Some(t(failed, &[("error", &error)]));
+                        this.notice = Some(super::said(failed, &[("error", &error)]));
                     }
                 }
                 cx.notify();

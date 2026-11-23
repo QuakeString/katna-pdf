@@ -295,7 +295,7 @@ impl Viewer {
             .map(|m| length(m.read(cx).text()).filter(|v| *v >= 0.0))
             .collect();
         let Some(&[top, right, bottom, left]) = typed.as_deref() else {
-            self.notice = Some(t("pages-card-bad-margins", &[]));
+            self.notice = Some(super::said("pages-card-bad-margins", &[]));
             cx.notify();
             return;
         };
@@ -376,14 +376,14 @@ impl Viewer {
                 .await;
             this.update(cx, |this, cx| {
                 this.notice = Some(match written {
-                    Ok((files, folder)) => t(
+                    Ok((files, folder)) => super::said(
                         "pages-card-split-done",
                         &[
                             ("count", &files.to_string()),
                             ("folder", &file_name(&folder)),
                         ],
                     ),
-                    Err(error) => t("pages-failed", &[("error", &error)]),
+                    Err(error) => super::said("pages-failed", &[("error", &error)]),
                 });
                 cx.notify();
             })

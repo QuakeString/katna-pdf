@@ -276,7 +276,7 @@ impl Viewer {
                 match found {
                     Ok(found) => redacting.found = found.map(Some),
                     Err(error) => {
-                        this.notice = Some(t("redact-failed", &[("error", &error)]));
+                        this.notice = Some(super::said("redact-failed", &[("error", &error)]));
                     }
                 }
                 cx.notify();
@@ -382,7 +382,7 @@ impl Viewer {
                         }
                     }
                     Err(error) => {
-                        this.notice = Some(t("redact-failed", &[("error", &error)]));
+                        this.notice = Some(super::said("redact-failed", &[("error", &error)]));
                     }
                 }
                 cx.notify();
@@ -449,7 +449,7 @@ impl Viewer {
         }
         let target = path.with_file_name(&name);
         if target == path || target.exists() {
-            self.notice = Some(t("redact-copy-there", &[("name", &name)]));
+            self.notice = Some(super::said("redact-copy-there", &[("name", &name)]));
             cx.notify();
             return;
         }
@@ -481,15 +481,17 @@ impl Viewer {
                 match written {
                     Ok(target) => {
                         this.redacting = None;
-                        this.notice =
-                            Some(t("redact-saved", &[("name", &super::file_name(&target))]));
+                        this.notice = Some(super::said(
+                            "redact-saved",
+                            &[("name", &super::file_name(&target))],
+                        ));
                         cx.emit(super::ViewerEvent::Dropped(vec![target]));
                     }
                     Err(error) => {
                         if let Some(r) = this.redacting.as_mut() {
                             r.working = false;
                         }
-                        this.notice = Some(t("redact-failed", &[("error", &error)]));
+                        this.notice = Some(super::said("redact-failed", &[("error", &error)]));
                     }
                 }
                 cx.notify();
