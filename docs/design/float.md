@@ -29,6 +29,10 @@ app carries it out.
   dots ringed when picked. The bars a tool opens (measure, initials, read
   aloud) and the stamp card (C05: Standard, With date and name, Mine)
   float above it too.
+- **Pages mode** (P01, P02): the organizer's grid fills the window; its
+  tray adds pages, turns, moves, deletes, saves the pages picked as a
+  file, crops and numbers them. The Pages card is a dialog with tabs
+  (Add, Replace, Page size, Margins, Split), one height for all.
 - **Paragraph bar**: the paragraph being typed in has its font, size,
   bold, italic, alignment, spacing, copy and delete in a bar floating
   just over it (`textedit.rs`).
@@ -66,6 +70,6 @@ line icons (`icons/float/`, served as `icons/f/NAME.svg`), 1.7 px strokes.
 
 ## Still to come
 
-One PR per area of the storyboard: pages, forms and signing (P, F, G), the
+One PR per area of the storyboard: forms and signing (F, G), the
 library (L), and the Settings window with the Profile page and the scheme
 editor (X, T).

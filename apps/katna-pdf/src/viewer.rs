@@ -3564,7 +3564,10 @@ impl Render for Viewer {
             0.0
         };
         let dock = self.dock(cx);
-        let tools = self.tools_row(cx).or_else(|| self.edit_row(cx));
+        let tools = self
+            .tools_row(cx)
+            .or_else(|| self.edit_row(cx))
+            .or_else(|| self.pages_tray(cx));
         let object_row = self.object_row();
         let measure_bar = self.measure_bar(cx);
         let stamp_bar = self.stamp_bar(cx);
@@ -3954,7 +3957,16 @@ impl Render for Viewer {
             .children(link_card)
             .children(numbering_card)
             .children(paste_many_card)
-            .children(setup_card)
+            .children(setup_card.map(|card| {
+                dialog(
+                    th,
+                    card,
+                    cx.listener(|this, _, _, cx| {
+                        this.setup = None;
+                        cx.notify();
+                    }),
+                )
+            }))
             .children(design_card)
             .children(properties_card.map(|card| {
                 dialog(
