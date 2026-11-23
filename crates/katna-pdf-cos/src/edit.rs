@@ -1728,7 +1728,9 @@ fn shown_align(places: &[Place], size: f64) -> TextAlign {
     if align == Align::Left
         && body.len() >= 2
         && body.iter().all(|p| tight(p.end, body[0].end))
-        && places.last().is_some_and(|last| last.end < body[0].end - size)
+        && places
+            .last()
+            .is_some_and(|last| last.end < body[0].end - size)
     {
         TextAlign::Justify
     } else {

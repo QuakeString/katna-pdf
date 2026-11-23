@@ -4628,8 +4628,10 @@ impl Render for Viewer {
             } else if notice.warn {
                 (
                     over(
-                        gpui::rgba(th.katna.warning & 0xffff_ff00 | if th.dark { 0x33 } else { 0x24 })
-                            .into(),
+                        gpui::rgba(
+                            th.katna.warning & 0xffff_ff00 | if th.dark { 0x33 } else { 0x24 },
+                        )
+                        .into(),
                         th.card,
                     ),
                     warning,

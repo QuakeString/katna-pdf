@@ -464,11 +464,7 @@ impl Viewer {
                     let words = |id: &str, standin: &str| {
                         t(
                             id,
-                            &[
-                                ("font", &m.font),
-                                ("chars", &m.chars),
-                                ("standin", standin),
-                            ],
+                            &[("font", &m.font), ("chars", &m.chars), ("standin", standin)],
                         )
                     };
                     match &m.stand_in {
@@ -506,7 +502,9 @@ impl Viewer {
     pub(super) fn change_page_told(
         &mut self,
         page: usize,
-        change: impl FnOnce(&katna_pdf_cos::Document) -> Result<(Vec<u8>, Option<super::Notice>), String>
+        change: impl FnOnce(
+            &katna_pdf_cos::Document,
+        ) -> Result<(Vec<u8>, Option<super::Notice>), String>
         + Send
         + 'static,
         cx: &mut Context<Self>,
@@ -565,7 +563,9 @@ impl Viewer {
         pages: Vec<usize>,
         failed: &'static str,
         after: Option<Arc<str>>,
-        change: impl FnOnce(&katna_pdf_cos::Document) -> Result<(Vec<u8>, Option<super::Notice>), String>
+        change: impl FnOnce(
+            &katna_pdf_cos::Document,
+        ) -> Result<(Vec<u8>, Option<super::Notice>), String>
         + Send
         + 'static,
         cx: &mut Context<Self>,
@@ -1221,7 +1221,11 @@ impl Viewer {
             let now = [
                 b.char_spacing,
                 b.word_spacing,
-                if b.size > 0.0 { b.leading / b.size } else { 1.2 },
+                if b.size > 0.0 {
+                    b.leading / b.size
+                } else {
+                    1.2
+                },
             ];
             self.spacing_menu = Some(SpacingMenu {
                 values: now,
@@ -1397,7 +1401,11 @@ impl Viewer {
             .on_mouse_up(
                 gpui::MouseButton::Left,
                 cx.listener(|this, _, _, cx| {
-                    if this.spacing_menu.as_ref().is_some_and(|m| m.dragging.is_some()) {
+                    if this
+                        .spacing_menu
+                        .as_ref()
+                        .is_some_and(|m| m.dragging.is_some())
+                    {
                         this.apply_spacing(cx);
                     }
                 }),
@@ -1736,26 +1744,32 @@ impl Viewer {
                 float::menu("text-size-menu", 80.0, &th)
                     .max_h(px(300.0))
                     .overflow_y_scroll()
-                    .children([8.0f32, 9.0, 10.0, 11.0, 12.0, 14.0, 16.0, 18.0, 20.0, 24.0, 28.0, 32.0, 36.0, 48.0, 72.0].map(|size| {
-                        let on = (size - size_now).abs() < 0.5;
-                        div()
-                            .id(("text-size-pick", size as usize))
-                            .h(px(28.0))
-                            .px(px(space::S3))
-                            .flex()
-                            .items_center()
-                            .rounded(px(5.0))
-                            .cursor_pointer()
-                            .text_size(px(text::SMALL))
-                            .text_color(if on { th.accent_text } else { th.text })
-                            .when(on, |d| d.bg(th.accent_soft))
-                            .hover(move |s| s.bg(hover))
-                            .child(format!("{size}"))
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.text_pop = None;
-                                this.resize_typed(size - size_now, cx);
-                            }))
-                    })),
+                    .children(
+                        [
+                            8.0f32, 9.0, 10.0, 11.0, 12.0, 14.0, 16.0, 18.0, 20.0, 24.0, 28.0,
+                            32.0, 36.0, 48.0, 72.0,
+                        ]
+                        .map(|size| {
+                            let on = (size - size_now).abs() < 0.5;
+                            div()
+                                .id(("text-size-pick", size as usize))
+                                .h(px(28.0))
+                                .px(px(space::S3))
+                                .flex()
+                                .items_center()
+                                .rounded(px(5.0))
+                                .cursor_pointer()
+                                .text_size(px(text::SMALL))
+                                .text_color(if on { th.accent_text } else { th.text })
+                                .when(on, |d| d.bg(th.accent_soft))
+                                .hover(move |s| s.bg(hover))
+                                .child(format!("{size}"))
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.text_pop = None;
+                                    this.resize_typed(size - size_now, cx);
+                                }))
+                        }),
+                    ),
                 false,
                 false,
             )
@@ -1764,11 +1778,8 @@ impl Viewer {
         let inks = (pop == Some(TextPop::Ink)).then(|| {
             float::popover(
                 float::menu("text-ink-menu", 0.0, &th).child(
-                    div()
-                        .flex()
-                        .gap(px(space::S2))
-                        .p(px(space::S1))
-                        .children(TEXT_INKS.into_iter().enumerate().map(|(i, ink)| {
+                    div().flex().gap(px(space::S2)).p(px(space::S1)).children(
+                        TEXT_INKS.into_iter().enumerate().map(|(i, ink)| {
                             let [r, g, b] = ink.map(|c| (c * 255.0).round() as u8);
                             float::swatch(
                                 ("text-ink", i),
@@ -1776,18 +1787,24 @@ impl Viewer {
                                 block.colour == [r, g, b],
                                 &th,
                             )
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.text_pop = None;
-                                this.colour_typed(ink, cx);
-                            }))
-                        })),
+                            .on_click(cx.listener(
+                                move |this, _, _, cx| {
+                                    this.text_pop = None;
+                                    this.colour_typed(ink, cx);
+                                },
+                            ))
+                        }),
+                    ),
                 ),
                 false,
                 false,
             )
         });
         let toggle_pop = move |which: TextPop| {
-            move |this: &mut Viewer, _: &gpui::ClickEvent, _: &mut Window, cx: &mut Context<Viewer>| {
+            move |this: &mut Viewer,
+                  _: &gpui::ClickEvent,
+                  _: &mut Window,
+                  cx: &mut Context<Viewer>| {
                 this.text_pop = if this.text_pop == Some(which) {
                     None
                 } else {
@@ -1798,162 +1815,161 @@ impl Viewer {
                 cx.notify();
             }
         };
-        let row = div()
-            .flex()
-            .items_center()
-            .gap(px(space::S1))
-            .child(
-                div()
-                    .relative()
-                    .child(
-                        div()
-                            .id("text-font")
-                            .h(px(32.0))
-                            .w(px(140.0))
-                            .px(px(space::S3))
-                            .flex()
-                            .items_center()
-                            .gap(px(space::S2))
-                            .rounded(px(6.0))
-                            .cursor_pointer()
-                            .hover(move |s| s.bg(th.hover))
-                            .tip(t("text-font-tip", &[]), &th.katna)
-                            .text_size(px(text::SMALL))
-                            .text_color(th.text)
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.text_pop = None;
-                                this.toggle_font_menu(window, cx);
-                            }))
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .truncate()
-                                    .child(face.family.clone()),
-                            )
-                            .child(chev(th.dim)),
-                    )
-                    .children(menu),
-            )
-            .child(
-                div()
-                    .relative()
-                    .child(
-                        div()
-                            .id("text-size")
-                            .h(px(32.0))
-                            .px(px(space::S2))
-                            .flex()
-                            .items_center()
-                            .gap(px(space::S1))
-                            .rounded(px(6.0))
-                            .cursor_pointer()
-                            .hover(move |s| s.bg(th.hover))
-                            .tip(t("text-size-tip", &[]), &th.katna)
-                            .text_size(px(text::SMALL))
-                            .text_color(th.text)
-                            .on_click(cx.listener(toggle_pop(TextPop::Size)))
-                            .child(format!("{size_now}"))
-                            .child(chev(th.dim)),
-                    )
-                    .children(sizes),
-            )
-            .child(step("text-smaller", "A−", "text-smaller", -1.0))
-            .child(step("text-bigger", "A+", "text-bigger", 1.0))
-            .child(float::vsep(&th))
-            .child(
-                letter("text-bold", "B", "text-bold", bold)
-                    .font_weight(gpui::FontWeight::BOLD)
-                    .on_click(
-                        cx.listener(move |this, _, _, cx| {
+        let row =
+            div()
+                .flex()
+                .items_center()
+                .gap(px(space::S1))
+                .child(
+                    div()
+                        .relative()
+                        .child(
+                            div()
+                                .id("text-font")
+                                .h(px(32.0))
+                                .w(px(140.0))
+                                .px(px(space::S3))
+                                .flex()
+                                .items_center()
+                                .gap(px(space::S2))
+                                .rounded(px(6.0))
+                                .cursor_pointer()
+                                .hover(move |s| s.bg(th.hover))
+                                .tip(t("text-font-tip", &[]), &th.katna)
+                                .text_size(px(text::SMALL))
+                                .text_color(th.text)
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.text_pop = None;
+                                    this.toggle_font_menu(window, cx);
+                                }))
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .truncate()
+                                        .child(face.family.clone()),
+                                )
+                                .child(chev(th.dim)),
+                        )
+                        .children(menu),
+                )
+                .child(
+                    div()
+                        .relative()
+                        .child(
+                            div()
+                                .id("text-size")
+                                .h(px(32.0))
+                                .px(px(space::S2))
+                                .flex()
+                                .items_center()
+                                .gap(px(space::S1))
+                                .rounded(px(6.0))
+                                .cursor_pointer()
+                                .hover(move |s| s.bg(th.hover))
+                                .tip(t("text-size-tip", &[]), &th.katna)
+                                .text_size(px(text::SMALL))
+                                .text_color(th.text)
+                                .on_click(cx.listener(toggle_pop(TextPop::Size)))
+                                .child(format!("{size_now}"))
+                                .child(chev(th.dim)),
+                        )
+                        .children(sizes),
+                )
+                .child(step("text-smaller", "A−", "text-smaller", -1.0))
+                .child(step("text-bigger", "A+", "text-bigger", 1.0))
+                .child(float::vsep(&th))
+                .child(
+                    letter("text-bold", "B", "text-bold", bold)
+                        .font_weight(gpui::FontWeight::BOLD)
+                        .on_click(cx.listener(move |this, _, _, cx| {
                             this.reweigh_typed(Some(!bold), None, cx)
+                        })),
+                )
+                .child(
+                    letter("text-italic", "I", "text-italic", italic)
+                        .italic()
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.reweigh_typed(None, Some(!italic), cx)
+                        })),
+                )
+                .child(
+                    div()
+                        .relative()
+                        .child(
+                            div()
+                                .id("text-ink")
+                                .size(px(32.0))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .rounded(px(6.0))
+                                .cursor_pointer()
+                                .hover(move |s| s.bg(th.hover))
+                                .ftip(t("text-ink", &[]), &th)
+                                .on_click(cx.listener(toggle_pop(TextPop::Ink)))
+                                .child(
+                                    div()
+                                        .size(px(16.0))
+                                        .rounded(px(radius::FULL))
+                                        .border_1()
+                                        .border_color(th.line)
+                                        .bg(ink),
+                                ),
+                        )
+                        .children(inks),
+                )
+                .child(float::vsep(&th))
+                .children(
+                    [
+                        (TextAlign::Left, "text-align-left", "al"),
+                        (TextAlign::Center, "text-align-centre", "ac"),
+                        (TextAlign::Right, "text-align-right", "ar"),
+                        (TextAlign::Justify, "text-align-justify", "aj"),
+                    ]
+                    .map(|(how, id, glyph)| {
+                        toggle(id, glyph, id, align == how)
+                            .on_click(cx.listener(move |this, _, _, cx| this.align_typed(how, cx)))
+                    }),
+                )
+                .child(float::vsep(&th))
+                .child(
+                    div()
+                        .relative()
+                        .child(
+                            toggle("text-spacing", "list", "text-spacing", spacing.is_some())
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.text_pop = None;
+                                    this.toggle_spacing_menu(cx);
+                                })),
+                        )
+                        .children(spacing),
+                )
+                .child(
+                    float::ib("text-copy", "copy", t("text-copy", &[]), false, &th).on_click(
+                        cx.listener(|this, _, _, cx| {
+                            this.copy_typed(cx);
                         }),
                     ),
-            )
-            .child(
-                letter("text-italic", "I", "text-italic", italic)
-                    .italic()
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.reweigh_typed(None, Some(!italic), cx)
-                    })),
-            )
-            .child(
-                div()
-                    .relative()
-                    .child(
-                        div()
-                            .id("text-ink")
-                            .size(px(32.0))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .rounded(px(6.0))
-                            .cursor_pointer()
-                            .hover(move |s| s.bg(th.hover))
-                            .ftip(t("text-ink", &[]), &th)
-                            .on_click(cx.listener(toggle_pop(TextPop::Ink)))
-                            .child(
-                                div()
-                                    .size(px(16.0))
-                                    .rounded(px(radius::FULL))
-                                    .border_1()
-                                    .border_color(th.line)
-                                    .bg(ink),
-                            ),
-                    )
-                    .children(inks),
-            )
-            .child(float::vsep(&th))
-            .children(
-                [
-                    (TextAlign::Left, "text-align-left", "al"),
-                    (TextAlign::Center, "text-align-centre", "ac"),
-                    (TextAlign::Right, "text-align-right", "ar"),
-                    (TextAlign::Justify, "text-align-justify", "aj"),
-                ]
-                .map(|(how, id, glyph)| {
-                    toggle(id, glyph, id, align == how)
-                        .on_click(cx.listener(move |this, _, _, cx| this.align_typed(how, cx)))
-                }),
-            )
-            .child(float::vsep(&th))
-            .child(
-                div()
-                    .relative()
-                    .child(
-                        toggle("text-spacing", "list", "text-spacing", spacing.is_some())
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.text_pop = None;
-                                this.toggle_spacing_menu(cx);
-                            })),
-                    )
-                    .children(spacing),
-            )
-            .child(
-                float::ib("text-copy", "copy", t("text-copy", &[]), false, &th).on_click(
-                    cx.listener(|this, _, _, cx| {
-                        this.copy_typed(cx);
-                    }),
-                ),
-            )
-            .child(
-                float::ib("text-move", "drag", t("text-grip", &[]), false, &th)
-                    .cursor(gpui::CursorStyle::OpenHand)
-                    .on_mouse_down(
-                        gpui::MouseButton::Left,
-                        cx.listener(move |this, event: &gpui::MouseDownEvent, _, cx| {
-                            cx.stop_propagation();
-                            this.text_move_press(page, index, event.position, cx);
+                )
+                .child(
+                    float::ib("text-move", "drag", t("text-grip", &[]), false, &th)
+                        .cursor(gpui::CursorStyle::OpenHand)
+                        .on_mouse_down(
+                            gpui::MouseButton::Left,
+                            cx.listener(move |this, event: &gpui::MouseDownEvent, _, cx| {
+                                cx.stop_propagation();
+                                this.text_move_press(page, index, event.position, cx);
+                            }),
+                        ),
+                )
+                .child(
+                    float::ib("text-delete", "trash", t("text-delete", &[]), false, &th).on_click(
+                        cx.listener(|this, _, _, cx| {
+                            this.delete_typed(cx);
                         }),
                     ),
-            )
-            .child(
-                float::ib("text-delete", "trash", t("text-delete", &[]), false, &th).on_click(
-                    cx.listener(|this, _, _, cx| {
-                        this.delete_typed(cx);
-                    }),
-                ),
-            );
+                );
         Some(row.into_any_element())
     }
 

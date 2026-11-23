@@ -672,7 +672,12 @@ fn a_paragraph_is_justified_and_set_back() {
         assert!((run.rect[0] - block.rect[0]).abs() < 0.05, "{runs:?}");
         assert!((run.rect[2] - block.rect[2]).abs() < 0.3, "{runs:?}");
     }
-    assert_eq!(out.text_blocks(0)[0].align, TextAlign::Justify, "{}", content(&out));
+    assert_eq!(
+        out.text_blocks(0)[0].align,
+        TextAlign::Justify,
+        "{}",
+        content(&out)
+    );
     // Back on the left: the lines end where they did.
     let left = Layout {
         align: Some(TextAlign::Left),
