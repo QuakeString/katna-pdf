@@ -72,6 +72,7 @@ pub struct Tabs {
     _appearance: Subscription,
     _look: Subscription,
     _profile: Subscription,
+    _active: Subscription,
     /// The signing token, for the profile menu.
     pub(crate) token: TokenStatus,
 }
@@ -98,6 +99,12 @@ impl Tabs {
             this.person = cx.global::<crate::profile::Profile>().display_name();
             cx.notify();
         });
+        // Katna Mail's colours may have changed while this window was away.
+        let active = cx.observe_window_activation(window, |_, window, cx| {
+            if window.is_window_active() {
+                crate::look::Look::follow(cx);
+            }
+        });
         let mut this = Self {
             tabs: Vec::new(),
             active: 0,
@@ -113,6 +120,7 @@ impl Tabs {
             _appearance: appearance,
             _look: look,
             _profile: profile,
+            _active: active,
             token: TokenStatus::Looking,
         };
         this.push(None, window, cx);

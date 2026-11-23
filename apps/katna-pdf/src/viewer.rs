@@ -595,6 +595,8 @@ pub struct Viewer {
     colors: Option<PageColors>,
     /// The colours picked last other than normal, for Ctrl+Shift+N.
     last_colors: PageColors,
+    /// The pages' colours in a dark window, as Settings says.
+    night_pages: PageColors,
     /// Whether the page colours menu is open, and when a press outside
     /// last closed it (a press on its button closes it, not again open).
     colors_menu: bool,
@@ -608,6 +610,7 @@ pub struct Viewer {
     zoom_card_closed: Option<std::time::Instant>,
     _appearance: Subscription,
     _look: Subscription,
+    _prefs: Subscription,
 }
 
 impl Viewer {
@@ -629,6 +632,14 @@ impl Viewer {
         });
         let look = cx.observe_global_in::<crate::look::Look>(window, |this, window, cx| {
             this.restyle(window, cx);
+        });
+        let prefs_changed = cx.observe_global::<Prefs>(|this, cx| {
+            let was = this.page_colors();
+            this.night_pages = cx.global::<Prefs>().night_pages;
+            if this.page_colors() != was {
+                this.redraw_thumbs();
+            }
+            cx.notify();
         });
         let list = ListState::new(0, ListAlignment::Top, desktop_px(600.0));
         let weak = cx.entity().downgrade();
@@ -757,6 +768,7 @@ impl Viewer {
             dark: cx.global::<crate::look::Look>().dark(window.appearance()),
             colors: None,
             last_colors: PageColors::Night,
+            night_pages: prefs.night_pages,
             colors_menu: false,
             font_menu: None,
             spacing_menu: None,
@@ -765,6 +777,7 @@ impl Viewer {
             zoom_card_closed: None,
             _appearance: appearance,
             _look: look,
+            _prefs: prefs_changed,
         };
         if let Some(file) = file {
             this.open(file, cx);
@@ -1495,7 +1508,7 @@ impl Viewer {
             return self.colors.unwrap_or(PageColors::Normal);
         }
         self.colors.unwrap_or(if self.dark {
-            PageColors::Night
+            self.night_pages
         } else {
             PageColors::Normal
         })
@@ -4201,7 +4214,7 @@ fn draw(
 }
 
 /// The id of a page colours mode's name.
-fn colors_text(colors: PageColors) -> &'static str {
+pub fn colors_text(colors: PageColors) -> &'static str {
     match colors {
         PageColors::Normal => "colors-normal",
         PageColors::Night => "colors-night",

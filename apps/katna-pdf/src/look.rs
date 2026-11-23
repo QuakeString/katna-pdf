@@ -4,13 +4,16 @@
 //! Settings: day, night or as the desktop is (`Mode`), in a colour
 //! scheme. The schemes are Float's own, Katna Mail's
 //! (`katna_ui::schemes`) and the desktop's (`System`). Kept in the state
-//! folder (`pdf/look.txt`), shared by every window.
+//! folder (`pdf/look.txt`), shared by every window. With `follow_mail`
+//! the mode, scheme and accent are Katna Mail's (its `config.toml`), and
+//! picking them here changes Katna Mail's too.
 
 use std::path::PathBuf;
 
 use gpui::{App, Global, WindowAppearance};
 use katna_platform::colors::{self, DesktopKind, SystemColors};
 use katna_ui::schemes::{self, BUILT_IN};
+use katna_ui::theme::Accent;
 
 use crate::theme::Five;
 
@@ -236,6 +239,10 @@ pub struct Look {
     pub desktop: SystemColors,
     /// The person's own schemes.
     pub mine: Vec<Mine>,
+    /// The accent over the scheme's own (X01).
+    pub accent: Accent,
+    /// Use Katna Mail's mode, scheme and accent, and change both (X09).
+    pub follow_mail: bool,
 }
 
 impl Global for Look {}
@@ -253,8 +260,23 @@ impl Default for Look {
             scheme: FLOAT.into(),
             desktop: SystemColors::default(),
             mine: Vec::new(),
+            accent: Accent::Scheme,
+            follow_mail: false,
         }
     }
+}
+
+/// The accents offered beside the scheme's own: Katna Mail's.
+pub const ACCENTS: [u32; 7] = [
+    0x0b57d0, 0x00807f, 0x2e9e4f, 0xe2a400, 0xe8590c, 0xd6336c, 0x7048e8,
+];
+
+/// Katna Mail's settings file, when Katna Mail has written one.
+pub fn mail_config_file() -> Option<PathBuf> {
+    katna_core::Paths::from_env()
+        .ok()
+        .map(|paths| paths.config_file())
+        .filter(|path| path.exists())
 }
 
 impl Look {
@@ -269,7 +291,69 @@ impl Look {
             .and_then(|f| std::fs::read_to_string(f).ok())
             .map(|text| parse_mine(&text))
             .unwrap_or_default();
+        if look.follow_mail {
+            look.take_mail();
+        }
         look
+    }
+
+    /// Takes Katna Mail's mode, scheme and accent; a scheme of its own
+    /// that Katna PDF doesn't have leaves this one as it is.
+    pub fn take_mail(&mut self) {
+        let Some(config) = mail_config_file().and_then(|f| katna_core::Config::load(&f).ok())
+        else {
+            return;
+        };
+        self.take_mail_view(&config.mail);
+    }
+
+    fn take_mail_view(&mut self, view: &katna_core::config::MailView) {
+        use katna_core::config::Theme;
+        self.mode = match view.theme {
+            Theme::System => Mode::System,
+            Theme::Light => Mode::Day,
+            Theme::Dark => Mode::Night,
+        };
+        let id = match view.colors() {
+            "katna" => FLOAT,
+            id => id,
+        };
+        if id == SYSTEM || schemes().iter().any(|s| s.id == id) {
+            self.scheme = id.to_owned();
+        }
+        self.accent = Accent::parse(&view.accent);
+    }
+
+    /// Puts this look into Katna Mail's settings; one of the person's
+    /// own schemes stays Katna Mail's scheme as it was.
+    fn give_mail(&self, view: &mut katna_core::config::MailView) {
+        use katna_core::config::Theme;
+        view.theme = match self.mode {
+            Mode::System => Theme::System,
+            Mode::Day => Theme::Light,
+            Mode::Night => Theme::Dark,
+        };
+        if self.scheme == FLOAT {
+            view.set_colors("katna");
+        } else if self.scheme == SYSTEM || schemes().iter().any(|s| s.id == self.scheme) {
+            view.set_colors(&self.scheme);
+        }
+        view.accent = self.accent.setting();
+    }
+
+    /// Katna Mail's look again, if it changed while this window was away.
+    pub fn follow(cx: &mut App) {
+        let look = cx.global::<Look>();
+        if !look.follow_mail {
+            return;
+        }
+        let mut again = look.clone();
+        again.take_mail();
+        let look = cx.global::<Look>();
+        if (again.mode, &again.scheme, again.accent) != (look.mode, &look.scheme, look.accent) {
+            again.save();
+            cx.set_global(again);
+        }
     }
 
     fn parse(text: &str) -> Self {
@@ -278,6 +362,8 @@ impl Look {
             match line.split_once('=') {
                 Some(("mode", v)) => look.mode = Mode::parse(v.trim()),
                 Some(("scheme", v)) => look.scheme = v.trim().to_owned(),
+                Some(("accent", v)) => look.accent = Accent::parse(v.trim()),
+                Some(("follow-mail", v)) => look.follow_mail = v.trim() == "on",
                 _ => {}
             }
         }
@@ -285,7 +371,13 @@ impl Look {
     }
 
     fn text(&self) -> String {
-        format!("mode={}\nscheme={}\n", self.mode.setting(), self.scheme)
+        format!(
+            "mode={}\nscheme={}\naccent={}\nfollow-mail={}\n",
+            self.mode.setting(),
+            self.scheme,
+            self.accent.setting(),
+            if self.follow_mail { "on" } else { "off" },
+        )
     }
 
     pub fn save(&self) {
@@ -328,9 +420,19 @@ impl Look {
         }
     }
 
-    /// The five colours for `dark`.
+    /// The five colours for `dark`, with the accent picked.
     pub fn five(&self, dark: bool) -> Five {
-        self.five_for(&self.scheme, dark)
+        let mut five = self.five_for(&self.scheme, dark);
+        match self.accent {
+            Accent::Scheme => {}
+            Accent::System => {
+                if let Some(accent) = self.desktop.accent {
+                    five.accent = accent >> 8;
+                }
+            }
+            Accent::Color(color) => five.accent = color >> 8,
+        }
+        five
     }
 
     /// The five colours of scheme `scheme` for `dark`.
@@ -365,6 +467,22 @@ impl Look {
         let mut look = cx.global::<Look>().clone();
         change(&mut look);
         look.save();
+        if look.follow_mail
+            && let Some(path) = mail_config_file()
+        {
+            match katna_core::Config::load(&path) {
+                Ok(mut config) => {
+                    let before = config.mail.clone();
+                    look.give_mail(&mut config.mail);
+                    if config.mail != before
+                        && let Err(err) = config.save(&path)
+                    {
+                        eprintln!("katna-pdf: saving Katna Mail's colours: {err}");
+                    }
+                }
+                Err(err) => eprintln!("katna-pdf: reading Katna Mail's settings: {err}"),
+            }
+        }
         cx.set_global(look);
     }
 }
@@ -405,6 +523,41 @@ mod tests {
         let again = Look::parse(&look.text());
         assert_eq!(again.mode, Mode::Night);
         assert_eq!(again.scheme, "nord");
+        assert_eq!(again.accent, Accent::Scheme);
+        let look = Look {
+            accent: Accent::Color(0x2e9e4fff),
+            follow_mail: true,
+            ..Look::default()
+        };
+        let again = Look::parse(&look.text());
+        assert_eq!(again.accent, look.accent);
+        assert!(again.follow_mail);
+        assert_eq!(again.five(false).accent, 0x2e9e4f);
+    }
+
+    #[test]
+    fn katna_mails_look_goes_both_ways() {
+        let mut view = katna_core::Config::default().mail;
+        let look = Look {
+            mode: Mode::Night,
+            scheme: FLOAT.into(),
+            accent: Accent::Color(0xd6336cff),
+            ..Look::default()
+        };
+        look.give_mail(&mut view);
+        assert_eq!(view.colors(), "katna");
+        assert_eq!(view.accent, "#d6336c");
+        let mut back = Look {
+            scheme: "nord".into(),
+            ..Look::default()
+        };
+        back.take_mail_view(&view);
+        assert_eq!(back.mode, Mode::Night);
+        assert_eq!(back.scheme, FLOAT);
+        assert_eq!(back.accent, look.accent);
+        view.set_colors("someones-own");
+        back.take_mail_view(&view);
+        assert_eq!(back.scheme, FLOAT, "a scheme only Katna Mail has is left");
     }
 
     #[test]

@@ -111,7 +111,17 @@ impl Theme {
 
     pub fn of(look: &Look, dark: bool) -> Self {
         if look.scheme_id() == FLOAT {
-            return Self::float(dark);
+            let mut th = Self::float(dark);
+            if look.accent != katna_ui::theme::Accent::Scheme {
+                // Float's hand-picked colours, with the accent's mixed.
+                let mixed = Self::mixed(FLOAT, look.five(dark), dark);
+                th.accent = mixed.accent;
+                th.accent_soft = mixed.accent_soft;
+                th.accent_text = mixed.accent_text;
+                th.on_accent = mixed.on_accent;
+                th.katna = mixed.katna;
+            }
+            return th;
         }
         Self::mixed(look.scheme_id(), look.five(dark), dark)
     }

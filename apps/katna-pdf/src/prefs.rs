@@ -8,6 +8,8 @@ use std::path::PathBuf;
 
 use gpui::Global;
 
+use katna_pdf_render::recolor::PageColors;
+
 use crate::spread::Spread;
 
 /// The zoom a file opens at.
@@ -63,7 +65,26 @@ pub struct Prefs {
     pub grid: bool,
     /// How fast reading aloud goes, 1.0 the voice's own pace.
     pub speed: f32,
+    /// The pages' colours when the window is dark (X09).
+    pub night_pages: PageColors,
+    /// The size of everything, over the desktop's scale.
+    pub size: f32,
+    /// Show the name of the mode chosen in the dock.
+    pub dock_labels: bool,
 }
+
+/// The sizes offered.
+pub const SIZES: [f32; 4] = [0.9, 1.0, 1.1, 1.25];
+
+/// The setting for page colours, and back.
+const PAGE_COLORS: [(PageColors, &str); 6] = [
+    (PageColors::Normal, "normal"),
+    (PageColors::Night, "night"),
+    (PageColors::Invert, "invert"),
+    (PageColors::InvertLightness, "invert-lightness"),
+    (PageColors::Sepia, "sepia"),
+    (PageColors::BlackWhite, "black-white"),
+];
 
 impl Default for Prefs {
     fn default() -> Self {
@@ -76,6 +97,9 @@ impl Default for Prefs {
             units: Units::default(),
             grid: false,
             speed: 1.0,
+            night_pages: PageColors::Night,
+            size: 1.0,
+            dock_labels: true,
         }
     }
 }
@@ -137,6 +161,19 @@ impl Prefs {
                         prefs.speed = speed;
                     }
                 }
+                "night-pages" => {
+                    if let Some(&(colors, _)) = PAGE_COLORS.iter().find(|(_, w)| *w == value) {
+                        prefs.night_pages = colors;
+                    }
+                }
+                "size" => {
+                    if let Ok(size) = value.parse::<f32>()
+                        && (0.5..=2.0).contains(&size)
+                    {
+                        prefs.size = size;
+                    }
+                }
+                "dock-labels" => prefs.dock_labels = value != "off",
                 _ => {}
             }
         }
@@ -155,14 +192,20 @@ impl Prefs {
             Spread::Facing => "two",
             Spread::Book => "book",
         };
+        let night = PAGE_COLORS
+            .iter()
+            .find(|(c, _)| *c == self.night_pages)
+            .map_or("night", |(_, w)| w);
         format!(
-            "open-at={}\nzoom={zoom}\nlayout={layout}\nreopen-session={}\nworkers={}\nunits={}\ngrid={}\nread-speed={}\n",
+            "open-at={}\nzoom={zoom}\nlayout={layout}\nreopen-session={}\nworkers={}\nunits={}\ngrid={}\nread-speed={}\nnight-pages={night}\nsize={}\ndock-labels={}\n",
             if self.open_at_last { "last" } else { "first" },
             on(self.reopen_session),
             on(self.workers),
             self.units.suffix(),
             on(self.grid),
             self.speed,
+            self.size,
+            on(self.dock_labels),
         )
     }
 
@@ -182,7 +225,12 @@ impl Prefs {
         change(&mut prefs);
         prefs.save();
         crate::speech::set_speed(prefs.speed);
+        let resized = prefs.size != cx.global::<Prefs>().size;
+        katna_ui::scale::set_scale(prefs.size);
         cx.set_global(prefs);
+        if resized {
+            cx.refresh_windows();
+        }
     }
 }
 
@@ -201,6 +249,9 @@ mod tests {
             units: Units::Millimetres,
             grid: true,
             speed: 1.25,
+            night_pages: PageColors::Sepia,
+            size: 1.1,
+            dock_labels: false,
         };
         assert_eq!(Prefs::parse(&prefs.text()), prefs);
         assert_eq!(Prefs::parse("nonsense\nzoom=huge"), Prefs::default());
