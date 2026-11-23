@@ -866,17 +866,6 @@ fn capital(words: &str) -> String {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn times_are_shortened_for_the_cards() {
-        assert_eq!(short_time("2026-11-14 11:02:45 UTC"), "14 Nov, 11:02");
-        assert_eq!(short_time("not a time"), "not a time");
-    }
-}
-
 /// The rows of the certificate view for `cert`: who it was issued to and
 /// by, when it holds, what its key may do and is for, its policies, where
 /// its revocation is checked, and its fingerprints.
@@ -1205,4 +1194,15 @@ fn rows_table(rows: Vec<(String, String, Option<Hsla>)>, th: &crate::theme::Them
                         .child(value),
                 )
         }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn times_are_shortened_for_the_cards() {
+        assert_eq!(short_time("2026-11-14 11:02:45 UTC"), "14 Nov, 11:02");
+        assert_eq!(short_time("not a time"), "not a time");
+    }
 }
