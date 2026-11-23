@@ -1275,6 +1275,22 @@ impl Viewer {
                             this.change_flags(|f| f.print = !f.print, cx)
                         })),
                     )
+                    .when(super::looks::tool_of(a).is_some(), |d| {
+                        let kept = self.look_is_kept(a);
+                        d.child(
+                            button(
+                                "comment-look",
+                                "star",
+                                if kept {
+                                    "comment-look-drop"
+                                } else {
+                                    "comment-look-keep"
+                                },
+                                kept,
+                            )
+                            .on_click(cx.listener(|this, _, _, cx| this.toggle_kept_look(cx))),
+                        )
+                    })
                     .child(div().flex_1())
                     .child(
                         button("comment-delete", "trash", "comment-delete", false)

@@ -200,6 +200,27 @@ impl Viewer {
         cx.notify();
     }
 
+    /// Opens the print dialog on the pages picked in the organizer.
+    pub(super) fn print_picked(&mut self, cx: &mut Context<Self>) {
+        if self.picked.is_empty() {
+            return;
+        }
+        let pages: Vec<usize> = self.picked.iter().copied().collect();
+        if self.printing.is_none() {
+            self.toggle_printing(cx);
+        }
+        let Some(printing) = self.printing.as_mut() else {
+            return;
+        };
+        printing.which = Which::These;
+        let input = printing.pages.clone();
+        input.update(cx, |input, cx| {
+            input.set_text(katna_pdf_cos::ranges::format(&pages), cx)
+        });
+        self.preview_sheets(cx);
+        cx.notify();
+    }
+
     /// Lays the sheets out again as the dialog now asks, and draws the
     /// first (or the one shown, if there still is one) for the preview.
     fn preview_sheets(&mut self, cx: &mut Context<Self>) {

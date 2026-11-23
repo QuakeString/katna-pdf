@@ -297,6 +297,11 @@ impl Viewer {
                 .on_click(cx.listener(|this, _, _, cx| this.open_setup_at(4, cx)))
             })
             .child(
+                button("pages-print", "print", "pages-print", false)
+                    .when(self.picked.is_empty(), |b| b.opacity(0.4))
+                    .on_click(cx.listener(|this, _, _, cx| this.print_picked(cx))),
+            )
+            .child(
                 button("pages-crop", "crop", "pages-crop", self.cropping)
                     .when(self.changing_pages, |b| b.opacity(0.4))
                     .on_click(cx.listener(|this, _, _, cx| this.toggle_crop(cx))),

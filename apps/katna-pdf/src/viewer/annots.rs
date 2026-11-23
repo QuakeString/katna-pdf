@@ -56,6 +56,7 @@ impl Viewer {
 
     pub(super) fn pick_tool(&mut self, tool: Tool, cx: &mut Context<Self>) {
         self.tool = (self.tool != Some(tool)).then_some(tool);
+        self.colour_chosen = false;
         self.cropping = false;
         self.draft = None;
         self.measuring = None;
@@ -122,7 +123,13 @@ impl Viewer {
             );
         }
         row = row.child(float::vsep(&th));
+        // The look kept for the tool in hand shows its colour as picked.
+        let kept = self.kept_look().map(|l| l.colour);
         for (i, [r, g, b]) in COLOURS.into_iter().enumerate() {
+            let on = match kept {
+                Some(c) => c.iter().zip([r, g, b]).all(|(x, y)| (x - y).abs() < 0.005),
+                None => self.colour == i,
+            };
             let fill: gpui::Hsla = gpui::rgb(u32::from_be_bytes([
                 0,
                 (r * 255.0) as u8,
@@ -131,7 +138,7 @@ impl Viewer {
             ]))
             .into();
             row = row.child(
-                float::swatch(("colour", i), fill, self.colour == i, &th)
+                float::swatch(("colour", i), fill, on, &th)
                     .ftip(t("tool-colour", &[]), &th)
                     .on_click(cx.listener(move |this, _, _, cx| this.pick_colour(i, cx))),
             );
@@ -143,6 +150,7 @@ impl Viewer {
     /// is given to the annotation chosen.
     fn pick_colour(&mut self, i: usize, cx: &mut Context<Self>) {
         self.colour = i;
+        self.colour_chosen = true;
         if self.tool.is_none()
             && let Some(mut a) = self.chosen_annotation().cloned()
             && !matches!(a.kind, AnnotKind::Other(_))
@@ -430,6 +438,7 @@ impl Viewer {
                         a.colour = [0.0, 0.0, 0.0];
                     }
                 }
+                self.with_kept_look(&mut a);
                 // Notes and free text are written in at once.
                 self.comment_next = matches!(a.kind, AnnotKind::Note | AnnotKind::FreeText { .. });
                 self.change_annotations(
@@ -475,6 +484,7 @@ impl Viewer {
             if let Some(mut a) = annotate::markup(style, page, &text.line_boxes(range), inv) {
                 a.colour = COLOURS[self.colour];
                 a.author = author();
+                self.with_kept_look(&mut a);
                 put.push(a);
             }
         }
@@ -824,7 +834,7 @@ impl Viewer {
         let Some(draft) = self.draft.as_ref().filter(|d| d.page == page) else {
             return out;
         };
-        let [r, g, b] = COLOURS[self.colour];
+        let [r, g, b] = self.drawing_colour();
         let colour = gpui::rgb(u32::from_be_bytes([
             0,
             (r * 255.0) as u8,

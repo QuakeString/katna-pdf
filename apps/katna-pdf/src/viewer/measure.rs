@@ -400,6 +400,7 @@ impl Viewer {
             a.width = super::super::annotate::WIDTH;
             a.cloudy = tool == Tool::Cloud;
             a.author = super::annots::author();
+            self.with_kept_look(&mut a);
             a.rect = a.bounds();
             self.change_annotations(
                 AnnotChanges {
