@@ -605,7 +605,11 @@ impl Viewer {
     }
 
     /// Marks the text selected in `style`, one annotation per page.
-    fn mark_selection(&mut self, style: katna_pdf_cos::MarkupStyle, cx: &mut Context<Self>) {
+    pub(super) fn mark_selection(
+        &mut self,
+        style: katna_pdf_cos::MarkupStyle,
+        cx: &mut Context<Self>,
+    ) {
         let (Some(selection), Some(texts)) = (self.selection.take(), self.texts.clone()) else {
             return;
         };
