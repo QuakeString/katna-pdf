@@ -479,6 +479,28 @@ fn flags_states_and_replies_round_trip() {
         panic!();
     };
     assert_eq!(dict.name("StateModel"), Some(&b"Review"[..]));
+    // A check mark is apart from the status.
+    assert!(!katna_pdf_cos::annotation_marked(&read, note.id.unwrap()));
+    let mut mark = Annotation::new(1, AnnotKind::Note);
+    mark.reply_to = note.id;
+    mark.state = Some("Marked".into());
+    mark.modified = Some("D:20260105000000Z".into());
+    mark.flags.hidden = true;
+    let marked = Document::load(
+        again
+            .annotate(&AnnotChanges {
+                put: vec![mark],
+                remove: vec![],
+            })
+            .unwrap(),
+    )
+    .unwrap()
+    .annotations();
+    assert!(katna_pdf_cos::annotation_marked(&marked, note.id.unwrap()));
+    assert_eq!(
+        katna_pdf_cos::annotation_status(&marked, note.id.unwrap()),
+        Some("Accepted")
+    );
     // As text: the note, its status and its reply; not the state reply.
     // (Dates are when they were written, so they are cut out.)
     let text = katna_pdf_cos::comments_text(&read);

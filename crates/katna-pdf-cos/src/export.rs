@@ -29,6 +29,70 @@ pub fn plain_text(doc: &Document, pages: &[usize]) -> String {
     out
 }
 
+/// How much text the pages hold: words, and characters with and without
+/// spaces, counted as a word processor counts them.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TextCount {
+    pub words: usize,
+    pub characters: usize,
+    /// Characters without spaces, tabs and line breaks.
+    pub letters: usize,
+}
+
+impl TextCount {
+    /// Counts `text`. Letters of scripts written without spaces (Chinese,
+    /// Japanese, Thai and the like) each count as a word, as Word does.
+    pub fn of(text: &str) -> Self {
+        let mut count = TextCount::default();
+        for word in text.split_whitespace() {
+            let mut run = false;
+            for c in word.chars() {
+                count.letters += 1;
+                if unspaced(c) {
+                    count.words += 1;
+                    run = false;
+                } else if !run {
+                    count.words += 1;
+                    run = true;
+                }
+            }
+        }
+        // Spaces between words, as the text reads (a line break is one).
+        count.characters = count.letters + text.split_whitespace().count().saturating_sub(1);
+        count
+    }
+
+    fn add(&mut self, other: TextCount) {
+        self.words += other.words;
+        self.letters += other.letters;
+        self.characters += other.characters;
+    }
+}
+
+/// Whether `c` belongs to a script written without spaces between words.
+fn unspaced(c: char) -> bool {
+    matches!(c as u32,
+        0x0E00..=0x0EFF   // Thai, Lao
+        | 0x1000..=0x109F // Myanmar
+        | 0x1780..=0x17FF // Khmer
+        | 0x3040..=0x30FF // Hiragana, Katakana
+        | 0x3400..=0x4DBF // CJK extension A
+        | 0x4E00..=0x9FFF // CJK
+        | 0xF900..=0xFAFF
+        | 0x20000..=0x2FFFF)
+}
+
+/// How much text `pages` (by index) hold, each paragraph counted apart.
+pub fn text_count(doc: &Document, pages: &[usize]) -> TextCount {
+    let mut count = TextCount::default();
+    for &page in pages {
+        for block in doc.text_blocks(page) {
+            count.add(TextCount::of(&block.text));
+        }
+    }
+    count
+}
+
 /// The text of `pages` as a Word document, paragraph by paragraph.
 pub fn docx(doc: &Document, pages: &[usize]) -> Vec<u8> {
     let mut body = String::new();
@@ -171,6 +235,15 @@ pub fn pictures_pdf(pictures: Vec<(Image, (f32, f32))>) -> Result<Vec<u8>, EditE
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn words_and_characters_are_counted() {
+        let c = TextCount::of("Hello  wide\nworld.");
+        assert_eq!((c.words, c.letters, c.characters), (3, 15, 17));
+        let c = TextCount::of("katna 日本語");
+        assert_eq!((c.words, c.letters, c.characters), (4, 8, 9));
+        assert_eq!(TextCount::of(" \n "), TextCount::default());
+    }
 
     #[test]
     fn zip_entries_are_findable() {

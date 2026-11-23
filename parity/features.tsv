@@ -1,5 +1,5 @@
 id	area	feature	adobe	mpe	katna	tier	where	note	source
-core.word-count	core	Word and character count	reader	n	todo	P2	-	text is there (render text.rs); no count shown	acrobat
+core.word-count	core	Word and character count	reader	n	shipped	P2	#194		acrobat
 core.open-pdf	core	Open PDF files	reader	y	shipped	P0	Phase 1		acrobat
 core.repair-broken-files	core	Open damaged files by reconstructing the cross-reference table	reader	n	shipped	P0	cos parse.rs #4		acrobat
 core.malformed-input-safety	core	Reject garbage or hostile input without crashing	-	n	shipped	P0	cos, cos-check	never-panic sweeps over a corpus	acrobat
@@ -367,7 +367,7 @@ comment.default-properties	comment	Make current properties the tool default	read
 comment.author-identity	comment	Author name from identity preferences	reader	y	shipped	P1	#172		acrobat
 comment.reply	comment	Reply to comments	reader	y	shipped	P1	#104		acrobat
 comment.set-status	comment	Set review status (accepted, rejected, cancelled, completed)	reader	y	shipped	P1	#104		acrobat
-comment.checkmark	comment	Mark comments with a checkmark	reader	n	todo	P2	-		acrobat
+comment.checkmark	comment	Mark comments with a checkmark	reader	n	shipped	P2	#194		acrobat
 comment.delete-comment	comment	Delete comments	reader	y	shipped	P0	#32, #104		acrobat
 comment.edit-comment-text	comment	Edit comment text	reader	y	shipped	P0	#32		acrobat
 comment.copy-comment-text	comment	Copy comment text	reader	n	shipped	P1	#152	copy button on the chosen comment	acrobat

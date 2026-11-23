@@ -58,8 +58,8 @@ mod xfdf;
 pub use actions::{FieldAction, SubmitFormat};
 pub use annots::{
     AnnotChanges, AnnotFlags, AnnotKind, Annotation, DYNAMIC_STAMPS, LineEnd, MARKS, MarkupStyle,
-    NOTE_SIZE, REVIEW_STATES, STAMPS, annotation_status, comments_text, custom_stamp, pdf_date,
-    stamp_is_dynamic, stamp_is_mark, stamp_label,
+    NOTE_SIZE, REVIEW_STATES, STAMPS, annotation_marked, annotation_status, comments_text,
+    custom_stamp, pdf_date, stamp_is_dynamic, stamp_is_mark, stamp_label,
 };
 pub use attachments::{
     Attachment, ColumnKind, ItemValue, Portfolio, PortfolioColumn, PortfolioView,
@@ -74,7 +74,7 @@ pub use design::{FieldEdit, FieldSpec, FormDesign, FormError, NewField};
 pub use document::{Document, Entry, LoadError, Repair, XrefKind};
 pub use dss::Dss;
 pub use edit::{EditError, Layout, NewFont, StandIn, TextAlign, TextBlock, TextRun};
-pub use export::{docx, pictures_pdf, plain_text};
+pub use export::{TextCount, docx, pictures_pdf, plain_text, text_count};
 pub use filter::{FilterError, decode};
 pub use flatten::Flatten;
 pub use formdata::{

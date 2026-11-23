@@ -8,7 +8,9 @@
 use std::path::Path;
 
 use gpui::{AnyElement, Context, Entity, Focusable, Subscription, Window, div, prelude::*};
-use katna_pdf_cos::{AnnotChanges, AnnotKind, Annotation, REVIEW_STATES, Ref, annotation_status};
+use katna_pdf_cos::{
+    AnnotChanges, AnnotKind, Annotation, REVIEW_STATES, Ref, annotation_marked, annotation_status,
+};
 use katna_ui::px;
 use katna_ui::text_input::{InputEvent, TextInput};
 use katna_ui::tokens::{radius, space, text};
@@ -34,6 +36,8 @@ pub(super) struct CommentFilter {
     pub kind: Option<KindGroup>,
     pub author: Option<String>,
     pub status: Option<StatusPick>,
+    /// Only those with a check mark, or only those without.
+    pub marked: Option<bool>,
     /// Words to look for in the comments, their replies and authors.
     pub words: Option<(Entity<TextInput>, Subscription)>,
     /// The order of the list; kept when the filter closes.
@@ -225,6 +229,11 @@ impl Viewer {
                 _ => {}
             }
         }
+        if let Some(marked) = f.marked
+            && a.id.is_none_or(|id| annotation_marked(all, id) != marked)
+        {
+            return false;
+        }
         true
     }
 
@@ -330,6 +339,30 @@ impl Viewer {
         let Some(parent) = self.chosen_annotation().cloned() else {
             return;
         };
+        let author = super::annots::author();
+        let mut a = Annotation::new(parent.page, AnnotKind::Note);
+        a.rect = parent.rect;
+        a.reply_to = parent.id;
+        a.state = Some(state.to_owned());
+        a.contents = format!("{state} set by {author}");
+        a.author = author;
+        a.flags.hidden = true;
+        self.change_annotations(
+            AnnotChanges {
+                put: vec![a],
+                remove: Vec::new(),
+            },
+            cx,
+        );
+    }
+
+    /// Marks `parent` with a check mark, or takes it off: a hidden reply
+    /// in the marked state model, as Acrobat writes it.
+    fn set_mark(&mut self, parent: &Annotation, on: bool, cx: &mut Context<Self>) {
+        if parent.id.is_none() {
+            return;
+        }
+        let state = if on { "Marked" } else { "Unmarked" };
         let author = super::annots::author();
         let mut a = Annotation::new(parent.page, AnnotKind::Note);
         a.rect = parent.rect;
@@ -696,6 +729,22 @@ impl Viewer {
                 })),
             );
         }
+        for (i, (on, id)) in [
+            (true, "comments-filter-marked"),
+            (false, "comments-filter-unmarked"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            statuses = statuses.child(
+                self.chip(("filter-marked", i), t(id, &[]), f.marked == Some(on))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        let f = &mut this.comment_filter;
+                        f.marked = (f.marked != Some(on)).then_some(on);
+                        cx.notify();
+                    })),
+            );
+        }
         let mut order = row().child(
             div()
                 .h(px(26.0))
@@ -758,7 +807,8 @@ impl Viewer {
             .collect();
         authors.sort_unstable();
         authors.dedup();
-        let none = f.kind.is_none() && f.author.is_none() && f.status.is_none();
+        let none =
+            f.kind.is_none() && f.author.is_none() && f.status.is_none() && f.marked.is_none();
         let mut row = div()
             .flex()
             .flex_wrap()
@@ -771,6 +821,7 @@ impl Viewer {
                         this.comment_filter.kind = None;
                         this.comment_filter.author = None;
                         this.comment_filter.status = None;
+                        this.comment_filter.marked = None;
                         cx.notify();
                     }),
                 ),
@@ -857,7 +908,8 @@ impl Viewer {
                 }
             }
             let status = annotation_status(&all, id);
-            list = list.child(self.comment_card(a, page, status, &replies, window, cx));
+            let marked = annotation_marked(&all, id);
+            list = list.child(self.comment_card(a, page, (status, marked), &replies, window, cx));
         }
         if !any {
             list = list.child(
@@ -902,12 +954,13 @@ impl Viewer {
         &self,
         a: &Annotation,
         page: usize,
-        status: Option<&str>,
+        (status, marked): (Option<&str>, bool),
         replies: &[Annotation],
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let th = self.theme;
+        let parent = a.clone();
         let Some(id) = a.id else {
             return div().into_any_element();
         };
@@ -1054,7 +1107,42 @@ impl Viewer {
                             )
                             .when(a.flags.locked, |d| d.child(flag("lock")))
                             .when(a.flags.hidden, |d| d.child(flag("eyeoff")))
-                            .when(!a.flags.print, |d| d.child(flag("print"))),
+                            .when(!a.flags.print, |d| d.child(flag("print")))
+                            .child(
+                                div()
+                                    .id(("comment-mark", id.num as usize))
+                                    .size(px(16.0))
+                                    .flex_none()
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .rounded(px(radius::XS))
+                                    .map(|d| {
+                                        if marked {
+                                            d.bg(th.accent)
+                                        } else {
+                                            d.border_1().border_color(th.dim)
+                                        }
+                                    })
+                                    .children(
+                                        marked.then(|| float::icon("check", 12.0, th.on_accent)),
+                                    )
+                                    .ftip(
+                                        t(
+                                            if marked {
+                                                "comments-unmark"
+                                            } else {
+                                                "comments-mark"
+                                            },
+                                            &[],
+                                        ),
+                                        &th,
+                                    )
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        cx.stop_propagation();
+                                        this.set_mark(&parent, !marked, cx);
+                                    })),
+                            ),
                     )
                     .when(!what.is_empty() && !chosen, |d| {
                         d.child(
