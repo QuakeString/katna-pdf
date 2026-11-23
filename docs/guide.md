@@ -53,7 +53,7 @@ The pencil in the dock edits what the pages draw.
 - Add text, pictures and shapes; move, resize, turn, restack, recolour and delete what is already there.
 - Headers, footers, watermarks, Bates numbers and backgrounds go on many pages at once from Page marks.
 - Redact takes text, pictures and drawings out for good, and finds PAN and Aadhaar numbers, phone numbers and emails.
-- Ctrl+Z undoes and Ctrl+Shift+Z redoes, all the way back to the file as it opened.
+- Ctrl+Z undoes and Ctrl+Shift+Z redoes, all the way back to the file as it opened, saved or not.
 
 ## Organizing pages
 
