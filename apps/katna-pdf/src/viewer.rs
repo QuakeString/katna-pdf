@@ -46,6 +46,7 @@ mod crop;
 mod datepick;
 mod design;
 mod dock;
+mod email;
 mod export;
 mod files;
 mod find;
@@ -100,6 +101,7 @@ actions!(
         ReopenSession,
         Compare,
         Export,
+        SendByEmail,
         ReadAloud,
         Present,
         PresentNext,
@@ -4784,6 +4786,7 @@ impl Render for Viewer {
             .on_action(cx.listener(|this, _: &Sign, _, cx| this.toggle_signing(cx)))
             .on_action(cx.listener(|this, _: &Properties, _, cx| this.toggle_properties(cx)))
             .on_action(cx.listener(|this, _: &Export, _, cx| this.toggle_exporting(cx)))
+            .on_action(cx.listener(|this, _: &SendByEmail, _, cx| this.send_by_email(cx)))
             .on_action(cx.listener(|this, _: &Revert, _, cx| this.revert(cx)))
             .on_action(cx.listener(|this, _: &PreviousView, _, cx| this.step_view(true, cx)))
             .on_action(cx.listener(|this, _: &NextView, _, cx| this.step_view(false, cx)))

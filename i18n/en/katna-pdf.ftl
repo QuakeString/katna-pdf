@@ -1326,6 +1326,7 @@ menu-reopen-session = Reopen the files from _last time
 menu-save = _Save
 menu-print = _Print
 menu-export = _Export
+menu-send-email = Send by e_mail
 menu-properties = P_roperties
 menu-compare = Co_mpare
 menu-library = _Library
@@ -1513,6 +1514,7 @@ window-maximize = Maximise
 window-close = Close
 share-print = Print
 share-export = Export
+share-email = Send by email
 share-compare = Compare
 share-present = Present
 share-read-aloud = Read aloud
@@ -1761,3 +1763,8 @@ repair-objects-in-streams = Objects found inside object streams: { $count }.
 repair-trailer-keyword = The trailer was taken from the last one in the file.
 repair-trailer-xref-stream = The trailer was taken from the newest cross-reference stream.
 repair-catalog-by-type = No trailer was found; the document catalog was found by its type.
+
+# Sending the file by email (viewer/email.rs).
+email-started = A new message with the file attached is open in { $app }.
+email-started-desktop = A new message with the file attached is open in your mail app.
+email-failed = No mail app could start a message: { $error }. Attach the file in your mail app instead.

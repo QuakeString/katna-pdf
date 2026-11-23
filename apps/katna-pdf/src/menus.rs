@@ -12,8 +12,8 @@ use crate::viewer::{
     FitWidth, GoToPage, Loupe, NewWindow, NextPage, NextSpread, NextTab, NextView, Open,
     OpenSettings, Organize, Present, PreviousPage, PreviousTab, PreviousView, Print, Properties,
     Quit, ReadAloud, ReadMode, Redo, ReopenSession, ReportProblem, Revert, RotateViewLeft,
-    RotateViewRight, Save, SelectAll, Shortcuts, ShowAbout, ShowLibrary, Sign, Snapshot,
-    ToggleContents, ToggleNight, Undo, ZoomIn, ZoomOut, ZoomToArea,
+    RotateViewRight, Save, SelectAll, SendByEmail, Shortcuts, ShowAbout, ShowLibrary, Sign,
+    Snapshot, ToggleContents, ToggleNight, Undo, ZoomIn, ZoomOut, ZoomToArea,
 };
 
 /// An item: its id (and the id of its words), and its keys as
@@ -34,6 +34,7 @@ pub const MENUS: &[(&str, &[Entry])] = &[
             Some(("menu-save", &["Control", "S"])),
             Some(("menu-print", &["Control", "P"])),
             Some(("menu-export", CTRL_SHIFT_E)),
+            Some(("menu-send-email", &[])),
             Some(("menu-properties", &["Control", "D"])),
             Some(("menu-compare", CTRL_SHIFT_D)),
             Some(("menu-library", &["Control", "L"])),
@@ -141,6 +142,7 @@ pub fn action(id: &str) -> Option<Box<dyn Action>> {
         "menu-save" => Box::new(Save),
         "menu-print" => Box::new(Print),
         "menu-export" => Box::new(Export),
+        "menu-send-email" => Box::new(SendByEmail),
         "menu-properties" => Box::new(Properties),
         "menu-compare" => Box::new(Compare),
         "menu-library" => Box::new(ShowLibrary),
