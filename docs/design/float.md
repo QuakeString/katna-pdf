@@ -109,13 +109,17 @@ at Shortcuts; asking again brings the open window forward.
 - Signing (X04): token drivers found, timestamping and its server,
   long-term proof, and the trusted roots folder. These are the signing
   card's own remembered choices, so either place changes both.
+- Library (X05): the watched folders with the files in each, taken
+  off or added; an open library reads them again at once.
+- Read aloud (X06): which voice reads (shown once one has been opened,
+  as opening Speech Dispatcher is slow), its speed (SSIP `RATE`,
+  espeak's `-s`, Windows' `Rate`) and a button to hear it.
 - Shortcuts (X07): every menu item with keys, and a box to find one.
 - About (X08): the build, whether it looks for updates, and the crash
   reports folder.
 
 ## Still to come
 
-Settings' Library and Read aloud pages, the
-scheme editor and import (X10, X11) and the accent row. The signing
-card as a step-by-step dialog (G02-G05) and the token status in the
+The scheme editor and import (X10, X11) and the accent row. The
+signing card as a step-by-step dialog (G02-G05) and the token status in the
 profile menu (S14).

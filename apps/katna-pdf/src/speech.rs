@@ -13,6 +13,38 @@
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU32, Ordering};
+
+/// How fast to speak, 1.0 the voice's own pace, as Settings > Read
+/// aloud sets it (hundredths, so it fits an atomic).
+static SPEED: AtomicU32 = AtomicU32::new(100);
+
+/// Sets how fast the voice speaks from the next sentence, from 0.5 to 2.
+pub fn set_speed(speed: f32) {
+    SPEED.store(
+        (speed.clamp(0.5, 2.0) * 100.0).round() as u32,
+        Ordering::Relaxed,
+    );
+}
+
+fn speed() -> f32 {
+    SPEED.load(Ordering::Relaxed) as f32 / 100.0
+}
+
+/// What reads aloud, once a reading has opened it: Speech Dispatcher,
+/// a program's name, or Windows' voice. `None` before then, as opening it
+/// may start Speech Dispatcher and is kept off the UI thread.
+pub fn opened_name() -> Option<&'static str> {
+    match VOICE.get()? {
+        None => Some(""),
+        Some(voice) => Some(match &voice.kind {
+            #[cfg(unix)]
+            Kind::Ssip { .. } => "Speech Dispatcher",
+            Kind::Program { program, .. } => program.as_str(),
+            Kind::PowerShell { .. } => "Windows",
+        }),
+    }
+}
 
 /// A voice to speak with.
 pub struct Voice {
@@ -47,7 +79,8 @@ enum Kind {
 #[cfg_attr(not(windows), allow(dead_code))]
 const POWERSHELL: &str = "[Console]::InputEncoding = [Text.Encoding]::UTF8; Add-Type -AssemblyName System.Speech; \
     $s = New-Object System.Speech.Synthesis.SpeechSynthesizer; \
-    while (($l = [Console]::In.ReadLine()) -ne $null) { $s.Speak($l); \
+    while (($l = [Console]::In.ReadLine()) -ne $null) { \
+    if ($l.StartsWith([string][char]1)) { $s.Rate = [int]$l.Substring(1); continue }; $s.Speak($l); \
     [Console]::Out.WriteLine('done'); [Console]::Out.Flush() }";
 
 /// Windows' flag for a program started without a console window.
@@ -57,9 +90,10 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 /// The app's one voice, opened the first time it is asked for: slow (it
 /// may start Speech Dispatcher), so asked for off the UI thread.
 pub fn voice() -> Option<&'static Voice> {
-    static VOICE: std::sync::OnceLock<Option<Voice>> = std::sync::OnceLock::new();
     VOICE.get_or_init(Voice::open).as_ref()
 }
+
+static VOICE: std::sync::OnceLock<Option<Voice>> = std::sync::OnceLock::new();
 
 impl Voice {
     /// The desktop's voice, when it has one.
@@ -108,11 +142,18 @@ impl Voice {
         match &self.kind {
             #[cfg(unix)]
             Kind::Ssip { reader, writer } => {
+                let mut reader = reader.lock().map_err(|_| ())?;
+                {
+                    // -100 to 100, 0 the voice's own pace.
+                    let rate = ((speed() - 1.0) * 100.0).round().clamp(-100.0, 100.0);
+                    let mut w = writer.lock().map_err(|_| ())?;
+                    send(&mut *w, &format!("SET self RATE {rate}")).map_err(|_| ())?;
+                }
+                wait_for(&mut *reader, |code| (200..300).contains(&code))?;
                 {
                     let mut w = writer.lock().map_err(|_| ())?;
                     send(&mut *w, "SPEAK").map_err(|_| ())?;
                 }
-                let mut reader = reader.lock().map_err(|_| ())?;
                 // `230 OK RECEIVING DATA` first, then the text.
                 wait_for(&mut *reader, |code| code == 230)?;
                 {
@@ -132,7 +173,10 @@ impl Voice {
             Kind::Program { program, running } => {
                 // On its input, so words that start with `-` are not
                 // taken for options.
+                // espeak's own pace is 175 words a minute.
+                let words = (175.0 * speed()).round() as u32;
                 let mut child = Command::new(program)
+                    .args(["-s", &words.to_string()])
                     .stdin(Stdio::piped())
                     .stdout(Stdio::null())
                     .stderr(Stdio::null())
@@ -179,6 +223,10 @@ impl Voice {
                         *child = Some(started);
                     }
                     let stdin = child.as_mut().and_then(|c| c.stdin.as_mut()).ok_or(())?;
+                    // -10 to 10, 0 the voice's own pace; a line that
+                    // starts with \u{1} sets it and is not spoken.
+                    let rate = ((speed() - 1.0) * 10.0).round().clamp(-10.0, 10.0);
+                    writeln!(stdin, "\u{1}{rate}").map_err(|_| ())?;
                     writeln!(stdin, "{text}").map_err(|_| ())?;
                     stdin.flush().map_err(|_| ())?;
                 }
@@ -419,9 +467,11 @@ mod tests {
         assert_eq!(
             &heard[3..],
             [
+                "SET self RATE 0",
                 "SPEAK",
                 "Hello there.",
                 ".",
+                "SET self RATE 0",
                 "SPEAK",
                 "..dot first",
                 ".",

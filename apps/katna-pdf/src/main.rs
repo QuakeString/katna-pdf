@@ -119,7 +119,9 @@ fn main() -> ExitCode {
             cx.set_global(history::History::load());
             cx.set_global(look::Look::load());
             cx.set_global(profile::Profile::load());
-            cx.set_global(prefs::Prefs::load());
+            let prefs = prefs::Prefs::load();
+            speech::set_speed(prefs.speed);
+            cx.set_global(prefs);
             katna_ui::text_input::bind_keys(cx);
             katna_ui::text_area::bind_keys(cx);
             viewer::bind_keys(cx);

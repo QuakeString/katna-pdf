@@ -61,6 +61,8 @@ pub struct Prefs {
     pub units: Units,
     /// Snap moved objects to the grid from the start.
     pub grid: bool,
+    /// How fast reading aloud goes, 1.0 the voice's own pace.
+    pub speed: f32,
 }
 
 impl Default for Prefs {
@@ -73,6 +75,7 @@ impl Default for Prefs {
             workers: true,
             units: Units::default(),
             grid: false,
+            speed: 1.0,
         }
     }
 }
@@ -127,6 +130,13 @@ impl Prefs {
                     }
                 }
                 "grid" => prefs.grid = on,
+                "read-speed" => {
+                    if let Ok(speed) = value.parse::<f32>()
+                        && (0.5..=2.0).contains(&speed)
+                    {
+                        prefs.speed = speed;
+                    }
+                }
                 _ => {}
             }
         }
@@ -146,12 +156,13 @@ impl Prefs {
             Spread::Book => "book",
         };
         format!(
-            "open-at={}\nzoom={zoom}\nlayout={layout}\nreopen-session={}\nworkers={}\nunits={}\ngrid={}\n",
+            "open-at={}\nzoom={zoom}\nlayout={layout}\nreopen-session={}\nworkers={}\nunits={}\ngrid={}\nread-speed={}\n",
             if self.open_at_last { "last" } else { "first" },
             on(self.reopen_session),
             on(self.workers),
             self.units.suffix(),
             on(self.grid),
+            self.speed,
         )
     }
 
@@ -170,6 +181,7 @@ impl Prefs {
         let mut prefs = cx.global::<Prefs>().clone();
         change(&mut prefs);
         prefs.save();
+        crate::speech::set_speed(prefs.speed);
         cx.set_global(prefs);
     }
 }
@@ -188,6 +200,7 @@ mod tests {
             workers: false,
             units: Units::Millimetres,
             grid: true,
+            speed: 1.25,
         };
         assert_eq!(Prefs::parse(&prefs.text()), prefs);
         assert_eq!(Prefs::parse("nonsense\nzoom=huge"), Prefs::default());

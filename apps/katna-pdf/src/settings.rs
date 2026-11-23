@@ -3,8 +3,8 @@
 //! Settings (docs/design/float.md, X row): a window of its own, as
 //! Okular's is, whose changes apply at once. A list of pages on the
 //! left, Close under it; Profile (X00), Appearance (X01), Viewing (X02),
-//! Editing (X03), Signing (X04), Shortcuts (X07) and About (X08) on the
-//! right.
+//! Editing (X03), Signing (X04), Library (X05), Read aloud (X06),
+//! Shortcuts (X07) and About (X08) on the right.
 
 use gpui::{
     AnyElement, App, Bounds, Context, Entity, FontWeight, Global, SharedString, Subscription,
@@ -33,16 +33,20 @@ pub enum Page {
     Viewing,
     Editing,
     Signing,
+    Library,
+    ReadAloud,
     Shortcuts,
     About,
 }
 
-const PAGES: [(Page, &str, &str); 7] = [
+const PAGES: [(Page, &str, &str); 9] = [
     (Page::Profile, "user", "settings-profile"),
     (Page::Appearance, "sun", "settings-appearance"),
     (Page::Viewing, "eye", "settings-viewing"),
     (Page::Editing, "edit", "settings-editing"),
     (Page::Signing, "sign", "settings-signing"),
+    (Page::Library, "lib", "settings-library"),
+    (Page::ReadAloud, "speak", "settings-read-aloud"),
     (Page::Shortcuts, "kbd", "settings-shortcuts"),
     (Page::About, "info", "settings-about"),
 ];
@@ -95,6 +99,8 @@ pub struct Settings {
     /// The timestamp server's address (Signing).
     server: Entity<TextInput>,
     signing: SigningDefaults,
+    /// The library's watched folders and the files found in each.
+    folders: Vec<(std::path::PathBuf, usize)>,
     _subs: Vec<Subscription>,
 }
 
@@ -151,6 +157,7 @@ impl Settings {
             find,
             server,
             signing,
+            folders: watched(),
             _subs: subs,
         }
     }
@@ -403,7 +410,6 @@ impl Settings {
                         div()
                             .text_size(px(text::CAPTION))
                             .text_color(th.dim)
-                            .truncate()
                             .child(v)
                     }))
                     .children(hint.map(|h| {
@@ -820,6 +826,175 @@ impl Settings {
             .into_any_element()
     }
 
+    fn library(&self, cx: &mut Context<Self>) -> AnyElement {
+        let th = self.theme;
+        let rows = self.folders.iter().enumerate().map(|(i, (folder, count))| {
+            let folder = folder.clone();
+            div()
+                .h(px(44.0))
+                .px(px(space::S4))
+                .flex()
+                .items_center()
+                .gap(px(space::S3))
+                .when(i > 0, |d| d.border_t_1().border_color(th.line_soft))
+                .child(icon("folder", 16.0, th.dim))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .text_size(px(text::BODY))
+                        .child(crate::viewer::short_folder(&folder)),
+                )
+                .child(
+                    div()
+                        .text_size(px(text::CAPTION))
+                        .text_color(th.dim)
+                        .child(t("settings-folder-files", &[("count", &count.to_string())])),
+                )
+                .child(
+                    float::ib(
+                        ("settings-forget-folder", i),
+                        "x",
+                        t("settings-forget-folder", &[]),
+                        false,
+                        &th,
+                    )
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if let Ok(lib) = katna_pdf_library::Library::open_default() {
+                            let _ = lib.remove_folder(&folder);
+                        }
+                        this.folders = watched();
+                        crate::library::folders_changed(cx);
+                        cx.notify();
+                    })),
+                )
+        });
+        let list = (!self.folders.is_empty()).then(|| {
+            div()
+                .mb(px(space::S3))
+                .rounded(px(8.0))
+                .border_1()
+                .border_color(th.line)
+                .children(rows)
+        });
+        div()
+            .flex()
+            .flex_col()
+            .child(
+                div()
+                    .mb(px(space::S2))
+                    .text_size(px(text::CAPTION))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(th.dim)
+                    .child(t("settings-watched", &[])),
+            )
+            .children(list)
+            .when(self.folders.is_empty(), |d| {
+                d.child(
+                    div()
+                        .mb(px(space::S3))
+                        .text_size(px(text::CAPTION))
+                        .text_color(th.dim)
+                        .child(t("settings-no-folders", &[])),
+                )
+            })
+            .child(
+                div().flex().child(
+                    button(
+                        "settings-add-folder",
+                        t("settings-add-folder", &[]),
+                        false,
+                        &th,
+                    )
+                    .on_click(cx.listener(|_, _, window, cx| {
+                        let chosen = cx.prompt_for_paths(gpui::PathPromptOptions {
+                            files: false,
+                            directories: true,
+                            multiple: true,
+                            prompt: None,
+                        });
+                        cx.spawn_in(window, async move |this, cx| {
+                            if let Ok(Ok(Some(paths))) = chosen.await {
+                                this.update(cx, |this, cx| {
+                                    if let Ok(lib) = katna_pdf_library::Library::open_default() {
+                                        for path in &paths {
+                                            let _ = lib.add_folder(path);
+                                        }
+                                    }
+                                    this.folders = watched();
+                                    crate::library::folders_changed(cx);
+                                    cx.notify();
+                                })
+                                .ok();
+                            }
+                        })
+                        .detach();
+                    })),
+                ),
+            )
+            .child(self.row(
+                t("settings-library-elsewhere", &[]),
+                Some(t("settings-library-elsewhere-detail", &[])),
+                None,
+                None,
+            ))
+            .into_any_element()
+    }
+
+    fn read_aloud(&self, cx: &mut Context<Self>) -> AnyElement {
+        let th = self.theme;
+        let prefs = cx.global::<Prefs>().clone();
+        let voice = match crate::speech::opened_name() {
+            None => t("settings-voice-later", &[]),
+            Some("") => t("settings-voice-none", &[]),
+            Some(name) => name.to_owned(),
+        };
+        let speed = self.choice(
+            "settings-speed",
+            prefs.speed,
+            &[
+                (0.8, "settings-speed-slow"),
+                (1.0, "settings-speed-1"),
+                (1.2, "settings-speed-fast"),
+                (1.5, "settings-speed-faster"),
+            ],
+            |p, v| p.speed = v,
+            cx,
+        );
+        let try_it = button(
+            "settings-try-voice",
+            t("settings-try-voice", &[]),
+            false,
+            &th,
+        )
+        .on_click(cx.listener(|_, _, _, cx| {
+            let words = t("settings-try-voice-words", &[]);
+            cx.spawn(async move |this, cx| {
+                cx.background_spawn(async move {
+                    if let Some(voice) = crate::speech::voice() {
+                        let _ = voice.say(&words);
+                    }
+                })
+                .await;
+                this.update(cx, |_, cx| cx.notify()).ok();
+            })
+            .detach();
+        }));
+        div()
+            .flex()
+            .flex_col()
+            .child(self.row(
+                t("settings-voice", &[]),
+                Some(voice),
+                Some(t("settings-voice-detail", &[])),
+                None,
+            ))
+            .child(self.row(t("settings-speed", &[]), None, None, Some(speed)))
+            .child(div().mt(px(space::S4)).flex().child(try_it))
+            .into_any_element()
+    }
+
     fn shortcuts(&self, cx: &mut Context<Self>) -> AnyElement {
         let th = self.theme;
         let find = self.find.read(cx).text().to_lowercase();
@@ -932,6 +1107,24 @@ impl Settings {
     }
 }
 
+/// The library's watched folders, each with how many files it holds.
+fn watched() -> Vec<(std::path::PathBuf, usize)> {
+    let Ok(lib) = katna_pdf_library::Library::open_default() else {
+        return Vec::new();
+    };
+    let folders = lib.folders().unwrap_or_default();
+    let docs = lib
+        .docs(&katna_pdf_library::Filter::default())
+        .unwrap_or_default();
+    folders
+        .into_iter()
+        .map(|folder| {
+            let count = docs.iter().filter(|d| d.path.starts_with(&folder)).count();
+            (folder, count)
+        })
+        .collect()
+}
+
 /// A button that shows `dir` in the desktop's file manager, made first
 /// when it is not there yet.
 fn open_folder(
@@ -957,6 +1150,8 @@ impl Render for Settings {
             Page::Viewing => ("settings-viewing", self.viewing(cx)),
             Page::Editing => ("settings-editing", self.editing(cx)),
             Page::Signing => ("settings-signing", self.signing(cx)),
+            Page::Library => ("settings-library", self.library(cx)),
+            Page::ReadAloud => ("settings-read-aloud", self.read_aloud(cx)),
             Page::Shortcuts => ("settings-shortcuts", self.shortcuts(cx)),
             Page::About => ("settings-about", self.about(cx)),
         };
