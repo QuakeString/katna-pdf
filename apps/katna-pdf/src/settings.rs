@@ -2,8 +2,9 @@
 
 //! Settings (docs/design/float.md, X row): a window of its own, as
 //! Okular's is, whose changes apply at once. A list of pages on the
-//! left, Close under it; Profile (X00), Appearance (X01), Shortcuts
-//! (X07) and About (X08) on the right.
+//! left, Close under it; Profile (X00), Appearance (X01), Viewing (X02),
+//! Editing (X03), Signing (X04), Shortcuts (X07) and About (X08) on the
+//! right.
 
 use gpui::{
     AnyElement, App, Bounds, Context, Entity, FontWeight, Global, SharedString, Subscription,
@@ -17,22 +18,31 @@ use katna_ui::tokens::{space, text};
 use crate::float::{self, avatar, button, icon, seg, seg_item};
 use crate::look::{self, Look, Mode};
 use crate::menus::{MENUS, keys_text, plain};
+use crate::prefs::{Prefs, StartZoom, Units};
 use crate::profile::Profile;
+use crate::spread::Spread;
 use crate::text::t;
 use crate::theme::{Five, Theme};
+use crate::viewer::SigningDefaults;
 
 /// A page of Settings.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Page {
     Profile,
     Appearance,
+    Viewing,
+    Editing,
+    Signing,
     Shortcuts,
     About,
 }
 
-const PAGES: [(Page, &str, &str); 4] = [
+const PAGES: [(Page, &str, &str); 7] = [
     (Page::Profile, "user", "settings-profile"),
     (Page::Appearance, "sun", "settings-appearance"),
+    (Page::Viewing, "eye", "settings-viewing"),
+    (Page::Editing, "edit", "settings-editing"),
+    (Page::Signing, "sign", "settings-signing"),
     (Page::Shortcuts, "kbd", "settings-shortcuts"),
     (Page::About, "info", "settings-about"),
 ];
@@ -82,6 +92,9 @@ pub struct Settings {
     title: Entity<TextInput>,
     organisation: Entity<TextInput>,
     find: Entity<TextInput>,
+    /// The timestamp server's address (Signing).
+    server: Entity<TextInput>,
+    signing: SigningDefaults,
     _subs: Vec<Subscription>,
 }
 
@@ -104,10 +117,18 @@ impl Settings {
         let title = input("settings-job-hint", &profile.title, cx);
         let organisation = input("settings-organisation-hint", &profile.organisation, cx);
         let find = input("settings-find-shortcut", "", cx);
+        let signing = crate::viewer::signing_defaults();
+        let server = input("settings-server-hint", &signing.server, cx);
         let mut subs = vec![
             cx.observe_window_appearance(window, |this, window, cx| this.restyle(window, cx)),
             cx.observe_global_in::<Look>(window, |this, window, cx| this.restyle(window, cx)),
             cx.subscribe(&find, |_, _, _: &InputEvent, cx| cx.notify()),
+            cx.subscribe(&server, |this, _, event: &InputEvent, cx| {
+                if matches!(event, InputEvent::Changed) {
+                    this.signing.server = this.server.read(cx).text().to_string();
+                    crate::viewer::set_signing_defaults(&this.signing);
+                }
+            }),
         ];
         for field in [&name, &short, &title, &organisation] {
             subs.push(cx.subscribe(field, |this, _, event: &InputEvent, cx| {
@@ -128,6 +149,8 @@ impl Settings {
             title,
             organisation,
             find,
+            server,
+            signing,
             _subs: subs,
         }
     }
@@ -141,6 +164,7 @@ impl Settings {
             &self.title,
             &self.organisation,
             &self.find,
+            &self.server,
         ] {
             field.update(cx, |input, _| input.set_accent(accent));
         }
@@ -558,6 +582,244 @@ impl Settings {
             .into_any_element()
     }
 
+    /// A choice of a few, as a segmented control that changes `Prefs`.
+    fn choice<T: Copy + PartialEq + 'static>(
+        &self,
+        id: &'static str,
+        current: T,
+        options: &[(T, &'static str)],
+        set: fn(&mut Prefs, T),
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let th = self.theme;
+        let items = options.iter().enumerate().map(|(i, &(value, words))| {
+            seg_item(
+                (id, i),
+                None,
+                Some(t(words, &[]).into()),
+                current == value,
+                &th,
+            )
+            .flex_none()
+            .on_click(cx.listener(move |_, _, _, cx| Prefs::set(cx, |p| set(p, value))))
+        });
+        seg(&th).children(items).into_any_element()
+    }
+
+    /// An on and off switch that changes `Prefs`.
+    fn toggle(
+        &self,
+        id: &'static str,
+        on: bool,
+        set: fn(&mut Prefs, bool),
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        float::switch(id, on, &self.theme)
+            .on_click(cx.listener(move |_, _, _, cx| Prefs::set(cx, |p| set(p, !on))))
+            .into_any_element()
+    }
+
+    fn viewing(&self, cx: &mut Context<Self>) -> AnyElement {
+        let prefs = cx.global::<Prefs>().clone();
+        let open_at = self.choice(
+            "settings-open-at",
+            prefs.open_at_last,
+            &[(true, "settings-open-last"), (false, "settings-open-first")],
+            |p, v| p.open_at_last = v,
+            cx,
+        );
+        let zoom = self.choice(
+            "settings-zoom",
+            prefs.zoom,
+            &[
+                (StartZoom::FitWidth, "settings-zoom-width"),
+                (StartZoom::FitPage, "settings-zoom-page"),
+                (StartZoom::Actual, "settings-zoom-actual"),
+            ],
+            |p, v| p.zoom = v,
+            cx,
+        );
+        let layout = self.choice(
+            "settings-layout",
+            prefs.layout,
+            &[
+                (Spread::Single, "settings-layout-one"),
+                (Spread::Facing, "settings-layout-two"),
+                (Spread::Book, "settings-layout-book"),
+            ],
+            |p, v| p.layout = v,
+            cx,
+        );
+        let reopen = self.toggle(
+            "settings-reopen",
+            prefs.reopen_session,
+            |p, v| p.reopen_session = v,
+            cx,
+        );
+        let workers = self.toggle("settings-workers", prefs.workers, |p, v| p.workers = v, cx);
+        div()
+            .flex()
+            .flex_col()
+            .child(self.row(t("settings-open-at", &[]), None, None, Some(open_at)))
+            .child(self.row(
+                t("settings-zoom", &[]),
+                None,
+                Some(t("settings-zoom-detail", &[])),
+                Some(zoom),
+            ))
+            .child(self.row(
+                t("settings-layout", &[]),
+                None,
+                Some(t("settings-zoom-detail", &[])),
+                Some(layout),
+            ))
+            .child(self.row(
+                t("settings-reopen", &[]),
+                None,
+                Some(t("settings-reopen-detail", &[])),
+                Some(reopen),
+            ))
+            .child(self.row(
+                t("settings-workers", &[]),
+                None,
+                Some(t("settings-workers-detail", &[])),
+                Some(workers),
+            ))
+            .into_any_element()
+    }
+
+    fn editing(&self, cx: &mut Context<Self>) -> AnyElement {
+        let th = self.theme;
+        let prefs = cx.global::<Prefs>().clone();
+        let units = self.choice(
+            "settings-units",
+            prefs.units,
+            &[
+                (Units::Millimetres, "settings-units-mm"),
+                (Units::Inches, "settings-units-in"),
+                (Units::Points, "settings-units-pt"),
+            ],
+            |p, v| p.units = v,
+            cx,
+        );
+        let grid = self.toggle("settings-grid", prefs.grid, |p, v| p.grid = v, cx);
+        let folder = katna_core::Paths::from_env()
+            .ok()
+            .map(|p| p.state_dir().join("pdf"))
+            .map(|dir| open_folder("settings-own-folder", dir, &th, cx));
+        div()
+            .flex()
+            .flex_col()
+            .child(self.row(
+                t("settings-units", &[]),
+                None,
+                Some(t("settings-units-detail", &[])),
+                Some(units),
+            ))
+            .child(self.row(
+                t("settings-grid", &[]),
+                None,
+                Some(t("settings-grid-detail", &[])),
+                Some(grid),
+            ))
+            .child(self.row(t("settings-own-files", &[]), None, None, folder))
+            .into_any_element()
+    }
+
+    /// An on and off switch for what signing starts with.
+    fn signing_switch(
+        &self,
+        id: &'static str,
+        on: bool,
+        change: fn(&mut SigningDefaults, bool),
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        float::switch(id, on, &self.theme)
+            .on_click(cx.listener(move |this, _, _, cx| {
+                change(&mut this.signing, !on);
+                crate::viewer::set_signing_defaults(&this.signing);
+                cx.notify();
+            }))
+            .into_any_element()
+    }
+
+    fn signing(&self, cx: &mut Context<Self>) -> AnyElement {
+        let th = self.theme;
+        let drivers: Vec<String> = katna_pdf_sign::pkcs11::known_modules()
+            .iter()
+            .filter_map(|m| m.file_stem().map(|s| s.to_string_lossy().into_owned()))
+            .collect();
+        let drivers = if drivers.is_empty() {
+            t("settings-drivers-none", &[])
+        } else {
+            drivers.join(" · ")
+        };
+        let defaults = self.signing.clone();
+        let timestamp = self.signing_switch(
+            "settings-timestamp",
+            defaults.timestamp,
+            |d, v| d.timestamp = v,
+            cx,
+        );
+        let long_term = self.signing_switch(
+            "settings-long-term",
+            defaults.long_term,
+            |d, v| d.long_term = v,
+            cx,
+        );
+        let folder = crate::viewer::trusted_folder();
+        let yours = folder
+            .as_ref()
+            .and_then(|f| std::fs::read_dir(f).ok())
+            .map_or(0, |entries| entries.flatten().count());
+        let open = folder.map(|dir| open_folder("settings-trusted-folder", dir, &th, cx));
+        let server = div()
+            .w(px(240.0))
+            .h(px(32.0))
+            .flex()
+            .items_center()
+            .px(px(space::S3))
+            .rounded(px(6.0))
+            .border_1()
+            .border_color(th.line)
+            .bg(th.field)
+            .text_size(px(text::BODY))
+            .child(self.server.clone())
+            .into_any_element();
+        div()
+            .flex()
+            .flex_col()
+            .child(self.row(
+                t("settings-drivers", &[]),
+                Some(drivers),
+                Some(t("settings-drivers-detail", &[])),
+                None,
+            ))
+            .child(self.row(
+                t("settings-timestamp", &[]),
+                None,
+                Some(t("settings-timestamp-detail", &[])),
+                Some(timestamp),
+            ))
+            .child(self.row(t("settings-server", &[]), None, None, Some(server)))
+            .child(self.row(
+                t("settings-long-term", &[]),
+                None,
+                Some(t("settings-long-term-detail", &[])),
+                Some(long_term),
+            ))
+            .child(self.row(
+                t("settings-trusted", &[]),
+                Some(t(
+                    "settings-trusted-detail",
+                    &[("count", &yours.to_string())],
+                )),
+                None,
+                open,
+            ))
+            .into_any_element()
+    }
+
     fn shortcuts(&self, cx: &mut Context<Self>) -> AnyElement {
         let th = self.theme;
         let find = self.find.read(cx).text().to_lowercase();
@@ -628,19 +890,7 @@ impl Settings {
             None => t("settings-version-dev", &[]),
         };
         let crash = katna_core::Paths::from_env().ok().map(|p| p.crash_dir());
-        let open = crash.map(|dir| {
-            button(
-                "settings-crash-folder",
-                t("settings-open-folder", &[]),
-                false,
-                &th,
-            )
-            .on_click(cx.listener(move |_, _, _, cx| {
-                std::fs::create_dir_all(&dir).ok();
-                cx.open_url(&format!("file://{}", dir.to_string_lossy()));
-            }))
-            .into_any_element()
-        });
+        let open = crash.map(|dir| open_folder("settings-crash-folder", dir, &th, cx));
         div()
             .flex()
             .flex_col()
@@ -682,12 +932,31 @@ impl Settings {
     }
 }
 
+/// A button that shows `dir` in the desktop's file manager, made first
+/// when it is not there yet.
+fn open_folder(
+    id: &'static str,
+    dir: std::path::PathBuf,
+    th: &Theme,
+    cx: &mut Context<Settings>,
+) -> AnyElement {
+    button(id, t("settings-open-folder", &[]), false, th)
+        .on_click(cx.listener(move |_, _, _, cx| {
+            std::fs::create_dir_all(&dir).ok();
+            cx.open_url(&format!("file://{}", dir.to_string_lossy()));
+        }))
+        .into_any_element()
+}
+
 impl Render for Settings {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let th = self.theme;
         let (title, body) = match self.page {
             Page::Profile => ("settings-profile", self.profile(cx)),
             Page::Appearance => ("settings-appearance", self.appearance(cx)),
+            Page::Viewing => ("settings-viewing", self.viewing(cx)),
+            Page::Editing => ("settings-editing", self.editing(cx)),
+            Page::Signing => ("settings-signing", self.signing(cx)),
             Page::Shortcuts => ("settings-shortcuts", self.shortcuts(cx)),
             Page::About => ("settings-about", self.about(cx)),
         };

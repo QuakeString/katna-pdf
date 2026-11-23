@@ -100,13 +100,22 @@ at Shortcuts; asking again brings the open window forward.
   is made.
 - Appearance (X01): Mode as a segmented control, then a tile for each
   scheme, its day half beside its night half, and the desktop's.
+- Viewing (X02): where files open (last page read or page 1), their
+  zoom and layout, the last session's files on start, and drawing in
+  worker processes; kept in `pdf/prefs.txt` (`prefs.rs`).
+- Editing (X03): the unit an object's place and size are shown and
+  typed in (a bare number counts in it; `1in` still works), the grid
+  from the start, and the folder of the person's stamps and initials.
+- Signing (X04): token drivers found, timestamping and its server,
+  long-term proof, and the trusted roots folder. These are the signing
+  card's own remembered choices, so either place changes both.
 - Shortcuts (X07): every menu item with keys, and a box to find one.
 - About (X08): the build, whether it looks for updates, and the crash
   reports folder.
 
 ## Still to come
 
-Settings' Viewing, Editing, Signing, Library and Read aloud pages, the
+Settings' Library and Read aloud pages, the
 scheme editor and import (X10, X11) and the accent row. The signing
 card as a step-by-step dialog (G02-G05) and the token status in the
 profile menu (S14).

@@ -348,7 +348,7 @@ impl Tabs {
     }
 
     /// Opens the files that were open when the app last ran.
-    fn reopen_session(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn reopen_session(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let files = cx.global::<History>().last_session().to_vec();
         if !files.is_empty() {
             self.open_files(files, window, cx);

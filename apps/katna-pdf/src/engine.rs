@@ -20,7 +20,9 @@ pub fn engine() -> &'static dyn Engine {
     static ENGINE: OnceLock<Box<dyn Engine>> = OnceLock::new();
     ENGINE
         .get_or_init(|| {
-            if std::env::var_os("KATNA_PDF_IN_PROCESS").is_some() {
+            if std::env::var_os("KATNA_PDF_IN_PROCESS").is_some()
+                || !crate::prefs::Prefs::load().workers
+            {
                 return Box::new(Hayro);
             }
             Box::new(Workers::new(program, vec![WORKER_ARG.to_owned()], WORKERS))
