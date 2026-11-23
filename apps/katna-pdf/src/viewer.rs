@@ -62,6 +62,7 @@ mod measure;
 mod numbering;
 mod objects;
 mod organizer;
+mod picmenu;
 mod present;
 mod printing;
 mod properties;
@@ -790,6 +791,8 @@ pub struct Viewer {
     ink: usize,
     /// The picture or shape picked with Edit text on, and its drag.
     picked_object: Option<objects::Picked>,
+    /// The menu right-clicking a picture opened.
+    picture_menu: Option<picmenu::PictureMenu>,
     marking: Option<marks::Marking>,
     /// The redact tool, while in hand, and the areas it marked.
     redacting: Option<redact::Redacting>,
@@ -1070,6 +1073,7 @@ impl Viewer {
             initials: None,
             ink: 0,
             picked_object: None,
+            picture_menu: None,
             marking: None,
             redacting: None,
             exporting: None,
@@ -4756,6 +4760,10 @@ impl Render for Viewer {
                         cx.listener(|this, event, window, cx| this.press(event, window, cx)),
                     )
                     .on_mouse_down(
+                        gpui::MouseButton::Right,
+                        cx.listener(|this, event, _, cx| this.picture_right_press(event, cx)),
+                    )
+                    .on_mouse_down(
                         gpui::MouseButton::Middle,
                         cx.listener(|this, event: &gpui::MouseDownEvent, _, cx| {
                             this.panning = Some(event.position);
@@ -5209,6 +5217,7 @@ impl Render for Viewer {
                 )
             }))
             .children(command_box)
+            .children(self.picture_menu_element(cx))
             .into_any_element()
     }
 }
