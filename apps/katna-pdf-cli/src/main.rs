@@ -116,7 +116,7 @@ usage: katna-pdf-cli COMMAND [--json] ...
                                   the document's properties changed (`info` shows
                                   them); an empty value takes one out
   stamp FILE -o OUT --text TEXT [--place top-left|top|top-right|bottom-left|bottom|
-        bottom-right|middle|across] [--pages LIST] [--font NAME] [--size PT]
+        bottom-right|middle|across|upright] [--pages LIST] [--font NAME] [--size PT]
         [--colour #RRGGBB] [--opacity 0..1] [--margin PT] [--under]
         [--bates-prefix P] [--bates-suffix S] [--bates-start N] [--bates-digits D]
                                   a header, footer or watermark on every page (or
@@ -2062,14 +2062,18 @@ fn stamp(args: &[String], json: bool) -> Done {
         "bottom-right" => StampPlace::BottomRight,
         "middle" => StampPlace::Middle,
         "across" => StampPlace::Across,
+        "upright" => StampPlace::Upright,
         p => {
             return Err(Failure::Usage(format!(
                 "--place {p}: top-left, top, top-right, bottom-left, bottom, \
-                 bottom-right, middle or across"
+                 bottom-right, middle, across or upright"
             )));
         }
     };
-    let mark = matches!(place, StampPlace::Across | StampPlace::Middle);
+    let mark = matches!(
+        place,
+        StampPlace::Across | StampPlace::Middle | StampPlace::Upright
+    );
     let bates = [
         "--bates-prefix",
         "--bates-suffix",
@@ -2135,6 +2139,7 @@ fn marks(args: &[String], json: bool) -> Done {
                                 s.place,
                                 katna_pdf_cos::StampPlace::Across
                                     | katna_pdf_cos::StampPlace::Middle
+                                    | katna_pdf_cos::StampPlace::Upright
                             ) {
                                 "watermark"
                             } else {

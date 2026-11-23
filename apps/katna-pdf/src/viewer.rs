@@ -3700,7 +3700,7 @@ impl Render for Viewer {
         let reading_bar = self.reading_bar(cx);
         let signatures_line = self.signatures_line(cx);
         let signing_card = self.signing_card(cx);
-        let marks_card = self.marks_card(cx);
+        let marks_card = self.marks_card(window, cx);
         let redact_card = self.redact_card(cx);
         let export_card = self.export_card(window, cx);
         let print_card = self.print_card(window, cx);
@@ -4073,7 +4073,16 @@ impl Render for Viewer {
             .children(measure_card.map(|c| float::appear_over("measure_card", c, -6.0)))
             .children(initials_card)
             .children(signing_card.map(|c| float::appear_over("signing_card", c, -6.0)))
-            .children(marks_card.map(|c| float::appear_over("marks_card", c, -6.0)))
+            .children(marks_card.map(|card| {
+                dialog(
+                    th,
+                    card,
+                    cx.listener(|this, _, _, cx| {
+                        this.marking = None;
+                        cx.notify();
+                    }),
+                )
+            }))
             .children(redact_card.map(|c| float::appear_over("redact_card", c, -6.0)))
             .children(export_card.map(|card| {
                 dialog(

@@ -105,6 +105,22 @@ fn bates_numbers_run_on_over_the_pages_stamped() {
 }
 
 #[test]
+fn an_upright_watermark_reads_upwards() {
+    let doc = three(false);
+    let mut stamp = footer("DRAFT", StampPlace::Upright);
+    stamp.size = 40.0;
+    let out = Document::load(doc.stamp(&[0], &stamp).unwrap()).unwrap();
+    let all = streams(&out, 0).join("\n");
+    // A quarter turn about the middle of the page.
+    assert!(all.contains("0 1 -1 0 297.5 421 cm"), "{all}");
+    let marks = out.page_marks();
+    let katna_pdf_cos::MarkWhat::Stamp(back) = &marks[0].what else {
+        panic!("not a stamp");
+    };
+    assert_eq!(back.place, StampPlace::Upright);
+}
+
+#[test]
 fn a_watermark_is_faint_and_turned_and_can_go_under() {
     let doc = three(false);
     let mut stamp = footer("DRAFT", StampPlace::Across);

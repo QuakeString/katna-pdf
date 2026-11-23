@@ -575,7 +575,7 @@ impl Viewer {
                             this.design_changed(read, cx);
                         }
                         if let Some(marks) = marks {
-                            this.marks_changed(marks);
+                            this.marks_changed(marks, cx);
                         }
                     }
                     Err(error) => {
