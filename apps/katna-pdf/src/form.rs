@@ -17,7 +17,7 @@ use std::sync::Arc;
 use gpui::{Entity, Subscription};
 use katna_pdf_cos::{
     Calculation, Display, Document, Field, FieldAction, FieldKind, FieldValue, FillExtras, Format,
-    Ref, Widget,
+    Range, Ref, Widget,
 };
 use katna_pdf_js::{Outcome, Request};
 use katna_ui::text_input::TextInput;
@@ -33,6 +33,8 @@ pub struct Form {
     calculated: Vec<(usize, Calculation)>,
     /// Fields that hold a date, with how it is written (`dd/mm/yyyy`).
     dates: HashMap<usize, String>,
+    /// The numbers fields allow, checked here when scripts don't run.
+    ranges: HashMap<usize, Range>,
     /// What buttons do when clicked.
     actions: HashMap<usize, FieldAction>,
     /// Values changed since the file was opened or saved.
@@ -112,12 +114,22 @@ impl Form {
                 _ => None,
             })
             .collect();
+        let ranges = if js.is_some() {
+            HashMap::new()
+        } else {
+            fields
+                .iter()
+                .enumerate()
+                .filter_map(|(f, field)| Some((f, found.get(&field.id)?.validate?)))
+                .collect()
+        };
         (!on_page.is_empty()).then_some(Self {
             source,
             fields,
             on_page,
             calculated,
             dates,
+            ranges,
             actions,
             changes: Vec::new(),
             filled: None,
@@ -196,6 +208,14 @@ impl Form {
                 };
             }
             return self.apply(outcome, Some(field));
+        }
+        if let (Some(range), FieldValue::Text(text)) = (self.ranges.get(&field), &value)
+            && !range.allows(text)
+        {
+            return Done {
+                alerts: vec![out_of_range(range)],
+                ..Done::default()
+            };
         }
         let f = &mut self.fields[field];
         f.value = new;
@@ -343,6 +363,19 @@ impl Form {
         self.changes.clear();
         self.outcomes.clear();
         self.filled = None;
+    }
+}
+
+/// What is said when a value is outside `range`.
+fn out_of_range(range: &Range) -> String {
+    let n = |n: f64| format!("{n}");
+    match (range.min, range.max) {
+        (Some(min), Some(max)) => {
+            crate::text::t("form-range-between", &[("min", &n(min)), ("max", &n(max))])
+        }
+        (Some(min), None) => crate::text::t("form-range-at-least", &[("min", &n(min))]),
+        (None, Some(max)) => crate::text::t("form-range-at-most", &[("max", &n(max))]),
+        (None, None) => String::new(),
     }
 }
 

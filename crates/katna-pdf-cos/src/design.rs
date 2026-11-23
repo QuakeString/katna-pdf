@@ -467,6 +467,20 @@ impl Designer<'_> {
         self.dict(self.form_ref)
     }
 
+    /// The JavaScript of action `key` in `aa`.
+    fn script_of(&self, aa: &Dict, key: &str) -> Option<String> {
+        let Object::Dict(action) = self.resolve(aa.get(key)) else {
+            return None;
+        };
+        match self.resolve(action.get("JS")) {
+            Object::String { bytes, .. } => Some(crate::outline::text_value(&bytes)),
+            Object::Stream(s) => crate::decode(&s.dict, &s.data)
+                .ok()
+                .map(|b| String::from_utf8_lossy(&b).into_owned()),
+            _ => None,
+        }
+    }
+
     /// Page `page`'s annotations, and the object holding the list when
     /// it is one of its own.
     fn annots(&self, page: Ref) -> (Vec<Object>, Option<Ref>) {
@@ -509,9 +523,15 @@ impl Designer<'_> {
             Object::Dict(aa) => aa,
             _ => Dict::new(),
         };
-        let texts = script_text(scripts.calculate.as_ref(), scripts.format.as_ref());
-        for (key, text) in ["C", "F", "K"].into_iter().zip(texts) {
+        let texts = script_text(scripts);
+        for (key, text) in ["C", "F", "K", "V"].into_iter().zip(texts) {
+            // A check of the file's own that is not a range stays.
+            let theirs = key == "V"
+                && self
+                    .script_of(&aa, key)
+                    .is_some_and(|js| crate::calc::range(&js).is_none());
             match text {
+                None if theirs => {}
                 Some((_, js)) => {
                     let mut action = Dict::new();
                     action.set("S", Object::name("JavaScript"));

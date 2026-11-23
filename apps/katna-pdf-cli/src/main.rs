@@ -153,7 +153,8 @@ usage: katna-pdf-cli COMMAND [--json] ...
        [--required NAME]... [--optional NAME]... [--read-only NAME]...
        [--rename NAME=NEW]... [--move NAME:L,B,R,T]... [--copy NAME:PAGES]...
        [--remove NAME]... [--order PAGE:NAME,NAME,...]...
-       [--total NAME=SUM:FIELD,FIELD,...]... [--format NAME=FORMAT]...
+       [--total NAME=SUM:FIELD,FIELD,...|NAME=expr:EXPRESSION]...
+       [--format NAME=FORMAT]... [--range NAME=[MIN]:[MAX]|none]...
        [--border NAME=STYLE[:WIDTH]]... [--border-colour NAME=#RRGGBB|none]...
        [--background NAME=#RRGGBB|none]... [--font NAME=SIZE[:#RRGGBB]]...
        [--max-len NAME=N|none]... [--comb NAME]... [--password NAME]...
@@ -166,10 +167,13 @@ usage: katna-pdf-cli COMMAND [--json] ...
                                   flags set, renamed, moved, shown on more pages too,
                                   taken out, and the order Tab goes through a page's
                                   fields set; a total (sum, product, average, min or
-                                  max of other fields, worked out as the form is
-                                  filled) and a format (number:DECIMALS[:CURRENCY],
+                                  max of other fields, or a sum such as
+                                  expr:Fee*0.18+Postage, worked out as the form is
+                                  filled), a format (number:DECIMALS[:CURRENCY],
                                   percent:DECIMALS, date:PATTERN such as dd/mm/yyyy,
-                                  phone, or none) given; how a field is drawn set
+                                  zip, zip4, phone, ssn, mask:PATTERN with 9 a digit,
+                                  A a letter, X either, or none) and the numbers
+                                  allowed given; how a field is drawn set
                                   (border STYLE solid, dashed, beveled, inset or
                                   underline, its WIDTH in points and colour, the
                                   background, the text's SIZE (0 fits the field)
@@ -2955,9 +2959,24 @@ fn form(args: &[String], json: bool) -> Done {
             .unwrap_or_else(|| current.get(&e.field).cloned().unwrap_or_default())
     };
     for item in args.all("--total") {
-        let bad = || Failure::Usage(format!("--total {item}: NAME=SUM:FIELD,FIELD,..."));
+        let bad = || {
+            Failure::Usage(format!(
+                "--total {item}: NAME=SUM:FIELD,FIELD,... or NAME=expr:EXPRESSION"
+            ))
+        };
         let (name, how) = item.split_once('=').ok_or_else(bad)?;
         let (op, from) = how.split_once(':').ok_or_else(bad)?;
+        if op.eq_ignore_ascii_case("expr") {
+            katna_pdf_cos::expression_fields(from).ok_or_else(bad)?;
+            let calc = katna_pdf_cos::Calculation::Expr(from.trim().to_owned());
+            change(name, &|s, e| {
+                s.scripts.calculate = Some(calc.clone());
+                let mut scripts = scripts_of(e);
+                scripts.calculate = Some(calc.clone());
+                e.scripts = Some(scripts);
+            })?;
+            continue;
+        }
         let op = match op.to_ascii_lowercase().as_str() {
             "sum" => katna_pdf_cos::CalcOp::Sum,
             "product" | "prd" => katna_pdf_cos::CalcOp::Product,
@@ -2980,7 +2999,7 @@ fn form(args: &[String], json: bool) -> Done {
     for item in args.all("--format") {
         let bad = || {
             Failure::Usage(format!(
-                "--format {item}: NAME=number:DECIMALS[:CURRENCY], percent:DECIMALS, date:PATTERN, phone or none"
+                "--format {item}: NAME=number:DECIMALS[:CURRENCY], percent:DECIMALS, date:PATTERN, zip, zip4, phone, ssn, mask:PATTERN or none"
             ))
         };
         let (name, how) = item.split_once('=').ok_or_else(bad)?;
@@ -3006,7 +3025,17 @@ fn form(args: &[String], json: bool) -> Done {
                     .ok_or_else(bad)?
                     .to_owned(),
             )),
+            "zip" => Some(katna_pdf_cos::Format::Special(0)),
+            "zip4" => Some(katna_pdf_cos::Format::Special(1)),
             "phone" => Some(katna_pdf_cos::Format::Special(2)),
+            "ssn" => Some(katna_pdf_cos::Format::Special(3)),
+            "mask" => Some(katna_pdf_cos::Format::Mask(
+                how.split_once(':')
+                    .map(|(_, m)| m)
+                    .filter(|m| !m.is_empty())
+                    .ok_or_else(bad)?
+                    .to_owned(),
+            )),
             "none" => None,
             _ => return Err(bad()),
         };
@@ -3014,6 +3043,32 @@ fn form(args: &[String], json: bool) -> Done {
             s.scripts.format = format.clone();
             let mut scripts = scripts_of(e);
             scripts.format = format.clone();
+            e.scripts = Some(scripts);
+        })?;
+    }
+    for item in args.all("--range") {
+        let bad = || Failure::Usage(format!("--range {item}: NAME=[MIN]:[MAX] or NAME=none"));
+        let (name, how) = item.split_once('=').ok_or_else(bad)?;
+        let range = if how == "none" {
+            None
+        } else {
+            let (min, max) = how.split_once(':').ok_or_else(bad)?;
+            let n = |s: &str| -> Result<Option<f64>, Failure> {
+                match s.trim() {
+                    "" => Ok(None),
+                    s => s.parse().map(Some).map_err(|_| bad()),
+                }
+            };
+            Some(katna_pdf_cos::Range {
+                min: n(min)?,
+                max: n(max)?,
+            })
+            .filter(|r| *r != katna_pdf_cos::Range::default())
+        };
+        change(name, &|s, e| {
+            s.scripts.validate = range;
+            let mut scripts = scripts_of(e);
+            scripts.validate = range;
             e.scripts = Some(scripts);
         })?;
     }

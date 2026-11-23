@@ -62,7 +62,8 @@ pub use annots::{
 };
 pub use attachments::Attachment;
 pub use calc::{
-    CalcOp, Calculation, Format, Scripts, calculate, format, number, parse_date, show, write_date,
+    CalcOp, Calculation, Format, Range, Scripts, calculate, expression_fields, fit_mask, format,
+    number, parse_date, range, script_text, show, write_date,
 };
 pub use content::{Op, ops};
 pub use crypt::{Permissions, UnlockError};
