@@ -30,6 +30,7 @@ mod organize;
 mod prefs;
 mod print;
 mod profile;
+mod recovery;
 mod search;
 mod select;
 mod settings;
@@ -117,6 +118,9 @@ fn main() -> ExitCode {
         .with_assets(assets::Assets)
         .run(move |cx: &mut App| {
             cx.set_global(history::History::load());
+            // Copies of changes left when the app last stopped, before
+            // this run keeps any of its own.
+            cx.set_global(recovery::Left(recovery::copies()));
             cx.set_global(look::Look::load());
             cx.set_global(profile::Profile::load());
             let prefs = prefs::Prefs::load();

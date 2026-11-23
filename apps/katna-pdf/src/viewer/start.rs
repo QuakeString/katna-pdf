@@ -90,6 +90,87 @@ impl Viewer {
                             .on_click(cx.listener(|_, _, _, cx| cx.emit(ViewerEvent::ShowLibrary))),
                     ),
             );
+        let left_over = cx.global::<crate::recovery::Left>().0.clone();
+        if !left_over.is_empty() {
+            let rows = left_over.into_iter().enumerate().map(|(i, copy)| {
+                let name = file_name(&copy.path);
+                let folder = copy.path.parent().map(short_folder).unwrap_or_default();
+                let thrown = copy.clone();
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(space::S3))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .flex_col()
+                            .child(
+                                div()
+                                    .text_size(px(text::SMALL))
+                                    .text_color(th.text)
+                                    .truncate()
+                                    .child(SharedString::from(name)),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(text::CAPTION))
+                                    .text_color(th.dim)
+                                    .truncate()
+                                    .child(folder),
+                            ),
+                    )
+                    .child(
+                        button(("recover-drop", i), t("recovery-drop", &[]), false, &th)
+                            .h(px(28.0))
+                            .on_click(cx.listener(move |_, _, _, cx| {
+                                crate::recovery::forget(&thrown.path);
+                                cx.global_mut::<crate::recovery::Left>()
+                                    .0
+                                    .retain(|c| *c != thrown);
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        button(("recover-open", i), t("recovery-open", &[]), true, &th)
+                            .h(px(28.0))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                cx.global_mut::<crate::recovery::Left>()
+                                    .0
+                                    .retain(|c| *c != copy);
+                                this.recover(copy.clone(), cx);
+                            })),
+                    )
+            });
+            left = left.child(
+                div()
+                    .mt(px(space::S6))
+                    .p(px(space::S5))
+                    .flex()
+                    .flex_col()
+                    .gap(px(space::S3))
+                    .rounded(px(10.0))
+                    .bg(th.card)
+                    .shadow(th.shadow())
+                    .border_1()
+                    .border_color(th.accent)
+                    .child(
+                        div()
+                            .text_size(px(text::SMALL))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(th.text)
+                            .child(t("recovery-title", &[])),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(text::CAPTION))
+                            .text_color(th.dim)
+                            .child(t("recovery-detail", &[])),
+                    )
+                    .children(rows),
+            );
+        }
         if !last.is_empty() {
             let count = last.len().to_string();
             left = left.child(
