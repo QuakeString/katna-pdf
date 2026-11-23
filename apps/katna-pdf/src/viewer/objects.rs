@@ -1217,12 +1217,7 @@ impl Viewer {
     }
 
     /// Copies the objects picked, then does `then` once they are.
-    fn copy_picked_then(
-        &mut self,
-        then: AfterCopy,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn copy_picked_then(&mut self, then: AfterCopy, window: &mut Window, cx: &mut Context<Self>) {
         let window = window.window_handle();
         self.copy_picked(Some((then, window)), cx);
     }
