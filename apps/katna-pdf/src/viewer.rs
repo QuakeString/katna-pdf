@@ -78,6 +78,7 @@ mod speak;
 mod stamps;
 mod start;
 mod strokes;
+mod textbox;
 mod textedit;
 mod watch;
 mod weblink;
@@ -299,7 +300,10 @@ const MARGIN: f32 = 24.0;
 const GAP: f32 = 12.0;
 
 /// The viewer, when no text field in it has the keys.
-const READING: &str = "Viewer && !TextInput && !TextArea";
+const READING: &str = "Viewer && !TextInput && !TextArea && !RichText";
+/// Anywhere but in rich text, whose own keys these are (Ctrl+B for bold,
+/// Ctrl+K for a link, Ctrl+Shift+E and R to align).
+const NOT_RICH: &str = "!RichText";
 /// The viewer presenting.
 const PRESENTING: &str = "Presenting";
 
@@ -318,7 +322,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl-y", Redo, Some(READING)),
         KeyBinding::new("ctrl-d", Properties, None),
         KeyBinding::new("ctrl-shift-d", Compare, None),
-        KeyBinding::new("ctrl-shift-e", Export, None),
+        KeyBinding::new("ctrl-shift-e", Export, Some(NOT_RICH)),
         KeyBinding::new("ctrl-shift-y", ReadAloud, None),
         KeyBinding::new("f5", Present, None),
         KeyBinding::new("right", PresentNext, Some(PRESENTING)),
@@ -341,7 +345,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new(",", PresentWhite, Some(PRESENTING)),
         KeyBinding::new("escape", PresentStop, Some(PRESENTING)),
         KeyBinding::new("ctrl-l", ShowLibrary, None),
-        KeyBinding::new("ctrl-b", AddBookmark, None),
+        KeyBinding::new("ctrl-b", AddBookmark, Some(NOT_RICH)),
         KeyBinding::new("ctrl-=", ZoomIn, None),
         KeyBinding::new("ctrl-+", ZoomIn, None),
         KeyBinding::new("ctrl--", ZoomOut, None),
@@ -353,7 +357,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl-g", GoToPage, None),
         KeyBinding::new("ctrl-shift-h", AutoScroll, None),
         KeyBinding::new("ctrl-h", ReadMode, Some(READING)),
-        KeyBinding::new("ctrl-shift-r", RotateViewLeft, None),
+        KeyBinding::new("ctrl-shift-r", RotateViewLeft, Some(NOT_RICH)),
         KeyBinding::new("ctrl-3", NextSpread, None),
         KeyBinding::new("ctrl-0", ActualSize, None),
         // Keys that mean something else while typing in a field.
@@ -385,7 +389,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("delete", DeleteAnnotation, Some(READING)),
         KeyBinding::new("escape", PutToolDown, Some(READING)),
         KeyBinding::new("ctrl-f", Find, None),
-        KeyBinding::new("ctrl-k", CommandBox, None),
+        KeyBinding::new("ctrl-k", CommandBox, Some(NOT_RICH)),
         KeyBinding::new("f3", FindNext, None),
         KeyBinding::new("shift-f3", FindPrevious, None),
         KeyBinding::new("f7", ToggleContents, None),
@@ -878,6 +882,8 @@ pub struct Viewer {
     popup_dragging: Option<popups::PopupDrag>,
     /// The rulers and guides while editing.
     guides: guides::Guides,
+    /// The text box comment being typed in, in place.
+    box_edit: Option<textbox::BoxEdit>,
     comment: Option<annots::Comment>,
     /// A reply being typed, and which comments the list shows.
     reply: Option<comments::Reply>,
@@ -1157,6 +1163,7 @@ impl Viewer {
             popups: Vec::new(),
             popup_dragging: None,
             guides: guides::Guides::default(),
+            box_edit: None,
             comment: None,
             reply: None,
             comment_filter: Default::default(),
@@ -1818,6 +1825,7 @@ impl Viewer {
     ) {
         // A press outside the field being typed in ends the typing.
         self.finish_typing(true, cx);
+        self.finish_box_edit(true, cx);
         window.focus(&self.focus, cx);
         if self.area_press(event.position, cx)
             || self.crop_press(event.position, cx)
@@ -1831,9 +1839,17 @@ impl Viewer {
             || self.text_edit_press(cx)
             || self.annot_press(event.position, cx)
         {
-            // A double-click on a comment opens it in a pop-up note.
+            // A double-click on a comment opens it in a pop-up note; on a
+            // text box, for typing in place.
             if event.click_count >= 2 && self.tool.is_none() && self.chosen.is_some() {
-                self.open_popup(window, cx);
+                if self
+                    .chosen_annotation()
+                    .is_some_and(|a| matches!(a.kind, katna_pdf_cos::AnnotKind::FreeText { .. }))
+                {
+                    self.start_box_edit(window, cx);
+                } else {
+                    self.open_popup(window, cx);
+                }
             }
             return;
         }
@@ -4492,6 +4508,7 @@ impl Viewer {
         overlays.extend(self.sign_overlay(page, cx));
         overlays.extend(self.text_edit_overlay(page, transform, w, window, cx));
         overlays.extend(self.guides_overlay(page, cx));
+        overlays.extend(self.box_edit_overlay(page, cx));
         // Matches on this page, the current one stronger, and the
         // selected text.
         let accent = self.theme.katna.accent & 0xffff_ff00;
@@ -5406,7 +5423,9 @@ impl Render for Viewer {
             }))
             .on_action(cx.listener(|this, _: &ReadMode, _, cx| this.toggle_read_mode(cx)))
             .on_action(cx.listener(|this, _: &PutToolDown, window, cx| {
-                if this.close_top_card(window, cx) {
+                if this.box_edit.is_some() {
+                    this.finish_box_edit(true, cx);
+                } else if this.close_top_card(window, cx) {
                 } else if this.read_mode {
                     this.toggle_read_mode(cx);
                 } else if this.auto_scroll.is_some() {

@@ -174,6 +174,15 @@ pub fn to_xfdf(annots: &[Vec<Annotation>], file: &str) -> String {
         if !a.contents.is_empty() {
             let _ = writeln!(out, "<contents>{}</contents>", escape(&a.contents));
         }
+        if !a.rich.is_empty() {
+            let size = match a.kind {
+                AnnotKind::FreeText { size } => size,
+                _ => 12.0,
+            };
+            let rc = crate::richtext::to_rc(&a.rich, size, a.colour);
+            let rc = rc.strip_prefix("<?xml version=\"1.0\"?>").unwrap_or(&rc);
+            let _ = writeln!(out, "<contents-richtext>{rc}</contents-richtext>");
+        }
         match &a.kind {
             AnnotKind::FreeText { size } => {
                 let [r, g, b] = a.colour;
@@ -322,6 +331,16 @@ pub fn from_xfdf(xml: &str) -> Result<Vec<XfdfAnnotation>, XfdfError> {
         a.state = attr("state").map(str::to_owned);
         a.grouped = attr("replyType") == Some("group");
         a.contents = child("contents").unwrap_or_default();
+        if let Some(rich) = elements
+            .iter()
+            .find(|c| c.parent == Some(e.index) && c.name == "contents-richtext")
+            .and_then(|c| xml.get(c.inner.0..c.inner.1))
+        {
+            let rich = crate::richtext::parse_rc(rich);
+            if crate::richtext::is_styled(&rich) {
+                a.rich = rich;
+            }
+        }
         a.author = attr("title").unwrap_or_default().to_owned();
         a.modified = attr("date").map(str::to_owned);
         a.name = attr("name").unwrap_or_default().to_owned();
@@ -505,6 +524,9 @@ pub(crate) struct Element {
     pub(crate) name: String,
     pub(crate) attrs: HashMap<String, String>,
     pub(crate) text: String,
+    /// Where the element's content starts and ends in the XML, so
+    /// rich text can be read back as written.
+    inner: (usize, usize),
 }
 
 /// The elements of `xml` in document order, with namespace prefixes
@@ -542,6 +564,8 @@ pub(crate) fn parse(xml: &str) -> Vec<Element> {
         if let Some(name) = tag.strip_prefix('/') {
             let name = local(name.trim());
             if let Some(at) = open.iter().rposition(|&i| out[i].name == name) {
+                let end = xml.len() - rest.len() - gt - 1;
+                out[open[at]].inner.1 = end;
                 open.truncate(at);
             }
             continue;
@@ -557,6 +581,7 @@ pub(crate) fn parse(xml: &str) -> Vec<Element> {
             name: local(&tag[..name_end]).to_owned(),
             attrs: attributes(&tag[name_end..]),
             text: String::new(),
+            inner: (xml.len() - rest.len(), xml.len() - rest.len()),
         });
         if !closed {
             open.push(index);
@@ -720,5 +745,31 @@ mod tests {
         assert_eq!(parse_hex("#FF0000"), Some([1.0, 0.0, 0.0]));
         assert_eq!(parse_numbers("1,2;3 4"), [1.0, 2.0, 3.0, 4.0]);
         assert_eq!(escape("a<\"b\">\n"), "a&lt;&quot;b&quot;&gt;&#10;");
+    }
+
+    #[test]
+    fn rich_text_goes_through_xfdf() {
+        use crate::{RichPara, SpanStyle};
+        let mut a = Annotation::new(0, AnnotKind::FreeText { size: 11.0 });
+        a.rect = [10.0, 10.0, 200.0, 60.0];
+        a.contents = "Plain bold".into();
+        let mut p = RichPara::default();
+        p.push("Plain ", &SpanStyle::default());
+        p.push(
+            "bold",
+            &SpanStyle {
+                bold: true,
+                ..SpanStyle::default()
+            },
+        );
+        a.rich = vec![p];
+        let xml = to_xfdf(&[vec![a.clone()]], "f.pdf");
+        assert!(xml.contains("<contents-richtext><body"), "{xml}");
+        let back = from_xfdf(&xml).expect("read");
+        assert_eq!(back[0].annotation.rich.len(), 1);
+        let spans = &back[0].annotation.rich[0].spans;
+        assert_eq!(spans.len(), 2);
+        assert!(!spans[0].style.bold && spans[1].style.bold);
+        assert_eq!(back[0].annotation.contents, "Plain bold");
     }
 }

@@ -713,6 +713,11 @@ impl Viewer {
         let Some(a) = self.chosen_annotation().cloned() else {
             return;
         };
+        // A text box's words are typed in the box itself.
+        if matches!(a.kind, AnnotKind::FreeText { .. }) {
+            self.start_box_edit(window, cx);
+            return;
+        }
         let Some(id) = a.id else {
             return;
         };
