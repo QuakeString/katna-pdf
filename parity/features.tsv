@@ -84,7 +84,7 @@ view.zoom-actual-size	view	Actual size	reader	y	shipped	P0	Ctrl+0		acrobat
 view.zoom-fit-page	view	Fit page	reader	y	shipped	P0	Ctrl+2		acrobat
 view.zoom-fit-width	view	Fit width	reader	y	shipped	P0	Ctrl+1		acrobat
 view.zoom-fit-height	view	Fit height	reader	n	shipped	P1	Ctrl+4; zoom card		acrobat
-view.zoom-fit-visible	view	Fit visible content	reader	n	todo	P1	-		acrobat
+view.zoom-fit-visible	view	Fit visible content	reader	n	shipped	P1	#162	Ctrl+5 or View > Fit Visible: what is drawn fills the width	acrobat
 view.marquee-zoom	view	Marquee zoom tool	reader	n	shipped	P0	viewer/area.rs; zoom card	a click zooms in a step there	acrobat
 view.dynamic-zoom	view	Dynamic zoom (drag to zoom)	reader	n	todo	P2	-		acrobat
 view.loupe	view	Loupe magnifier tool	reader	n	shipped	P1	#140	zoom card or View > Loupe; lens 3× drawn sharp	acrobat

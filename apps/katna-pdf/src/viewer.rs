@@ -49,6 +49,7 @@ mod dock;
 mod export;
 mod files;
 mod find;
+mod fitvisible;
 mod fonts;
 mod goto;
 mod initials;
@@ -112,6 +113,7 @@ actions!(
         FitWidth,
         FitPage,
         FitHeight,
+        FitVisible,
         RotateViewRight,
         GoToPage,
         AutoScroll,
@@ -293,6 +295,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl-1", FitWidth, None),
         KeyBinding::new("ctrl-2", FitPage, None),
         KeyBinding::new("ctrl-4", FitHeight, None),
+        KeyBinding::new("ctrl-5", FitVisible, None),
         KeyBinding::new("ctrl-r", RotateViewRight, None),
         KeyBinding::new("ctrl-g", GoToPage, None),
         KeyBinding::new("ctrl-shift-h", AutoScroll, None),
@@ -4673,6 +4676,7 @@ impl Render for Viewer {
             .on_action(cx.listener(|this, _: &FitWidth, _, cx| this.set_zoom(Zoom::FitWidth, cx)))
             .on_action(cx.listener(|this, _: &FitPage, _, cx| this.set_zoom(Zoom::FitPage, cx)))
             .on_action(cx.listener(|this, _: &FitHeight, _, cx| this.set_zoom(Zoom::FitHeight, cx)))
+            .on_action(cx.listener(|this, _: &FitVisible, _, cx| this.fit_visible(cx)))
             .on_action(cx.listener(|this, _: &ZoomToArea, _, cx| {
                 this.toggle_area_tool(area::AreaKind::Zoom, cx)
             }))

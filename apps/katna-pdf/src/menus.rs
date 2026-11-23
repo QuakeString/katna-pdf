@@ -8,12 +8,12 @@ use gpui::Action;
 
 use crate::viewer::{
     ActualSize, AddBookmark, Annotate, AutoScroll, CloseAll, CloseTab, Compare, CopyText,
-    CursorCoordinates, Export, Find, FindNext, FindPrevious, FitHeight, FitPage, FitWidth,
-    GoToPage, Loupe, NewWindow, NextPage, NextSpread, NextTab, NextView, Open, OpenSettings,
-    Organize, Present, PreviousPage, PreviousTab, PreviousView, Print, Properties, Quit, ReadAloud,
-    ReadMode, Redo, ReopenSession, ReportProblem, Revert, RotateViewLeft, RotateViewRight, Save,
-    SelectAll, Shortcuts, ShowAbout, ShowLibrary, Sign, Snapshot, ToggleContents, ToggleNight,
-    Undo, ZoomIn, ZoomOut, ZoomToArea,
+    CursorCoordinates, Export, Find, FindNext, FindPrevious, FitHeight, FitPage, FitVisible,
+    FitWidth, GoToPage, Loupe, NewWindow, NextPage, NextSpread, NextTab, NextView, Open,
+    OpenSettings, Organize, Present, PreviousPage, PreviousTab, PreviousView, Print, Properties,
+    Quit, ReadAloud, ReadMode, Redo, ReopenSession, ReportProblem, Revert, RotateViewLeft,
+    RotateViewRight, Save, SelectAll, Shortcuts, ShowAbout, ShowLibrary, Sign, Snapshot,
+    ToggleContents, ToggleNight, Undo, ZoomIn, ZoomOut, ZoomToArea,
 };
 
 /// An item: its id (and the id of its words), and its keys as
@@ -74,6 +74,7 @@ pub const MENUS: &[(&str, &[Entry])] = &[
             Some(("menu-fit-width", &["Control", "1"])),
             Some(("menu-fit-page", &["Control", "2"])),
             Some(("menu-fit-height", &["Control", "4"])),
+            Some(("menu-fit-visible", &["Control", "5"])),
             Some(("menu-zoom-area", &[])),
             Some(("menu-loupe", &[])),
             Some(("menu-rotate-right", &["Control", "R"])),
@@ -161,6 +162,7 @@ pub fn action(id: &str) -> Option<Box<dyn Action>> {
         "menu-fit-width" => Box::new(FitWidth),
         "menu-fit-page" => Box::new(FitPage),
         "menu-fit-height" => Box::new(FitHeight),
+        "menu-fit-visible" => Box::new(FitVisible),
         "menu-zoom-area" => Box::new(ZoomToArea),
         "menu-revert" => Box::new(Revert),
         "menu-close-all" => Box::new(CloseAll),
