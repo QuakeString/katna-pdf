@@ -95,16 +95,18 @@ impl Viewer {
         cx.notify();
     }
 
-    /// The row of tools and colours under the toolbar, while shown.
-    pub(super) fn tools_row(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+    /// The row of tools and colours over the dock, while shown, in
+    /// `room` pixels: tools that do not fit go in a More menu at its end.
+    pub(super) fn tools_row(&self, room: f32, cx: &mut Context<Self>) -> Option<AnyElement> {
         if !self.tools || !matches!(self.content, Content::Ready(_)) {
             return None;
         }
         let th = self.theme;
+        let fit = tools_that_fit(room, self.tool.map(|t| t.name().len() * 7));
         let mut row = float::tray("annotation-tools", &th);
-        for (i, tool) in Tool::ALL.into_iter().enumerate() {
+        for (i, tool) in Tool::ALL.into_iter().enumerate().take(fit) {
             let on = self.tool == Some(tool);
-            if matches!(tool, Tool::Note | Tool::Ink | Tool::Stamp | Tool::Distance) {
+            if starts_group(tool) {
                 row = row.child(float::vsep(&th));
             }
             row = row.child(
@@ -121,6 +123,69 @@ impl Viewer {
                     &th,
                 )
                 .on_click(cx.listener(move |this, _, _, cx| this.pick_tool(tool, cx))),
+            );
+        }
+        if fit < Tool::ALL.len() {
+            // The tool in hand, when it is one of those folded away,
+            // shows on the More button.
+            let hidden = self.tool.filter(|tool| {
+                Tool::ALL
+                    .iter()
+                    .position(|t| t == tool)
+                    .is_some_and(|i| i >= fit)
+            });
+            row = row.child(float::vsep(&th)).child(
+                div()
+                    .relative()
+                    .child(
+                        float::dk(
+                            "tool-more",
+                            hidden.map_or("more", |tool| tool.icon()),
+                            hidden.map(|tool| SharedString::from(t(tool.name(), &[]))),
+                            t("tool-more", &[]),
+                            if hidden.is_some() || self.tools_more {
+                                float::Pressed::Tool
+                            } else {
+                                float::Pressed::No
+                            },
+                            &th,
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.tools_more = !this.tools_more;
+                            cx.notify();
+                        })),
+                    )
+                    .when(self.tools_more, |d| {
+                        let mut menu = float::menu("tool-more-menu", 220.0, &th)
+                            .max_h(px(480.0))
+                            .overflow_y_scroll()
+                            .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+                                this.tools_more = false;
+                                cx.notify();
+                            }));
+                        for (i, tool) in Tool::ALL.into_iter().enumerate().skip(fit) {
+                            if i > fit && starts_group(tool) {
+                                menu = menu.child(float::menu_sep(&th));
+                            }
+                            menu = menu.child(
+                                float::menu_item(
+                                    ("tool-more-item", i),
+                                    Some(tool.icon()),
+                                    t(tool.name(), &[]),
+                                    None,
+                                    &th,
+                                )
+                                .when(self.tool == Some(tool), |d| d.bg(th.accent_soft))
+                                .on_click(cx.listener(
+                                    move |this, _, _, cx| {
+                                        this.tools_more = false;
+                                        this.pick_tool(tool, cx);
+                                    },
+                                )),
+                            );
+                        }
+                        d.child(float::popover(menu, true, true))
+                    }),
             );
         }
         row = row.child(float::vsep(&th));
@@ -1191,4 +1256,52 @@ pub(super) fn author() -> String {
     std::env::var("USER")
         .or_else(|_| std::env::var("USERNAME"))
         .unwrap_or_default()
+}
+
+/// Whether `tool` starts a group of the row, after a line.
+fn starts_group(tool: Tool) -> bool {
+    matches!(tool, Tool::Note | Tool::Ink | Tool::Stamp | Tool::Distance)
+}
+
+/// How many of [`Tool::ALL`] fit in a row `room` pixels wide beside the
+/// colours, with the tool in hand `label` pixels wider for its name; all
+/// of them when they fit, else as many as leave room for More.
+fn tools_that_fit(room: f32, label: Option<usize>) -> usize {
+    const TOOL: f32 = 40.0 + 4.0;
+    const LINE: f32 = 1.0 + 2.0 * 8.0 + 4.0;
+    // The tray's padding and border, the line before the colours, and
+    // the colours.
+    let fixed = 12.0 + LINE + COLOURS.len() as f32 * (26.0 + 4.0);
+    // A label shows on whichever button holds the tool in hand.
+    let label = label.map_or(0.0, |w| w as f32 + 6.0);
+    let width = |n: usize| {
+        Tool::ALL
+            .iter()
+            .take(n)
+            .map(|&t| TOOL + if starts_group(t) { LINE } else { 0.0 })
+            .sum::<f32>()
+    };
+    let all = Tool::ALL.len();
+    if fixed + label + width(all) <= room {
+        return all;
+    }
+    let more = TOOL + LINE;
+    (0..all)
+        .rev()
+        .find(|&n| fixed + label + more + width(n) <= room)
+        .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod fit_tests {
+    use super::*;
+
+    #[test]
+    fn tools_fold_into_more_when_the_window_is_narrow() {
+        assert_eq!(tools_that_fit(4000.0, None), Tool::ALL.len());
+        let some = tools_that_fit(900.0, None);
+        assert!(some > 0 && some < Tool::ALL.len());
+        assert!(tools_that_fit(900.0, Some(80)) <= some);
+        assert_eq!(tools_that_fit(100.0, None), 0);
+    }
 }
