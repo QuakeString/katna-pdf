@@ -1114,3 +1114,7 @@ scheme-ayu = Ayu
 zoom-card-fit-width = Fit width
 zoom-card-fit-page = Fit page
 zoom-card-hand = Hand tool
+start-detail = Choose a file, or drop one anywhere on this window.
+start-open-all = Open all { $count }
+start-recent = Opened lately
+start-at-page = { $folder } · page { $page }
