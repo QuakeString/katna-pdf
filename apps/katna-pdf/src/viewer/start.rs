@@ -8,7 +8,7 @@ use gpui::{AnyElement, Context, FontWeight, SharedString, div, prelude::*};
 use katna_ui::px;
 use katna_ui::tokens::{space, text};
 
-use super::{RECENT, Viewer, ViewerEvent, file_name, short_folder};
+use super::{Viewer, ViewerEvent, file_name, short_folder};
 use crate::float::{self, button};
 use crate::history::History;
 use crate::text::t;
@@ -17,6 +17,7 @@ impl Viewer {
     pub(super) fn start_screen(&self, cx: &mut Context<Self>) -> AnyElement {
         let th = self.theme;
         let (last, recent): (Vec<String>, Vec<_>) = {
+            let shown = cx.global::<crate::prefs::Prefs>().recent;
             let history = cx.global::<History>();
             (
                 history
@@ -24,7 +25,7 @@ impl Viewer {
                     .iter()
                     .map(|p| file_name(p).trim_end_matches(".pdf").to_owned())
                     .collect(),
-                history.recent().iter().take(RECENT).cloned().collect(),
+                history.recent().iter().take(shown).cloned().collect(),
             )
         };
         let any_recent = !recent.is_empty();
