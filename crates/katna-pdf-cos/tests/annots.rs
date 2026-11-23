@@ -786,3 +786,37 @@ fn line_ends_and_dashes_are_written_and_read_back() {
     let content = String::from_utf8_lossy(&n.data);
     assert!(!content.contains(" c "), "{content}");
 }
+
+#[test]
+fn comments_move_and_resize_with_their_points() {
+    let mut ink = Annotation::new(0, AnnotKind::Ink(vec![vec![[10.0, 10.0], [20.0, 30.0]]]));
+    ink.rect = [10.0, 10.0, 20.0, 30.0];
+    let moved = ink.moved(5.0, -2.0);
+    assert_eq!(moved.rect, [15.0, 8.0, 25.0, 28.0]);
+    assert_eq!(
+        moved.kind,
+        AnnotKind::Ink(vec![vec![[15.0, 8.0], [25.0, 28.0]]])
+    );
+    let bigger = ink.resized([10.0, 10.0, 30.0, 50.0]);
+    assert_eq!(
+        bigger.kind,
+        AnnotKind::Ink(vec![vec![[10.0, 10.0], [30.0, 50.0]]])
+    );
+    // A callout keeps what it points at when its box moves.
+    let mut call = Annotation::new(0, AnnotKind::FreeText { size: 10.0 });
+    call.rect = [100.0, 100.0, 200.0, 140.0];
+    call.callout = Some([[50.0, 50.0], [80.0, 120.0], [100.0, 120.0]]);
+    let grown = call.resized([100.0, 100.0, 300.0, 140.0]);
+    assert_eq!(grown.callout.unwrap()[0], [50.0, 50.0]);
+    assert_eq!(call.moved(10.0, 0.0).callout.unwrap()[0], [60.0, 50.0]);
+    // Text markup stays on its words; a locked comment stays put.
+    let mark = Annotation::new(
+        0,
+        AnnotKind::Markup(katna_pdf_cos::MarkupStyle::Highlight, vec![[0.0; 8]]),
+    );
+    assert!(!mark.movable());
+    let mut locked = call.clone();
+    locked.flags.locked = true;
+    assert!(!locked.movable() && call.movable() && call.resizable());
+    assert!(!Annotation::new(0, AnnotKind::Note).resizable());
+}

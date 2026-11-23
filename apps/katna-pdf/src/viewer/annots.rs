@@ -322,6 +322,12 @@ impl Viewer {
                     let annots = self.annots.as_ref()?.get(page)?;
                     annots.get(annotate::at(annots, inv.map(point))?)?.id
                 });
+                // A corner of the chosen one resizes it; the chosen one
+                // stays chosen.
+                if self.annot_move_press(page, point, hit) {
+                    cx.notify();
+                    return true;
+                }
                 self.choose(hit, cx);
                 hit.is_some()
             }
