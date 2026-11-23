@@ -73,6 +73,8 @@ pub struct Prefs {
     pub dock_labels: bool,
     /// Run forms' own scripts (checks, totals, buttons).
     pub form_scripts: bool,
+    /// Keep a copy of changes not saved, to recover after a crash.
+    pub recovery: bool,
 }
 
 /// The sizes offered.
@@ -103,6 +105,7 @@ impl Default for Prefs {
             size: 1.0,
             dock_labels: true,
             form_scripts: true,
+            recovery: true,
         }
     }
 }
@@ -178,6 +181,7 @@ impl Prefs {
                 }
                 "dock-labels" => prefs.dock_labels = value != "off",
                 "form-scripts" => prefs.form_scripts = value != "off",
+                "recovery" => prefs.recovery = value != "off",
                 _ => {}
             }
         }
@@ -201,7 +205,7 @@ impl Prefs {
             .find(|(c, _)| *c == self.night_pages)
             .map_or("night", |(_, w)| w);
         format!(
-            "open-at={}\nzoom={zoom}\nlayout={layout}\nreopen-session={}\nworkers={}\nunits={}\ngrid={}\nread-speed={}\nnight-pages={night}\nsize={}\ndock-labels={}\nform-scripts={}\n",
+            "open-at={}\nzoom={zoom}\nlayout={layout}\nreopen-session={}\nworkers={}\nunits={}\ngrid={}\nread-speed={}\nnight-pages={night}\nsize={}\ndock-labels={}\nform-scripts={}\nrecovery={}\n",
             if self.open_at_last { "last" } else { "first" },
             on(self.reopen_session),
             on(self.workers),
@@ -211,6 +215,7 @@ impl Prefs {
             self.size,
             on(self.dock_labels),
             on(self.form_scripts),
+            on(self.recovery),
         )
     }
 
@@ -258,6 +263,7 @@ mod tests {
             size: 1.1,
             dock_labels: false,
             form_scripts: false,
+            recovery: false,
         };
         assert_eq!(Prefs::parse(&prefs.text()), prefs);
         assert_eq!(Prefs::parse("nonsense\nzoom=huge"), Prefs::default());

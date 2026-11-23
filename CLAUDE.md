@@ -138,6 +138,8 @@ cargo run --release -p katna-pdf-bench -- file.pdf
   `viewer/initials.rs` keeps initials (typed, a picture, or drawn) in
   the state folder and puts them into pages with a click; `history.rs`
   keeps the last session's files (`session.txt`) to open again.
+  `recovery.rs` keeps a copy of changes not saved every minute
+  (`pdf/recovery/`) and the start screen offers them back.
   `update.rs` looks for a newer build on the package's own release
   (`katna-pdf-update.txt`, from `packaging/update-manifest.sh`) and, for
   the Arch package (pkexec and `packaging/arch/katna-pdf-update-helper`),
