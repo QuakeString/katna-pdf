@@ -14,6 +14,11 @@ empty-open = Open…
 recent-title = Recent
 empty-library = Library
 empty-session = Files from last time
+recovery-title = Changes not saved
+recovery-detail = Kept from when the app stopped without saving them.
+recovery-open = Recover
+recovery-drop = Throw away
+recovered = Recovered the changes not saved. Save them with Ctrl+S, or Revert to Saved to drop them.
 
 ## The library
 library-tip = Library: the PDFs in your folders (Ctrl+L)
@@ -1411,6 +1416,8 @@ settings-grid = Snap to the grid
 settings-grid-detail = From the start in Edit; the grid button there turns it off and on
 settings-form-scripts = Run forms' own scripts
 settings-form-scripts-detail = Checks on what you type, totals and buttons, as the form was made. They can't reach your files or the internet; from the next file opened
+settings-recovery = Keep a copy of changes not saved
+settings-recovery-detail = Every minute, so a crash or a power cut loses little. The start screen offers it back; a file with a password stays locked in its copy
 settings-own-files = My stamps, initials and mark templates
 settings-drivers = Token drivers
 settings-drivers-none = None found on this computer

@@ -130,7 +130,28 @@ impl Tabs {
         this.push(None, window, cx);
         this.open_files(files, window, cx);
         this.watch_updates(cx);
+        this.keep_changes(cx);
         this
+    }
+
+    /// Every [`crate::recovery::EVERY`] seconds, keeps a copy of each
+    /// tab's changes not saved.
+    fn keep_changes(&mut self, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            let every = std::time::Duration::from_secs(crate::recovery::EVERY);
+            loop {
+                cx.background_executor().timer(every).await;
+                let kept = this.update(cx, |this, cx| {
+                    for tab in &this.tabs {
+                        tab.viewer.update(cx, |viewer, cx| viewer.keep_changes(cx));
+                    }
+                });
+                if kept.is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
     }
 
     fn restyle(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -582,7 +603,7 @@ impl Tabs {
         }
         self.tabs[i]
             .viewer
-            .update(cx, |viewer, _| viewer.release(window));
+            .update(cx, |viewer, cx| viewer.release(window, cx));
         if self.tabs.len() == 1 {
             self.tabs.clear();
             self.push(None, window, cx);

@@ -555,6 +555,11 @@ pub struct Viewer {
     /// After a zoom to an area: its page, the area, and frames waited
     /// for the page to be laid out at the new size.
     area_focus: Option<(usize, [f32; 4], u8)>,
+    /// The file whose changes not saved have a copy kept
+    /// (`crate::recovery`), and which changes those were.
+    kept: Option<(PathBuf, u64)>,
+    /// Changes to put back once the file is open: a copy recovered.
+    recover_after: Option<Arc<Vec<u8>>>,
     /// Rotate view: the pages shown this many quarter turns clockwise,
     /// the file left as it is.
     turn: u8,
@@ -815,6 +820,8 @@ impl Viewer {
             find_list: false,
             area: None,
             area_focus: None,
+            kept: None,
+            recover_after: None,
             turn: 0,
             password: None,
             focus_password: false,
@@ -990,6 +997,9 @@ impl Viewer {
     }
 
     fn open_with(&mut self, path: PathBuf, password: String, cx: &mut Context<Self>) {
+        if self.kept.as_ref().is_some_and(|(kept, _)| *kept != path) {
+            self.forget_kept(cx);
+        }
         let name = file_name(&path);
         let tried = !password.is_empty();
         self.key = tried.then(|| Arc::from(password.as_str()));
@@ -1099,6 +1109,7 @@ impl Viewer {
                         this.released.extend(old);
                         this.visible = 0..1;
                         this.content = Content::Ready(opened);
+                        this.apply_recovered(cx);
                         this.password = None;
                         if let Some(older) = this.compare_after.take() {
                             this.compare_with(older, cx);
@@ -1198,6 +1209,7 @@ impl Viewer {
                 }
                 this.contents = Some(Contents::new(outline));
                 this.set_label_ranges(ranges);
+                this.apply_recovered(cx);
                 cx.notify();
             })
             .ok();
@@ -2063,7 +2075,8 @@ impl Viewer {
     }
 
     /// Frees every drawn page now: the tab is closing.
-    pub fn release(&mut self, window: &mut Window) {
+    pub fn release(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.forget_kept(cx);
         self.end_reading();
         self.generation += 1;
         self.forget_pages();
@@ -3069,7 +3082,7 @@ impl Viewer {
         if !self.dirty() {
             return true;
         }
-        let mark = self.revision_mark();
+        let mark = self.change_mark();
         if self.close_warned == Some(mark) {
             return true;
         }
@@ -3084,7 +3097,7 @@ impl Viewer {
         match answer {
             CloseAnswer::Cancel => {}
             CloseAnswer::Leave => {
-                self.close_warned = Some(self.revision_mark());
+                self.close_warned = Some(self.change_mark());
                 cx.emit(ViewerEvent::Close);
             }
             CloseAnswer::Save => {
@@ -3093,11 +3106,6 @@ impl Viewer {
             }
         }
         cx.notify();
-    }
-
-    /// The changes as they stand, to tell when they change again.
-    fn revision_mark(&self) -> u64 {
-        self.revision + self.form.as_ref().map_or(0, |f| f.generation << 32)
     }
 
     /// The dialog asking what to do with changes not saved (S07).
@@ -3179,6 +3187,87 @@ impl Viewer {
         )
     }
 
+    /// Which changes the file has: moves on with each one.
+    fn change_mark(&self) -> u64 {
+        self.revision + self.form.as_ref().map_or(0, |f| f.generation << 32)
+    }
+
+    /// Keeps a copy of the changes not saved, if they changed since the
+    /// last copy; drops the copy once there are none (saved, reverted).
+    pub fn keep_changes(&mut self, cx: &mut Context<Self>) {
+        let wanted = cx.global::<Prefs>().recovery;
+        let mark = self.change_mark();
+        let changes = match (&self.path, self.dirty() && wanted) {
+            (Some(path), true) => self.unsaved().map(|bytes| (path.clone(), bytes)),
+            _ => None,
+        };
+        let Some((path, bytes)) = changes else {
+            if !self.dirty() || !wanted {
+                self.forget_kept(cx);
+            }
+            return;
+        };
+        if self
+            .kept
+            .as_ref()
+            .is_some_and(|k| *k == (path.clone(), mark))
+        {
+            return;
+        }
+        self.kept = Some((path.clone(), mark));
+        cx.background_spawn(async move {
+            if let Err(err) = crate::recovery::keep(&path, &bytes) {
+                eprintln!("katna-pdf: keeping a copy of changes: {err}");
+            }
+        })
+        .detach();
+    }
+
+    /// Drops the copy of changes kept, if any.
+    fn forget_kept(&mut self, cx: &mut Context<Self>) {
+        if let Some((path, _)) = self.kept.take() {
+            cx.background_spawn(async move { crate::recovery::forget(&path) })
+                .detach();
+        }
+    }
+
+    /// Puts back the changes recovered, once the file is open and all
+    /// read from disk (so nothing read later covers them).
+    fn apply_recovered(&mut self, cx: &mut Context<Self>) {
+        if self.recover_after.is_none()
+            || self.contents.is_none()
+            || !matches!(self.content, Content::Ready(_))
+        {
+            return;
+        }
+        if let Some(bytes) = self.recover_after.take() {
+            self.restore(Some(bytes), cx);
+            self.notice = Some(said("recovered", &[]));
+        }
+    }
+
+    /// Opens `copy`'s file with the changes the copy kept.
+    pub(super) fn recover(&mut self, copy: crate::recovery::Kept, cx: &mut Context<Self>) {
+        match std::fs::read(&copy.copy) {
+            Ok(bytes) => {
+                self.open(copy.path.clone(), cx);
+                self.recover_after = Some(Arc::new(bytes));
+                // The copy stays until the changes are saved or dropped.
+                self.kept = Some((copy.path, u64::MAX));
+            }
+            Err(err) => {
+                self.notice = Some(said(
+                    "error-read",
+                    &[
+                        ("name", &file_name(&copy.path)),
+                        ("error", &err.to_string()),
+                    ],
+                ));
+                cx.notify();
+            }
+        }
+    }
+
     /// Revert: shows the file as it was last saved. Undo brings the
     /// changes back.
     fn revert(&mut self, cx: &mut Context<Self>) {
@@ -3234,10 +3323,13 @@ impl Viewer {
                         if this.revision == revision {
                             this.edited = None;
                         }
+                        if !this.dirty() {
+                            this.forget_kept(cx);
+                        }
                         this.notice = None;
                         back = true;
                         if std::mem::take(&mut this.close_after_save) {
-                            this.close_warned = Some(this.revision_mark());
+                            this.close_warned = Some(this.change_mark());
                             cx.emit(ViewerEvent::Close);
                         }
                     }

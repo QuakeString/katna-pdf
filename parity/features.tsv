@@ -42,9 +42,9 @@ core.undo-labels	core	Edit menu names the step to undo or redo	reader	n	todo	P1	
 core.undo-after-save	core	Undo still works after saving	reader	n	partial	P1	#96		acrobat
 core.atomic-batch-edits	core	Multi-step edits are one undo step and all-or-nothing	reader	n	shipped	P1	#96	one step per change	acrobat
 core.history-panel	core	History panel with named snapshots	-	n	todo	P2	-		acrobat
-core.autosave	core	Autosave changed documents periodically	reader	y	todo	P0	-		acrobat
-core.crash-recovery	core	Offer to recover unsaved work after a crash	reader	n	partial	P0	#91	crash reports go to Katna's crash folder; no unsaved-work recovery	acrobat
-core.encrypted-autosave	core	Autosaves of encrypted documents stay encrypted	-	n	todo	P0	-		acrobat
+core.autosave	core	Autosave changed documents periodically	reader	y	shipped	P0	#142	a copy of changes not saved every minute (Settings > Editing)	acrobat
+core.crash-recovery	core	Offer to recover unsaved work after a crash	reader	n	shipped	P0	#91, #142	crash reports to Katna's crash folder; changes not saved offered back on the start screen	acrobat
+core.encrypted-autosave	core	Autosaves of encrypted documents stay encrypted	-	n	shipped	P0	#142	the copy is the file's own bytes, so it stays locked	acrobat
 core.web-recovery	core	Crash recovery in the web app	-	n	skip	-	-		acrobat
 core.unsaved-changes-prompt	core	Ask before closing or quitting with unsaved changes	reader	y	shipped	P0	app unsaved-close		acrobat
 core.dirty-indicator	core	Unsaved-changes marker on document tabs	reader	y	shipped	P1	tabs.rs		acrobat

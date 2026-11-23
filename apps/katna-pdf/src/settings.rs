@@ -1072,6 +1072,12 @@ impl Settings {
             |p, v| p.form_scripts = v,
             cx,
         );
+        let recovery = self.toggle(
+            "settings-recovery",
+            prefs.recovery,
+            |p, v| p.recovery = v,
+            cx,
+        );
         let folder = katna_core::Paths::from_env()
             .ok()
             .map(|p| p.state_dir().join("pdf"))
@@ -1096,6 +1102,12 @@ impl Settings {
                 None,
                 Some(t("settings-form-scripts-detail", &[])),
                 Some(scripts),
+            ))
+            .child(self.row(
+                t("settings-recovery", &[]),
+                None,
+                Some(t("settings-recovery-detail", &[])),
+                Some(recovery),
             ))
             .child(self.row(t("settings-own-files", &[]), None, None, folder))
             .into_any_element()
