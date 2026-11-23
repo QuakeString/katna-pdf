@@ -525,6 +525,13 @@ impl Viewer {
             }
         }
         let new_on = changes.put.iter().find(|a| a.id.is_none()).map(|a| a.page);
+        let what = if new_on.is_some() {
+            "undo-what-add-comment"
+        } else if changes.put.is_empty() {
+            "undo-what-delete-comment"
+        } else {
+            "undo-what-change-comment"
+        };
         self.annotating = true;
         cx.spawn(async move |this, cx| {
             let written = cx
@@ -550,7 +557,10 @@ impl Viewer {
                 }
                 this.annotating = false;
                 match written {
-                    Ok((bytes, doc, cos)) => this.show_annotated(bytes, doc, cos, &pages, new_on),
+                    Ok((bytes, doc, cos)) => {
+                        this.doing = what;
+                        this.show_annotated(bytes, doc, cos, &pages, new_on)
+                    }
                     Err(error) => {
                         this.comment_next = false;
                         this.notice = Some(super::said("annotate-failed", &[("error", &error)]));

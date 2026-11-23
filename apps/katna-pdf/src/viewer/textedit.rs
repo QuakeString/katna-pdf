@@ -528,6 +528,7 @@ impl Viewer {
     ) {
         let key = self.key.clone();
         let kept = after.clone();
+        let what = what_failed(failed);
         let (Some(path), Content::Ready(_)) = (self.path.clone(), &self.content) else {
             return;
         };
@@ -573,6 +574,7 @@ impl Viewer {
                             .is_some()
                             .then(|| super::design::read_form(&cos));
                         let marks = this.marking.is_some().then(|| cos.page_marks());
+                        this.doing = what;
                         this.show_annotated(bytes, doc, cos, &pages, None);
                         if let Some(read) = design {
                             this.design_changed(read, cx);
@@ -1590,5 +1592,27 @@ impl Viewer {
         }
         self.finish_text_edit(true, cx);
         true
+    }
+}
+
+/// The id of the words naming a change, for Undo, from the id of the
+/// words saying it failed.
+fn what_failed(failed: &str) -> &'static str {
+    match failed {
+        "bookmark-failed" => "undo-what-bookmarks",
+        "files-failed" => "undo-what-files",
+        "flatten-failed" => "undo-what-flatten",
+        "form-design-failed" => "undo-what-form-design",
+        "form-failed" => "undo-what-form",
+        "layers-failed" => "undo-what-layers",
+        "link-failed" => "undo-what-links",
+        "marks-failed" => "undo-what-marks",
+        "numbering-failed" => "undo-what-numbering",
+        "paste-many-failed" => "undo-what-paste",
+        "properties-failed" => "undo-what-properties",
+        "properties-lock-failed" => "undo-what-password",
+        "properties-shrink-failed" => "undo-what-shrink",
+        "text-font-failed" => "undo-what-font",
+        _ => "undo-what-edit",
     }
 }

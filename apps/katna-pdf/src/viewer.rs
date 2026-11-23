@@ -386,6 +386,13 @@ pub enum ViewerEvent {
     Close,
 }
 
+/// A step Undo or Redo goes back to: the file as it was (`None`: as
+/// opened) and the id of the words naming the change between.
+struct Step {
+    bytes: Option<Arc<Vec<u8>>>,
+    what: &'static str,
+}
+
 /// A change to the pages, as [`Viewer::change_pages`] writes it.
 pub(super) enum Pages {
     /// The new pages: (0 for this file, page, quarter turns added).
@@ -411,6 +418,32 @@ pub(super) enum Pages {
         pages: BTreeSet<usize>,
         margins: [f32; 4],
     },
+}
+
+impl Pages {
+    /// The id of the words naming this change, for Undo, in a file of
+    /// `count` pages.
+    fn what(&self, count: usize) -> &'static str {
+        match self {
+            Pages::Order(order) => {
+                let ours = order.iter().filter(|(file, _, _)| *file == 0).count();
+                if ours < order.len() {
+                    "undo-what-insert-pages"
+                } else if order.len() < count {
+                    "undo-what-delete-pages"
+                } else if order.len() > count {
+                    "undo-what-copy-pages"
+                } else if order.iter().any(|(_, _, turns)| turns.rem_euclid(4) != 0) {
+                    "undo-what-turn-pages"
+                } else {
+                    "undo-what-move-pages"
+                }
+            }
+            Pages::Insert { .. } => "undo-what-insert-pages",
+            Pages::Replace { .. } => "undo-what-replace-pages",
+            Pages::Crop { .. } | Pages::Crops(_) | Pages::Margins { .. } => "undo-what-crop-pages",
+        }
+    }
 }
 
 /// Where pages inserted come from.
@@ -660,8 +693,11 @@ pub struct Viewer {
     /// The file as it was before each change not undone, oldest first,
     /// and after each one undone (`None`: the file as opened), for Undo
     /// and Redo.
-    undo: Vec<Option<Arc<Vec<u8>>>>,
-    redo: Vec<Option<Arc<Vec<u8>>>>,
+    undo: Vec<Step>,
+    redo: Vec<Step>,
+    /// The id of the words naming the change about to be shown, for the
+    /// Undo step it records.
+    doing: &'static str,
     /// A change being put back, which is not a change to record.
     restoring: bool,
     /// Whether a page change is being written.
@@ -908,6 +944,7 @@ impl Viewer {
             edited: None,
             undo: Vec::new(),
             redo: Vec::new(),
+            doing: "undo-what-change",
             restoring: false,
             changing_pages: false,
             tools: false,
@@ -1007,8 +1044,8 @@ impl Viewer {
             ready: matches!(self.content, Content::Ready(_)),
             pane: self.pane_shown(),
             dirty: self.dirty(),
-            undo: !self.undo.is_empty(),
-            redo: !self.redo.is_empty(),
+            undo: self.undo.last().map(|s| s.what),
+            redo: self.redo.last().map(|s| s.what),
             finding: self.search.is_some(),
             colors: colors_text(self.page_colors()),
         }
@@ -2986,6 +3023,7 @@ impl Viewer {
             return;
         }
         let name = opened.name.clone();
+        let what = change.what(self.page_count());
         let current = self.unsaved();
         let generation = self.generation;
         self.changing_pages = true;
@@ -3079,7 +3117,10 @@ impl Viewer {
                 }
                 this.changing_pages = false;
                 match changed {
-                    Ok((bytes, doc, cos)) => this.show_changed(name, bytes, doc, cos, picked),
+                    Ok((bytes, doc, cos)) => {
+                        this.doing = what;
+                        this.show_changed(name, bytes, doc, cos, picked)
+                    }
                     Err(error) => this.notice = Some(said("pages-failed", &[("error", &error)])),
                 }
                 cx.notify();
@@ -3170,7 +3211,11 @@ impl Viewer {
         if self.restoring {
             return;
         }
-        self.undo.push(self.unsaved());
+        let what = std::mem::replace(&mut self.doing, "undo-what-change");
+        self.undo.push(Step {
+            bytes: self.unsaved(),
+            what,
+        });
         self.redo.clear();
         if self.undo.len() > UNDO_STEPS {
             self.undo.remove(0);
@@ -3182,10 +3227,16 @@ impl Viewer {
         self.finish_typing(true, cx);
         self.finish_text_edit(true, cx);
         let Some(before) = self.undo.pop() else {
+            self.notice = Some(said("undo-none-tip", &[]));
+            cx.notify();
             return;
         };
-        self.redo.push(self.unsaved());
-        self.restore(before, cx);
+        self.redo.push(Step {
+            bytes: self.unsaved(),
+            what: before.what,
+        });
+        self.notice = Some(said("undone", &[("what", &t(before.what, &[]))]));
+        self.restore(before.bytes, cx);
     }
 
     /// Does the last change undone again.
@@ -3193,10 +3244,16 @@ impl Viewer {
         self.finish_typing(true, cx);
         self.finish_text_edit(true, cx);
         let Some(after) = self.redo.pop() else {
+            self.notice = Some(said("redo-none-tip", &[]));
+            cx.notify();
             return;
         };
-        self.undo.push(self.unsaved());
-        self.restore(after, cx);
+        self.undo.push(Step {
+            bytes: self.unsaved(),
+            what: after.what,
+        });
+        self.notice = Some(said("redone", &[("what", &t(after.what, &[]))]));
+        self.restore(after.bytes, cx);
     }
 
     /// Shows the file as `bytes` (or, with none, as opened from disk) in
@@ -3468,6 +3525,7 @@ impl Viewer {
             cx.notify();
             return;
         }
+        self.doing = "undo-what-revert";
         self.record_change();
         self.redo.clear();
         self.restore(None, cx);
@@ -4251,8 +4309,10 @@ pub struct Chrome {
     pub pane: bool,
     /// Changes not saved yet.
     pub dirty: bool,
-    pub undo: bool,
-    pub redo: bool,
+    /// The id of the words naming the change Undo, or Redo, would take
+    /// back or make again; `None` when there is none.
+    pub undo: Option<&'static str>,
+    pub redo: Option<&'static str>,
     /// The find card is open.
     pub finding: bool,
     /// The id of the words for the pages' colours.

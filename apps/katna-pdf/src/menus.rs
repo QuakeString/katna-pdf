@@ -10,9 +10,9 @@ use crate::viewer::{
     ActualSize, AddBookmark, Annotate, AutoScroll, CloseAll, CloseTab, Compare, CopyText, Export,
     Find, FindNext, FindPrevious, FitHeight, FitPage, FitWidth, GoToPage, Loupe, NewWindow,
     NextPage, NextSpread, NextTab, NextView, Open, OpenSettings, Organize, Present, PreviousPage,
-    PreviousTab, PreviousView, Print, Properties, Quit, ReadAloud, ReopenSession, ReportProblem,
-    Revert, RotateViewLeft, RotateViewRight, Save, Shortcuts, ShowAbout, ShowLibrary, Sign,
-    Snapshot, ToggleContents, ToggleNight, ZoomIn, ZoomOut, ZoomToArea,
+    PreviousTab, PreviousView, Print, Properties, Quit, ReadAloud, Redo, ReopenSession,
+    ReportProblem, Revert, RotateViewLeft, RotateViewRight, Save, Shortcuts, ShowAbout,
+    ShowLibrary, Sign, Snapshot, ToggleContents, ToggleNight, Undo, ZoomIn, ZoomOut, ZoomToArea,
 };
 
 /// An item: its id (and the id of its words), and its keys as
@@ -49,6 +49,9 @@ pub const MENUS: &[(&str, &[Entry])] = &[
     (
         "menu-edit",
         &[
+            Some(("menu-undo", &["Control", "Z"])),
+            Some(("menu-redo", &["Control", "Shift", "Z"])),
+            None,
             Some(("menu-copy", &["Control", "C"])),
             Some(("menu-snapshot", &[])),
             None,
@@ -110,8 +113,6 @@ pub const MENUS: &[(&str, &[Entry])] = &[
 
 /// Keys no menu item shows: the words' id and the keys.
 pub const MORE_KEYS: &[(&str, &str)] = &[
-    ("shortcut-undo", "Ctrl Z"),
-    ("shortcut-redo", "Ctrl Shift Z, Ctrl Y"),
     ("shortcut-select-all", "Ctrl A"),
     ("shortcut-cut", "Ctrl X"),
     ("shortcut-paste", "Ctrl V"),
@@ -141,6 +142,8 @@ pub fn action(id: &str) -> Option<Box<dyn Action>> {
         "menu-sign" => Box::new(Sign),
         "menu-close-tab" => Box::new(CloseTab),
         "menu-quit" => Box::new(Quit),
+        "menu-undo" => Box::new(Undo),
+        "menu-redo" => Box::new(Redo),
         "menu-copy" => Box::new(CopyText),
         "menu-find" => Box::new(Find),
         "menu-find-next" => Box::new(FindNext),
