@@ -487,7 +487,7 @@ form.xfa-data	form	XFA XML data import and export	pro	n	skip	-	-		acrobat
 form.xfa-flatten	form	Flatten XFA forms	pro	n	skip	-	-		acrobat
 form.fill-sign-text	form	Fill & Sign: add text on flat forms	reader	y	shipped	P0	#59 add text		acrobat
 form.fill-sign-marks	form	Fill & Sign: check, cross, dot, line marks	reader	p	shipped	P0	#147	stamp card Marks tab: tick, cross, dot, line, ring	acrobat
-form.fill-sign-date	form	Fill & Sign: today's date	reader	n	partial	P1	#105 dynamic stamp		acrobat
+form.fill-sign-date	form	Fill & Sign: today's date	reader	n	shipped	P1	#159	Today's date in the stamp row's Marks, typed where clicked	acrobat
 form.fill-sign-signature	form	Fill & Sign: typed, drawn, image or scanned signature and initials	reader	y	shipped	P0	#109 initials, #52 signature pictures		acrobat
 form.fill-sign-flatten	form	Fill & Sign: flatten on save	reader	n	shipped	P1	#106		acrobat
 form.autofill-profile	form	Autofill collection synced to an Adobe account	reader	n	skip	-	-		acrobat
