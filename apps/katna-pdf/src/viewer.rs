@@ -73,6 +73,7 @@ pub(crate) mod sign;
 mod speak;
 mod stamps;
 mod start;
+mod strokes;
 mod textedit;
 mod watch;
 

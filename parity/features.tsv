@@ -359,12 +359,12 @@ comment.area-highlight	comment	Area highlight	reader	n	shipped	P1	#158	Highlight
 comment.attach-file-comment	comment	Attach a file as a comment	reader	y	shipped	P1	#105		acrobat
 comment.record-audio	comment	Sound comments	reader	n	skip	-	-		acrobat
 comment.image-comment	comment	Add an image as a comment	reader	n	todo	P2	-		acrobat
-comment.line-endings	comment	All ten line-ending styles and dashed/cloudy borders	reader	n	partial	P1	#32		acrobat
+comment.line-endings	comment	All ten line-ending styles and dashed/cloudy borders	reader	n	shipped	P1	#172		acrobat
 comment.properties-dialog	comment	Comment properties (appearance, author, subject)	reader	y	shipped	P0	#104 comments.rs		acrobat
-comment.properties-bar	comment	Comment properties bar	reader	y	partial	P1	colour dots		acrobat
+comment.properties-bar	comment	Comment properties bar	reader	y	shipped	P1	#172		acrobat
 comment.lock-comment	comment	Lock comments	reader	y	shipped	P2	#104		acrobat
 comment.default-properties	comment	Make current properties the tool default	reader	y	shipped	P1	#164		acrobat
-comment.author-identity	comment	Author name from identity preferences	reader	y	partial	P1	#104	author from the account name	acrobat
+comment.author-identity	comment	Author name from identity preferences	reader	y	shipped	P1	#172		acrobat
 comment.reply	comment	Reply to comments	reader	y	shipped	P1	#104		acrobat
 comment.set-status	comment	Set review status (accepted, rejected, cancelled, completed)	reader	y	shipped	P1	#104		acrobat
 comment.checkmark	comment	Mark comments with a checkmark	reader	n	todo	P2	-		acrobat
