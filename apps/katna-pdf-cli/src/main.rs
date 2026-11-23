@@ -11,8 +11,8 @@ use std::process::ExitCode;
 
 use katna_pdf_cos::{
     Allowed, AnnotChanges, AnnotKind, Annotation, Change, Coverage, Document, FieldEdit, FieldSpec,
-    FormDesign, Lock, NewField, Object, ObjectChange, PageSource, Placement, SignRequest,
-    SigningInfo, compose, text_string,
+    FormDesign, Lock, NewField, ObjectChange, PageSource, Placement, SignRequest, SigningInfo,
+    compose,
 };
 use katna_pdf_sign::{Digest, Revocation, Signer, Trust, common_name, p12, pkcs11};
 
@@ -64,7 +64,8 @@ usage: katna-pdf-cli COMMAND [--json] ...
                                   a password put on (AES-256): --user opens it (none:
                                   anyone may), with only what --allow lets (print,
                                   print-well, change, copy, comment, fill, assemble;
-                                  all without it); --owner opens it fully
+                                  all without it); --owner opens it fully;
+                                  --plain-metadata leaves title and author readable
   unlock FILE -o OUT --owner PW   the password taken off, given the owner's
                                   (any command opens a locked file with the password
                                   in KATNA_PDF_OPEN_PASSWORD)
@@ -548,6 +549,7 @@ impl<'a> Args<'a> {
                 options.push((a.as_str(), value.as_str()));
             } else if [
                 "--uncrop",
+                "--plain-metadata",
                 "--online",
                 "--ltv",
                 "--lta",
@@ -698,26 +700,20 @@ fn info(args: &[String], json: bool) -> Done {
     let doc = open(file)?;
     let count = doc.pages().len();
     let version = version(&doc);
+    // /Info, with XMP filling gaps; a locked file shows only plain XMP.
+    let m = doc.metadata();
     let meta: Vec<(&str, String)> = [
-        "Title",
-        "Author",
-        "Subject",
-        "Keywords",
-        "Creator",
-        "Producer",
-        "CreationDate",
-        "ModDate",
+        ("Title", m.title),
+        ("Author", m.author),
+        ("Subject", m.subject),
+        ("Keywords", m.keywords),
+        ("Creator", m.creator),
+        ("Producer", m.producer),
+        ("CreationDate", m.created),
+        ("ModDate", m.modified),
     ]
     .into_iter()
-    .filter_map(|key| {
-        let Object::Dict(info) = doc.resolve(doc.trailer().get("Info")?) else {
-            return None;
-        };
-        match doc.resolve_key(&info, key) {
-            Object::String { bytes, .. } => Some((key, text_string(&bytes))),
-            _ => None,
-        }
-    })
+    .filter_map(|(key, value)| Some((key, value?)))
     .collect();
     let sizes: Vec<(f32, f32, i64)> = (0..count)
         .filter_map(|p| doc.page_info(p))
@@ -1535,7 +1531,7 @@ fn lock(args: &[String], json: bool) -> Done {
         ));
     }
     let bytes = doc
-        .lock(user, owner, permissions)
+        .lock_with(user, owner, permissions, args.flag("--plain-metadata"))
         .map_err(|e| failed(format!("{file}: {e}")))?;
     write(&out, &bytes)?;
     Ok(wrote(&[(out, doc.pages().len())], json))

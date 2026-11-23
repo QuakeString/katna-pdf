@@ -49,6 +49,8 @@ pub(super) struct Properties {
     owner: Entity<TextInput>,
     /// What someone opening it without the owner's password may do.
     allow: Permissions,
+    /// Leave the title and author readable without the password.
+    plain_meta: bool,
     /// The part shown.
     part: Part,
     /// How to make it smaller: the same look, pictures to 150 dpi, or
@@ -134,6 +136,7 @@ impl Viewer {
             password,
             owner,
             allow: Permissions::ALL,
+            plain_meta: false,
             part: Part::Description,
             shrink: 0,
             _fields: subs,
@@ -227,6 +230,7 @@ impl Viewer {
         let password = properties.password.read(cx).text().to_owned();
         let owner = properties.owner.read(cx).text().to_owned();
         let allow = properties.allow;
+        let plain_meta = properties.plain_meta;
         // One password typed serves both ways; the owner's alone leaves
         // the file open to anyone, with only what is allowed.
         let (user, owner) = match (password.is_empty(), owner.is_empty()) {
@@ -242,7 +246,10 @@ impl Viewer {
             pages,
             "properties-lock-failed",
             Some(after),
-            move |doc| doc.lock(&user, &owner, allow).map_err(|e| e.to_string()),
+            move |doc| {
+                doc.lock_with(&user, &owner, allow, plain_meta)
+                    .map_err(|e| e.to_string())
+            },
             cx,
         );
     }
@@ -714,6 +721,27 @@ impl Viewer {
                     ),
             );
         }
+        let plain_meta = div()
+            .id("properties-plain-meta")
+            .flex()
+            .items_center()
+            .gap(px(space::S2))
+            .cursor_pointer()
+            .on_click(cx.listener(|this, _, _, cx| {
+                if let Some(p) = this.properties.as_mut() {
+                    p.plain_meta = !p.plain_meta;
+                }
+                cx.notify();
+            }))
+            .child(super::sign::check_box(properties.plain_meta, th))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .text_size(px(text::SMALL))
+                    .text_color(th.text)
+                    .child(t("properties-plain-meta", &[])),
+            );
         let part = div().flex().flex_col().gap(px(space::S3));
         match (locked, owner) {
             (false, _) => part
@@ -727,6 +755,7 @@ impl Viewer {
                 )
                 .child(section(t("properties-allow", &[]), th))
                 .child(allowed)
+                .child(plain_meta)
                 .child(
                     div().flex().justify_end().child(
                         float::button("properties-lock", t("properties-lock", &[]), true, &th)
