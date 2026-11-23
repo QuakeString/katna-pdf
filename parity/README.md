@@ -36,24 +36,24 @@ the feature.
 | Optimise and standards (`optimize`) | 61 | 10 | 9 | 22 | 0 | 20 |
 | Printing (`print`) | 41 | 16 | 2 | 4 | 0 | 19 |
 | Accessibility (`a11y`) | 62 | 3 | 4 | 49 | 0 | 6 |
-| Compare, automation, settings, cloud (`misc`) | 101 | 23 | 20 | 26 | 2 | 30 |
+| Compare, automation, settings, cloud (`misc`) | 101 | 24 | 20 | 25 | 2 | 30 |
 | Library (`library`, ours) | 9 | 9 | 0 | 0 | 0 | 0 |
 | Ideas (`idea`, ours, proposed) | 11 | 0 | 0 | 10 | 1 | 0 |
-| **All** | **961** | **424** | **120** | **254** | **36** | **127** |
+| **All** | **961** | **425** | **120** | **253** | **36** | **127** |
 
 Against each product, counting only what is in scope (not `skip`):
 
 | Against | In scope | Shipped | Partial | To do | Deferred |
 |---|---:|---:|---:|---:|---:|
-| Acrobat Reader (free) | 333 | 230 (69 %) | 48 | 53 | 2 |
-| Acrobat Standard (Reader + Standard) | 553 | 338 (61 %) | 85 | 124 | 6 |
-| Acrobat Pro (everything below Studio) | 737 | 376 (51 %) | 111 | 217 | 33 |
-| Master PDF Editor | 437 | 301 (68 %) | 59 | 58 | 19 |
+| Acrobat Reader (free) | 333 | 231 (69 %) | 48 | 52 | 2 |
+| Acrobat Standard (Reader + Standard) | 553 | 339 (61 %) | 85 | 123 | 6 |
+| Acrobat Pro (everything below Studio) | 737 | 377 (51 %) | 111 | 216 | 33 |
+| Master PDF Editor | 437 | 302 (69 %) | 59 | 57 | 19 |
 | Only in Katna PDF | 61 | 32 | 5 | 22 | 2 |
 
 Many of Acrobat Pro's open rows are accessibility tagging (49 rows, nothing built
 yet) and OCR (25 rows, deferred by the owner on 2026-10-17). Without those two
-areas, Pro parity is 374 of 656 shipped (57 %), 73 % with partial rows counted.
+areas, Pro parity is 375 of 656 shipped (57 %), 73 % with partial rows counted.
 
 Out of scope (`skip`): Adobe's cloud services and accounts, shared reviews, Acrobat
 Sign requests, PDF Spaces and the generative AI features, prepress (separations,

@@ -135,10 +135,12 @@ cargo run --release -p katna-pdf-bench -- file.pdf
   card (`viewer/printing.rs`: layout, paper, as pictures, pages; the
   sheets go to the desktop's print dialog or are saved as a PDF);
   Ctrl+Shift+E the export card (`viewer/export.rs`).
+  Help > User guide (`guide.rs`) opens `docs/guide.md` as a PDF with
+  bookmarks and the menus' keys.
   `viewer/initials.rs` keeps initials (typed, a picture, or drawn) in
   the state folder and puts them into pages with a click; `history.rs`
   keeps the last session's files (`session.txt`) to open again.
-  `recovery.rs` keeps a copy of changes not saved every minute
+  `recovery.rs` keeps a copy of changes not saved every few minutes
   (`pdf/recovery/`) and the start screen offers them back.
   `update.rs` looks for a newer build on the package's own release
   (`katna-pdf-update.txt`, from `packaging/update-manifest.sh`) and, for

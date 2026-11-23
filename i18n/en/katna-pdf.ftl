@@ -1379,6 +1379,7 @@ menu-next-tab = Next _Tab
 menu-previous-tab = Previous T_ab
 menu-help = _Help
 menu-settings = _Settings
+menu-guide = User _Guide
 menu-shortcuts = _Keyboard Shortcuts
 menu-report = _Report a Problem
 menu-about = _About Katna PDF
@@ -1809,3 +1810,8 @@ repair-catalog-by-type = No trailer was found; the document catalog was found by
 email-started = A new message with the file attached is open in { $app }.
 email-started-desktop = A new message with the file attached is open in your mail app.
 email-failed = No mail app could start a message: { $error }. Attach the file in your mail app instead.
+
+# The user guide (Help > User guide), made into a PDF.
+guide-title = Katna PDF guide
+guide-keys = Keyboard
+guide-more-keys = More keys

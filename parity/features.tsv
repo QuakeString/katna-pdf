@@ -922,7 +922,7 @@ misc.installers	misc	Signed installers for macOS, Windows and Linux	reader	y	shi
 misc.web-deploy	misc	Hosted web app deployment	-	n	skip	-	-		acrobat
 misc.performance-budgets	misc	Meet performance budgets on Tier-1 platforms	reader	n	shipped	P0	tools/katna-pdf-bench		acrobat
 misc.send-email	misc	Send the file by email (system mail client)	reader	y	shipped	P1	#168		acrobat
-misc.user-docs	misc	User documentation and keyboard reference	reader	y	todo	P1	-		acrobat
+misc.user-docs	misc	User documentation and keyboard reference	reader	y	shipped	P1	#171		acrobat
 misc.custom-shortcuts	misc	Change keyboard shortcuts	-	y	todo	P2	-		mpe
 misc.proxy-settings	misc	Network proxy settings	reader	y	todo	P2	-	uses the system's	mpe
 misc.log-file	misc	Write a log to a file	-	y	todo	P2	-		mpe
