@@ -30,6 +30,19 @@ pub(crate) struct Tab {
 }
 
 /// The title bar's menus (`chrome.rs`).
+/// What the profile menu says of a signing token (S14), looked for each
+/// time the menu opens.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TokenStatus {
+    Looking,
+    /// No token driver is installed.
+    NoDriver,
+    /// A driver, but no token in.
+    NonePlugged,
+    /// The first token in: its label.
+    Found(String),
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TopMenu {
     Share,
@@ -59,6 +72,8 @@ pub struct Tabs {
     _appearance: Subscription,
     _look: Subscription,
     _profile: Subscription,
+    /// The signing token, for the profile menu.
+    pub(crate) token: TokenStatus,
 }
 
 /// Where an update offered stands.
@@ -98,6 +113,7 @@ impl Tabs {
             _appearance: appearance,
             _look: look,
             _profile: profile,
+            token: TokenStatus::Looking,
         };
         this.push(None, window, cx);
         this.open_files(files, window, cx);
@@ -348,6 +364,41 @@ impl Tabs {
     }
 
     /// Opens the files that were open when the app last ran.
+    /// Looks for a signing token off the UI thread, for the profile
+    /// menu's token row.
+    pub(crate) fn look_for_token(&mut self, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            let status = cx
+                .background_spawn(async {
+                    let modules = katna_pdf_sign::pkcs11::known_modules();
+                    if modules.is_empty() {
+                        return TokenStatus::NoDriver;
+                    }
+                    for path in modules {
+                        if let Ok(module) = katna_pdf_sign::pkcs11::Module::load(&path)
+                            && let Ok(tokens) = module.tokens()
+                            && let Some(token) = tokens.into_iter().next()
+                        {
+                            let name = if token.label.is_empty() {
+                                token.model
+                            } else {
+                                token.label
+                            };
+                            return TokenStatus::Found(name);
+                        }
+                    }
+                    TokenStatus::NonePlugged
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                this.token = status;
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     pub(crate) fn reopen_session(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let files = cx.global::<History>().last_session().to_vec();
         if !files.is_empty() {
@@ -536,6 +587,9 @@ impl Render for Tabs {
             .id("katna-pdf")
             .key_context("Tabs")
             .on_action(cx.listener(|this, _: &Open, window, cx| this.choose_files(window, cx)))
+            .on_action(cx.listener(|_, _: &crate::viewer::OpenSettings, _, cx| {
+                crate::settings::open(crate::settings::Page::Appearance, cx)
+            }))
             .on_action(
                 cx.listener(|this, _: &ReopenSession, window, cx| this.reopen_session(window, cx)),
             )

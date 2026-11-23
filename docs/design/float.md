@@ -125,8 +125,22 @@ at Shortcuts; asking again brings the open window forward.
 - About (X08): the build, whether it looks for updates, and the crash
   reports folder.
 
+## Signing dialog
+
+Placing the box opens the signing card as a dialog over the dimmed page
+(G02): USB token or certificate file, the token's certificates or the
+file, the PIN or password, reason and place side by side, what the box
+shows, then switches for the timestamp, long-term proof and locking the
+form, certifying, more files, and Cancel and Sign at the foot. A wrong
+PIN says what the token says of the tries left (PKCS#11's count-low and
+final-try flags, `pkcs11::PinTries`), and a locked token how to unlock
+it (G05).
+
+The profile menu (S14) says "Add your name" until Settings has one, and
+under it whether a token is plugged in, looked for each time the menu
+opens, with a way to Settings > Signing. Settings… is Ctrl+, and About
+Katna PDF opens Settings > About.
+
 ## Still to come
 
-The accent row. The
-signing card as a step-by-step dialog (G02-G05) and the token status in the
-profile menu (S14).
+The accent row in Appearance.

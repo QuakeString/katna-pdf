@@ -138,6 +138,18 @@ pub struct Token {
     pub locked: bool,
 }
 
+/// What a token says of the wrong PINs it still takes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PinTries {
+    /// It does not say, or there are still several.
+    Unknown,
+    /// A few.
+    Few,
+    /// One more wrong PIN locks it.
+    Last,
+    Locked,
+}
+
 impl Module {
     /// Loads and starts the module at `path`.
     pub fn load(path: &Path) -> Result<Self, TokenError> {
@@ -176,6 +188,18 @@ impl Module {
             });
         }
         Ok(out)
+    }
+
+    /// How many wrong PINs `token` takes before it locks, as far as the
+    /// token says: PKCS#11 gives no number, only that few are left, that
+    /// the next is the last, or that it is locked.
+    pub fn pin_tries(&self, token: &Token) -> PinTries {
+        match self.context.get_token_info(token.slot) {
+            Ok(info) if info.user_pin_locked() => PinTries::Locked,
+            Ok(info) if info.user_pin_final_try() => PinTries::Last,
+            Ok(info) if info.user_pin_count_low() => PinTries::Few,
+            _ => PinTries::Unknown,
+        }
     }
 
     /// The certificates on `token` that sign, read without the PIN (they

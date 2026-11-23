@@ -236,11 +236,12 @@ impl Tabs {
                             .cursor_pointer()
                             .on_mouse_move(|_, _, cx| cx.stop_propagation())
                             .ftip(t("profile-tip", &[]), &th)
-                            .on_click(
-                                cx.listener(|this, _, _, cx| {
-                                    this.toggle_menu(TopMenu::Profile, cx)
-                                }),
-                            )
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.toggle_menu(TopMenu::Profile, cx);
+                                if this.menu == Some(TopMenu::Profile) {
+                                    this.look_for_token(cx);
+                                }
+                            }))
                             .child(avatar(&float::initials(&self.person), 28.0, &th)),
                     )
                     .children(
@@ -448,10 +449,69 @@ impl Tabs {
         )
     }
 
+    /// The signing token, as the profile menu shows it (S14): plugged in
+    /// or not, and a way to Settings > Signing.
+    fn token_row(&self, cx: &mut Context<Self>) -> AnyElement {
+        let th = self.theme;
+        let words = match &self.token {
+            crate::tabs::TokenStatus::Looking => t("profile-token-looking", &[]),
+            crate::tabs::TokenStatus::NoDriver => t("profile-token-no-driver", &[]),
+            crate::tabs::TokenStatus::NonePlugged => t("profile-token-none", &[]),
+            crate::tabs::TokenStatus::Found(name) => t("profile-token-found", &[("name", name)]),
+        };
+        let found = matches!(self.token, crate::tabs::TokenStatus::Found(_));
+        div()
+            .mx(px(space::S3))
+            .mb(px(space::S2))
+            .h(px(36.0))
+            .px(px(space::S3))
+            .flex()
+            .items_center()
+            .gap(px(space::S2))
+            .rounded(px(7.0))
+            .border_1()
+            .border_color(th.line_soft)
+            .text_size(px(text::CAPTION))
+            .child(float::icon(
+                "usb",
+                14.0,
+                if found { th.accent } else { th.dim },
+            ))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .text_color(if found { th.text } else { th.dim })
+                    .child(words),
+            )
+            .child(
+                div()
+                    .id("profile-token-setup")
+                    .cursor_pointer()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(th.accent_text)
+                    .child(t(
+                        if found {
+                            "profile-token-settings"
+                        } else {
+                            "profile-token-setup"
+                        },
+                        &[],
+                    ))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.close_menu(cx);
+                        settings::open(Page::Signing, cx);
+                    })),
+            )
+            .into_any_element()
+    }
+
     /// The person's menu (S08): who they are, day or night, the colour
     /// schemes, the pages' colours, the app menu, updates and Quit.
     fn profile_menu(&self, colors: &'static str, cx: &mut Context<Self>) -> AnyElement {
         let th = self.theme;
+        let token_row = self.token_row(cx);
         let current = cx.global::<Look>().clone();
         let modes = [
             (Mode::System, None, "mode-system"),
@@ -539,6 +599,11 @@ impl Tabs {
             }))
         });
         let name = self.person.clone();
+        let named = !cx
+            .global::<crate::profile::Profile>()
+            .name
+            .trim()
+            .is_empty();
         let hover = th.hover;
         let job = {
             let profile = cx.global::<crate::profile::Profile>();
@@ -564,9 +629,22 @@ impl Tabs {
                         this.close_menu(cx);
                         settings::open(Page::Profile, cx);
                     }))
-                    .child(avatar(&float::initials(&name), 40.0, &th))
+                    .child(if named {
+                        avatar(&float::initials(&name), 40.0, &th)
+                    } else {
+                        div()
+                            .size(px(40.0))
+                            .flex_none()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded_full()
+                            .bg(th.hover)
+                            .child(float::icon("user", 18.0, th.dim))
+                    })
                     .child(
                         div()
+                            .flex_1()
                             .flex()
                             .flex_col()
                             .min_w_0()
@@ -575,18 +653,28 @@ impl Tabs {
                                     .text_size(px(text::BODY))
                                     .font_weight(FontWeight::SEMIBOLD)
                                     .truncate()
-                                    .child(name.clone()),
+                                    .child(if named {
+                                        name.clone()
+                                    } else {
+                                        t("profile-add-name", &[])
+                                    }),
                             )
                             .child(div().text_size(px(text::CAPTION)).text_color(th.dim).child(
                                 job.unwrap_or_else(|| {
                                     t(
-                                        "profile-signs-as",
+                                        if named {
+                                            "profile-signs-as"
+                                        } else {
+                                            "profile-shown-as"
+                                        },
                                         &[("name", &crate::viewer::comment_author())],
                                     )
                                 }),
                             )),
-                    ),
+                    )
+                    .child(float::icon("chevr", 14.0, th.dim)),
             )
+            .child(token_row)
             .child(float::heading(t("profile-mode", &[]), &th))
             .child(div().px(px(space::S3)).child(seg(&th).children(modes)))
             .child(float::heading(t("profile-colours", &[]), &th))
@@ -630,7 +718,7 @@ impl Tabs {
                     "profile-all-settings",
                     Some("gear"),
                     t("profile-settings", &[]),
-                    None,
+                    Some("Ctrl ,".into()),
                     &th,
                 )
                 .on_click(cx.listener(|this, _, _, cx| {
@@ -665,6 +753,19 @@ impl Tabs {
                 })),
             )
             .children(update.map(|u| u.into_any_element()))
+            .child(
+                menu_item(
+                    "profile-about",
+                    Some("help"),
+                    t("profile-about", &[]),
+                    None,
+                    &th,
+                )
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.close_menu(cx);
+                    settings::open(Page::About, cx);
+                })),
+            )
             .child(menu_sep(&th))
             .child(
                 menu_item(

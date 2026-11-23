@@ -1168,152 +1168,68 @@ impl Viewer {
         };
         let label = |id: &str| {
             div()
-                .text_size(px(text::SMALL))
+                .text_size(px(text::CAPTION))
+                .font_weight(gpui::FontWeight::SEMIBOLD)
                 .text_color(th.dim)
                 .child(t(id, &[]))
+        };
+        let labelled = |id: &str, input: &Entity<TextInput>| {
+            div()
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .gap(px(space::S1))
+                .child(label(id))
+                .child(field(input))
+        };
+        // A switch on the right of its words, as Settings' rows.
+        let switch_row = |id: &'static str, words: &str, on: bool| {
+            div()
+                .id(id)
+                .min_h(px(36.0))
+                .flex()
+                .items_center()
+                .justify_between()
+                .gap(px(space::S3))
+                .cursor_pointer()
+                .child(
+                    div()
+                        .text_size(px(text::BODY))
+                        .text_color(th.text)
+                        .child(t(words, &[])),
+                )
+                .child(float::switch((id, 0usize), on, &th))
+        };
+        let secret_label = if signing.source == Source::Token {
+            "sign-pin-label"
+        } else {
+            "sign-password-label"
         };
         let certificate = signing
             .certificate
             .as_deref()
             .map_or_else(|| t("sign-certificate-none", &[]), file_name);
         let busy = signing.busy;
-        Some(
-            div()
-                .id("signing-card")
-                .occlude()
-                .absolute()
-                .top(px(space::S2))
-                .right(px(float::GAP))
-                .w(px(320.0))
-                .p(px(space::S4))
-                .flex()
-                .flex_col()
-                .gap(px(space::S2))
-                .rounded(px(10.0))
-                .bg(th.card)
-                .shadow(th.lifted())
-                .when(th.dark, |d| d.border_1().border_color(th.line))
-                .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                .child(
-                    div()
-                        .text_size(px(text::BODY))
-                        .font_weight(gpui::FontWeight::BOLD)
-                        .text_color(th.text)
-                        .child(t("sign-title", &[])),
-                )
-                .child(self.source_switch(cx))
-                .when(signing.source == Source::File, |d| {
-                    d.child(label("sign-certificate")).child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(px(space::S2))
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .overflow_hidden()
-                                    .text_ellipsis()
-                                    .whitespace_nowrap()
-                                    .text_size(px(text::BODY))
-                                    .text_color(if signing.certificate.is_some() {
-                                        th.text
-                                    } else {
-                                        th.dim
-                                    })
-                                    .child(certificate),
-                            )
-                            .child(
-                                float::button("sign-choose", t("sign-choose", &[]), false, &th)
-                                    .ftip(t("sign-choose-tip", &[]), &th)
-                                    .on_click(
-                                        cx.listener(|this, _, _, cx| this.choose_certificate(cx)),
-                                    ),
-                            ),
-                    )
-                })
-                .when(signing.source == Source::Token, |d| {
-                    d.child(self.token_list(cx))
-                })
-                .child(field(&signing.password))
-                .child(field(&signing.reason))
-                .child(field(&signing.location))
-                .when(!matches!(signing.placed, Some(Placed::Hidden)), |d| {
-                    d.child(self.picture_row(cx))
-                })
-                .child(
-                    div()
-                        .id("sign-timestamp")
-                        .flex()
-                        .items_center()
-                        .gap(px(space::S2))
-                        .py(px(space::S1))
-                        .cursor_pointer()
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            if let Some(signing) = this.signing.as_mut() {
-                                signing.timestamp = !signing.timestamp;
-                                cx.notify();
-                            }
-                        }))
-                        .child(check_box(signing.timestamp, th))
-                        .child(
-                            div()
-                                .text_size(px(text::SMALL))
-                                .text_color(th.text)
-                                .child(t("sign-timestamp", &[])),
-                        ),
-                )
-                .when(signing.timestamp, |d| d.child(field(&signing.server)))
-                .child(
-                    div()
-                        .id("sign-long-term")
-                        .flex()
-                        .items_center()
-                        .gap(px(space::S2))
-                        .py(px(space::S1))
-                        .cursor_pointer()
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            if let Some(signing) = this.signing.as_mut() {
-                                signing.long_term = !signing.long_term;
-                                cx.notify();
-                            }
-                        }))
-                        .child(check_box(signing.long_term, th))
-                        .child(
-                            div()
-                                .text_size(px(text::SMALL))
-                                .text_color(th.text)
-                                .child(t("sign-long-term", &[])),
-                        )
-                        .ftip(t("sign-long-term-tip", &[]), &th),
-                )
-                .when(self.signable.has_form, |d| {
-                    d.child(
-                        div()
-                            .id("sign-lock")
-                            .flex()
-                            .items_center()
-                            .gap(px(space::S2))
-                            .py(px(space::S1))
-                            .cursor_pointer()
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                if let Some(signing) = this.signing.as_mut() {
-                                    signing.lock = !signing.lock;
-                                    cx.notify();
-                                }
-                            }))
-                            .child(check_box(signing.lock, th))
-                            .child(
-                                div()
-                                    .text_size(px(text::SMALL))
-                                    .text_color(th.text)
-                                    .child(t("sign-lock", &[])),
-                            )
-                            .ftip(t("sign-lock-tip", &[]), &th),
-                    )
-                })
-                .when(!self.signable.signed, |d| d.child(self.certify_choice(cx)))
-                .child(
+        let card = div()
+            .id("signing-card")
+            .flex_1()
+            .min_h_0()
+            .overflow_y_scroll()
+            .p(px(space::S5))
+            .flex()
+            .flex_col()
+            .gap(px(space::S3))
+            .child(
+                div()
+                    .text_size(px(text::SUBTITLE))
+                    .font_weight(gpui::FontWeight::BOLD)
+                    .text_color(th.text)
+                    .child(t("sign-title", &[])),
+            )
+            .child(self.source_switch(cx))
+            .when(signing.source == Source::File, |d| {
+                d.child(label("sign-certificate")).child(
                     div()
                         .flex()
                         .items_center()
@@ -1322,83 +1238,189 @@ impl Viewer {
                             div()
                                 .flex_1()
                                 .min_w_0()
-                                .text_size(px(text::SMALL))
-                                .text_color(if signing.others.is_empty() {
-                                    th.dim
-                                } else {
+                                .overflow_hidden()
+                                .text_ellipsis()
+                                .whitespace_nowrap()
+                                .text_size(px(text::BODY))
+                                .text_color(if signing.certificate.is_some() {
                                     th.text
-                                })
-                                .child(if signing.others.is_empty() {
-                                    t("sign-others-none", &[])
                                 } else {
-                                    t(
-                                        "sign-others",
-                                        &[("count", &signing.others.len().to_string())],
-                                    )
-                                }),
+                                    th.dim
+                                })
+                                .child(certificate),
                         )
-                        .when(!signing.others.is_empty(), |d| {
-                            d.child(
-                                float::button(
-                                    "sign-others-clear",
-                                    t("sign-others-clear", &[]),
-                                    false,
-                                    &th,
-                                )
-                                .on_click(cx.listener(
-                                    |this, _, _, cx| {
-                                        if let Some(signing) = this.signing.as_mut() {
-                                            signing.others.clear();
-                                            cx.notify();
-                                        }
-                                    },
-                                )),
-                            )
-                        })
                         .child(
+                            float::button("sign-choose", t("sign-choose", &[]), false, &th)
+                                .ftip(t("sign-choose-tip", &[]), &th)
+                                .on_click(
+                                    cx.listener(|this, _, _, cx| this.choose_certificate(cx)),
+                                ),
+                        ),
+                )
+            })
+            .when(signing.source == Source::Token, |d| {
+                d.child(self.token_list(cx))
+            })
+            .child(labelled(secret_label, &signing.password))
+            .child(
+                div()
+                    .flex()
+                    .gap(px(space::S3))
+                    .child(labelled("sign-reason-label", &signing.reason))
+                    .child(labelled("sign-place-label", &signing.location)),
+            )
+            .when(!matches!(signing.placed, Some(Placed::Hidden)), |d| {
+                d.child(label("sign-shown-label"))
+                    .child(self.picture_row(cx))
+            })
+            .child(
+                switch_row("sign-timestamp", "sign-timestamp", signing.timestamp).on_click(
+                    cx.listener(|this, _, _, cx| {
+                        if let Some(signing) = this.signing.as_mut() {
+                            signing.timestamp = !signing.timestamp;
+                            cx.notify();
+                        }
+                    }),
+                ),
+            )
+            .when(signing.timestamp, |d| d.child(field(&signing.server)))
+            .child(
+                switch_row("sign-long-term", "sign-long-term", signing.long_term)
+                    .ftip(t("sign-long-term-tip", &[]), &th)
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        if let Some(signing) = this.signing.as_mut() {
+                            signing.long_term = !signing.long_term;
+                            cx.notify();
+                        }
+                    })),
+            )
+            .when(self.signable.has_form, |d| {
+                d.child(
+                    switch_row("sign-lock", "sign-lock", signing.lock)
+                        .ftip(t("sign-lock-tip", &[]), &th)
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            if let Some(signing) = this.signing.as_mut() {
+                                signing.lock = !signing.lock;
+                                cx.notify();
+                            }
+                        })),
+                )
+            })
+            .when(!self.signable.signed, |d| d.child(self.certify_choice(cx)))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(space::S2))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .text_size(px(text::SMALL))
+                            .text_color(if signing.others.is_empty() {
+                                th.dim
+                            } else {
+                                th.text
+                            })
+                            .child(if signing.others.is_empty() {
+                                t("sign-others-none", &[])
+                            } else {
+                                t(
+                                    "sign-others",
+                                    &[("count", &signing.others.len().to_string())],
+                                )
+                            }),
+                    )
+                    .when(!signing.others.is_empty(), |d| {
+                        d.child(
                             float::button(
-                                "sign-others-choose",
-                                t("sign-others-choose", &[]),
+                                "sign-others-clear",
+                                t("sign-others-clear", &[]),
                                 false,
                                 &th,
                             )
-                            .ftip(t("sign-others-tip", &[]), &th)
-                            .on_click(cx.listener(|this, _, _, cx| this.choose_others(cx))),
-                        ),
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                if let Some(signing) = this.signing.as_mut() {
+                                    signing.others.clear();
+                                    cx.notify();
+                                }
+                            })),
+                        )
+                    })
+                    .child(
+                        float::button(
+                            "sign-others-choose",
+                            t("sign-others-choose", &[]),
+                            false,
+                            &th,
+                        )
+                        .ftip(t("sign-others-tip", &[]), &th)
+                        .on_click(cx.listener(|this, _, _, cx| this.choose_others(cx))),
+                    ),
+            )
+            .children(signing.error.clone().map(|error| {
+                div()
+                    .p(px(space::S3))
+                    .rounded(px(7.0))
+                    .bg(th.error_soft)
+                    .text_size(px(text::SMALL))
+                    .text_color(th.error)
+                    .child(error)
+            }));
+        let footer = div()
+            .px(px(space::S5))
+            .py(px(space::S4))
+            .flex()
+            .justify_end()
+            .gap(px(space::S2))
+            .border_t_1()
+            .border_color(th.line_soft)
+            .child(
+                float::button("sign-back", t("sign-cancel", &[]), false, &th)
+                    .on_click(cx.listener(|this, _, _, cx| this.toggle_signing(cx))),
+            )
+            .child(
+                float::button(
+                    "sign-go",
+                    t(
+                        match (busy, signing.others.len()) {
+                            (true, _) => "sign-busy",
+                            (false, 0) => "sign-go",
+                            (false, _) => "sign-go-all",
+                        },
+                        &[("count", &(signing.others.len() + 1).to_string())],
+                    ),
+                    true,
+                    &th,
                 )
-                .children(signing.error.clone().map(|error| {
-                    div()
-                        .text_size(px(text::SMALL))
-                        .text_color(th.error)
-                        .child(error)
-                }))
+                .when(busy, |b| b.opacity(0.6))
+                .on_click(cx.listener(|this, _, _, cx| this.sign_now(cx))),
+            );
+        // Over the page, the page dimmed behind it (G02).
+        Some(
+            div()
+                .id("signing-backdrop")
+                .absolute()
+                .inset_0()
+                .flex()
+                .items_center()
+                .justify_center()
+                .bg(gpui::black().opacity(if th.dark { 0.45 } else { 0.25 }))
+                .occlude()
                 .child(
                     div()
-                        .pt(px(space::S2))
+                        .id("signing-dialog")
+                        .w(px(540.0))
+                        .max_h(px(640.0))
                         .flex()
-                        .justify_end()
-                        .gap(px(space::S2))
-                        .child(
-                            float::button("sign-back", t("sign-cancel", &[]), false, &th)
-                                .on_click(cx.listener(|this, _, _, cx| this.toggle_signing(cx))),
-                        )
-                        .child(
-                            float::button(
-                                "sign-go",
-                                t(
-                                    match (busy, signing.others.len()) {
-                                        (true, _) => "sign-busy",
-                                        (false, 0) => "sign-go",
-                                        (false, _) => "sign-go-all",
-                                    },
-                                    &[("count", &(signing.others.len() + 1).to_string())],
-                                ),
-                                true,
-                                &th,
-                            )
-                            .when(busy, |b| b.opacity(0.6))
-                            .on_click(cx.listener(|this, _, _, cx| this.sign_now(cx))),
-                        ),
+                        .flex_col()
+                        .rounded(px(12.0))
+                        .bg(th.card)
+                        .shadow(th.lifted())
+                        .when(th.dark, |d| d.border_1().border_color(th.line))
+                        .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .child(card)
+                        .child(footer),
                 )
                 .into_any_element(),
         )
@@ -2223,7 +2245,12 @@ fn unlock(file: Option<PathBuf>, found: Option<Found>, secret: &str) -> Result<K
             .find(|t| t.serial == found.token.serial && t.label == found.token.label)
             .ok_or_else(|| t("sign-token-gone", &[]))?;
         let ids = module.open(&token, secret).map_err(|e| match e {
-            pkcs11::TokenError::Pin => t("sign-wrong-pin", &[]),
+            pkcs11::TokenError::Pin => match module.pin_tries(&token) {
+                pkcs11::PinTries::Last => t("sign-wrong-pin-last", &[]),
+                pkcs11::PinTries::Few => t("sign-wrong-pin-few", &[]),
+                pkcs11::PinTries::Locked => t("sign-pin-locked", &[]),
+                pkcs11::PinTries::Unknown => t("sign-wrong-pin", &[]),
+            },
             pkcs11::TokenError::Locked => t("sign-pin-locked", &[]),
             pkcs11::TokenError::Gone => t("sign-token-gone", &[]),
             e => e.to_string(),
