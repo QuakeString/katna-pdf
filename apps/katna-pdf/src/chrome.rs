@@ -25,7 +25,7 @@ use crate::tabs::{Tabs, TopMenu};
 use crate::text::t;
 use crate::viewer::{
     Compare, Export, Find, Present, Print, Properties, Quit, ReadAloud, Redo, Save, ShowLibrary,
-    ToggleContents, ToggleNight, Undo,
+    Snapshot, ToggleContents, ToggleNight, Undo,
 };
 
 /// The person's name, as the desktop knows it: the full name in their
@@ -450,7 +450,7 @@ impl Tabs {
     fn share_menu(&self, cx: &mut Context<Self>) -> AnyElement {
         let th = self.theme;
         type Run = fn() -> Box<dyn gpui::Action>;
-        let rows: [Option<(&str, &str, &str, Run)>; 11] = [
+        let rows: [Option<(&str, &str, &str, Run)>; 12] = [
             Some(("print", "share-print", "Ctrl P", || Box::new(Print))),
             Some(("upload", "share-export", "Ctrl Shift E", || {
                 Box::new(Export)
@@ -463,6 +463,7 @@ impl Tabs {
             Some(("speak", "share-read-aloud", "Ctrl Shift Y", || {
                 Box::new(ReadAloud)
             })),
+            Some(("scissors", "share-snapshot", "", || Box::new(Snapshot))),
             None,
             Some(("zip", "share-smaller", "", || Box::new(Properties))),
             Some(("book", "share-pdfa", "", || Box::new(Properties))),

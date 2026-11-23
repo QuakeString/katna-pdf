@@ -35,6 +35,7 @@ use katna_ui::widgets::{self, Tip};
 use katna_ui::{ScrollBar, px, unpx};
 
 mod annots;
+mod area;
 mod bookmarks;
 mod comments;
 mod compare;
@@ -106,6 +107,9 @@ actions!(
         ZoomOut,
         FitWidth,
         FitPage,
+        FitHeight,
+        ZoomToArea,
+        Snapshot,
         ActualSize,
         NextSpread,
         Print,
@@ -228,6 +232,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl--", ZoomOut, None),
         KeyBinding::new("ctrl-1", FitWidth, None),
         KeyBinding::new("ctrl-2", FitPage, None),
+        KeyBinding::new("ctrl-4", FitHeight, None),
         KeyBinding::new("ctrl-3", NextSpread, None),
         KeyBinding::new("ctrl-0", ActualSize, None),
         // Keys that mean something else while typing in a field.
@@ -274,6 +279,8 @@ enum Zoom {
     FitWidth,
     /// The tallest page fits in the view, and the widest across it.
     FitPage,
+    /// The tallest page fits the view's height, however wide.
+    FitHeight,
     /// Points to logical pixels (1.0 is the page's printed size on a
     /// 96 dpi screen, as other readers count 100%).
     Fixed(f32),
@@ -467,6 +474,11 @@ pub struct Viewer {
     find_options: katna_pdf_render::text::FindOptions,
     /// Whether the find bar lists every match.
     find_list: bool,
+    /// Zoom to an area or Snapshot, while in hand.
+    area: Option<area::AreaTool>,
+    /// After a zoom to an area: its page, the area, and frames waited
+    /// for the page to be laid out at the new size.
+    area_focus: Option<(usize, [f32; 4], u8)>,
     /// The password field, while a file asks for one, and whether to put
     /// the keys in it on the next frame.
     password: Option<(Entity<TextInput>, Subscription)>,
@@ -715,6 +727,8 @@ impl Viewer {
             search: None,
             find_options: Default::default(),
             find_list: false,
+            area: None,
+            area_focus: None,
             password: None,
             focus_password: false,
             key: None,
@@ -1341,7 +1355,8 @@ impl Viewer {
         // A press outside the field being typed in ends the typing.
         self.finish_typing(true, cx);
         window.focus(&self.focus, cx);
-        if self.measure_press(event, cx)
+        if self.area_press(event.position, cx)
+            || self.measure_press(event, cx)
             || self.sign_press(event.position, cx)
             || self.design_press(event.position, cx)
             || self.redact_press(event.position, cx)
@@ -1383,7 +1398,8 @@ impl Viewer {
             cx.notify();
             return;
         }
-        if self.measure_move(event.position, cx)
+        if self.area_drag(event.position, cx)
+            || self.measure_move(event.position, cx)
             || self.design_drag(event.position, cx)
             || self.redact_drag(event.position, cx)
             || self.link_drag(event.position, cx)
@@ -1412,7 +1428,8 @@ impl Viewer {
             cx.notify();
         }
         self.selecting = false;
-        if self.text_move_release(window, cx)
+        if self.area_release(cx)
+            || self.text_move_release(window, cx)
             || self.measure_release(cx)
             || self.sign_release(cx)
             || self.crop_release(cx)
@@ -1993,6 +2010,7 @@ impl Viewer {
             (Zoom::FitPage, Content::Ready(opened)) => {
                 fit_width(opened).min((height - 2.0 * GAP) / opened.tallest)
             }
+            (Zoom::FitHeight, Content::Ready(opened)) => (height - 2.0 * GAP) / opened.tallest,
             (_, _) => POINT,
         };
         shown.clamp(0.05, STEPS[STEPS.len() - 1] * POINT)
@@ -2055,6 +2073,9 @@ impl Viewer {
 
     fn set_hand(&mut self, hand: bool, cx: &mut Context<Self>) {
         self.hand = hand;
+        if hand {
+            self.area = None;
+        }
         self.selection = None;
         cx.notify();
     }
@@ -3318,6 +3339,7 @@ impl Viewer {
             _ => Vec::new(),
         };
         let mut overlays = self.annot_overlays(page, transform);
+        overlays.extend(self.area_overlay(page));
         overlays.extend(self.crop_overlay(page));
         overlays.extend(self.measure_overlay(page));
         overlays.extend(self.sign_overlay(page, cx));
@@ -3365,7 +3387,7 @@ impl Viewer {
             .shadow(self.theme.page_shadow())
             .relative()
             .cursor(match self.tool {
-                _ if self.cropping => gpui::CursorStyle::Crosshair,
+                _ if self.cropping || self.area.is_some() => gpui::CursorStyle::Crosshair,
                 // Drawing a shape or placing a picture with Edit text on.
                 _ if self.adding.is_some_and(|a| a != insert::Adding::Text) => {
                     gpui::CursorStyle::Crosshair
@@ -3650,6 +3672,7 @@ impl Render for Viewer {
             self.list.remeasure();
         }
         self.pan_x = self.pan_x.clamp(0.0, self.max_pan());
+        self.bring_area_into_view(window, cx);
         self.open_comment_now(window, cx);
         self.focus_signing(window, cx);
         self.focus_calibrating(window, cx);
@@ -3864,6 +3887,13 @@ impl Render for Viewer {
             .on_action(cx.listener(|this, _: &ZoomOut, _, cx| this.step_zoom(false, cx)))
             .on_action(cx.listener(|this, _: &FitWidth, _, cx| this.set_zoom(Zoom::FitWidth, cx)))
             .on_action(cx.listener(|this, _: &FitPage, _, cx| this.set_zoom(Zoom::FitPage, cx)))
+            .on_action(cx.listener(|this, _: &FitHeight, _, cx| this.set_zoom(Zoom::FitHeight, cx)))
+            .on_action(cx.listener(|this, _: &ZoomToArea, _, cx| {
+                this.toggle_area_tool(area::AreaKind::Zoom, cx)
+            }))
+            .on_action(cx.listener(|this, _: &Snapshot, _, cx| {
+                this.toggle_area_tool(area::AreaKind::Snapshot, cx)
+            }))
             .on_action(
                 cx.listener(|this, _: &ActualSize, _, cx| this.set_zoom(Zoom::Fixed(1.0), cx)),
             )
@@ -3942,7 +3972,10 @@ impl Render for Viewer {
                 }
             }))
             .on_action(cx.listener(|this, _: &PutToolDown, _, cx| {
-                if this.signing.is_some() {
+                if this.area.is_some() {
+                    this.area = None;
+                    cx.notify();
+                } else if this.signing.is_some() {
                     this.toggle_signing(cx);
                 } else if this.text_editing && this.adding.is_some() {
                     this.pick_adding(None, cx);

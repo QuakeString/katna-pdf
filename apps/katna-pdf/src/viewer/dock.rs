@@ -247,7 +247,9 @@ impl Viewer {
         let percent = self.percent();
         let fit = |id: &'static str, words: &'static str, keys: &'static str, zoom: Zoom| {
             let on = match (self.zoom, zoom) {
-                (Zoom::FitWidth, Zoom::FitWidth) | (Zoom::FitPage, Zoom::FitPage) => true,
+                (Zoom::FitWidth, Zoom::FitWidth)
+                | (Zoom::FitPage, Zoom::FitPage)
+                | (Zoom::FitHeight, Zoom::FitHeight) => true,
                 (Zoom::Fixed(a), Zoom::Fixed(b)) => (a - b).abs() < 0.001,
                 _ => false,
             };
@@ -290,6 +292,10 @@ impl Viewer {
             }))
         });
         let hand = self.hand;
+        let zooming = self
+            .area
+            .as_ref()
+            .is_some_and(|a| a.kind == super::area::AreaKind::Zoom);
         let body = menu("zoom-card", 250.0, &th)
             .on_mouse_down_out(cx.listener(|this, _, _, cx| {
                 this.zoom_card = false;
@@ -307,6 +313,12 @@ impl Viewer {
                 "zoom-card-fit-page",
                 "Ctrl 2",
                 Zoom::FitPage,
+            ))
+            .child(fit(
+                "zoom-fit-height",
+                "zoom-card-fit-height",
+                "Ctrl 4",
+                Zoom::FitHeight,
             ))
             .child(fit(
                 "zoom-actual",
@@ -342,6 +354,20 @@ impl Viewer {
                 )
                 .when(hand, |d| d.bg(th.accent_soft).text_color(th.accent_text))
                 .on_click(cx.listener(move |this, _, _, cx| this.set_hand(!hand, cx))),
+            )
+            .child(
+                menu_item(
+                    "zoom-area",
+                    Some("search"),
+                    t("zoom-card-area", &[]),
+                    None,
+                    &th,
+                )
+                .when(zooming, |d| d.bg(th.accent_soft).text_color(th.accent_text))
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.zoom_card = false;
+                    this.toggle_area_tool(super::area::AreaKind::Zoom, cx)
+                })),
             );
         popover(body, true, false)
     }

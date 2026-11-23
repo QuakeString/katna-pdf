@@ -8,10 +8,10 @@ use gpui::Action;
 
 use crate::viewer::{
     ActualSize, AddBookmark, Annotate, CloseTab, Compare, CopyText, Export, Find, FindNext,
-    FindPrevious, FitPage, FitWidth, NewWindow, NextPage, NextSpread, NextTab, Open, OpenSettings,
-    Organize, Present, PreviousPage, PreviousTab, Print, Properties, Quit, ReadAloud,
-    ReopenSession, ReportProblem, Save, ShowAbout, ShowLibrary, ShowShortcuts, Sign,
-    ToggleContents, ToggleNight, ZoomIn, ZoomOut,
+    FindPrevious, FitHeight, FitPage, FitWidth, NewWindow, NextPage, NextSpread, NextTab, Open,
+    OpenSettings, Organize, Present, PreviousPage, PreviousTab, Print, Properties, Quit, ReadAloud,
+    ReopenSession, ReportProblem, Save, ShowAbout, ShowLibrary, ShowShortcuts, Sign, Snapshot,
+    ToggleContents, ToggleNight, ZoomIn, ZoomOut, ZoomToArea,
 };
 
 /// An item: its id (and the id of its words), and its keys as
@@ -46,6 +46,7 @@ pub const MENUS: &[(&str, &[Entry])] = &[
         "menu-edit",
         &[
             Some(("menu-copy", &["Control", "C"])),
+            Some(("menu-snapshot", &[])),
             None,
             Some(("menu-find", &["Control", "F"])),
             Some(("menu-find-next", &["F3"])),
@@ -63,6 +64,8 @@ pub const MENUS: &[(&str, &[Entry])] = &[
             Some(("menu-actual-size", &["Control", "0"])),
             Some(("menu-fit-width", &["Control", "1"])),
             Some(("menu-fit-page", &["Control", "2"])),
+            Some(("menu-fit-height", &["Control", "4"])),
+            Some(("menu-zoom-area", &[])),
             Some(("menu-layout", &["Control", "3"])),
             None,
             Some(("menu-side-pane", &["F7"])),
@@ -120,6 +123,9 @@ pub fn action(id: &str) -> Option<Box<dyn Action>> {
         "menu-actual-size" => Box::new(ActualSize),
         "menu-fit-width" => Box::new(FitWidth),
         "menu-fit-page" => Box::new(FitPage),
+        "menu-fit-height" => Box::new(FitHeight),
+        "menu-zoom-area" => Box::new(ZoomToArea),
+        "menu-snapshot" => Box::new(Snapshot),
         "menu-layout" => Box::new(NextSpread),
         "menu-side-pane" => Box::new(ToggleContents),
         "menu-night" => Box::new(ToggleNight),
