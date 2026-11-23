@@ -2849,6 +2849,11 @@ impl Viewer {
     }
 
     fn step_page(&mut self, forward: bool, cx: &mut Context<Self>) {
+        // With the print card open, Page Down and Up go through its sheets.
+        if self.printing.is_some() {
+            self.step_preview(forward, cx);
+            return;
+        }
         let count = self.page_count();
         let row = self.list.logical_scroll_top().item_ix;
         let row = if forward {
@@ -4972,11 +4977,14 @@ impl Render for Viewer {
             || properties_card.is_some()
             || initials_card.is_some();
         if carded {
-            // The website card keeps its own keys (Enter opens).
-            if !self.dialog_focus.contains_focused(window, cx)
-                && !self.link_focus.is_focused(window)
-            {
-                window.focus(&self.dialog_focus, cx);
+            // The website card keeps its own keys (Enter opens); the
+            // print card has its own (arrows go through the sheets).
+            let card_focus = match &self.printing {
+                Some(p) => p.focus.clone(),
+                None => self.dialog_focus.clone(),
+            };
+            if !card_focus.contains_focused(window, cx) && !self.link_focus.is_focused(window) {
+                window.focus(&card_focus, cx);
             }
         } else if self.carded {
             window.focus(&self.focus, cx);
@@ -5268,10 +5276,20 @@ impl Render for Viewer {
                     this.sideways(true, cx);
                 }
             }))
-            .on_action(cx.listener(|this, _: &FirstPage, _, cx| this.go_to_page(0, cx)))
+            .on_action(cx.listener(|this, _: &FirstPage, _, cx| {
+                if this.printing.is_some() {
+                    this.end_of_preview(false, cx);
+                } else {
+                    this.go_to_page(0, cx);
+                }
+            }))
             .on_action(cx.listener(|this, _: &LastPage, _, cx| {
-                let last = this.page_count().saturating_sub(1);
-                this.go_to_page(last, cx);
+                if this.printing.is_some() {
+                    this.end_of_preview(true, cx);
+                } else {
+                    let last = this.page_count().saturating_sub(1);
+                    this.go_to_page(last, cx);
+                }
             }))
             .on_action(cx.listener(|_, _: &FullScreen, window, _| window.toggle_fullscreen()))
             .on_action(cx.listener(|this, _: &HandTool, _, cx| this.set_hand(true, cx)))
@@ -5360,13 +5378,17 @@ impl Render for Viewer {
             .on_action(cx.listener(|this, _: &FindNext, _, cx| this.step_search(true, cx)))
             .on_action(cx.listener(|this, _: &FindPrevious, _, cx| this.step_search(false, cx)))
             .on_action(cx.listener(|this, _: &ScrollDown, _, cx| {
-                if !this.auto_scroll_speed(1, cx) && !this.nudge_picked(0.0, 1.0, cx) {
+                if this.printing.is_some() {
+                    this.step_preview(true, cx);
+                } else if !this.auto_scroll_speed(1, cx) && !this.nudge_picked(0.0, 1.0, cx) {
                     this.list.scroll_by(px(48.0));
                     cx.notify();
                 }
             }))
             .on_action(cx.listener(|this, _: &ScrollUp, _, cx| {
-                if !this.auto_scroll_speed(-1, cx) && !this.nudge_picked(0.0, -1.0, cx) {
+                if this.printing.is_some() {
+                    this.step_preview(false, cx);
+                } else if !this.auto_scroll_speed(-1, cx) && !this.nudge_picked(0.0, -1.0, cx) {
                     this.list.scroll_by(px(-48.0));
                     cx.notify();
                 }

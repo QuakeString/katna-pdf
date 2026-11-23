@@ -32,7 +32,7 @@ core.linearization	core	Linearized save (Fast Web View)	standard	n	todo	P1	-	lin
 core.revision-list	core	List document revisions from the xref chain	reader	n	shipped	P1	Signatures pane	revisions per signature	acrobat
 core.view-revision	core	View an earlier revision as a read-only snapshot	reader	n	partial	P1	Signatures pane	the signed version opens; not any revision	acrobat
 core.lazy-loading	core	Lazy loading of very large (GB) files within a memory budget	reader	n	partial	P0	cos	object streams cached (#77); whole file mapped	acrobat
-core.pdf20-utf8-strings	core	PDF 2.0 UTF-8 text strings	reader	n	partial	P1	cos text_string		acrobat
+core.pdf20-utf8-strings	core	PDF 2.0 UTF-8 text strings	reader	n	shipped	P1	#187		acrobat
 core.pdf20-associated-files	core	PDF 2.0 associated files (/AF)	reader	n	todo	P2	-		acrobat
 core.pdf20-dpart	core	PDF 2.0 document parts (DPart)	reader	n	skip	-	-		acrobat
 core.pdf20-namespaces	core	PDF 2.0 structure namespaces	reader	n	todo	P2	-		acrobat
@@ -750,7 +750,7 @@ print.poster	print	Poster / tiled printing with overlap and cut marks	reader	y	s
 print.orientation	print	Auto portrait/landscape	reader	y	shipped	P0	#144	one a sheet: each sheet the page's way up	acrobat
 print.comments-and-forms	print	Print document, markups, stamps or form fields only	reader	y	shipped	P0	#111, #144, #150	pages and comments, pages only, pages and stamps, form fields only	acrobat
 print.print-with-comment-summary	print	Print with a comments summary	standard	n	todo	P2	-		acrobat
-print.print-preview	print	Print preview	reader	n	partial	P1	#111 card shows the layout		acrobat
+print.print-preview	print	Print preview	reader	n	shipped	P1	#187		acrobat
 print.grayscale	print	Print in grayscale	reader	y	shipped	P1	#163		acrobat
 print.print-as-image	print	Print as image	reader	y	shipped	P1	#111 print-pictures		acrobat
 print.page-setup	print	Page setup	reader	y	shipped	P1	#180		acrobat
