@@ -14,7 +14,7 @@ use katna_pdf_render::Document;
 use katna_ui::px;
 use katna_ui::scale::desktop_px;
 use katna_ui::text_input::{InputEvent, TextInput};
-use katna_ui::tokens::radius;
+use katna_ui::tokens::{radius, space, text};
 
 use super::{Content, PaneTab, Viewer};
 use crate::annotate::{self, COLOURS, Inverse, Tool};
@@ -210,6 +210,31 @@ impl Viewer {
                 self.choose(hit, cx);
                 hit.is_some()
             }
+        }
+    }
+
+    /// The pointer moved, no button down: the comment under it, if it
+    /// has words, has them shown beside it.
+    pub(super) fn annot_hover_move(
+        &mut self,
+        position: gpui::Point<gpui::Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        let hit = if self.tool.is_some() {
+            None
+        } else {
+            self.page_point(position).and_then(|(page, point)| {
+                let inv = self.inverse(page)?;
+                let annots = self.annots.as_ref()?.get(page)?;
+                let a = annots.get(annotate::at(annots, inv.map(point))?)?;
+                (!a.contents.trim().is_empty() && !a.flags.hidden)
+                    .then_some(a.id)
+                    .flatten()
+            })
+        };
+        if hit != self.annot_hover {
+            self.annot_hover = hit;
+            cx.notify();
         }
     }
 
@@ -583,6 +608,65 @@ impl Viewer {
 
     /// Page `page`'s annotation overlays: the outline of the one chosen
     /// and what is being drawn.
+    /// The words of the comment under the pointer, in a card under it,
+    /// over everything else on page `page`.
+    pub(super) fn annot_hover_card(
+        &self,
+        page: usize,
+        transform: Option<[f64; 6]>,
+    ) -> Option<AnyElement> {
+        let shown = self.shown;
+        if let (Some(id), Some(transform)) = (self.annot_hover, transform)
+            && self.chosen != Some(id)
+            && let Some(a) = self
+                .annots
+                .as_ref()
+                .and_then(|all| all.get(page))
+                .and_then(|on| on.iter().find(|a| a.id == Some(id)))
+        {
+            let th = self.theme;
+            let b = katna_pdf_render::map_rect(transform, a.rect);
+            let words: String = if a.contents.chars().count() > 400 {
+                a.contents.chars().take(398).chain("…".chars()).collect()
+            } else {
+                a.contents.clone()
+            };
+            return Some(
+                div()
+                    .absolute()
+                    .left(desktop_px(b[0] * shown))
+                    .top(desktop_px(b[3] * shown + 6.0))
+                    .w(px(280.0))
+                    .flex()
+                    .flex_col()
+                    .gap(px(space::S1))
+                    .p(px(space::S3))
+                    .rounded(px(radius::SM))
+                    .bg(th.card)
+                    .border_1()
+                    .border_color(th.line)
+                    .shadow(th.lifted())
+                    .when(!a.author.is_empty(), |d| {
+                        d.child(
+                            div()
+                                .text_size(px(text::CAPTION))
+                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                .text_color(th.dim)
+                                .child(a.author.clone()),
+                        )
+                    })
+                    .child(
+                        div()
+                            .text_size(px(text::SMALL))
+                            .text_color(th.text)
+                            .child(words),
+                    )
+                    .into_any_element(),
+            );
+        }
+        None
+    }
+
     pub(super) fn annot_overlays(
         &self,
         page: usize,

@@ -707,6 +707,8 @@ pub struct Viewer {
     draft: Option<annots::Draft>,
     /// The annotation chosen, and its comment while typed.
     chosen: Option<katna_pdf_cos::Ref>,
+    /// The comment under the pointer, its words shown beside it.
+    annot_hover: Option<katna_pdf_cos::Ref>,
     comment: Option<annots::Comment>,
     /// A reply being typed, and which comments the list shows.
     reply: Option<comments::Reply>,
@@ -928,6 +930,7 @@ impl Viewer {
             annots: None,
             draft: None,
             chosen: None,
+            annot_hover: None,
             comment: None,
             reply: None,
             comment_filter: Default::default(),
@@ -1578,6 +1581,9 @@ impl Viewer {
             || self.annot_drag(event.position, cx)
         {
             return;
+        }
+        if event.pressed_button.is_none() {
+            self.annot_hover_move(event.position, cx);
         }
         let spot = self.spot_at(event.position, cx);
         if !self.selecting || event.pressed_button != Some(gpui::MouseButton::Left) {
@@ -3912,6 +3918,7 @@ impl Viewer {
             .children(overlays)
             .children(links)
             .children(fields)
+            .children(self.annot_hover_card(page, transform))
             .children(self.lens_overlay(page))
             .child({
                 // Notes where the page is, for the pointer: where it is
