@@ -78,12 +78,16 @@ enum OnPaper {
     Document,
     /// The pages, form fields and stamps.
     Stamps,
+    /// Only what is filled in to the form, to print onto the form
+    /// already on paper.
+    Fields,
 }
 
-const CONTENTS: [(&str, OnPaper); 3] = [
+const CONTENTS: [(&str, OnPaper); 4] = [
     ("print-with-comments", OnPaper::All),
     ("print-document", OnPaper::Document),
     ("print-with-stamps", OnPaper::Stamps),
+    ("print-fields-only", OnPaper::Fields),
 ];
 
 /// The size of each page on the paper, when printed as it is: as the
@@ -871,13 +875,22 @@ fn sheets(job: &Job) -> Result<Vec<u8>, String> {
             .filter(|a| !(job.content == OnPaper::Stamps && matches!(a.kind, AnnotKind::Stamp(_))))
             .filter_map(|a| a.id)
             .collect::<Vec<_>>();
-        if !remove.is_empty() {
-            let bytes = doc
-                .annotate(&AnnotChanges {
+        let fields_only = job.content == OnPaper::Fields;
+        if !remove.is_empty() || fields_only {
+            let mut bytes = if remove.is_empty() {
+                doc.bytes().to_vec()
+            } else {
+                doc.annotate(&AnnotChanges {
                     put: Vec::new(),
                     remove,
                 })
-                .map_err(|e| e.to_string())?;
+                .map_err(|e| e.to_string())?
+            };
+            if fields_only {
+                bytes = super::cos(bytes, job.key.as_deref())?
+                    .without_page_content()
+                    .map_err(|e| e.to_string())?;
+            }
             if job.pictures {
                 drawn = crate::engine::engine()
                     .open(Arc::new(bytes.clone()), job.key.as_deref().unwrap_or(""))

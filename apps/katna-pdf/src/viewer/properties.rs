@@ -38,6 +38,8 @@ pub(super) struct Properties {
     actions: Option<Vec<DocAction>>,
     /// What keeps the file from being PDF/A, once read (nothing: it is).
     pdfa: Option<Vec<PdfaIssue>>,
+    /// The fonts the pages draw with, once read.
+    fonts: Option<Vec<katna_pdf_cos::FontUse>>,
     fields: [Entity<TextInput>; 4],
     /// A new password to put on: the one that opens the file, and the
     /// owner's, which opens it fully.
@@ -124,6 +126,7 @@ impl Viewer {
             size: None,
             actions: None,
             pdfa: None,
+            fonts: None,
             fields,
             password,
             owner,
@@ -150,6 +153,7 @@ impl Viewer {
                             size,
                             d.document_actions(),
                             d.pdfa_issues(),
+                            d.fonts(),
                         )
                     })
                 })
@@ -158,7 +162,8 @@ impl Viewer {
                 let Some(properties) = this.properties.as_mut() else {
                     return;
                 };
-                let (meta, locked, size, actions, pdfa) = meta.unwrap_or_default();
+                let (meta, locked, size, actions, pdfa, fonts) = meta.unwrap_or_default();
+                properties.fonts = Some(fonts);
                 properties.locked = Some(locked);
                 properties.size = Some(size);
                 properties.actions = Some(actions);
@@ -477,6 +482,7 @@ impl Viewer {
             Part::Password => self.password_part(properties, window, cx),
             Part::Size => self.size_part(properties, cx),
             Part::Pdfa => self.pdfa_part(properties, cx),
+            Part::Fonts => self.fonts_part(properties),
             Part::Form => self.form_part(fields, cx),
             Part::Comments => self.comments_part(comments, cx),
             Part::Scripts => self.scripts_part(properties, cx),
@@ -960,6 +966,79 @@ impl Viewer {
     }
 
     /// The file's scripts and actions, none of them run (R16).
+    /// The fonts the pages draw with: each one's type, whether it is in
+    /// the file, and the pages that use it.
+    fn fonts_part(&self, properties: &Properties) -> AnyElement {
+        let th = self.theme;
+        let Some(fonts) = properties.fonts.as_ref() else {
+            return div().into_any_element();
+        };
+        if fonts.is_empty() {
+            return note(t("properties-fonts-none", &[]), th).into_any_element();
+        }
+        let missing = fonts.iter().filter(|f| !f.embedded).count();
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(space::S3))
+            .child(note(
+                if missing == 0 {
+                    t("properties-fonts-all-in", &[])
+                } else {
+                    t(
+                        "properties-fonts-missing",
+                        &[("count", &missing.to_string())],
+                    )
+                },
+                th,
+            ))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .rounded(px(radius::SM))
+                    .border_1()
+                    .border_color(th.line)
+                    .overflow_hidden()
+                    .children(fonts.iter().enumerate().map(|(i, font)| {
+                        let kept = t(
+                            match (font.embedded, font.subset) {
+                                (true, true) => "properties-font-subset",
+                                (true, false) => "properties-font-embedded",
+                                (false, _) => "properties-font-not-embedded",
+                            },
+                            &[],
+                        );
+                        div()
+                            .flex()
+                            .flex_col()
+                            .px(px(space::S3))
+                            .py(px(space::S2))
+                            .when(i > 0, |d| d.border_t_1().border_color(th.line))
+                            .child(
+                                div()
+                                    .text_size(px(text::BODY))
+                                    .text_color(th.text)
+                                    .child(font.name.clone()),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(text::CAPTION))
+                                    .text_color(th.dim)
+                                    .child(t(
+                                        "properties-font-line",
+                                        &[
+                                            ("kind", &font.kind),
+                                            ("kept", &kept),
+                                            ("pages", &katna_pdf_cos::ranges::format(&font.pages)),
+                                        ],
+                                    )),
+                            )
+                    })),
+            )
+            .into_any_element()
+    }
+
     fn scripts_part(&self, properties: &Properties, cx: &mut Context<Self>) -> AnyElement {
         let th = self.theme;
         let Some(actions) = properties.actions.as_ref() else {
@@ -1047,17 +1126,19 @@ pub(super) enum Part {
     Password,
     Size,
     Pdfa,
+    Fonts,
     Form,
     Comments,
     Scripts,
 }
 
 impl Part {
-    const ALL: [Part; 7] = [
+    const ALL: [Part; 8] = [
         Part::Description,
         Part::Password,
         Part::Size,
         Part::Pdfa,
+        Part::Fonts,
         Part::Form,
         Part::Comments,
         Part::Scripts,
@@ -1069,6 +1150,7 @@ impl Part {
             Part::Password => "properties-password",
             Part::Size => "properties-size",
             Part::Pdfa => "pdfa-heading",
+            Part::Fonts => "properties-fonts",
             Part::Form => "properties-form",
             Part::Comments => "properties-comments",
             Part::Scripts => "properties-tab-scripts",

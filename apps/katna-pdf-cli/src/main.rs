@@ -265,6 +265,9 @@ usage: katna-pdf-cli COMMAND [--json] ...
                                   hidden, renamed and taken out (what was on one
                                   stays, shown always), and objects (as `objects`
                                   numbers them) put on a layer or on none
+  fonts FILE                      the fonts the pages draw with: type, whether in
+                                  the file (whole or the letters used), encoding,
+                                  and the pages that use each
   actions FILE                    every script and action the document carries
                                   (none is run): the document's own scripts, what
                                   happens when it opens, closes, is saved or printed,
@@ -358,6 +361,7 @@ fn main() -> ExitCode {
         "annots" => annots(rest, json),
         "attachments" => attachments(rest, json),
         "layers" => layers(rest, json),
+        "fonts" => fonts(rest, json),
         "actions" => actions(rest, json),
         "page-actions" => page_actions(rest, json),
         "library" => library(rest, json),
@@ -4198,6 +4202,57 @@ fn actions(args: &[String], json: bool) -> Done {
         text.push_str("no scripts or actions\n");
     }
     Ok(text)
+}
+
+fn fonts(args: &[String], json: bool) -> Done {
+    let args = Args::parse(args)?;
+    let [file] = args.words()?;
+    let doc = open(file)?;
+    let fonts = doc.fonts();
+    if json {
+        let items: Vec<String> = fonts
+            .iter()
+            .map(|f| {
+                format!(
+                    "{{\"name\":{},\"type\":{},\"embedded\":{},\"subset\":{},\"encoding\":{},\"pages\":[{}]}}",
+                    string(&f.name),
+                    string(&f.kind),
+                    f.embedded,
+                    f.subset,
+                    f.encoding.as_deref().map_or_else(|| "null".to_owned(), string),
+                    f.pages
+                        .iter()
+                        .map(|p| (p + 1).to_string())
+                        .collect::<Vec<_>>()
+                        .join(",")
+                )
+            })
+            .collect();
+        return Ok(format!("{{\"fonts\":[{}]}}\n", items.join(",")));
+    }
+    let mut out = String::new();
+    for f in &fonts {
+        let kept = match (f.embedded, f.subset) {
+            (true, true) => "embedded subset",
+            (true, false) => "embedded",
+            (false, _) => "not embedded",
+        };
+        let _ = writeln!(
+            out,
+            "{}  {}, {kept}{}; pages {}",
+            f.name,
+            f.kind,
+            f.encoding
+                .as_deref()
+                .map(|e| format!(", {e}"))
+                .unwrap_or_default(),
+            katna_pdf_cos::ranges::format(&f.pages)
+        );
+    }
+    if fonts.is_empty() {
+        out.push_str("no fonts\n");
+    }
+    Ok(out)
 }
 
 fn layers(args: &[String], json: bool) -> Done {

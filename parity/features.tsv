@@ -321,7 +321,7 @@ organize.portfolio-extract	organize	Extract files from a portfolio	reader	n	ship
 organize.portfolio-create	organize	Create PDF Portfolios	pro	n	skip	-	-		acrobat
 organize.document-properties	organize	Document properties dialog (description, fonts, advanced)	reader	y	shipped	P1	#62 Ctrl+D		acrobat
 organize.edit-metadata	organize	Edit title, author, subject and keywords	standard	y	shipped	P1	#62 meta.rs		acrobat
-organize.fonts-list	organize	List fonts with type and embedding status	reader	y	todo	P1	-		acrobat
+organize.fonts-list	organize	List fonts with type and embedding status	reader	y	shipped	P1	#149	Properties > Fonts; CLI fonts	acrobat
 organize.initial-view	organize	Edit initial view (layout, magnification, panels, window options)	standard	y	todo	P1	-		acrobat
 organize.custom-properties	organize	Custom document properties	standard	n	todo	P1	-		acrobat
 organize.xmp-editor	organize	Additional metadata (XMP) editor	standard	n	partial	P1	#62	XMP kept in step with /Info	acrobat
@@ -748,7 +748,7 @@ print.n-up	print	Multiple pages per sheet	reader	y	shipped	P1	#111 impose.rs 2/4
 print.booklet	print	Booklet printing	reader	y	shipped	P1	#111		acrobat
 print.poster	print	Poster / tiled printing with overlap and cut marks	reader	y	shipped	P2	#111		acrobat
 print.orientation	print	Auto portrait/landscape	reader	y	shipped	P0	#144	one a sheet: each sheet the page's way up	acrobat
-print.comments-and-forms	print	Print document, markups, stamps or form fields only	reader	y	partial	P0	#111, #144	pages and comments, pages only, pages and stamps; no form fields only	acrobat
+print.comments-and-forms	print	Print document, markups, stamps or form fields only	reader	y	shipped	P0	#111, #144, #149	pages and comments, pages only, pages and stamps, form fields only	acrobat
 print.print-with-comment-summary	print	Print with a comments summary	standard	n	todo	P2	-		acrobat
 print.print-preview	print	Print preview	reader	n	partial	P1	#111 card shows the layout		acrobat
 print.grayscale	print	Print in grayscale	reader	y	todo	P1	-		acrobat

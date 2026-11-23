@@ -341,3 +341,43 @@ fn blank_pages_are_made_and_pages_resized() {
     // Nothing else changed: the file still composes.
     assert_eq!(resized.pages().len(), 3);
 }
+
+#[test]
+fn pages_can_be_emptied_for_printing_fields_only() {
+    let doc = three();
+    let emptied = Document::load(doc.without_page_content().unwrap()).unwrap();
+    assert_eq!(emptied.pages().len(), 3);
+    for page in emptied.pages() {
+        let dict = emptied.get(page).unwrap().as_dict().unwrap().clone();
+        let Some(Object::Stream(s)) = dict.get("Contents").map(|c| emptied.resolve(c)) else {
+            panic!("no content");
+        };
+        assert!(katna_pdf_cos::decode(&s.dict, &s.data).unwrap().is_empty());
+    }
+}
+
+#[test]
+fn fonts_are_listed_with_the_pages_using_them() {
+    let doc = Document::load(file(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Count 2 /Kids [3 0 R 4 0 R] /MediaBox [0 0 100 100] >>",
+        "<< /Type /Page /Parent 2 0 R /Resources << /Font << /F1 5 0 R /F2 6 0 R >> >> >>",
+        "<< /Type /Page /Parent 2 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
+        "<< /Type /Font /Subtype /TrueType /BaseFont /ABCDEF+Arial /FontDescriptor 7 0 R >>",
+        "<< /Type /FontDescriptor /FontName /ABCDEF+Arial /FontFile2 8 0 R >>",
+        "<< /Length 0 >>\nstream\n\nendstream",
+        "<< /Title (Fonts) >>",
+    ]))
+    .unwrap();
+    let fonts = doc.fonts();
+    assert_eq!(fonts.len(), 2);
+    assert_eq!(fonts[0].name, "Helvetica");
+    assert!(!fonts[0].embedded);
+    assert_eq!(fonts[0].pages, [0, 1]);
+    assert_eq!(fonts[0].encoding.as_deref(), Some("WinAnsiEncoding"));
+    assert_eq!(fonts[1].name, "Arial");
+    assert_eq!(fonts[1].kind, "TrueType");
+    assert!(fonts[1].embedded && fonts[1].subset);
+    assert_eq!(fonts[1].pages, [0]);
+}
