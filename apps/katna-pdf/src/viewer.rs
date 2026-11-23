@@ -639,6 +639,8 @@ pub struct Viewer {
     search: Option<SearchBar>,
     /// How the find bar matches, kept while the window is open.
     find_options: katna_pdf_render::text::FindOptions,
+    /// The comment tools folded away for want of room, shown.
+    tools_more: bool,
     /// The command box (Ctrl+K), while open.
     command: Option<command::CommandBox>,
     /// Whether the find bar lists every match.
@@ -943,6 +945,7 @@ impl Viewer {
             search: None,
             find_options: Default::default(),
             command: None,
+            tools_more: false,
             find_list: false,
             area: None,
             area_focus: None,
@@ -4470,8 +4473,10 @@ impl Render for Viewer {
         };
         let reading_only = self.read_mode;
         let dock = self.dock(cx).filter(|_| !reading_only);
+        let row_room =
+            unpx(window.viewport_size().width) - pane_room - 2.0 * float::GAP - 2.0 * space::S2;
         let tools = self
-            .tools_row(cx)
+            .tools_row(row_room, cx)
             .or_else(|| self.edit_row(cx))
             .or_else(|| self.pages_tray(cx))
             .or_else(|| self.forms_tray(cx))
