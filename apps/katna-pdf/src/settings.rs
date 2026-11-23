@@ -1007,6 +1007,12 @@ impl Settings {
             |p, v| p.reopen_session = v,
             cx,
         );
+        let new_window = self.toggle(
+            "settings-new-window",
+            prefs.new_window,
+            |p, v| p.new_window = v,
+            cx,
+        );
         let workers = self.toggle("settings-workers", prefs.workers, |p, v| p.workers = v, cx);
         div()
             .flex()
@@ -1029,6 +1035,12 @@ impl Settings {
                 None,
                 Some(t("settings-reopen-detail", &[])),
                 Some(reopen),
+            ))
+            .child(self.row(
+                t("settings-new-window", &[]),
+                None,
+                Some(t("settings-new-window-detail", &[])),
+                Some(new_window),
             ))
             .child(self.row(
                 t("settings-workers", &[]),

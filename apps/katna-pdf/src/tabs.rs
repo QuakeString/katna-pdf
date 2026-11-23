@@ -59,6 +59,8 @@ pub struct Tabs {
     /// The app menu's submenu shown.
     /// The application menu's title pointed at, its items shown.
     pub(crate) app_open: Option<usize>,
+    /// The tab right-clicked, and where, while its menu is open.
+    pub(crate) tab_menu: Option<(usize, gpui::Point<gpui::Pixels>)>,
     /// The person's name, for their picture.
     pub(crate) person: String,
     /// The window title last set, so it is set only when it changes.
@@ -112,6 +114,7 @@ impl Tabs {
             menu: None,
             menu_closed: None,
             app_open: None,
+            tab_menu: None,
             person: cx.global::<crate::profile::Profile>().display_name(),
             title: String::new(),
             theme: Theme::current(window, cx.global()),
@@ -567,6 +570,50 @@ impl Tabs {
     }
 }
 
+impl Tabs {
+    /// Closes every tab but `keep`, each asking first if it has changes.
+    pub(crate) fn close_others(
+        &mut self,
+        keep: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        for i in (0..self.tabs.len()).rev() {
+            if i != keep {
+                self.close(i, window, cx);
+            }
+        }
+    }
+
+    /// Closes the tabs after `i`.
+    pub(crate) fn close_right(&mut self, i: usize, window: &mut Window, cx: &mut Context<Self>) {
+        for j in (i + 1..self.tabs.len()).rev() {
+            self.close(j, window, cx);
+        }
+    }
+
+    /// Opens tab `i`'s file in a window of its own and closes the tab.
+    /// A file with changes not saved stays, and says why.
+    pub(crate) fn move_to_window(&mut self, i: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(tab) = self.tabs.get(i) else {
+            return;
+        };
+        let viewer = tab.viewer.read(cx);
+        let Some(path) = viewer.path().map(Path::to_path_buf) else {
+            return;
+        };
+        if viewer.dirty() {
+            tab.viewer.update(cx, |viewer, cx| {
+                viewer.tell(crate::text::t("tab-move-unsaved", &[]), cx)
+            });
+            self.activate(i, window, cx);
+            return;
+        }
+        self.close(i, window, cx);
+        crate::open_window(vec![path], cx);
+    }
+}
+
 impl Focusable for Tabs {
     fn focus_handle(&self, cx: &App) -> FocusHandle {
         self.viewer(cx).focus_handle(cx)
@@ -596,6 +643,9 @@ impl Render for Tabs {
             .id("katna-pdf")
             .key_context("Tabs")
             .on_action(cx.listener(|this, _: &Open, window, cx| this.choose_files(window, cx)))
+            .on_action(cx.listener(|_, _: &crate::viewer::NewWindow, _, cx| {
+                crate::open_window(Vec::new(), cx);
+            }))
             .on_action(cx.listener(|_, _: &crate::viewer::OpenSettings, _, cx| {
                 crate::settings::open(crate::settings::Page::Appearance, cx)
             }))
@@ -627,6 +677,7 @@ impl Render for Tabs {
             .text_color(th.text)
             .font_family(".SystemUIFont")
             .child(self.title_bar(window, cx))
+            .children(self.tab_menu(cx))
             .children(self.update_bar(cx))
             .map(|d| match &self.library {
                 Some((library, _)) if self.in_library => d.child(library.clone()),

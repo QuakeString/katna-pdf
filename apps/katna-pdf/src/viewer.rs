@@ -83,6 +83,7 @@ actions!(
     katna_pdf,
     [
         Open,
+        NewWindow,
         OpenSettings,
         ShowShortcuts,
         ShowAbout,
@@ -189,6 +190,7 @@ pub fn bind_keys(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("ctrl-o", Open, None),
         KeyBinding::new("ctrl-,", OpenSettings, None),
+        KeyBinding::new("ctrl-n", NewWindow, None),
         KeyBinding::new("ctrl-p", Print, None),
         KeyBinding::new("ctrl-s", Save, None),
         KeyBinding::new("ctrl-z", Undo, Some(READING)),
@@ -796,6 +798,12 @@ impl Viewer {
     }
 
     /// The file shown or being opened.
+    /// Shows `words` in the notice bar.
+    pub(crate) fn tell(&mut self, words: String, cx: &mut Context<Self>) {
+        self.notice = Some(words);
+        cx.notify();
+    }
+
     pub fn path(&self) -> Option<&Path> {
         self.path.as_deref()
     }

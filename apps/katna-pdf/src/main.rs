@@ -79,13 +79,21 @@ fn main() -> ExitCode {
     let mut files: Vec<PathBuf> = Vec::new();
     // `--compare OLDER NEWER`: NEWER opened and compared with OLDER.
     let mut compare: Option<PathBuf> = None;
+    // `--new-window`: the files go in a window of their own.
+    let mut new_window = false;
     let mut args = std::env::args_os().skip(1);
     while let Some(arg) = args.next() {
         match arg.to_str() {
             Some("-h" | "--help") => {
-                println!("{}\n{}", t("usage", &[]), t("usage-compare", &[]));
+                println!(
+                    "{}\n{}\n{}",
+                    t("usage", &[]),
+                    t("usage-compare", &[]),
+                    t("usage-new-window", &[])
+                );
                 return ExitCode::SUCCESS;
             }
+            Some("--new-window") => new_window = true,
             Some("--compare") => {
                 let (Some(older), Some(newer)) = (args.next(), args.next()) else {
                     eprintln!("{}\n{}", t("usage", &[]), t("usage-compare", &[]));
@@ -108,7 +116,7 @@ fn main() -> ExitCode {
     // A comparison is not handed to a running app: it opens its own.
     let requests = match compare {
         Some(_) => None,
-        None => match instance::start(&files) {
+        None => match instance::start(&files, new_window) {
             instance::Started::HandedOff => return ExitCode::SUCCESS,
             instance::Started::Running(requests) => requests,
         },
@@ -160,7 +168,7 @@ fn main() -> ExitCode {
     ExitCode::SUCCESS
 }
 
-fn open_window(files: Vec<PathBuf>, cx: &mut App) -> Option<WindowHandle<tabs::Tabs>> {
+pub(crate) fn open_window(files: Vec<PathBuf>, cx: &mut App) -> Option<WindowHandle<tabs::Tabs>> {
     let bounds = Bounds::centered(None, size(desktop_px(1100.0), desktop_px(820.0)), cx);
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(bounds)),
@@ -195,6 +203,19 @@ async fn serve(
             katna_ui::native::set_activation_token(token);
         }
         let mut files = Some(request.files);
+        // A window of its own, when asked or when Settings says so.
+        let own = request.new_window
+            || cx.update(|cx| cx.global::<prefs::Prefs>().new_window)
+                && files.as_ref().is_some_and(|f| !f.is_empty());
+        if own {
+            if cx
+                .update(|cx| open_window(files.take().unwrap_or_default(), cx))
+                .is_none()
+            {
+                return;
+            }
+            continue;
+        }
         let shown = window.update(cx, |tabs, window, cx| {
             tabs.open_files(files.take().unwrap_or_default(), window, cx);
             window.activate_window();

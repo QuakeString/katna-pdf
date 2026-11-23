@@ -8,10 +8,10 @@ use gpui::Action;
 
 use crate::viewer::{
     ActualSize, AddBookmark, Annotate, CloseTab, Compare, CopyText, Export, Find, FindNext,
-    FindPrevious, FitPage, FitWidth, NextPage, NextSpread, NextTab, Open, OpenSettings, Organize,
-    Present, PreviousPage, PreviousTab, Print, Properties, Quit, ReadAloud, ReopenSession,
-    ReportProblem, Save, ShowAbout, ShowLibrary, ShowShortcuts, Sign, ToggleContents, ToggleNight,
-    ZoomIn, ZoomOut,
+    FindPrevious, FitPage, FitWidth, NewWindow, NextPage, NextSpread, NextTab, Open, OpenSettings,
+    Organize, Present, PreviousPage, PreviousTab, Print, Properties, Quit, ReadAloud,
+    ReopenSession, ReportProblem, Save, ShowAbout, ShowLibrary, ShowShortcuts, Sign,
+    ToggleContents, ToggleNight, ZoomIn, ZoomOut,
 };
 
 /// An item: its id (and the id of its words), and its keys as
@@ -27,6 +27,7 @@ pub const MENUS: &[(&str, &[Entry])] = &[
         "menu-file",
         &[
             Some(("menu-open", &["Control", "O"])),
+            Some(("menu-new-window", &["Control", "N"])),
             Some(("menu-reopen-session", &[])),
             Some(("menu-save", &["Control", "S"])),
             Some(("menu-print", &["Control", "P"])),
@@ -97,6 +98,7 @@ pub const MENUS: &[(&str, &[Entry])] = &[
 pub fn action(id: &str) -> Option<Box<dyn Action>> {
     Some(match id {
         "menu-open" => Box::new(Open),
+        "menu-new-window" => Box::new(NewWindow),
         "menu-reopen-session" => Box::new(ReopenSession),
         "menu-save" => Box::new(Save),
         "menu-print" => Box::new(Print),

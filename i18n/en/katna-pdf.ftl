@@ -5,6 +5,7 @@
 app-name = Katna PDF
 usage = Usage: katna-pdf [FILE.pdf…]
 usage-compare =        katna-pdf --compare OLDER.pdf NEWER.pdf
+usage-new-window =        katna-pdf --new-window [FILE.pdf…]
 
 ## The empty window
 empty-title = Open a PDF
@@ -656,6 +657,13 @@ object-layer = On the layer { $name }: click for the next layer, or none
 object-layer-none = On no layer: click to put it on one
 
 ## Tabs
+tab-new-window = Move to New Window
+tab-copy-path = Copy Path
+tab-show-folder = Show in Folder
+tab-close = Close Tab
+tab-close-others = Close Other Tabs
+tab-close-right = Close Tabs to the Right
+tab-move-unsaved = Save this file first; a new window opens it as saved.
 tab-empty = New tab
 
 ## Opening
@@ -1053,6 +1061,7 @@ signatures-roots = Signers are checked against your system's root certificates, 
 ## The menu bar (KDE's global menu)
 menu-file = _File
 menu-open = _Open…
+menu-new-window = _New Window
 menu-reopen-session = Reopen the files from _last time
 menu-save = _Save
 menu-print = _Print…
@@ -1266,6 +1275,8 @@ settings-layout-two = Two
 settings-layout-book = Book
 settings-reopen = Open the last session's files
 settings-reopen-detail = When Katna PDF starts without a file
+settings-new-window = Open files in a new window
+settings-new-window-detail = Files opened from the file manager get a window of their own instead of a tab
 settings-workers = Draw pages in separate processes
 settings-workers-detail = A bad file can't take the window down. From the next start
 settings-units = Units
