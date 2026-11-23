@@ -76,8 +76,8 @@ usage: katna-pdf-cli COMMAND [--json] ...
                                   break between pages); or a PDF OUT of the pages as
                                   a scanner would see them (--grey in shades of grey)
   impose FILE -o OUT (--booklet | --n-up N | --poster AxB | --one) [--pages PAGES]
-         [--odd | --even] [--reverse] [--scale fit|actual|shrink]
-         [--paper a4|letter|WxH] [--landscape]
+         [--odd | --even] [--reverse] [--scale fit|actual|shrink|PERCENT]
+         [--paper a4|letter|WxH] [--landscape | --portrait] [--margin PT]
                                   the pages laid out on sheets for printing: a
                                   booklet (two a side, in the order that folds),
                                   N pages a sheet (2, 4, 6, 9 or 16), or each page
@@ -87,7 +87,10 @@ usage: katna-pdf-cli COMMAND [--json] ...
                                   anyway). Comments and fields are not carried.
                                   --one is a page a sheet, each sheet the page's
                                   way up, sized by --scale (as big as fits, own
-                                  size, or own size unless too big)
+                                  size, own size unless too big, or a percentage
+                                  of it); --portrait keeps sheets upright, and
+                                  --margin is the space around and between pages
+                                  (18 points unless said)
   compare OLD NEW [--overlay PAGE -o OUT.png]
                                   what changed from OLD to NEW: words added, removed
                                   and changed (text moved to another page is not a
@@ -568,6 +571,7 @@ impl<'a> Args<'a> {
                 "--even",
                 "--reverse",
                 "--landscape",
+                "--portrait",
                 "--reset",
                 "--forms",
                 "--comments",
@@ -1545,11 +1549,14 @@ fn impose(args: &[String], json: bool) -> Done {
         None | Some("fit") => SheetScale::Fit,
         Some("actual") => SheetScale::Actual,
         Some("shrink") => SheetScale::Shrink,
-        Some(other) => {
-            return Err(Failure::Usage(format!(
-                "--scale {other}: fit, actual or shrink"
-            )));
-        }
+        Some(other) => match other.trim_end_matches('%').parse::<u16>() {
+            Ok(p) if (10..=400).contains(&p) => SheetScale::Percent(p),
+            _ => {
+                return Err(Failure::Usage(format!(
+                    "--scale {other}: fit, actual, shrink or a percentage from 10 to 400"
+                )));
+            }
+        },
     };
     let grid = |spec: &str, option: &str| -> Result<(u32, u32), Failure> {
         let (a, b) = spec
@@ -1608,8 +1615,12 @@ fn impose(args: &[String], json: bool) -> Done {
     };
     let sheet = Sheet {
         scale,
-        auto_turn: one && !args.flag("--landscape"),
-        ..Sheet::of(paper, sideways || args.flag("--landscape"))
+        auto_turn: one && !args.flag("--landscape") && !args.flag("--portrait"),
+        gap: number_option(&args, "--margin", 18.0, |v| (0.0..=144.0).contains(&v))?,
+        ..Sheet::of(
+            paper,
+            !args.flag("--portrait") && (sideways || args.flag("--landscape")),
+        )
     };
     let bytes = katna_pdf_cos::impose(&doc, &pages, layout, sheet)
         .map_err(|e| failed(format!("{file}: {e}")))?;

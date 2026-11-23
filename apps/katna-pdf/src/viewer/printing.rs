@@ -92,11 +92,28 @@ const CONTENTS: [(&str, OnPaper); 4] = [
 
 /// The size of each page on the paper, when printed as it is: as the
 /// print dialog says, or one of these.
-const SIZES: [(&str, Option<SheetScale>); 4] = [
+const SIZES: [(&str, Option<SheetScale>); 5] = [
     ("print-size-dialog", None),
     ("print-size-fit", Some(SheetScale::Fit)),
     ("print-size-actual", Some(SheetScale::Actual)),
     ("print-size-shrink", Some(SheetScale::Shrink)),
+    ("print-size-custom", Some(SheetScale::Percent(100))),
+];
+
+/// Which way up the paper goes: as the layout wants (and, a page a
+/// sheet, as each page is), upright, or on its side.
+const ORIENTATIONS: [&str; 3] = [
+    "print-orientation-auto",
+    "print-orientation-portrait",
+    "print-orientation-landscape",
+];
+
+/// The space around and between the pages, in points.
+const MARGINS: [(&str, f32); 4] = [
+    ("print-margin-none", 0.0),
+    ("print-margin-narrow", 9.0),
+    ("print-margin-normal", 18.0),
+    ("print-margin-wide", 36.0),
 ];
 
 /// Pages printed as pictures are drawn at this many dots to the inch.
@@ -112,6 +129,11 @@ pub(super) struct Printing {
     reverse: bool,
     content: usize,
     size: usize,
+    /// An index into [`ORIENTATIONS`] and one into [`MARGINS`].
+    orientation: usize,
+    margin: usize,
+    /// The percentage typed for a size of one's own.
+    percent: Entity<TextInput>,
     /// Which pages: all, the one shown, or those typed.
     which: Which,
     /// The page shown when the dialog opened.
@@ -123,6 +145,7 @@ pub(super) struct Printing {
     /// Bumped with each change, so an older preview is dropped.
     asked: u64,
     _sub: Subscription,
+    _percent_sub: Subscription,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -179,6 +202,17 @@ impl Viewer {
             }
             InputEvent::Cancel => {}
         });
+        let percent = cx.new(|cx| {
+            let mut input = TextInput::new("100".to_string(), cx);
+            input.set_accent(accent);
+            input.set_text("100".to_string(), cx);
+            input
+        });
+        let percent_sub = cx.subscribe(&percent, |this, _, event, cx| {
+            if let InputEvent::Changed = event {
+                this.preview_sheets(cx);
+            }
+        });
         self.printing = Some(Printing {
             layout: 0,
             paper: 0,
@@ -188,6 +222,10 @@ impl Viewer {
             reverse: false,
             content: 0,
             size: 0,
+            orientation: 0,
+            margin: 2,
+            percent,
+            _percent_sub: percent_sub,
             which: Which::All,
             shown: self.current_page(),
             pages,
@@ -375,6 +413,36 @@ impl Viewer {
             |p, i| p.size = i,
             cx,
         );
+        let orientations = row(
+            "print-orientation",
+            &ORIENTATIONS,
+            printing.orientation,
+            |p, i| p.orientation = i,
+            cx,
+        );
+        let margins = row(
+            "print-margin",
+            &MARGINS.map(|(id, _)| id),
+            printing.margin,
+            |p, i| p.margin = i,
+            cx,
+        );
+        let custom = matches!(SIZES[printing.size].1, Some(SheetScale::Percent(_)));
+        let percent = div()
+            .flex()
+            .items_center()
+            .gap(px(space::S2))
+            .child(
+                div()
+                    .w(px(80.0))
+                    .child(float::input_box(&printing.percent, window, cx, &th)),
+            )
+            .child(
+                div()
+                    .text_size(px(text::SMALL))
+                    .text_color(th.dim)
+                    .child(t("print-size-percent", &[])),
+            );
         let contents = row(
             "print-content",
             &CONTENTS.map(|(id, _)| id),
@@ -530,9 +598,14 @@ impl Viewer {
                     .when(printing.layout == 0, |d| {
                         d.child(label("print-size-label")).child(sizes)
                     })
+                    .when(printing.layout == 0 && custom, |d| d.child(percent))
                     .when(printing.layout > 0 || printing.size > 0, |d| {
                         d.child(label("print-paper-label"))
                             .child(div().flex().child(papers))
+                            .child(label("print-orientation-label"))
+                            .child(orientations)
+                            .child(label("print-margin-label"))
+                            .child(margins)
                     })
                     .child(label("print-content-label"))
                     .child(contents)
@@ -710,8 +783,27 @@ impl Viewer {
         let (_, layout, sideways) = LAYOUTS[printing.layout];
         // One page a sheet, sized as asked, each sheet the page's way up.
         let (layout, scale) = match (layout, SIZES[printing.size].1) {
+            (None, Some(SheetScale::Percent(_))) => {
+                let typed = printing.percent.read(cx).text();
+                let percent = typed
+                    .trim()
+                    .trim_end_matches('%')
+                    .trim()
+                    .parse::<u16>()
+                    .ok()
+                    .filter(|p| (10..=400).contains(p))?;
+                (
+                    Some(SheetLayout::NUp { across: 1, down: 1 }),
+                    SheetScale::Percent(percent),
+                )
+            }
             (None, Some(scale)) => (Some(SheetLayout::NUp { across: 1, down: 1 }), scale),
             (layout, _) => (layout, SheetScale::Fit),
+        };
+        let sideways = match printing.orientation {
+            1 => false,
+            2 => true,
+            _ => sideways,
         };
         let (parity, reverse) = (PARITIES[printing.parity].1, printing.reverse);
         let all_pages = all_pages && parity == Parity::All && !reverse;
@@ -723,7 +815,8 @@ impl Viewer {
             layout,
             sheet: Sheet {
                 scale,
-                auto_turn: true,
+                auto_turn: printing.orientation == 0,
+                gap: MARGINS[printing.margin].1,
                 ..Sheet::of(PAPERS[printing.paper].1, sideways)
             },
             pictures: printing.pictures || printing.grey,

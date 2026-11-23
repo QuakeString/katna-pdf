@@ -70,7 +70,7 @@ Initials and your signature picture are kept for the next time.
 
 - Ctrl+S saves. A file opened from a drive is saved back to the drive too.
 - A copy of changes not saved is kept every few minutes; after a crash the start screen offers it back.
-- Ctrl+P prints: the pages you choose, as a booklet, several to a sheet, or a poster, in colour or grey.
+- Ctrl+P prints: the pages you choose, as a booklet, several to a sheet, or a poster, in colour or grey, at a size of your own (10 to 400 %), upright or on its side, with the margins you pick.
 - Ctrl+Shift+E exports pages as pictures, the text as plain text or a Word file, and tables as CSV.
 - File > Send by email starts a message in Katna Mail or your mail app with the file attached.
 - File properties (Ctrl+D) changes the title and author, puts on or takes off a password, makes the file smaller, and makes it PDF/A for keeping.
