@@ -132,6 +132,8 @@ actions!(
         CloseAll,
         Revert,
         Shortcuts,
+        PreviousView,
+        NextView,
         NextTab,
         PreviousTab,
         DeleteAnnotation,
@@ -314,6 +316,8 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl-w", CloseTab, None),
         KeyBinding::new("ctrl-f4", CloseTab, None),
         KeyBinding::new("ctrl-shift-w", CloseAll, None),
+        KeyBinding::new("alt-left", PreviousView, None),
+        KeyBinding::new("alt-right", NextView, None),
         KeyBinding::new("f1", Shortcuts, None),
         KeyBinding::new("ctrl-tab", NextTab, None),
         KeyBinding::new("ctrl-pagedown", NextTab, None),
@@ -432,6 +436,17 @@ enum Content {
     },
     Ready(Opened),
 }
+
+/// Where the pages were scrolled to, and at what zoom: a step of
+/// Previous view and Next view.
+#[derive(Clone, Copy)]
+struct View {
+    at: ListOffset,
+    zoom: Zoom,
+}
+
+/// Views remembered at most.
+const VIEWS: usize = 50;
 
 struct Opened {
     name: String,
@@ -560,6 +575,9 @@ pub struct Viewer {
     /// The file whose changes not saved have a copy kept
     /// (`crate::recovery`), and which changes those were.
     kept: Option<(PathBuf, u64)>,
+    /// Views jumped away from (Previous view), and back from (Next view).
+    views_back: Vec<View>,
+    views_forward: Vec<View>,
     /// Changes to put back once the file is open: a copy recovered.
     recover_after: Option<Arc<Vec<u8>>>,
     /// Rotate view: the pages shown this many quarter turns clockwise,
@@ -830,6 +848,8 @@ impl Viewer {
             area: None,
             area_focus: None,
             kept: None,
+            views_back: Vec::new(),
+            views_forward: Vec::new(),
             recover_after: None,
             turn: 0,
             password: None,
@@ -1015,6 +1035,10 @@ impl Viewer {
             self.forget_kept(cx);
         }
         let name = file_name(&path);
+        if self.path.as_deref() != Some(path.as_path()) {
+            self.views_back.clear();
+            self.views_forward.clear();
+        }
         let tried = !password.is_empty();
         self.key = tried.then(|| Arc::from(password.as_str()));
         self.path = Some(path.clone());
@@ -1386,6 +1410,7 @@ impl Viewer {
         };
         let gap = px(if hit.page == 0 { space::S5 } else { GAP / 2.0 });
         let below = desktop_px((top * self.shown - 96.0).max(0.0));
+        self.note_jump(self.spread.row_of(hit.page));
         self.list.scroll_to(ListOffset {
             item_ix: self.spread.row_of(hit.page),
             offset_in_item: gap + below,
@@ -1832,11 +1857,12 @@ impl Viewer {
         }
         let page = dest.page.min(count - 1);
         let height = opened.doc.page_size(page).map_or(792.0, |(_, h)| h);
+        let transform = opened.doc.page_transform(page);
+        self.note_view();
         // Each page sits below a gap (`render_page`); the height is
         // counted from the page's bottom, as PDF counts it, before the
         // page's crop and rotation.
         let gap = px(if page == 0 { space::S5 } else { GAP / 2.0 });
-        let transform = opened.doc.page_transform(page);
         let below_top = dest.top.map_or(0.0, |top| {
             let y = transform.map_or(height - top, |t| {
                 katna_pdf_render::map_point(t, (0.0, top)).1
@@ -2227,10 +2253,58 @@ impl Viewer {
         if count == 0 {
             return;
         }
+        self.note_jump(self.spread.row_of(page.min(count - 1)));
         self.list.scroll_to(ListOffset {
             item_ix: self.spread.row_of(page.min(count - 1)),
             offset_in_item: px(0.0),
         });
+        cx.notify();
+    }
+
+    /// Notes the view shown before a jump to row `row`: one further than
+    /// the next or last row (paging on is not a jump).
+    fn note_jump(&mut self, row: usize) {
+        let now = self.list.logical_scroll_top().item_ix;
+        if row.abs_diff(now) > 1 {
+            self.note_view();
+        }
+    }
+
+    /// Notes the view shown, for Previous view, before going elsewhere.
+    fn note_view(&mut self) {
+        if !matches!(self.content, Content::Ready(_)) {
+            return;
+        }
+        self.views_back.push(View {
+            at: self.list.logical_scroll_top(),
+            zoom: self.zoom,
+        });
+        if self.views_back.len() > VIEWS {
+            self.views_back.remove(0);
+        }
+        self.views_forward.clear();
+    }
+
+    /// Previous view (`back`) or Next view: where the pages were before
+    /// the last jump, or after it.
+    fn step_view(&mut self, back: bool, cx: &mut Context<Self>) {
+        let (from, to) = if back {
+            (&mut self.views_back, &mut self.views_forward)
+        } else {
+            (&mut self.views_forward, &mut self.views_back)
+        };
+        let Some(view) = from.pop() else {
+            return;
+        };
+        to.push(View {
+            at: self.list.logical_scroll_top(),
+            zoom: self.zoom,
+        });
+        if self.zoom != view.zoom {
+            self.zoom = view.zoom;
+            self.list.remeasure();
+        }
+        self.list.scroll_to(view.at);
         cx.notify();
     }
 
@@ -4440,6 +4514,16 @@ impl Render for Viewer {
             .on_action(cx.listener(|this, _: &Properties, _, cx| this.toggle_properties(cx)))
             .on_action(cx.listener(|this, _: &Export, _, cx| this.toggle_exporting(cx)))
             .on_action(cx.listener(|this, _: &Revert, _, cx| this.revert(cx)))
+            .on_action(cx.listener(|this, _: &PreviousView, _, cx| this.step_view(true, cx)))
+            .on_action(cx.listener(|this, _: &NextView, _, cx| this.step_view(false, cx)))
+            .on_mouse_down(
+                gpui::MouseButton::Navigate(gpui::NavigationDirection::Back),
+                cx.listener(|this, _, _, cx| this.step_view(true, cx)),
+            )
+            .on_mouse_down(
+                gpui::MouseButton::Navigate(gpui::NavigationDirection::Forward),
+                cx.listener(|this, _, _, cx| this.step_view(false, cx)),
+            )
             .on_action(cx.listener(|this, _: &Compare, _, cx| this.choose_compare(cx)))
             .on_action(cx.listener(|this, _: &ReadAloud, _, cx| this.toggle_reading(cx)))
             .on_action(cx.listener(|this, _: &Present, window, cx| {
