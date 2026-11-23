@@ -407,6 +407,24 @@ pub fn blank_pdf(sizes: &[(f32, f32)]) -> Vec<u8> {
 }
 
 impl Document {
+    /// The file with nothing drawn on its pages but their annotations
+    /// and form fields: each page's content emptied, as for printing a
+    /// form's answers onto the form already printed on paper.
+    pub fn without_page_content(&self) -> Result<Vec<u8>, crate::edit::EditError> {
+        use crate::edit::EditError;
+        let mut update = self.update().map_err(EditError::Update)?;
+        let empty = update.add(Object::Stream(crate::dss::compressed(b"")));
+        for page_ref in self.pages() {
+            let mut dict = self
+                .get(page_ref)
+                .and_then(|o| o.as_dict().cloned())
+                .unwrap_or_default();
+            dict.set("Contents", Object::Ref(empty));
+            update.replace(page_ref, Object::Dict(dict));
+        }
+        Ok(update.finish())
+    }
+
     /// The file with `pages` made `size` (width, height in points, as
     /// the page lies before its `/Rotate`): what they draw is scaled to
     /// fit the new size with `scale`, else kept as big as it was, and

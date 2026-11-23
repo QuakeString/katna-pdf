@@ -214,7 +214,163 @@ pub fn system_font(want: FontWant) -> Option<Vec<u8>> {
     find_font(&font_files(&font_dirs()), want)
 }
 
+/// A font the file draws with (File > Properties > Fonts).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FontUse {
+    /// Its name, without a subset's `ABCDEF+` tag.
+    pub name: String,
+    /// Type1, TrueType, Type0, Type3, MMType1 or CIDFontType0/2 for a
+    /// Type0's descendant.
+    pub kind: String,
+    /// Whether its program is in the file.
+    pub embedded: bool,
+    /// Whether only the letters used are (a `ABCDEF+` name).
+    pub subset: bool,
+    /// Its encoding's name, when it names one.
+    pub encoding: Option<String>,
+    /// The pages that use it, from 0.
+    pub pages: Vec<usize>,
+}
+
 impl Document {
+    /// The fonts the pages, their forms and their annotations draw with,
+    /// in the order first met, each with the pages that use it.
+    pub fn fonts(&self) -> Vec<FontUse> {
+        let mut out: Vec<FontUse> = Vec::new();
+        let mut by_ref: BTreeMap<Ref, usize> = BTreeMap::new();
+        for (page, page_ref) in self.pages().into_iter().enumerate() {
+            let dict = page_dict(self, page_ref);
+            let mut found = Vec::new();
+            let (mut fonts_seen, mut forms_seen) = (HashSet::new(), HashSet::new());
+            if let Object::Dict(res) = self.resolve_key(&dict, "Resources") {
+                self.fonts_in(&res, &mut fonts_seen, &mut forms_seen, &mut found, 0);
+            }
+            if let Object::Array(annots) = self.resolve_key(&dict, "Annots") {
+                for a in annots {
+                    let Some(annot) = self.resolve(&a).as_dict().cloned() else {
+                        continue;
+                    };
+                    let Object::Dict(ap) = self.resolve_key(&annot, "AP") else {
+                        continue;
+                    };
+                    for (_, v) in ap.iter() {
+                        let mut streams = Vec::new();
+                        match self.resolve(v) {
+                            Object::Stream(s) => streams.push(s),
+                            Object::Dict(states) => {
+                                streams.extend(states.iter().filter_map(|(_, s)| {
+                                    match self.resolve(s) {
+                                        Object::Stream(s) => Some(s),
+                                        _ => None,
+                                    }
+                                }))
+                            }
+                            _ => {}
+                        }
+                        for s in streams {
+                            if let Object::Dict(res) = self.resolve_key(&s.dict, "Resources") {
+                                self.fonts_in(
+                                    &res,
+                                    &mut fonts_seen,
+                                    &mut forms_seen,
+                                    &mut found,
+                                    0,
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+            for (r, font) in found {
+                if let Some(&i) = r.as_ref().and_then(|r| by_ref.get(r)) {
+                    if out[i].pages.last() != Some(&page) {
+                        out[i].pages.push(page);
+                    }
+                    continue;
+                }
+                let mut shown = self.font_use(&font);
+                shown.pages.push(page);
+                // The same font written again (files merged, a font in a
+                // page itself) is listed once.
+                let same = out.iter().position(|f| {
+                    (&f.name, &f.kind, f.embedded, f.subset, &f.encoding)
+                        == (
+                            &shown.name,
+                            &shown.kind,
+                            shown.embedded,
+                            shown.subset,
+                            &shown.encoding,
+                        )
+                });
+                if let Some(i) = same {
+                    if out[i].pages.last() != Some(&page) {
+                        out[i].pages.push(page);
+                    }
+                    if let Some(r) = r {
+                        by_ref.insert(r, i);
+                    }
+                    continue;
+                }
+                if let Some(r) = r {
+                    by_ref.insert(r, out.len());
+                }
+                out.push(shown);
+            }
+        }
+        out
+    }
+
+    /// What `fonts` says of font `dict`.
+    fn font_use(&self, dict: &Dict) -> FontUse {
+        let name_of = |d: &Dict| {
+            d.name("BaseFont")
+                .map(|n| String::from_utf8_lossy(n).into_owned())
+        };
+        let mut kind = dict
+            .name("Subtype")
+            .map(|n| String::from_utf8_lossy(n).into_owned())
+            .unwrap_or_default();
+        let mut name = name_of(dict);
+        if kind == "Type0"
+            && let Object::Array(desc) = self.resolve_key(dict, "DescendantFonts")
+            && let Some(d) = desc
+                .first()
+                .and_then(|d| self.resolve(d).as_dict().cloned())
+            && let Some(sub) = d.name("Subtype")
+        {
+            kind = format!("Type0 ({})", String::from_utf8_lossy(sub));
+            name = name.or_else(|| name_of(&d));
+        }
+        let name = name.unwrap_or_else(|| {
+            if kind == "Type3" {
+                "Type 3".to_owned()
+            } else {
+                "?".to_owned()
+            }
+        });
+        let subset = name.len() > 7
+            && name.as_bytes()[6] == b'+'
+            && name.as_bytes()[..6].iter().all(u8::is_ascii_uppercase);
+        let encoding = match self.resolve_key(dict, "Encoding") {
+            Object::Name(n) => Some(String::from_utf8_lossy(n.as_bytes()).into_owned()),
+            Object::Dict(e) => Some(
+                e.name("BaseEncoding")
+                    .map(|n| format!("{} + Differences", String::from_utf8_lossy(n)))
+                    .unwrap_or_else(|| "Differences".to_owned()),
+            ),
+            Object::Stream(_) => Some("Embedded CMap".to_owned()),
+            _ => None,
+        };
+        FontUse {
+            name: if subset { name[7..].to_owned() } else { name },
+            kind,
+            embedded: self.font_embedded(dict),
+            subset,
+            encoding,
+            pages: Vec::new(),
+        }
+    }
+
     /// What keeps the file from being PDF/A.
     pub fn pdfa_issues(&self) -> Vec<Issue> {
         let mut out = Vec::new();
