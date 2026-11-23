@@ -69,6 +69,7 @@ mod properties;
 mod redact;
 mod setup;
 mod sharp;
+mod sidemenu;
 pub(crate) mod sign;
 mod signatures;
 mod speak;
@@ -178,6 +179,12 @@ actions!(
         Properties,
         AddBookmark,
         ShowLibrary,
+        SaveAs,
+        FirstPage,
+        LastPage,
+        FullScreen,
+        HandTool,
+        SelectTool,
         Quit
     ]
 );
@@ -301,6 +308,9 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl-n", NewWindow, None),
         KeyBinding::new("ctrl-p", Print, None),
         KeyBinding::new("ctrl-s", Save, None),
+        KeyBinding::new("ctrl-shift-s", SaveAs, None),
+        KeyBinding::new("f11", FullScreen, None),
+        KeyBinding::new("ctrl-shift-f", FullScreen, None),
         KeyBinding::new("ctrl-z", Undo, Some(READING)),
         KeyBinding::new("ctrl-shift-z", Redo, Some(READING)),
         KeyBinding::new("ctrl-y", Redo, Some(READING)),
@@ -349,6 +359,13 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("pageup", PreviousPage, Some(READING)),
         KeyBinding::new("space", NextPage, Some(READING)),
         KeyBinding::new("shift-space", PreviousPage, Some(READING)),
+        KeyBinding::new("backspace", PreviousPage, Some(READING)),
+        KeyBinding::new("home", FirstPage, Some(READING)),
+        KeyBinding::new("end", LastPage, Some(READING)),
+        KeyBinding::new("ctrl-home", FirstPage, Some(READING)),
+        KeyBinding::new("ctrl-end", LastPage, Some(READING)),
+        KeyBinding::new("h", HandTool, Some(READING)),
+        KeyBinding::new("v", SelectTool, Some(READING)),
         KeyBinding::new("down", ScrollDown, Some(READING)),
         KeyBinding::new("up", ScrollUp, Some(READING)),
         KeyBinding::new("ctrl-c", CopyText, Some(READING)),
@@ -747,6 +764,14 @@ pub struct Viewer {
     /// dragged out now.
     selection: Option<Selection>,
     selecting: bool,
+    /// Where a press to select landed before that page's text was read:
+    /// the selection starts there once it is.
+    press_pending: Option<gpui::Point<gpui::Pixels>>,
+    /// The selection came from a double or triple click, so letting go
+    /// keeps it however short.
+    selected_by_clicks: bool,
+    /// The pointer is over the pages' text, so it shows as a text cursor.
+    over_text: bool,
     /// The hand tool: dragging moves the pages instead of selecting text.
     hand: bool,
     /// Where the pointer was as the pages are dragged along (the hand
@@ -804,6 +829,8 @@ pub struct Viewer {
     picked_object: Option<objects::Picked>,
     /// The menu right-clicking a picture opened.
     picture_menu: Option<picmenu::PictureMenu>,
+    /// The side pane's right-click menu, while open.
+    side_menu: Option<sidemenu::SideMenu>,
     marking: Option<marks::Marking>,
     /// The redact tool, while in hand, and the areas it marked.
     redacting: Option<redact::Redacting>,
@@ -1063,6 +1090,9 @@ impl Viewer {
             close_after_save: false,
             selection: None,
             selecting: false,
+            press_pending: None,
+            selected_by_clicks: false,
+            over_text: false,
             hand: false,
             panning: None,
             pan_x: 0.0,
@@ -1090,6 +1120,7 @@ impl Viewer {
             ink: 0,
             picked_object: None,
             picture_menu: None,
+            side_menu: None,
             marking: None,
             redacting: None,
             exporting: None,
@@ -1734,12 +1765,96 @@ impl Viewer {
             cx.notify();
             return;
         }
-        self.selection = self.spot_at(event.position, cx).map(|spot| Selection {
-            anchor: spot,
-            head: spot,
-        });
-        self.selecting = self.selection.is_some();
+        let spot = self.spot_at(event.position, cx);
+        self.selected_by_clicks = false;
+        self.press_pending = None;
+        // Shift and a click carries the selection on to here.
+        if event.modifiers.shift
+            && let (Some(selection), Some(spot)) = (self.selection.as_mut(), spot)
+        {
+            selection.head = spot;
+            self.selecting = true;
+            self.selected_by_clicks = true;
+            cx.notify();
+            return;
+        }
+        match (spot, event.click_count) {
+            (Some(spot), 2) => {
+                self.selection = self.word_around(spot, false);
+                self.selected_by_clicks = self.selection.is_some();
+                self.selecting = false;
+            }
+            (Some(spot), n) if n >= 3 => {
+                self.selection = self.word_around(spot, true);
+                self.selected_by_clicks = self.selection.is_some();
+                self.selecting = false;
+            }
+            (Some(spot), _) => {
+                self.selection = Some(Selection {
+                    anchor: spot,
+                    head: spot,
+                });
+                self.selecting = true;
+            }
+            (None, _) => {
+                // The page's text is still being read: the selection
+                // starts here once it is.
+                self.selection = None;
+                self.press_pending = self.texts.is_some().then_some(event.position);
+                self.selecting = self.press_pending.is_some();
+            }
+        }
         cx.notify();
+    }
+
+    /// Whether a character of the text read is right under `position`.
+    fn text_under(&self, position: gpui::Point<gpui::Pixels>) -> bool {
+        let Some((page, [x, y])) = self.page_point(position) else {
+            return false;
+        };
+        self.texts
+            .as_ref()
+            .and_then(|t| t.get(page)?.get())
+            .is_some_and(|text| {
+                text.boxes
+                    .iter()
+                    .any(|b| x >= b[0] && x <= b[2] && y >= b[1] && y <= b[3])
+            })
+    }
+
+    /// The word around `spot`, or with `line` its whole line, as a
+    /// selection.
+    fn word_around(&self, spot: Spot, line: bool) -> Option<Selection> {
+        let text = self.texts.as_ref()?.get(spot.page)?.get()?;
+        let chars: Vec<char> = text.text.chars().collect();
+        let part = |c: char| {
+            if line {
+                c != '\n'
+            } else {
+                c.is_alphanumeric() || c == '_' || c == '-' || c == '\''
+            }
+        };
+        if !chars.get(spot.index).copied().is_some_and(part) {
+            return None;
+        }
+        let mut start = spot.index;
+        while start > 0 && part(chars[start - 1]) {
+            start -= 1;
+        }
+        let mut end = spot.index;
+        while end + 1 < chars.len() && part(chars[end + 1]) {
+            end += 1;
+        }
+        Some(Selection {
+            anchor: Spot {
+                page: spot.page,
+                index: start,
+            },
+            head: Spot {
+                page: spot.page,
+                index: end,
+            },
+        })
     }
 
     fn drag(&mut self, event: &gpui::MouseMoveEvent, cx: &mut Context<Self>) {
@@ -1774,11 +1889,29 @@ impl Viewer {
         }
         if event.pressed_button.is_none() {
             self.annot_hover_move(event.position, cx);
+            let over = self.text_under(event.position);
+            if over != self.over_text {
+                self.over_text = over;
+                cx.notify();
+            }
         }
         let spot = self.spot_at(event.position, cx);
         if !self.selecting || event.pressed_button != Some(gpui::MouseButton::Left) {
             self.selecting = false;
+            self.press_pending = None;
             return;
+        }
+        // A press made before the text was read starts the selection
+        // now that it is.
+        if self.selection.is_none()
+            && let Some(at) = self.press_pending
+            && let Some(anchor) = self.spot_at(at, cx)
+        {
+            self.press_pending = None;
+            self.selection = Some(Selection {
+                anchor,
+                head: anchor,
+            });
         }
         if let (Some(selection), Some(spot)) = (self.selection.as_mut(), spot)
             && selection.head != spot
@@ -1807,8 +1940,11 @@ impl Viewer {
         {
             return;
         }
+        self.press_pending = None;
         // A click without a drag selects nothing.
-        if self.selection.is_some_and(|s| s.anchor == s.head) {
+        if !std::mem::take(&mut self.selected_by_clicks)
+            && self.selection.is_some_and(|s| s.anchor == s.head)
+        {
             self.selection = None;
             cx.notify();
         }
@@ -2041,6 +2177,13 @@ impl Viewer {
                 let keys = event.modifiers();
                 this.thumb_click(page, keys.control || keys.platform, keys.shift, cx);
             }))
+            .on_mouse_down(
+                gpui::MouseButton::Right,
+                cx.listener(move |this, event: &gpui::MouseDownEvent, _, cx| {
+                    cx.stop_propagation();
+                    this.thumb_menu(event.position, page, cx);
+                }),
+            )
             .on_drag(self.dragged(page), |dragged, _, _, cx| {
                 cx.new(|_| dragged.clone())
             })
@@ -2232,6 +2375,7 @@ impl Viewer {
                 let chosen = contents.chosen.clone();
                 let rows = contents.rows().into_iter().map(|row| {
                     let (path, dest) = (row.path.clone(), row.dest);
+                    let menu_path = path.clone();
                     let picked = chosen.as_ref() == Some(&path);
                     let editor = self.renaming_field(&path);
                     let pick = path.clone();
@@ -2240,6 +2384,9 @@ impl Viewer {
                             contents.toggle(&path);
                             cx.notify();
                         }
+                    });
+                    let menu = cx.listener(move |this, at: &gpui::Point<gpui::Pixels>, _, cx| {
+                        this.bookmark_menu(*at, menu_path.clone(), cx);
                     });
                     let go = cx.listener(move |this, clicks: &usize, window, cx| {
                         if let Some(contents) = this.contents.as_mut() {
@@ -2261,6 +2408,7 @@ impl Viewer {
                         editor,
                         move |window, cx| fold(&(), window, cx),
                         move |clicks, window, cx| go(&clicks, window, cx),
+                        move |at, window, cx| menu(&at, window, cx),
                     )
                 });
                 let list = div()
@@ -2648,6 +2796,16 @@ impl Viewer {
     }
 
     /// Goes to the next row of pages, or the one before.
+    /// Left or Right with nothing picked: the pages move sideways when
+    /// wider than the view, otherwise the next or previous page comes.
+    fn sideways(&mut self, right: bool, cx: &mut Context<Self>) {
+        if self.max_pan() > 0.0 {
+            self.pan_by(if right { 48.0 } else { -48.0 }, cx);
+        } else {
+            self.step_page(right, cx);
+        }
+    }
+
     fn step_page(&mut self, forward: bool, cx: &mut Context<Self>) {
         let count = self.page_count();
         let row = self.list.logical_scroll_top().item_ix;
@@ -3877,6 +4035,45 @@ impl Viewer {
         .detach();
     }
 
+    /// Save as (Ctrl+Shift+S): the document as it is now, changes and
+    /// all, written to a new file, which then opens in this tab.
+    fn save_as(&mut self, cx: &mut Context<Self>) {
+        self.finish_typing(true, cx);
+        let Some(path) = self.path.clone() else {
+            return;
+        };
+        let folder = path.parent().map(Path::to_path_buf).unwrap_or_default();
+        let name = file_name(&path);
+        let chosen = cx.prompt_for_new_path(&folder, Some(&name));
+        let current = self.unsaved();
+        cx.spawn(async move |this, cx| {
+            let Ok(Ok(Some(target))) = chosen.await else {
+                return;
+            };
+            let to = target.clone();
+            let written = cx
+                .background_executor()
+                .spawn(async move {
+                    match current {
+                        Some(bytes) => save_over(&to, bytes.as_slice()),
+                        None => std::fs::copy(&path, &to).map(|_| ()),
+                    }
+                })
+                .await;
+            this.update(cx, |this, cx| match written {
+                Ok(()) => {
+                    this.open(target, cx);
+                }
+                Err(error) => {
+                    this.notice = Some(said("save-failed", &[("error", &error.to_string())]));
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     /// Sends a file opened from a drive back there once it is saved
     /// here: the drive file gets the new contents and keeps its name,
     /// folder and sharing. The notice says how it went.
@@ -4828,6 +5025,14 @@ impl Render for Viewer {
                         cx.listener(|this, event, _, cx| this.picture_right_press(event, cx)),
                     )
                     .on_mouse_down(
+                        gpui::MouseButton::Navigate(gpui::NavigationDirection::Back),
+                        cx.listener(|this, _, _, cx| this.step_view(true, cx)),
+                    )
+                    .on_mouse_down(
+                        gpui::MouseButton::Navigate(gpui::NavigationDirection::Forward),
+                        cx.listener(|this, _, _, cx| this.step_view(false, cx)),
+                    )
+                    .on_mouse_down(
                         gpui::MouseButton::Middle,
                         cx.listener(|this, event: &gpui::MouseDownEvent, _, cx| {
                             this.panning = Some(event.position);
@@ -4844,6 +5049,14 @@ impl Render for Viewer {
                     .when(self.hand && self.panning.is_none(), |d| {
                         d.cursor(gpui::CursorStyle::OpenHand)
                     })
+                    .when(
+                        self.over_text
+                            && !self.hand
+                            && self.panning.is_none()
+                            && self.area.is_none()
+                            && self.mode() == dock::Mode::Read,
+                        |d| d.cursor(gpui::CursorStyle::IBeam),
+                    )
                     .on_mouse_move(cx.listener(|this, event, _, cx| this.drag(event, cx)))
                     .child({
                         // Notes the view's size, and zooms with Ctrl and
@@ -4997,11 +5210,24 @@ impl Render for Viewer {
                 this.toggle_paste_many(window, cx);
             }))
             .on_action(cx.listener(|this, _: &NudgeLeft, _, cx| {
-                this.nudge_picked(-1.0, 0.0, cx);
+                if !this.nudge_picked(-1.0, 0.0, cx) {
+                    this.sideways(false, cx);
+                }
             }))
             .on_action(cx.listener(|this, _: &NudgeRight, _, cx| {
-                this.nudge_picked(1.0, 0.0, cx);
+                if !this.nudge_picked(1.0, 0.0, cx) {
+                    this.sideways(true, cx);
+                }
             }))
+            .on_action(cx.listener(|this, _: &FirstPage, _, cx| this.go_to_page(0, cx)))
+            .on_action(cx.listener(|this, _: &LastPage, _, cx| {
+                let last = this.page_count().saturating_sub(1);
+                this.go_to_page(last, cx);
+            }))
+            .on_action(cx.listener(|_, _: &FullScreen, window, _| window.toggle_fullscreen()))
+            .on_action(cx.listener(|this, _: &HandTool, _, cx| this.set_hand(true, cx)))
+            .on_action(cx.listener(|this, _: &SelectTool, _, cx| this.set_hand(false, cx)))
+            .on_action(cx.listener(|this, _: &SaveAs, _, cx| this.save_as(cx)))
             .on_action(cx.listener(|this, _: &NudgeUp, _, cx| {
                 this.nudge_picked(0.0, -1.0, cx);
             }))
@@ -5075,6 +5301,9 @@ impl Render for Viewer {
                     this.toggle_crop(cx);
                 } else if this.organizer {
                     this.toggle_organizer(cx);
+                } else if this.selection.is_some() {
+                    this.selection = None;
+                    cx.notify();
                 } else {
                     this.cancel_tool(cx);
                 }
@@ -5303,6 +5532,7 @@ impl Render for Viewer {
             }))
             .children(command_box)
             .children(self.picture_menu_element(cx))
+            .children(self.side_menu_element(cx))
             .into_any_element()
     }
 }
