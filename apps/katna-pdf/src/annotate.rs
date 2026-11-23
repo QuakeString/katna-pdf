@@ -64,28 +64,55 @@ impl Tool {
         Tool::Area,
     ];
 
+    /// Float's glyph for it (`icons/float`).
     pub fn icon(self) -> &'static str {
         match self {
-            Tool::Highlight => "highlight",
-            Tool::Underline => "format-underline",
-            Tool::StrikeOut => "format-strike",
-            Tool::Squiggly => "format-squiggle",
-            Tool::Note => "notes",
-            Tool::FreeText => "format-text",
-            Tool::Typewriter => "typewriter",
+            Tool::Highlight => "mark",
+            Tool::Underline => "under",
+            Tool::StrikeOut => "strike",
+            Tool::Squiggly => "squig",
+            Tool::Note => "note",
+            Tool::FreeText => "text",
+            Tool::Typewriter => "typew",
             Tool::Callout => "callout",
-            Tool::Ink => "ink",
-            Tool::Rectangle => "shape-square",
-            Tool::Ellipse => "shape-circle",
-            Tool::Line => "shape-line",
-            Tool::Arrow => "shape-arrow",
-            Tool::Polygon => "shape-polygon",
+            Tool::Ink => "pen",
+            Tool::Rectangle => "sq",
+            Tool::Ellipse => "circ",
+            Tool::Line => "line",
+            Tool::Arrow => "arrow",
+            Tool::Polygon => "polygon",
             Tool::Cloud => "cloud",
             Tool::Stamp => "stamp",
-            Tool::Attach => "attachment",
+            Tool::Attach => "clip",
             Tool::Distance => "ruler",
-            Tool::Perimeter => "measure-perimeter",
-            Tool::Area => "measure-area",
+            Tool::Perimeter => "perim",
+            Tool::Area => "area",
+        }
+    }
+
+    /// Its name, shown beside it in the tray while it is in hand.
+    pub fn name(self) -> &'static str {
+        match self {
+            Tool::Highlight => "tool-highlight-name",
+            Tool::Underline => "tool-underline-name",
+            Tool::StrikeOut => "tool-strikeout-name",
+            Tool::Squiggly => "tool-squiggly-name",
+            Tool::Note => "tool-note-name",
+            Tool::FreeText => "tool-free-text-name",
+            Tool::Typewriter => "tool-typewriter-name",
+            Tool::Callout => "tool-callout-name",
+            Tool::Ink => "tool-ink-name",
+            Tool::Rectangle => "tool-rectangle-name",
+            Tool::Ellipse => "tool-ellipse-name",
+            Tool::Line => "tool-line-name",
+            Tool::Arrow => "tool-arrow-name",
+            Tool::Polygon => "tool-polygon-name",
+            Tool::Cloud => "tool-cloud-name",
+            Tool::Stamp => "tool-stamp-name",
+            Tool::Attach => "tool-attach-name",
+            Tool::Distance => "tool-distance-name",
+            Tool::Perimeter => "tool-perimeter-name",
+            Tool::Area => "tool-area-name",
         }
     }
 

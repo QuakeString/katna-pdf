@@ -557,6 +557,9 @@ pub struct Viewer {
     stamp: String,
     custom_stamps: Vec<String>,
     stamp_input: Option<(Entity<TextInput>, Subscription)>,
+    /// The stamp card's tab: 0 standard, 1 with date and name, 2 the
+    /// person's own.
+    stamp_tab: usize,
     /// Whether annotation changes are being written, and those asked for
     /// meanwhile.
     annotating: bool,
@@ -727,6 +730,7 @@ impl Viewer {
             stamp: "Approved".into(),
             custom_stamps: stamps::load_custom(),
             stamp_input: None,
+            stamp_tab: 0,
             annotating: false,
             annots_waiting: Default::default(),
             comment_next: false,
@@ -3561,7 +3565,7 @@ impl Render for Viewer {
         };
         let dock = self.dock(cx);
         let tools = self.tools_row(cx).or_else(|| self.edit_row(cx));
-        let object_row = self.object_row(cx);
+        let object_row = self.object_row();
         let measure_bar = self.measure_bar(cx);
         let stamp_bar = self.stamp_bar(cx);
         let initials_bar = self.initials_bar(cx);
@@ -3582,6 +3586,7 @@ impl Render for Viewer {
             - 48.0
             - 4.0 * katna_ui::tokens::space::S3;
         let properties_card = self.properties_card(card_height, cx);
+        let object_card = self.object_card(card_height, cx);
         let find_bar = self.find_bar(cx);
         let notice = self.notice.clone().map(|notice| {
             div()
@@ -3914,14 +3919,15 @@ impl Render for Viewer {
                     .flex_col()
                     .items_center()
                     .gap(px(space::S3))
-                    .children(object_row.map(floating(th)))
+                    .children(object_row)
                     .children(measure_bar.map(floating(th)))
-                    .children(stamp_bar.map(floating(th)))
+                    .children(stamp_bar)
                     .children(initials_bar.map(floating(th)))
                     .children(notice)
-                    .children(tools.map(floating(th)))
+                    .children(tools)
                     .children(reading_bar.or(dock)),
             )
+            .children(object_card)
             .children(signing_card)
             .children(marks_card)
             .children(redact_card)

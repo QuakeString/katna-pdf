@@ -24,8 +24,18 @@ app carries it out.
   (Read, Comment, Edit, Pages, Forms, Sign; the mode on shows its name in
   inverse colours), zoom out, the zoom (a card of fits, steps, layouts and
   the hand tool), zoom in, fit page, the page number, the pages' colours.
-- **Tray**: the mode's tools float above the dock; the bars a tool opens
-  (object, measure, stamps, initials, read aloud) float above it too.
+- **Tray** (`float::tray`): the mode's tools float above the dock (C01,
+  E01); the tool in hand shows its name on the accent's wash, colours are
+  dots ringed when picked. The bars a tool opens (measure, initials, read
+  aloud) and the stamp card (C05: Standard, With date and name, Mine)
+  float above it too.
+- **Paragraph bar**: the paragraph being typed in has its font, size,
+  bold, italic, alignment, spacing, copy and delete in a bar floating
+  just over it (`textedit.rs`).
+- **Object card** (`objects.rs` `inspector`): the pictures and shapes
+  picked get a card at the top right (E07): place and size, fill and
+  line with switches and see-through, width, dashes, ends, corners,
+  edit points, arrange (line up, turn, flip, fit, order), layer, delete.
   Notices and the signatures line float at the top, Find at the top right.
 - **Profile menu**: the person, Mode (System, Day, Night), the colour
   schemes, the pages' colours, the app menu, an update when one is ready,
@@ -56,7 +66,6 @@ line icons (`icons/float/`, served as `icons/f/NAME.svg`), 1.7 px strokes.
 
 ## Still to come
 
-One PR per area of the storyboard: reading and start screens (R, S),
-comment and edit trays (C, E), pages, forms and signing (P, F, G), the
+One PR per area of the storyboard: pages, forms and signing (P, F, G), the
 library (L), and the Settings window with the Profile page and the scheme
 editor (X, T).
