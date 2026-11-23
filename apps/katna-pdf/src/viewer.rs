@@ -47,6 +47,7 @@ mod export;
 mod files;
 mod find;
 mod fonts;
+mod goto;
 mod initials;
 mod insert;
 mod linking;
@@ -108,6 +109,7 @@ actions!(
         FitPage,
         FitHeight,
         RotateViewRight,
+        GoToPage,
         RotateViewLeft,
         ZoomToArea,
         Loupe,
@@ -284,6 +286,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl-2", FitPage, None),
         KeyBinding::new("ctrl-4", FitHeight, None),
         KeyBinding::new("ctrl-r", RotateViewRight, None),
+        KeyBinding::new("ctrl-g", GoToPage, None),
         KeyBinding::new("ctrl-shift-r", RotateViewLeft, None),
         KeyBinding::new("ctrl-3", NextSpread, None),
         KeyBinding::new("ctrl-0", ActualSize, None),
@@ -565,6 +568,8 @@ pub struct Viewer {
     numbering: Option<numbering::Numbering>,
     /// The card for pasting copied objects on many pages, while open.
     pasting_many: Option<objects::PastingMany>,
+    /// The Go to page bar, while open.
+    going_to: Option<goto::GoingTo>,
     setup: Option<setup::PageSetup>,
     /// The form, once read, if the file has fields to fill in.
     form: Option<Form>,
@@ -852,6 +857,7 @@ impl Viewer {
             compare_count: 0,
             numbering: None,
             pasting_many: None,
+            going_to: None,
             setup: None,
             form: None,
             links: None,
@@ -4306,6 +4312,7 @@ impl Render for Viewer {
         let object_row = self.crop_bar(cx).or_else(|| self.object_row());
         let measure_bar = self.measure_bar(cx);
         let stamp_bar = self.stamp_bar(cx);
+        let goto_bar = self.goto_bar();
         let initials_bar = self.initials_bar(cx);
         let reading_bar = self.reading_bar(cx);
         let signatures_line = self.signatures_line(cx);
@@ -4522,6 +4529,7 @@ impl Render for Viewer {
             .on_action(cx.listener(|this, _: &PreviousPage, _, cx| this.step_page(false, cx)))
             .on_action(cx.listener(|this, _: &NextSpread, _, cx| this.next_spread(cx)))
             .on_action(cx.listener(|this, _: &RotateViewRight, _, cx| this.turn_view(1, cx)))
+            .on_action(cx.listener(|this, _: &GoToPage, window, cx| this.toggle_goto(window, cx)))
             .on_action(cx.listener(|this, _: &RotateViewLeft, _, cx| this.turn_view(3, cx)))
             .on_action(cx.listener(|this, _: &Print, _, cx| this.toggle_printing(cx)))
             .on_action(cx.listener(|this, _: &Save, _, cx| this.save(cx)))
@@ -4698,6 +4706,7 @@ impl Render for Viewer {
                     .children(object_row)
                     .children(measure_bar.map(floating(th)))
                     .children(stamp_bar)
+                    .children(goto_bar.map(floating(th)))
                     .children(initials_bar.map(floating(th)))
                     .children(notice)
                     .children(tools.map(|t| float::appear("tools-row", t, -6.0)))

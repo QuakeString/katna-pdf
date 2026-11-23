@@ -1268,6 +1268,7 @@ menu-go = _Go
 menu-next-page = _Next Page
 menu-previous-page = _Previous Page
 menu-previous-view = Previous _View
+menu-go-to-page = Go to page…
 menu-next-view = Ne_xt View
 menu-add-bookmark = Add _Bookmark
 menu-next-tab = Next _Tab
@@ -1609,3 +1610,10 @@ start-detail = Choose a file, or drop one anywhere on this window.
 start-open-all = Open all { $count }
 start-recent = Opened lately
 start-at-page = { $folder } · page { $page }
+
+## Go to page (Ctrl+G)
+goto-label = Go to page
+goto-placeholder = 1 to { $count }
+goto-of = of { $count }
+goto-or-label = number or label
+goto-no-page = There's no page "{ $typed }": type a number from 1 to { $count }, or a page's label.

@@ -8,11 +8,11 @@ use gpui::Action;
 
 use crate::viewer::{
     ActualSize, AddBookmark, Annotate, CloseAll, CloseTab, Compare, CopyText, Export, Find,
-    FindNext, FindPrevious, FitHeight, FitPage, FitWidth, Loupe, NewWindow, NextPage, NextSpread,
-    NextTab, NextView, Open, OpenSettings, Organize, Present, PreviousPage, PreviousTab,
-    PreviousView, Print, Properties, Quit, ReadAloud, ReopenSession, ReportProblem, Revert,
-    RotateViewLeft, RotateViewRight, Save, Shortcuts, ShowAbout, ShowLibrary, Sign, Snapshot,
-    ToggleContents, ToggleNight, ZoomIn, ZoomOut, ZoomToArea,
+    FindNext, FindPrevious, FitHeight, FitPage, FitWidth, GoToPage, Loupe, NewWindow, NextPage,
+    NextSpread, NextTab, NextView, Open, OpenSettings, Organize, Present, PreviousPage,
+    PreviousTab, PreviousView, Print, Properties, Quit, ReadAloud, ReopenSession, ReportProblem,
+    Revert, RotateViewLeft, RotateViewRight, Save, Shortcuts, ShowAbout, ShowLibrary, Sign,
+    Snapshot, ToggleContents, ToggleNight, ZoomIn, ZoomOut, ZoomToArea,
 };
 
 /// An item: its id (and the id of its words), and its keys as
@@ -86,6 +86,7 @@ pub const MENUS: &[(&str, &[Entry])] = &[
         &[
             Some(("menu-next-page", &["Page Down"])),
             Some(("menu-previous-page", &["Page Up"])),
+            Some(("menu-go-to-page", &["Control", "G"])),
             Some(("menu-previous-view", &["Alt", "Left"])),
             Some(("menu-next-view", &["Alt", "Right"])),
             Some(("menu-add-bookmark", &["Control", "B"])),
@@ -156,6 +157,7 @@ pub fn action(id: &str) -> Option<Box<dyn Action>> {
         "menu-close-all" => Box::new(CloseAll),
         "menu-shortcuts" => Box::new(Shortcuts),
         "menu-previous-view" => Box::new(PreviousView),
+        "menu-go-to-page" => Box::new(GoToPage),
         "menu-next-view" => Box::new(NextView),
         "menu-loupe" => Box::new(Loupe),
         "menu-rotate-right" => Box::new(RotateViewRight),
