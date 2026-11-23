@@ -123,7 +123,7 @@ pub(super) fn allowed_id(allowed: Allowed) -> &'static str {
     }
 }
 
-fn change_id(change: Change) -> &'static str {
+pub(super) fn change_id(change: Change) -> &'static str {
     match change {
         Change::FormFilled => "change-form",
         Change::Signed => "change-signed",

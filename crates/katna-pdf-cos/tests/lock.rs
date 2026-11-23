@@ -132,3 +132,34 @@ fn changes_to_a_locked_file_are_told_apart() {
         [Change::Dss]
     );
 }
+
+#[test]
+fn revisions_are_listed_with_what_each_changed() {
+    let first = letter();
+    let one = first.bytes().len();
+    let data = Dss {
+        certs: vec![b"not really a certificate".to_vec()],
+        ..Dss::default()
+    };
+    let second = Document::load(first.add_dss(&data).unwrap()).unwrap();
+    let two = second.bytes().len();
+    let third = Document::load(
+        second
+            .set_metadata(&katna_pdf_cos::Metadata {
+                title: Some("Again".into()),
+                ..Default::default()
+            })
+            .unwrap(),
+    )
+    .unwrap();
+    let all = third.revisions();
+    assert_eq!(
+        all.iter().map(|r| r.end).collect::<Vec<_>>(),
+        [one, two, third.bytes().len()]
+    );
+    assert!(all[0].changes.is_empty());
+    assert_eq!(all[1].changes.iter().collect::<Vec<_>>(), [&Change::Dss]);
+    assert!(!all[2].changes.is_empty());
+    // A file saved once has one.
+    assert_eq!(letter().revisions().len(), 1);
+}
