@@ -140,7 +140,11 @@ impl HayroDocument {
         if w16 == 0 || h16 == 0 {
             return None;
         }
-        if let Some(drawn) = self.draw_scene(page, scale, origin, size) {
+        // A scene keeps its page's comments: with them hidden, the page
+        // is drawn the usual way.
+        if crate::comments_shown()
+            && let Some(drawn) = self.draw_scene(page, scale, origin, size)
+        {
             return drawn;
         }
         let pages = self.pdf.pages();
@@ -153,7 +157,10 @@ impl HayroDocument {
         render_into(
             pdf_page,
             &cache,
-            &InterpreterSettings::default(),
+            &InterpreterSettings {
+                render_comments: crate::comments_shown(),
+                ..InterpreterSettings::default()
+            },
             &RenderSettings::default(),
             &mut ctx,
             transform,

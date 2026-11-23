@@ -56,6 +56,10 @@ impl Viewer {
 
     pub(super) fn pick_tool(&mut self, tool: Tool, cx: &mut Context<Self>) {
         self.tool = (self.tool != Some(tool)).then_some(tool);
+        // Comments drawn while hidden would not be seen: they come back.
+        if self.tool.is_some() && !katna_pdf_render::comments_shown() {
+            super::set_comments_shown(true, cx);
+        }
         self.colour_chosen = false;
         self.cropping = false;
         self.draft = None;
@@ -311,7 +315,8 @@ impl Viewer {
             // Markup tools select text, and mark it when let go.
             Some(_) => false,
             None => {
-                let hit = self.inverse(page).and_then(|inv| {
+                let shown = katna_pdf_render::comments_shown();
+                let hit = self.inverse(page).filter(|_| shown).and_then(|inv| {
                     let annots = self.annots.as_ref()?.get(page)?;
                     annots.get(annotate::at(annots, inv.map(point))?)?.id
                 });
@@ -328,7 +333,10 @@ impl Viewer {
         position: gpui::Point<gpui::Pixels>,
         cx: &mut Context<Self>,
     ) {
-        let hit = if self.tool.is_some() || !cx.global::<crate::prefs::Prefs>().comment_hover {
+        let hit = if self.tool.is_some()
+            || !cx.global::<crate::prefs::Prefs>().comment_hover
+            || !katna_pdf_render::comments_shown()
+        {
             None
         } else {
             self.page_point(position).and_then(|(page, point)| {

@@ -13,7 +13,7 @@ use crate::viewer::{
     OpenSettings, Organize, Present, PreviousPage, PreviousTab, PreviousView, Print, Properties,
     Quit, ReadAloud, ReadMode, Redo, ReopenSession, ReportProblem, Revert, RotateViewLeft,
     RotateViewRight, Save, SelectAll, SendByEmail, Shortcuts, ShowAbout, ShowGuide, ShowLibrary,
-    Sign, Snapshot, ToggleContents, ToggleNight, Undo, ZoomIn, ZoomOut, ZoomToArea,
+    Sign, Snapshot, ToggleComments, ToggleContents, ToggleNight, Undo, ZoomIn, ZoomOut, ZoomToArea,
 };
 
 /// An item: its id (and the id of its words), and its keys as
@@ -85,6 +85,7 @@ pub const MENUS: &[(&str, &[Entry])] = &[
             Some(("menu-side-pane", &["F7"])),
             Some(("menu-read-mode", &["Control", "H"])),
             Some(("menu-night", &["Control", "Shift", "N"])),
+            Some(("menu-comments", &[])),
             Some(("menu-read-aloud", &["Control", "Shift", "Y"])),
             Some(("menu-auto-scroll", &["Control", "Shift", "H"])),
             Some(("menu-cursor-coordinates", &[])),
@@ -183,6 +184,7 @@ pub fn action(id: &str) -> Option<Box<dyn Action>> {
         "menu-side-pane" => Box::new(ToggleContents),
         "menu-read-mode" => Box::new(ReadMode),
         "menu-night" => Box::new(ToggleNight),
+        "menu-comments" => Box::new(ToggleComments),
         "menu-read-aloud" => Box::new(ReadAloud),
         "menu-present" => Box::new(Present),
         "menu-next-page" => Box::new(NextPage),

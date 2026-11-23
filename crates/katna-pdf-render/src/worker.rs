@@ -116,6 +116,7 @@ impl Document for RemoteDocument {
     fn render(&self, page: usize, scale: f32) -> Option<Bitmap> {
         let mut m = Message::new(RENDER);
         m.u64(self.id).u32(page as u32).f32(scale);
+        m.0.push(u8::from(crate::comments_shown()));
         match self.ask(page, &m.0) {
             Ok(answer) => bitmap(answer?),
             Err(()) => self.local.render(page, scale),
@@ -131,6 +132,7 @@ impl Document for RemoteDocument {
             .u32(region.y)
             .u32(region.width)
             .u32(region.height);
+        m.0.push(u8::from(crate::comments_shown()));
         match self.ask(page, &m.0) {
             Ok(answer) => bitmap(answer?),
             Err(()) => self.local.render_region(page, scale, region),
@@ -443,6 +445,7 @@ fn answer(docs: &mut Vec<(u64, Arc<dyn Document>)>, request: &[u8], blob: Vec<u8
                 return failed();
             };
             let drawn = if kind == RENDER {
+                crate::show_comments(r.u8() != Some(0));
                 doc.render(page, scale)
             } else {
                 let (Some(x), Some(y), Some(width), Some(height)) =
@@ -450,6 +453,7 @@ fn answer(docs: &mut Vec<(u64, Arc<dyn Document>)>, request: &[u8], blob: Vec<u8
                 else {
                     return failed();
                 };
+                crate::show_comments(r.u8() != Some(0));
                 doc.render_region(
                     page,
                     scale,

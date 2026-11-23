@@ -140,6 +140,7 @@ actions!(
         ScrollDown,
         ToggleContents,
         ToggleNight,
+        ToggleComments,
         Find,
         CommandBox,
         FindNext,
@@ -387,6 +388,19 @@ enum PaneTab {
     Signatures,
     /// What changed from another version, while comparing.
     Changes,
+}
+
+/// Whether the pages show their comments; every viewer draws its pages
+/// again when it changes (View > Comments, the Comments pane's menu).
+#[derive(Default)]
+pub struct CommentsShown(pub bool);
+
+impl gpui::Global for CommentsShown {}
+
+/// Shows or hides the comments in every window.
+pub(crate) fn set_comments_shown(on: bool, cx: &mut gpui::App) {
+    katna_pdf_render::show_comments(on);
+    cx.set_global(CommentsShown(on));
 }
 
 /// What a viewer asks of the tabs around it.
@@ -860,6 +874,7 @@ pub struct Viewer {
     _appearance: Subscription,
     _look: Subscription,
     _prefs: Subscription,
+    _comments: Subscription,
 }
 
 impl Viewer {
@@ -881,6 +896,15 @@ impl Viewer {
         });
         let look = cx.observe_global_in::<crate::look::Look>(window, |this, window, cx| {
             this.restyle(window, cx);
+        });
+        let comments_changed = cx.observe_global::<CommentsShown>(|this, cx| {
+            this.annot_hover = None;
+            if !cx.global::<CommentsShown>().0 {
+                this.chosen = None;
+                this.notice = Some(said("comments-hidden", &[]));
+            }
+            this.redraw_all();
+            cx.notify();
         });
         let prefs_changed = cx.observe_global::<Prefs>(|this, cx| {
             let was = this.page_colors();
@@ -1074,6 +1098,7 @@ impl Viewer {
             _appearance: appearance,
             _look: look,
             _prefs: prefs_changed,
+            _comments: comments_changed,
         };
         if let Some(file) = file {
             this.open(file, cx);
@@ -2911,6 +2936,23 @@ impl Viewer {
         self.texts = Some(search::texts(self.page_count()));
     }
 
+    /// Draws every page and thumbnail again, as the comments were shown
+    /// or hidden.
+    fn redraw_all(&mut self) {
+        let Content::Ready(_) = &self.content else {
+            return;
+        };
+        self.revision += 1;
+        self.forget_runs();
+        for page in 0..self.page_count() {
+            if let Some(drawn) = self.pages.get_mut(&page) {
+                drawn.scale = 0.0;
+            }
+            self.drawing.remove(&page);
+            self.released.extend(self.thumbs.forget(page));
+        }
+    }
+
     /// A click on page `page`'s thumbnail: picks it (Ctrl adds or takes
     /// it away, Shift picks the run to it) and, alone, goes to it.
     fn thumb_click(&mut self, page: usize, ctrl: bool, shift: bool, cx: &mut Context<Self>) {
@@ -4744,6 +4786,9 @@ impl Render for Viewer {
             .on_action(cx.listener(|this, _: &Redo, _, cx| this.redo(cx)))
             .on_action(cx.listener(|this, _: &ToggleContents, _, cx| this.toggle_pane(cx)))
             .on_action(cx.listener(|this, _: &ToggleNight, _, cx| this.toggle_night(cx)))
+            .on_action(cx.listener(|_, _: &ToggleComments, _, cx| {
+                set_comments_shown(!katna_pdf_render::comments_shown(), cx)
+            }))
             .on_action(cx.listener(|this, _: &Find, window, cx| this.open_search(window, cx)))
             .on_action(cx.listener(|this, _: &CommandBox, window, cx| {
                 this.toggle_command(window, cx);
