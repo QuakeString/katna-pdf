@@ -120,6 +120,7 @@ impl Viewer {
         }
         let th = self.theme;
         let now = self.mode();
+        let labels = cx.global::<crate::prefs::Prefs>().dock_labels;
         let mut dock = bar_shell(&th, 12.0).id("dock").occlude();
         for (i, mode) in Mode::ALL.into_iter().enumerate() {
             let on = mode == now;
@@ -127,7 +128,7 @@ impl Viewer {
                 dk(
                     ("dock-mode", i),
                     mode.icon(),
-                    on.then(|| SharedString::from(t(mode.words(), &[]))),
+                    (on && labels).then(|| SharedString::from(t(mode.words(), &[]))),
                     t(mode.words(), &[]),
                     if on { Pressed::Mode } else { Pressed::No },
                     &th,

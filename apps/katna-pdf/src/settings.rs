@@ -18,7 +18,7 @@ use katna_ui::tokens::{space, text};
 use crate::float::{self, avatar, button, icon, seg, seg_item};
 use crate::look::{self, Look, Mine, Mode};
 use crate::menus::{MENUS, keys_text, plain};
-use crate::prefs::{Prefs, StartZoom, Units};
+use crate::prefs::{self, Prefs, StartZoom, Units};
 use crate::profile::Profile;
 use crate::spread::Spread;
 use crate::text::t;
@@ -105,6 +105,8 @@ pub struct Settings {
     editor: Option<Editor>,
     /// Why the last scheme file could not be brought in (X11).
     notice: Option<String>,
+    /// Whether the menu of pages at night is open (X09).
+    night_menu: bool,
     _subs: Vec<Subscription>,
 }
 
@@ -152,6 +154,7 @@ impl Settings {
         let mut subs = vec![
             cx.observe_window_appearance(window, |this, window, cx| this.restyle(window, cx)),
             cx.observe_global_in::<Look>(window, |this, window, cx| this.restyle(window, cx)),
+            cx.observe_global::<Prefs>(|_, cx| cx.notify()),
             cx.subscribe(&find, |_, _, _: &InputEvent, cx| cx.notify()),
             cx.subscribe(&server, |this, _, event: &InputEvent, cx| {
                 if matches!(event, InputEvent::Changed) {
@@ -184,6 +187,7 @@ impl Settings {
             folders: watched(),
             editor: None,
             notice: None,
+            night_menu: false,
             _subs: subs,
         }
     }
@@ -738,7 +742,195 @@ impl Settings {
             )
             .children(own_actions)
             .children(notice)
+            .child(self.accent_row(&current, cx))
+            .child(self.appearance_more(&current, cx))
             .into_any_element()
+    }
+
+    /// The accent over the scheme's own (X01): the scheme's, or one of
+    /// Katna Mail's seven.
+    fn accent_row(&self, current: &Look, cx: &mut Context<Self>) -> impl IntoElement {
+        use katna_ui::theme::Accent;
+        let th = self.theme;
+        let picked = current.accent;
+        let ring = |on: bool| {
+            div()
+                .size(px(26.0))
+                .flex_none()
+                .rounded_full()
+                .p(px(2.0))
+                .when(on, |d| d.border_2().border_color(th.text))
+        };
+        let own = div()
+            .id("settings-accent-own")
+            .cursor_pointer()
+            .child(
+                ring(picked == Accent::Scheme).child(
+                    div()
+                        .size_full()
+                        .rounded_full()
+                        .border_1()
+                        .border_dashed()
+                        .border_color(th.dim),
+                ),
+            )
+            .on_click(cx.listener(|_, _, _, cx| Look::set(cx, |l| l.accent = Accent::Scheme)));
+        let swatches = look::ACCENTS.iter().enumerate().map(|(i, &rgb)| {
+            let accent = Accent::Color(rgb << 8 | 0xff);
+            div()
+                .id(("settings-accent", i))
+                .cursor_pointer()
+                .child(
+                    ring(picked == accent)
+                        .child(div().size_full().rounded_full().bg(gpui::rgb(rgb))),
+                )
+                .on_click(cx.listener(move |_, _, _, cx| Look::set(cx, |l| l.accent = accent)))
+        });
+        let caption = match picked {
+            Accent::Scheme => "settings-accent-own",
+            _ => "settings-accent-mine",
+        };
+        div()
+            .mt(px(space::S5))
+            .flex()
+            .items_center()
+            .gap(px(space::S3))
+            .child(
+                div()
+                    .w(px(60.0))
+                    .flex_none()
+                    .text_size(px(text::BODY))
+                    .child(t("settings-accent", &[])),
+            )
+            .child(own)
+            .children(swatches)
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(80.0))
+                    .text_size(px(text::CAPTION))
+                    .text_color(th.dim)
+                    .truncate()
+                    .child(t(caption, &[])),
+            )
+    }
+
+    /// Appearance's other rows (X09): the pages at night, the size of
+    /// everything, the dock's labels and Katna Mail's colours.
+    fn appearance_more(&self, current: &Look, cx: &mut Context<Self>) -> impl IntoElement {
+        let th = self.theme;
+        let prefs = cx.global::<Prefs>().clone();
+        let night = crate::viewer::colors_text(prefs.night_pages);
+        let menu = self.night_menu.then(|| {
+            let items = katna_pdf_render::recolor::PageColors::ALL
+                .into_iter()
+                .enumerate()
+                .map(|(i, colors)| {
+                    float::menu_item(
+                        ("settings-night-pages", i),
+                        (colors == prefs.night_pages).then_some("check"),
+                        t(crate::viewer::colors_text(colors), &[]),
+                        None,
+                        &th,
+                    )
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.night_menu = false;
+                        Prefs::set(cx, |p| p.night_pages = colors);
+                    }))
+                });
+            float::popover(
+                float::menu("settings-night-menu", 200.0, &th).children(items),
+                false,
+                true,
+            )
+        });
+        let pages = div()
+            .relative()
+            .child(
+                div()
+                    .id("settings-night-button")
+                    .h(px(30.0))
+                    .px(px(space::S3))
+                    .flex()
+                    .items_center()
+                    .gap(px(space::S2))
+                    .rounded(px(6.0))
+                    .border_1()
+                    .border_color(th.line)
+                    .cursor_pointer()
+                    .text_size(px(text::BODY))
+                    .child(t(night, &[]))
+                    .child(icon("chev", 14.0, th.dim))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.night_menu = !this.night_menu;
+                        cx.notify();
+                    })),
+            )
+            .children(menu)
+            .into_any_element();
+        let size = {
+            let items = prefs::SIZES.into_iter().enumerate().map(|(i, value)| {
+                seg_item(
+                    ("settings-size", i),
+                    None,
+                    Some(size_words(value).into()),
+                    (prefs.size - value).abs() < 0.001,
+                    &th,
+                )
+                .flex_none()
+                .on_click(cx.listener(move |_, _, _, cx| Prefs::set(cx, |p| p.size = value)))
+            });
+            seg(&th).children(items).into_any_element()
+        };
+        let labels = self.toggle(
+            "settings-dock-labels",
+            prefs.dock_labels,
+            |p, v| p.dock_labels = v,
+            cx,
+        );
+        let follow = look::mail_config_file().map(|_| {
+            let on = current.follow_mail;
+            float::switch("settings-follow-mail", on, &th)
+                .on_click(cx.listener(move |_, _, _, cx| {
+                    Look::set(cx, |l| {
+                        l.follow_mail = !on;
+                        if l.follow_mail {
+                            l.take_mail();
+                        }
+                    })
+                }))
+                .into_any_element()
+        });
+        div()
+            .mt(px(space::S4))
+            .flex()
+            .flex_col()
+            .child(self.row(
+                t("settings-night-pages", &[]),
+                None,
+                Some(t("settings-night-pages-detail", &[])),
+                Some(pages),
+            ))
+            .child(self.row(
+                t("settings-size", &[]),
+                None,
+                Some(t("settings-size-detail", &[])),
+                Some(size),
+            ))
+            .child(self.row(
+                t("settings-dock-labels", &[]),
+                None,
+                Some(t("settings-dock-labels-detail", &[])),
+                Some(labels),
+            ))
+            .children(follow.map(|follow| {
+                self.row(
+                    t("settings-follow-mail", &[]),
+                    None,
+                    Some(t("settings-follow-mail-detail", &[])),
+                    Some(follow),
+                )
+            }))
     }
 
     /// A choice of a few, as a segmented control that changes `Prefs`.
@@ -1546,6 +1738,14 @@ impl Settings {
 
 /// A small picture of a scheme's side: a card on its page, text lines,
 /// and the accent as a button.
+/// A size of everything, as a percentage.
+fn size_words(size: f32) -> String {
+    t(
+        "settings-size-percent",
+        &[("n", &format!("{:.0}", size * 100.0))],
+    )
+}
+
 fn preview(five: Five) -> impl IntoElement {
     let c = |rgb: u32| gpui::rgb(rgb);
     let line = |w: f32, colour: u32| div().h(px(3.0)).w(px(w)).rounded(px(1.5)).bg(c(colour));

@@ -106,7 +106,17 @@ at Shortcuts; asking again brings the open window forward.
   of the side shown. Import (X11) reads a KDE `.colors` file into the
   editor, its own side as it is and the other made from Float's with
   its accent; anything else says why under the tiles. Kept in
-  `pdf/schemes.txt`; the profile menu's dots list them too.
+  `pdf/schemes.txt`; the profile menu's dots list them too. Under the
+  tiles the accent: the scheme's own, or one of Katna Mail's seven,
+  over any scheme (`Look::accent`, Katna Mail's `accent` setting).
+  Then (X09) the pages' colours when the window is dark, the size of
+  everything (`katna_ui::scale`, 90 to 125 %), the mode's name in the
+  dock, and Same colours as Katna Mail: shown when Katna Mail's
+  `config.toml` exists, it takes Katna Mail's mode, scheme and accent,
+  again whenever a window comes to the front, and writes the ones picked
+  here back to it (one of the person's own schemes stays Katna PDF's).
+  Pages that follow the scheme's card colour and a side pane that hides
+  by itself are not built.
 - Viewing (X02): where files open (last page read or page 1), their
   zoom and layout, the last session's files on start, and drawing in
   worker processes; kept in `pdf/prefs.txt` (`prefs.rs`).
@@ -143,4 +153,5 @@ Katna PDF opens Settings > About.
 
 ## Still to come
 
-The accent row in Appearance.
+Pages at night in the scheme's own card colour, and a side pane that
+hides by itself (X09).
