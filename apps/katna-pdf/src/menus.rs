@@ -8,9 +8,10 @@ use gpui::Action;
 
 use crate::viewer::{
     ActualSize, AddBookmark, Annotate, CloseTab, Compare, CopyText, Export, Find, FindNext,
-    FindPrevious, FitPage, FitWidth, NextPage, NextSpread, NextTab, Open, Organize, Present,
-    PreviousPage, PreviousTab, Print, Properties, Quit, ReadAloud, ReopenSession, Save,
-    ShowLibrary, Sign, ToggleContents, ToggleNight, ZoomIn, ZoomOut,
+    FindPrevious, FitPage, FitWidth, NextPage, NextSpread, NextTab, Open, OpenSettings, Organize,
+    Present, PreviousPage, PreviousTab, Print, Properties, Quit, ReadAloud, ReopenSession,
+    ReportProblem, Save, ShowAbout, ShowLibrary, ShowShortcuts, Sign, ToggleContents, ToggleNight,
+    ZoomIn, ZoomOut,
 };
 
 /// An item: its id (and the id of its words), and its keys as
@@ -80,6 +81,16 @@ pub const MENUS: &[(&str, &[Entry])] = &[
             Some(("menu-previous-tab", &["Control", "Shift", "Tab"])),
         ],
     ),
+    (
+        "menu-help",
+        &[
+            Some(("menu-settings", &["Control", ","])),
+            Some(("menu-shortcuts", &[])),
+            Some(("menu-report", &[])),
+            None,
+            Some(("menu-about", &[])),
+        ],
+    ),
 ];
 
 /// The action an item runs.
@@ -117,6 +128,10 @@ pub fn action(id: &str) -> Option<Box<dyn Action>> {
         "menu-add-bookmark" => Box::new(AddBookmark),
         "menu-next-tab" => Box::new(NextTab),
         "menu-previous-tab" => Box::new(PreviousTab),
+        "menu-settings" => Box::new(OpenSettings),
+        "menu-shortcuts" => Box::new(ShowShortcuts),
+        "menu-about" => Box::new(ShowAbout),
+        "menu-report" => Box::new(ReportProblem),
         _ => return None,
     })
 }

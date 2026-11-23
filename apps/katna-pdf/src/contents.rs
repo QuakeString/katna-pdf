@@ -4,7 +4,7 @@
 //! pages, as Okular's side pane shows it (docs/PLAN.md, Phase 1). Items
 //! with children open and close; clicking an item goes to its page.
 
-use gpui::{FontWeight, ScrollHandle, div, prelude::*, svg};
+use gpui::{AnimationExt as _, FontWeight, ScrollHandle, div, prelude::*, svg};
 use katna_pdf_cos::{Destination, OutlineItem};
 use katna_ui::tokens::{radius, space, text};
 use katna_ui::{ScrollBar, px};
@@ -250,6 +250,12 @@ pub fn row(
     on_fold: impl Fn(&mut gpui::Window, &mut gpui::App) + 'static,
     on_go: impl Fn(usize, &mut gpui::Window, &mut gpui::App) + 'static,
 ) -> impl IntoElement {
+    let key = row
+        .path
+        .iter()
+        .map(usize::to_string)
+        .collect::<Vec<_>>()
+        .join("-");
     let fold = row.fold.map(|open| {
         div()
             .id("fold")
@@ -265,28 +271,28 @@ pub fn row(
                 on_fold(window, cx);
             })
             .child(
+                // The arrow turns down as the item opens.
                 svg()
-                    .path(if open {
-                        "icons/chevron-down.svg"
-                    } else {
-                        "icons/chevron-right.svg"
-                    })
+                    .path("icons/chevron-right.svg")
                     .size(px(16.0))
-                    .text_color(th.dim),
+                    .text_color(th.dim)
+                    .with_spring(
+                        gpui::ElementId::Name(format!("fold-turn-{key}").into()),
+                        gpui::SpringAnimation::new(katna_ui::motion::scaled(
+                            katna_ui::motion::SMOOTH,
+                        ))
+                        .to(if open { 1.0 } else { 0.0 }),
+                        |svg, s: f32| {
+                            svg.with_transformation(gpui::Transformation::rotate(gpui::radians(
+                                s * std::f32::consts::FRAC_PI_2,
+                            )))
+                        },
+                    ),
             )
     });
-    div()
-        .id(gpui::ElementId::Name(
-            format!(
-                "outline-{}",
-                row.path
-                    .iter()
-                    .map(usize::to_string)
-                    .collect::<Vec<_>>()
-                    .join("-")
-            )
-            .into(),
-        ))
+    let grow = gpui::ElementId::Name(format!("outline-grow-{key}").into());
+    let line = div()
+        .id(gpui::ElementId::Name(format!("outline-{key}").into()))
         .h(px(ROW))
         .flex_shrink_0()
         .flex()
@@ -318,7 +324,20 @@ pub fn row(
                 .text_color(if row.dest.is_some() { th.text } else { th.dim })
                 .child(row.title)
                 .into_any_element(),
-        })
+        });
+    // A line comes in by growing to its height, as its parent opens.
+    div()
+        .flex_shrink_0()
+        .overflow_hidden()
+        .child(line)
+        .with_animation(
+            grow,
+            gpui::Animation::new(katna_ui::motion::time(std::time::Duration::from_millis(
+                180,
+            )))
+            .with_easing(gpui::ease_out_quint()),
+            |d, t| d.h(px(ROW * t)).opacity(t),
+        )
 }
 
 #[cfg(test)]

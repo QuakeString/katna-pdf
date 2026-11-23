@@ -488,25 +488,106 @@ impl Look {
 }
 
 /// The desktop's colours: KDE's scheme, GNOME's accent, Windows'.
-fn desktop_colors() -> SystemColors {
-    let kind = if cfg!(windows) {
-        DesktopKind::Windows
-    } else {
-        let desktops = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default();
-        let has = |name: &str| desktops.split(':').any(|d| d.eq_ignore_ascii_case(name));
-        if has("KDE") {
-            DesktopKind::Kde
-        } else if has("GNOME") {
-            DesktopKind::Gnome
-        } else {
-            DesktopKind::Other
-        }
-    };
-    match colors::config_home() {
-        _ if kind == DesktopKind::Windows => colors::read(kind, std::path::Path::new(""), None),
-        Some(home) => colors::read(kind, &home, None),
-        None => SystemColors::accent_only(None),
+fn desktop_kind() -> DesktopKind {
+    if cfg!(windows) {
+        return DesktopKind::Windows;
     }
+    let desktops = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default();
+    let has = |name: &str| desktops.split(':').any(|d| d.eq_ignore_ascii_case(name));
+    if has("KDE") {
+        DesktopKind::Kde
+    } else if has("GNOME") {
+        DesktopKind::Gnome
+    } else {
+        DesktopKind::Other
+    }
+}
+
+/// The desktop's colours with `portal_accent`, the accent the Settings
+/// portal gives (Plasma's and GNOME's own, the wallpaper's on Plasma).
+fn desktop_colors_with(portal_accent: Option<u32>) -> SystemColors {
+    let kind = desktop_kind();
+    match colors::config_home() {
+        _ if kind == DesktopKind::Windows => {
+            colors::read(kind, std::path::Path::new(""), portal_accent)
+        }
+        Some(home) => colors::read(kind, &home, portal_accent),
+        None => SystemColors::accent_only(portal_accent),
+    }
+}
+
+fn desktop_colors() -> SystemColors {
+    desktop_colors_with(None)
+}
+
+/// Follows the desktop's colours while the app runs, as Katna Mail does:
+/// the Settings portal's accent, read at once and whenever the portal
+/// says a setting changed, and the desktop's colour files (KDE's
+/// `kdeglobals`, GTK's style sheet) when they change.
+pub fn watch_desktop(cx: &mut App) {
+    use futures_lite::StreamExt;
+    let kind = desktop_kind();
+    let files = colors::config_home()
+        .map(|home| colors::watched_files(kind, &home))
+        .unwrap_or_default();
+    cx.spawn(async move |cx| {
+        let connection = cx
+            .background_executor()
+            .spawn(zbus::Connection::session())
+            .await
+            .ok();
+        let mut changes = match &connection {
+            Some(connection) => colors::setting_changes(connection).await.ok().map(Box::pin),
+            None => None,
+        };
+        let mut stamps = colors::stamps(&files);
+        let mut accent = None;
+        let mut ask_portal = true;
+        loop {
+            if ask_portal && let Some(connection) = &connection {
+                accent = colors::portal_accent(connection).await;
+            }
+            let desktop = cx
+                .background_executor()
+                .spawn(async move { desktop_colors_with(accent) })
+                .await;
+            cx.update(|cx| {
+                let look = cx.global::<Look>();
+                if look.desktop != desktop {
+                    let mut look = look.clone();
+                    look.desktop = desktop;
+                    cx.set_global(look);
+                }
+            });
+            // Wait for the portal, or look at the files every few seconds.
+            loop {
+                let timer = async {
+                    cx.background_executor()
+                        .timer(std::time::Duration::from_secs(3))
+                        .await;
+                    false
+                };
+                let signalled = match changes.as_mut() {
+                    Some(changes) => {
+                        futures_lite::future::or(async { changes.next().await.is_some() }, timer)
+                            .await
+                    }
+                    None => timer.await,
+                };
+                let now = colors::stamps(&files);
+                if signalled || now != stamps {
+                    stamps = now;
+                    ask_portal = signalled || accent.is_none();
+                    // Let the desktop finish writing.
+                    cx.background_executor()
+                        .timer(std::time::Duration::from_millis(300))
+                        .await;
+                    break;
+                }
+            }
+        }
+    })
+    .detach();
 }
 
 #[cfg(test)]

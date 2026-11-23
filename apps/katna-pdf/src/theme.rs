@@ -136,7 +136,6 @@ impl Theme {
             th.line = c(0x2c3039);
             th.line_soft = c(0x252930);
             th.text2 = c(0xc4c9d2);
-            th.accent_soft = c(0x22304f);
             th.accent_text = c(0xa9c1ff);
             th.on_accent = c(0x0b1020);
         } else {
@@ -145,7 +144,6 @@ impl Theme {
             th.line = c(0xdfe2e8);
             th.line_soft = c(0xeef0f3);
             th.text2 = c(0x3d434d);
-            th.accent_soft = c(0xe6edff);
             th.accent_text = c(0x1d4fd8);
         }
         th
@@ -173,11 +171,13 @@ impl Theme {
             dim: c(fa),
             line: c(m(cd, tx, 0.15)),
             line_soft: c(m(cd, tx, 0.09)),
-            hover: c(m(cd, tx, 0.06)),
+            // The text colour over whatever is under it, so a hover
+            // shows on the title bar, the cards and the page alike.
+            hover: c(tx).opacity(if dark { 0.12 } else { 0.09 }),
             field: c(m(cd, tx, 0.06)),
             sunk: c(m(pg, tx, 0.03)),
             accent: c(ac),
-            accent_soft: c(m(cd, ac, if dark { 0.2 } else { 0.12 })),
+            accent_soft: c(m(cd, ac, if dark { 0.3 } else { 0.2 })),
             accent_text: c(if dark {
                 m(ac, 0xffffff, 0.25)
             } else {

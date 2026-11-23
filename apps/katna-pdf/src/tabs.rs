@@ -57,7 +57,8 @@ pub struct Tabs {
     pub(crate) menu: Option<TopMenu>,
     pub(crate) menu_closed: Option<(TopMenu, std::time::Instant)>,
     /// The app menu's submenu shown.
-    pub(crate) app_open: usize,
+    /// The application menu's title pointed at, its items shown.
+    pub(crate) app_open: Option<usize>,
     /// The person's name, for their picture.
     pub(crate) person: String,
     /// The window title last set, so it is set only when it changes.
@@ -110,7 +111,7 @@ impl Tabs {
             active: 0,
             menu: None,
             menu_closed: None,
-            app_open: 0,
+            app_open: None,
             person: cx.global::<crate::profile::Profile>().display_name(),
             title: String::new(),
             theme: Theme::current(window, cx.global()),
@@ -597,6 +598,15 @@ impl Render for Tabs {
             .on_action(cx.listener(|this, _: &Open, window, cx| this.choose_files(window, cx)))
             .on_action(cx.listener(|_, _: &crate::viewer::OpenSettings, _, cx| {
                 crate::settings::open(crate::settings::Page::Appearance, cx)
+            }))
+            .on_action(cx.listener(|_, _: &crate::viewer::ShowShortcuts, _, cx| {
+                crate::settings::open(crate::settings::Page::Shortcuts, cx)
+            }))
+            .on_action(cx.listener(|_, _: &crate::viewer::ReportProblem, _, cx| {
+                cx.open_url("https://github.com/QuakeString/katna-pdf/issues/new")
+            }))
+            .on_action(cx.listener(|_, _: &crate::viewer::ShowAbout, _, cx| {
+                crate::settings::open(crate::settings::Page::About, cx)
             }))
             .on_action(
                 cx.listener(|this, _: &ReopenSession, window, cx| this.reopen_session(window, cx)),

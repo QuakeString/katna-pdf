@@ -470,7 +470,7 @@ pub fn popover(menu: impl IntoElement, above: bool, right: bool) -> AnyElement {
                 katna_ui::anchored().anchor(anchor).snap_to_window().child(
                     div()
                         .map(|d| if above { d.mb(px(8.0)) } else { d.mt(px(6.0)) })
-                        .child(menu),
+                        .child(appear("popover", menu, if above { 4.0 } else { -4.0 })),
                 ),
             )
             .with_priority(2),
@@ -486,6 +486,44 @@ pub fn initials(name: &str) -> String {
         (Some(a), None) => a.to_uppercase().collect(),
         _ => "?".into(),
     }
+}
+
+/// `el` coming on: faded in and risen `rise` pixels into place over a
+/// moment (none when the desktop asks for less motion). Runs each time
+/// the element comes back after being gone.
+pub fn appear(id: impl Into<ElementId>, el: impl IntoElement, rise: f32) -> AnyElement {
+    use gpui::{Animation, AnimationExt, ease_out_quint};
+    div()
+        .relative()
+        .child(el)
+        .with_animation(
+            id,
+            Animation::new(katna_ui::motion::time(std::time::Duration::from_millis(
+                180,
+            )))
+            .with_easing(ease_out_quint()),
+            move |d, t| d.opacity(t).top(px(rise * (1.0 - t))),
+        )
+        .into_any_element()
+}
+
+/// [`appear`] for a card placed with `absolute()`: the motion is laid
+/// over the whole room, so the card keeps its own place in it.
+pub fn appear_over(id: impl Into<ElementId>, el: impl IntoElement, rise: f32) -> AnyElement {
+    use gpui::{Animation, AnimationExt, ease_out_quint};
+    div()
+        .absolute()
+        .inset_0()
+        .child(el)
+        .with_animation(
+            id,
+            Animation::new(katna_ui::motion::time(std::time::Duration::from_millis(
+                180,
+            )))
+            .with_easing(ease_out_quint()),
+            move |d, t| d.opacity(t).top(px(rise * (1.0 - t))),
+        )
+        .into_any_element()
 }
 
 #[cfg(test)]

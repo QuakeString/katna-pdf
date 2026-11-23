@@ -118,6 +118,7 @@ fn main() -> ExitCode {
         .run(move |cx: &mut App| {
             cx.set_global(history::History::load());
             cx.set_global(look::Look::load());
+            look::watch_desktop(cx);
             cx.set_global(profile::Profile::load());
             let prefs = prefs::Prefs::load();
             speech::set_speed(prefs.speed);

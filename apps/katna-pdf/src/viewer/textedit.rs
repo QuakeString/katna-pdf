@@ -390,6 +390,8 @@ impl Viewer {
         let handle = input.focus_handle(cx);
         window.focus(&handle, cx);
         cx.defer_in(window, move |_, window, cx| window.focus(&handle, cx));
+        // One thing is edited at a time: a picture or shape picked lets go.
+        self.picked_object = None;
         self.typing = Some(Typing {
             page,
             target,

@@ -1065,6 +1065,11 @@ menu-previous-page = _Previous Page
 menu-add-bookmark = Add _Bookmark
 menu-next-tab = Next _Tab
 menu-previous-tab = Previous T_ab
+menu-help = _Help
+menu-settings = _Settings…
+menu-shortcuts = _Keyboard Shortcuts
+menu-report = _Report a Problem…
+menu-about = _About Katna PDF
 
 # Katna PDF Setup, the Windows installer (apps/katna-pdf-setup).
 setup-window-title = Katna PDF Setup

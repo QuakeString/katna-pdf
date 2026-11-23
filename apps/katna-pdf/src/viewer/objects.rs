@@ -459,6 +459,9 @@ impl Viewer {
     /// Picks objects `indices` of page `page`, their numbers in the
     /// inspector.
     fn pick_object(&mut self, page: usize, indices: Vec<usize>, cx: &mut Context<Self>) {
+        // One thing is edited at a time: a paragraph being typed in is
+        // written first.
+        self.finish_text_edit(true, cx);
         let accent = gpui::rgba(self.theme.katna.accent).into();
         let fields = [0, 1, 2, 3, 4, 5].map(|_| {
             cx.new(|cx| {

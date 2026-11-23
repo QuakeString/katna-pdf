@@ -69,6 +69,9 @@ impl Tabs {
         } else {
             Some(which)
         };
+        if self.menu == Some(TopMenu::App) {
+            self.app_open = None;
+        }
         cx.notify();
     }
 
@@ -276,6 +279,10 @@ impl Tabs {
             .min_w_0()
             .flex()
             .gap(px(space::S2))
+            // Room for the chosen tab's shadow, which the scrolling
+            // strip would cut off.
+            .py(px(6.0))
+            .px(px(3.0))
             .overflow_x_scroll()
             .children(self.tabs.iter().enumerate().map(|(i, tab)| {
                 let on = i == self.active;
@@ -391,29 +398,31 @@ impl Tabs {
         )
     }
 
-    /// The application menu: File, Edit, View, Go, each opening beside
-    /// it (S09).
+    /// The application menu: File, Edit, View, Go under the button; the
+    /// one pointed at opens its items beside it, on the left, as the
+    /// menu sits at the window's right edge (S09).
     fn app_menu(&self, cx: &mut Context<Self>) -> AnyElement {
         let th = self.theme;
         let open = self.app_open;
+        let open_at = open.unwrap_or(usize::MAX);
         let titles = MENUS.iter().enumerate().map(|(i, (title, _))| {
             menu_item(("app-menu", i), None, plain(&t(title, &[])), None, &th)
-                .when(i == open, |d| {
+                .when(i == open_at, |d| {
                     d.bg(th.accent_soft).text_color(th.accent_text)
                 })
                 .child(float::icon("chevr", 13.0, th.dim))
                 .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
-                    if *hovered && this.app_open != i {
-                        this.app_open = i;
+                    if *hovered && this.app_open != Some(i) {
+                        this.app_open = Some(i);
                         cx.notify();
                     }
                 }))
                 .on_click(cx.listener(move |this, _, _, cx| {
-                    this.app_open = i;
+                    this.app_open = Some(i);
                     cx.notify();
                 }))
         });
-        let (_, entries) = MENUS[open.min(MENUS.len() - 1)];
+        let entries = open.and_then(|o| MENUS.get(o)).map_or(&[][..], |(_, e)| *e);
         let items = entries.iter().enumerate().map(|(i, entry)| match entry {
             None => menu_sep(&th).into_any_element(),
             Some((id, keys)) => {
@@ -442,8 +451,13 @@ impl Tabs {
                 .items_start()
                 .gap(px(space::S2))
                 .on_mouse_down_out(cx.listener(|this, _, _, cx| this.close_menu(cx)))
-                .child(menu("app-menu-titles", 190.0, &th).children(titles))
-                .child(menu("app-menu-items", 290.0, &th).children(items)),
+                .children(open.map(|o| {
+                    // Level with the title it belongs to.
+                    menu("app-menu-items", 290.0, &th)
+                        .mt(px(o as f32 * 32.0))
+                        .children(items)
+                }))
+                .child(menu("app-menu-titles", 190.0, &th).children(titles)),
             false,
             true,
         )

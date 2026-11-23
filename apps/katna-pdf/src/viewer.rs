@@ -19,6 +19,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use gpui::AnimationExt as _;
 use gpui::{
     AnyElement, App, ClickEvent, Context, Entity, EventEmitter, ExternalPaths, FocusHandle,
     Focusable, ImageSource, KeyBinding, ListAlignment, ListOffset, ListState, RenderImage,
@@ -83,6 +84,9 @@ actions!(
     [
         Open,
         OpenSettings,
+        ShowShortcuts,
+        ShowAbout,
+        ReportProblem,
         ReopenSession,
         Compare,
         Export,
@@ -575,6 +579,8 @@ pub struct Viewer {
     open_comment: bool,
     /// Whether the side pane is shown, and which of its tabs.
     pane: bool,
+    /// The side card sliding in (1) or out (0).
+    pane_slide: katna_ui::motion::Spring,
     tab: PaneTab,
     thumbs: Thumbs,
     /// The organizer shows in place of the pages (`organizer.rs`).
@@ -758,6 +764,7 @@ impl Viewer {
             comment_next: false,
             open_comment: false,
             pane: false,
+            pane_slide: katna_ui::motion::Spring::new(katna_ui::motion::SLIDE, 0.0),
             tab: PaneTab::Pages,
             thumbs: Thumbs::new(),
             organizer: false,
@@ -1794,9 +1801,12 @@ impl Viewer {
     /// The side pane: its tabs in a header lined up with the toolbar,
     /// then the page thumbnails or the outline.
     fn pane(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
-        if !self.pane_shown() {
+        if !matches!(self.content, Content::Ready(_))
+            || (!self.pane && self.pane_slide.value() < 0.01)
+        {
             return None;
         }
+        let slide = self.pane_slide.value().clamp(0.0, 1.0);
         let th = self.theme;
         let thumb = th.katna.text_dim & 0xffff_ff00 | 0x99;
         // Contents only when the file has an outline.
@@ -1986,7 +1996,10 @@ impl Viewer {
                 .id("side-card")
                 .occlude()
                 .absolute()
-                .left(px(float::GAP))
+                .left(px(
+                    float::GAP - (1.0 - slide) * (contents::WIDTH + float::GAP)
+                ))
+                .opacity(slide)
                 .top(px(space::S2))
                 .bottom(px(float::GAP))
                 .w(px(contents::WIDTH))
@@ -2753,17 +2766,39 @@ impl Viewer {
             .copied()
             .unwrap_or_else(|| self.current_page())
             .min(count.saturating_sub(1));
-        self.forget_pages();
+        // The same pages at the same sizes (an undo, a redo, most edits):
+        // the drawn pages stay on screen until drawn again, and the view
+        // stays where it is, so nothing blinks.
+        let same = match &self.content {
+            Content::Ready(shown) => {
+                shown.doc.page_count() == count
+                    && (0..count).all(|p| shown.doc.page_size(p) == doc.page_size(p))
+            }
+            _ => false,
+        };
         self.forget_runs();
         self.revision += 1;
-        self.list.reset(self.spread.rows(count));
-        self.list.scroll_to(ListOffset {
-            item_ix: self.spread.row_of(page),
-            offset_in_item: px(0.0),
-        });
-        self.visible = page..page + 1;
-        let old = self.thumbs.reset(count);
-        self.released.extend(old);
+        if same {
+            for drawn in self.pages.values_mut() {
+                drawn.scale = 0.0;
+            }
+            self.drawing.clear();
+            self.queue.clear();
+            self.forget_sharp(None);
+            for p in 0..count {
+                self.released.extend(self.thumbs.forget(p));
+            }
+        } else {
+            self.forget_pages();
+            self.list.reset(self.spread.rows(count));
+            self.list.scroll_to(ListOffset {
+                item_ix: self.spread.row_of(page),
+                offset_in_item: px(0.0),
+            });
+            self.visible = page..page + 1;
+            let old = self.thumbs.reset(count);
+            self.released.extend(old);
+        }
         self.texts = Some(search::texts(count));
         if let Some(bar) = self.search.as_mut() {
             bar.generation.fetch_add(1, Ordering::Relaxed);
@@ -3621,8 +3656,11 @@ impl Render for Viewer {
         self.focus_signing(window, cx);
         self.focus_calibrating(window, cx);
         self.focus_initials_field(window, cx);
+        self.pane_slide
+            .set(if self.pane_shown() { 1.0 } else { 0.0 });
+        self.pane_slide.tick(window, cx.reduce_motion());
         let pane = self.pane(window, cx);
-        let pane_room = if pane.is_some() {
+        let pane_room = if self.pane_shown() {
             contents::WIDTH + float::GAP
         } else {
             0.0
@@ -3997,15 +4035,15 @@ impl Render for Viewer {
                     .children(stamp_bar)
                     .children(initials_bar.map(floating(th)))
                     .children(notice)
-                    .children(tools)
+                    .children(tools.map(|t| float::appear("tools-row", t, -6.0)))
                     .children(reading_bar.or(dock)),
             )
-            .children(object_card)
-            .children(measure_card)
+            .children(object_card.map(|c| float::appear_over("object_card", c, -6.0)))
+            .children(measure_card.map(|c| float::appear_over("measure_card", c, -6.0)))
             .children(initials_card)
-            .children(signing_card)
-            .children(marks_card)
-            .children(redact_card)
+            .children(signing_card.map(|c| float::appear_over("signing_card", c, -6.0)))
+            .children(marks_card.map(|c| float::appear_over("marks_card", c, -6.0)))
+            .children(redact_card.map(|c| float::appear_over("redact_card", c, -6.0)))
             .children(export_card.map(|card| {
                 dialog(
                     th,
@@ -4026,9 +4064,9 @@ impl Render for Viewer {
                     }),
                 )
             }))
-            .children(link_card)
-            .children(numbering_card)
-            .children(paste_many_card)
+            .children(link_card.map(|c| float::appear_over("link_card", c, -6.0)))
+            .children(numbering_card.map(|c| float::appear_over("numbering_card", c, -6.0)))
+            .children(paste_many_card.map(|c| float::appear_over("paste_many_card", c, -6.0)))
             .children(setup_card.map(|card| {
                 dialog(
                     th,
@@ -4039,7 +4077,7 @@ impl Render for Viewer {
                     }),
                 )
             }))
-            .children(design_card)
+            .children(design_card.map(|c| float::appear_over("design_card", c, -6.0)))
             .children(properties_card.map(|card| {
                 dialog(
                     th,
@@ -4071,7 +4109,14 @@ fn dialog(
         .items_center()
         .justify_center()
         .on_mouse_down(gpui::MouseButton::Left, close)
-        .child(card)
+        .child(float::appear("dialog-card", card, 8.0))
+        .with_animation(
+            "dialog-scrim",
+            gpui::Animation::new(katna_ui::motion::time(std::time::Duration::from_millis(
+                140,
+            ))),
+            |d, t| d.opacity(t),
+        )
         .into_any_element()
 }
 
