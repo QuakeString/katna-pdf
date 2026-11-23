@@ -49,6 +49,8 @@ pub struct Theme {
     pub on_inverse: Hsla,
     pub error: Hsla,
     pub error_soft: Hsla,
+    /// Behind a dialog.
+    pub scrim: Hsla,
     /// A signature that holds.
     pub valid: u32,
     /// The palette for Katna's shared controls (`katna_ui::widgets`),
@@ -176,6 +178,11 @@ impl Theme {
             on_inverse: c(cd),
             error: c(if dark { 0xfca5a5 } else { 0xb91c1c }),
             error_soft: c(if dark { 0x2a1515 } else { 0xfde8e8 }),
+            scrim: if dark {
+                hsla(0.0, 0.0, 0.0, 0.5)
+            } else {
+                hsla(0.62, 0.2, 0.08, 0.28)
+            },
             valid: if dark { 0x81c995ff } else { 0x1e8e3eff },
             katna,
         }
@@ -218,6 +225,29 @@ impl Theme {
                 color: hsla(0.6, 0.2, 0.08, b),
                 offset: point(px(0.0), px(2.0)),
                 blur_radius: px(6.0),
+                spread_radius: px(0.0),
+                inset: false,
+            },
+        ]
+    }
+}
+
+impl Theme {
+    /// The shadow under a page.
+    pub fn page_shadow(&self) -> Vec<BoxShadow> {
+        let (a, b) = if self.dark { (0.3, 0.45) } else { (0.1, 0.08) };
+        vec![
+            BoxShadow {
+                color: hsla(0.6, 0.2, 0.1, a),
+                offset: point(px(0.0), px(1.0)),
+                blur_radius: px(3.0),
+                spread_radius: px(0.0),
+                inset: false,
+            },
+            BoxShadow {
+                color: hsla(0.6, 0.2, 0.1, b),
+                offset: point(px(0.0), px(8.0)),
+                blur_radius: px(28.0),
                 spread_radius: px(0.0),
                 inset: false,
             },

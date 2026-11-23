@@ -61,6 +61,7 @@ mod sharp;
 pub(crate) mod sign;
 mod speak;
 mod stamps;
+mod start;
 mod textedit;
 
 use crate::annotate::Tool;
@@ -1234,65 +1235,54 @@ impl Viewer {
         };
         Some(
             div()
-                .h(px(48.0))
-                .flex_shrink_0()
                 .flex()
                 .items_center()
                 .gap(px(space::S2))
-                .px(px(space::S3))
+                .p(px(space::S3))
                 .child(
                     div()
                         .flex_1()
                         .min_w_0()
-                        .max_w(px(420.0))
                         .h(px(32.0))
                         .flex()
                         .items_center()
-                        .gap(px(space::S2))
-                        .px(px(space::S3))
-                        .rounded(px(radius::FULL))
-                        .bg(th.field)
-                        .text_size(px(text::BODY))
+                        .gap(px(space::S3))
+                        .px(px(10.0))
+                        .rounded(px(7.0))
+                        .border_1()
+                        .border_color(th.accent)
+                        .bg(th.card)
+                        .text_size(px(text::SMALL))
                         .text_color(th.text)
+                        .child(float::icon("search", 15.0, th.dim))
+                        .child(div().flex_1().min_w_0().child(bar.input.clone()))
                         .child(
-                            svg()
-                                .path("icons/search.svg")
-                                .size(px(16.0))
-                                .flex_shrink_0()
-                                .text_color(th.dim),
-                        )
-                        .child(bar.input.clone()),
+                            div()
+                                .flex_none()
+                                .text_size(px(text::MICRO))
+                                .text_color(th.dim)
+                                .whitespace_nowrap()
+                                .child(status),
+                        ),
                 )
                 .child(
-                    div()
-                        .min_w(px(72.0))
-                        .text_size(px(text::SMALL))
-                        .text_color(th.dim)
-                        .whitespace_nowrap()
-                        .child(status),
+                    float::ib(
+                        "find-previous",
+                        "chevu",
+                        t("search-previous", &[]),
+                        false,
+                        &th,
+                    )
+                    .on_click(cx.listener(|this, _, _, cx| this.step_search(false, cx))),
                 )
-                .child(icon_button(
-                    "find-previous",
-                    "chevron-up",
-                    t("search-previous", &[]),
-                    th,
-                    cx.listener(|this, _, _, cx| this.step_search(false, cx)),
-                ))
-                .child(icon_button(
-                    "find-next",
-                    "chevron-down",
-                    t("search-next", &[]),
-                    th,
-                    cx.listener(|this, _, _, cx| this.step_search(true, cx)),
-                ))
-                .child(div().flex_1())
-                .child(icon_button(
-                    "find-close",
-                    "close",
-                    t("search-close", &[]),
-                    th,
-                    cx.listener(|this, _, window, cx| this.close_search(window, cx)),
-                ))
+                .child(
+                    float::ib("find-next", "chev", t("search-next", &[]), false, &th)
+                        .on_click(cx.listener(|this, _, _, cx| this.step_search(true, cx))),
+                )
+                .child(
+                    float::ib("find-close", "x", t("search-close", &[]), false, &th)
+                        .on_click(cx.listener(|this, _, window, cx| this.close_search(window, cx))),
+                )
                 .into_any_element(),
         )
     }
@@ -3308,7 +3298,7 @@ impl Viewer {
             .h(desktop_px(h * shown))
             .flex_shrink_0()
             .bg(self.paper())
-            .shadow_sm()
+            .shadow(self.theme.page_shadow())
             .relative()
             .cursor(match self.tool {
                 _ if self.cropping => gpui::CursorStyle::Crosshair,
@@ -3397,7 +3387,10 @@ impl Viewer {
     /// The bar of tools, `width` points wide: when that is too little for
     /// every button, the ones with keys of their own (fit to width and
     /// page, facing pages, print) are left out rather than cut off.
-    fn message(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn message(&self, cx: &mut Context<Self>) -> AnyElement {
+        if matches!(self.content, Content::Empty) {
+            return self.start_screen(cx);
+        }
         let th = self.theme;
         let body = div()
             .flex()
@@ -3465,57 +3458,7 @@ impl Viewer {
                     .text_center()
                     .child(message.clone()),
             ),
-            _ => body
-                .child(
-                    svg()
-                        .path("icons/document.svg")
-                        .size(px(48.0))
-                        .text_color(th.dim),
-                )
-                .child(
-                    div()
-                        .text_size(px(text::TITLE))
-                        .text_color(th.text)
-                        .child(t("empty-title", &[])),
-                )
-                .child(
-                    div()
-                        .text_size(px(text::SMALL))
-                        .text_color(th.dim)
-                        .child(t("empty-detail", &[])),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .gap(px(space::S2))
-                        .child(
-                            widgets::filled_button("empty-open", t("empty-open", &[]), &th.katna)
-                                .on_click(
-                                    cx.listener(|_, _, _, cx| cx.emit(ViewerEvent::ChooseFiles)),
-                                ),
-                        )
-                        .child(
-                            widgets::outlined_button(
-                                "empty-library",
-                                t("empty-library", &[]),
-                                &th.katna,
-                            )
-                            .on_click(cx.listener(|_, _, _, cx| cx.emit(ViewerEvent::ShowLibrary))),
-                        )
-                        .when(!cx.global::<History>().last_session().is_empty(), |row| {
-                            row.child(
-                                widgets::outlined_button(
-                                    "empty-session",
-                                    t("empty-session", &[]),
-                                    &th.katna,
-                                )
-                                .on_click(
-                                    cx.listener(|_, _, _, cx| cx.emit(ViewerEvent::ReopenSession)),
-                                ),
-                            )
-                        }),
-                )
-                .children(self.recent(cx)),
+            _ => body,
         };
         div()
             .flex_1()
@@ -3524,82 +3467,7 @@ impl Viewer {
             .justify_center()
             .bg(th.backdrop)
             .child(body)
-    }
-}
-
-impl Viewer {
-    /// The files opened lately, for the start screen.
-    fn recent(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
-        let th = self.theme;
-        let entries: Vec<_> = cx
-            .global::<History>()
-            .recent()
-            .iter()
-            .take(RECENT)
-            .cloned()
-            .collect();
-        if entries.is_empty() {
-            return None;
-        }
-        let rows = entries.into_iter().enumerate().map(|(i, entry)| {
-            let folder = entry.path.parent().map(short_folder).unwrap_or_default();
-            let name = file_name(&entry.path);
-            let path = entry.path;
-            div()
-                .id(("recent", i))
-                .flex()
-                .items_center()
-                .gap(px(space::S3))
-                .px(px(space::S3))
-                .py(px(space::S2))
-                .rounded(px(radius::SM))
-                .cursor_pointer()
-                .hover(|s| s.bg(th.hover))
-                .on_click(cx.listener(move |this, _, _, cx| this.open(path.clone(), cx)))
-                .child(
-                    svg()
-                        .path("icons/document.svg")
-                        .size(px(16.0))
-                        .flex_none()
-                        .text_color(th.dim),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .min_w_0()
-                        .child(
-                            div()
-                                .text_size(px(text::BODY))
-                                .text_color(th.text)
-                                .truncate()
-                                .child(name),
-                        )
-                        .child(
-                            div()
-                                .text_size(px(text::SMALL))
-                                .text_color(th.dim)
-                                .truncate()
-                                .child(folder),
-                        ),
-                )
-        });
-        Some(
-            div()
-                .w(px(420.0))
-                .mt(px(space::S4))
-                .flex()
-                .flex_col()
-                .child(
-                    div()
-                        .px(px(space::S3))
-                        .pb(px(space::S2))
-                        .text_size(px(text::SMALL))
-                        .text_color(th.dim)
-                        .child(t("recent-title", &[])),
-                )
-                .children(rows),
-        )
+            .into_any_element()
     }
 }
 
@@ -4023,8 +3891,7 @@ impl Render for Viewer {
                     .flex_col()
                     .items_center()
                     .gap(px(space::S3))
-                    .children(signatures_line.map(floating(th)))
-                    .children(notice),
+                    .children(signatures_line.map(floating(th))),
             )
             .children(find_bar.map(|bar| {
                 div()
@@ -4051,23 +3918,71 @@ impl Render for Viewer {
                     .children(measure_bar.map(floating(th)))
                     .children(stamp_bar.map(floating(th)))
                     .children(initials_bar.map(floating(th)))
-                    .children(reading_bar.map(floating(th)))
+                    .children(notice)
                     .children(tools.map(floating(th)))
-                    .children(dock),
+                    .children(reading_bar.or(dock)),
             )
             .children(signing_card)
             .children(marks_card)
             .children(redact_card)
-            .children(export_card)
-            .children(print_card)
+            .children(export_card.map(|card| {
+                dialog(
+                    th,
+                    card,
+                    cx.listener(|this, _, _, cx| {
+                        this.exporting = None;
+                        cx.notify();
+                    }),
+                )
+            }))
+            .children(print_card.map(|card| {
+                dialog(
+                    th,
+                    card,
+                    cx.listener(|this, _, _, cx| {
+                        this.printing = None;
+                        cx.notify();
+                    }),
+                )
+            }))
             .children(link_card)
             .children(numbering_card)
             .children(paste_many_card)
             .children(setup_card)
             .children(design_card)
-            .children(properties_card)
+            .children(properties_card.map(|card| {
+                dialog(
+                    th,
+                    card,
+                    cx.listener(|this, _, _, cx| {
+                        this.properties = None;
+                        cx.notify();
+                    }),
+                )
+            }))
             .into_any_element()
     }
+}
+
+/// A card that asks for the window's attention: in the middle, over a
+/// scrim that closes it when clicked.
+fn dialog(
+    th: Theme,
+    card: AnyElement,
+    close: impl Fn(&gpui::MouseDownEvent, &mut Window, &mut App) + 'static,
+) -> AnyElement {
+    div()
+        .id("dialog-scrim")
+        .absolute()
+        .inset_0()
+        .occlude()
+        .bg(th.scrim)
+        .flex()
+        .items_center()
+        .justify_center()
+        .on_mouse_down(gpui::MouseButton::Left, close)
+        .child(card)
+        .into_any_element()
 }
 
 /// A bar that floats over the pages: the card's colour, rounded, with

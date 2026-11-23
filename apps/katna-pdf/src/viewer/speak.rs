@@ -13,9 +13,9 @@ use gpui::{AnyElement, Context, div, prelude::*};
 use katna_pdf_render::text::PageText;
 use katna_ui::px;
 use katna_ui::tokens::{space, text};
-use katna_ui::widgets;
 
-use super::{Content, Viewer, icon_button};
+use super::{Content, Viewer};
+use crate::float::{self, Pressed};
 use crate::speech;
 use crate::text::t;
 
@@ -216,50 +216,48 @@ impl Viewer {
             Some((page, ..)) => t("read-page", &[("page", &(page + 1).to_string())]),
             None => t("read-starting", &[]),
         };
+        let (glyph, tip, pause) = if reading.held {
+            ("play", "read-resume", false)
+        } else {
+            ("pause", "read-pause", true)
+        };
         Some(
-            div()
-                .h(px(44.0))
-                .flex_shrink_0()
-                .flex()
-                .items_center()
+            float::bar_shell(&th, 12.0)
+                .id("reading-bar")
+                .occlude()
+                .pl(px(space::S4))
                 .gap(px(space::S2))
-                .px(px(space::S4))
-                .child(widgets::icon("speaker", th.katna.text_dim, 18.0))
+                .child(float::icon("speak", 16.0, th.accent))
                 .child(
                     div()
-                        .flex_1()
-                        .min_w_0()
-                        .truncate()
+                        .px(px(space::S3))
                         .text_size(px(text::SMALL))
                         .text_color(th.text)
+                        .whitespace_nowrap()
                         .child(status),
                 )
-                .child(if reading.held {
-                    icon_button(
-                        "read-resume",
-                        "play",
-                        t("read-resume", &[]),
-                        th,
-                        cx.listener(|this, _, _, cx| this.resume_reading(cx)),
+                .child(
+                    float::dk("read-toggle", glyph, None, t(tip, &[]), Pressed::Tool, &th)
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            if pause {
+                                this.pause_reading(cx);
+                            } else {
+                                this.resume_reading(cx);
+                            }
+                        })),
+                )
+                .child(float::vsep(&th))
+                .child(
+                    float::dk(
+                        "read-stop",
+                        "stop",
+                        None,
+                        t("read-stop", &[]),
+                        Pressed::No,
+                        &th,
                     )
-                    .into_any_element()
-                } else {
-                    icon_button(
-                        "read-pause",
-                        "pause",
-                        t("read-pause", &[]),
-                        th,
-                        cx.listener(|this, _, _, cx| this.pause_reading(cx)),
-                    )
-                    .into_any_element()
-                })
-                .child(icon_button(
-                    "read-stop",
-                    "close",
-                    t("read-stop", &[]),
-                    th,
-                    cx.listener(|this, _, _, cx| this.stop_reading(cx)),
-                ))
+                    .on_click(cx.listener(|this, _, _, cx| this.stop_reading(cx))),
+                )
                 .into_any_element(),
         )
     }
