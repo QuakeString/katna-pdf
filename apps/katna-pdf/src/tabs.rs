@@ -58,6 +58,7 @@ pub struct Tabs {
     pub(crate) update: Option<(Offer, UpdateStep)>,
     _appearance: Subscription,
     _look: Subscription,
+    _profile: Subscription,
 }
 
 /// Where an update offered stands.
@@ -78,13 +79,17 @@ impl Tabs {
         let look = cx.observe_global_in::<crate::look::Look>(window, |this, window, cx| {
             this.restyle(window, cx)
         });
+        let profile = cx.observe_global::<crate::profile::Profile>(|this, cx| {
+            this.person = cx.global::<crate::profile::Profile>().display_name();
+            cx.notify();
+        });
         let mut this = Self {
             tabs: Vec::new(),
             active: 0,
             menu: None,
             menu_closed: None,
             app_open: 0,
-            person: crate::chrome::person(),
+            person: cx.global::<crate::profile::Profile>().display_name(),
             title: String::new(),
             theme: Theme::current(window, cx.global()),
             library: None,
@@ -92,6 +97,7 @@ impl Tabs {
             update: None,
             _appearance: appearance,
             _look: look,
+            _profile: profile,
         };
         this.push(None, window, cx);
         this.open_files(files, window, cx);

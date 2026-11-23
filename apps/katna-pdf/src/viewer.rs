@@ -3478,6 +3478,25 @@ impl Viewer {
 impl EventEmitter<ViewerEvent> for Viewer {}
 
 /// Who comments and stamps are signed as.
+/// The initials kept for the initials tool, as Settings lists them.
+pub fn kept_initials() -> Vec<String> {
+    initials::load()
+        .iter()
+        .enumerate()
+        .map(|(i, initial)| initial.label(i + 1))
+        .collect()
+}
+
+/// The person's own stamps, as Settings lists them.
+pub fn kept_stamps() -> Vec<String> {
+    stamps::load_custom()
+}
+
+/// The file name of the picture signatures show, if one was chosen.
+pub fn signature_picture() -> Option<String> {
+    sign::remembered_picture().map(|path| file_name(&path))
+}
+
 pub fn comment_author() -> String {
     annots::author()
 }

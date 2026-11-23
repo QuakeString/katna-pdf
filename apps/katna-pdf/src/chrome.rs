@@ -20,6 +20,7 @@ use crate::float::{
 };
 use crate::look::{self, Look, Mode};
 use crate::menus::{MENUS, action, keys_text, plain};
+use crate::settings::{self, Page};
 use crate::tabs::{Tabs, TopMenu};
 use crate::text::t;
 use crate::viewer::{
@@ -532,14 +533,31 @@ impl Tabs {
             }))
         });
         let name = self.person.clone();
+        let hover = th.hover;
+        let job = {
+            let profile = cx.global::<crate::profile::Profile>();
+            let parts: Vec<&str> = [profile.title.trim(), profile.organisation.trim()]
+                .into_iter()
+                .filter(|s| !s.is_empty())
+                .collect();
+            (!parts.is_empty()).then(|| parts.join(" · "))
+        };
         let body = menu("profile-menu", 320.0, &th)
             .on_mouse_down_out(cx.listener(|this, _, _, cx| this.close_menu(cx)))
             .child(
                 div()
+                    .id("profile-who")
                     .flex()
                     .items_center()
                     .gap(px(space::S4))
                     .p(px(space::S4))
+                    .rounded(px(8.0))
+                    .cursor_pointer()
+                    .hover(move |s| s.bg(hover))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.close_menu(cx);
+                        settings::open(Page::Profile, cx);
+                    }))
                     .child(avatar(&float::initials(&name), 40.0, &th))
                     .child(
                         div()
@@ -553,15 +571,14 @@ impl Tabs {
                                     .truncate()
                                     .child(name.clone()),
                             )
-                            .child(
-                                div()
-                                    .text_size(px(text::CAPTION))
-                                    .text_color(th.dim)
-                                    .child(t(
+                            .child(div().text_size(px(text::CAPTION)).text_color(th.dim).child(
+                                job.unwrap_or_else(|| {
+                                    t(
                                         "profile-signs-as",
                                         &[("name", &crate::viewer::comment_author())],
-                                    )),
-                            ),
+                                    )
+                                }),
+                            )),
                     ),
             )
             .child(float::heading(t("profile-mode", &[]), &th))
@@ -589,6 +606,45 @@ impl Tabs {
                 })),
             )
             .child(menu_sep(&th))
+            .child(
+                menu_item(
+                    "profile-settings",
+                    Some("user"),
+                    t("profile-profile", &[]),
+                    None,
+                    &th,
+                )
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.close_menu(cx);
+                    settings::open(Page::Profile, cx);
+                })),
+            )
+            .child(
+                menu_item(
+                    "profile-all-settings",
+                    Some("gear"),
+                    t("profile-settings", &[]),
+                    None,
+                    &th,
+                )
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.close_menu(cx);
+                    settings::open(Page::Appearance, cx);
+                })),
+            )
+            .child(
+                menu_item(
+                    "profile-shortcuts",
+                    Some("kbd"),
+                    t("profile-shortcuts", &[]),
+                    None,
+                    &th,
+                )
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.close_menu(cx);
+                    settings::open(Page::Shortcuts, cx);
+                })),
+            )
             .child(
                 menu_item(
                     "profile-menu-item",

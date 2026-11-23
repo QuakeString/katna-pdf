@@ -777,6 +777,9 @@ impl Viewer {
 
 /// Who annotations are by: the name the person logged in with.
 pub(super) fn author() -> String {
+    if let Some(name) = crate::profile::Profile::load().author() {
+        return name;
+    }
     std::env::var("USER")
         .or_else(|_| std::env::var("USERNAME"))
         .unwrap_or_default()
