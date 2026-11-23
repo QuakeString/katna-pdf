@@ -100,6 +100,18 @@ enum Progress {
     Done(Result<katna_pdf_library::ScanReport, String>),
 }
 
+/// Bumped when Settings adds or takes away a watched folder, so an open
+/// library reads its folders again.
+pub struct FoldersChanged(pub u64);
+
+impl gpui::Global for FoldersChanged {}
+
+/// Tells an open library that its folders changed.
+pub fn folders_changed(cx: &mut gpui::App) {
+    let n = cx.try_global::<FoldersChanged>().map_or(0, |f| f.0);
+    cx.set_global(FoldersChanged(n + 1));
+}
+
 pub struct LibraryView {
     focus: FocusHandle,
     theme: Theme,
@@ -155,6 +167,7 @@ pub struct LibraryView {
     /// Watches the folders; dropped and made again when they change.
     watcher: Option<notify::RecommendedWatcher>,
     _inputs: [Subscription; 4],
+    _folders: Subscription,
 }
 
 #[derive(Default)]
@@ -262,6 +275,11 @@ impl LibraryView {
             mail: None,
             watcher: None,
             _inputs: [searching, tagging, adding, naming],
+            _folders: cx.observe_global::<FoldersChanged>(|this, cx| {
+                this.reload(cx);
+                this.watch(cx);
+                this.scan(cx);
+            }),
         };
         this.reload(cx);
         this.watch(cx);

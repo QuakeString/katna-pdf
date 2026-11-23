@@ -4116,7 +4116,7 @@ fn save_over(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 }
 
 /// A folder as people read it: the home folder as `~`.
-fn short_folder(folder: &Path) -> String {
+pub fn short_folder(folder: &Path) -> String {
     let home = std::env::var_os("HOME").map(PathBuf::from);
     match home
         .as_deref()
