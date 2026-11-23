@@ -825,6 +825,7 @@ print-preview-working = Laying out…
 print-back = Sheet before
 print-next = Next sheet
 print-pictures = Print as pictures (every page drawn first; slower, but as shown)
+print-grey = Print in shades of grey
 print-size-label = Size on the paper
 print-size-dialog = As the print dialog says
 print-size-fit = Fit the paper

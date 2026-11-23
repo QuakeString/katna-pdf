@@ -5190,7 +5190,7 @@ pub fn colors_text(colors: PageColors) -> &'static str {
 }
 
 /// A drawn page as GPUI draws images: BGRA.
-fn render_image(bitmap: Bitmap) -> Option<Arc<RenderImage>> {
+pub(super) fn render_image(bitmap: Bitmap) -> Option<Arc<RenderImage>> {
     let Bitmap {
         width,
         height,

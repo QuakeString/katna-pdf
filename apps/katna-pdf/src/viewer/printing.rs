@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use gpui::{AnyElement, App, Context, Entity, Subscription, div, prelude::*};
 use katna_pdf_cos::{AnnotChanges, AnnotKind, Parity, Sheet, SheetLayout, SheetScale};
-use katna_pdf_render::export::scanned_page;
+use katna_pdf_render::export::{greyed, print_page};
 use katna_ui::px;
 use katna_ui::text_input::{InputEvent, TextInput};
 use katna_ui::tokens::{space, text};
@@ -106,6 +106,8 @@ pub(super) struct Printing {
     layout: usize,
     paper: usize,
     pictures: bool,
+    /// In shades of grey: the pages go as grey pictures.
+    grey: bool,
     parity: usize,
     reverse: bool,
     content: usize,
@@ -135,6 +137,8 @@ struct Preview {
     doc: Arc<dyn katna_pdf_render::Document>,
     count: usize,
     sheet: usize,
+    /// Drawn in shades of grey.
+    grey: bool,
     image: Option<Arc<gpui::RenderImage>>,
 }
 
@@ -179,6 +183,7 @@ impl Viewer {
             layout: 0,
             paper: 0,
             pictures: false,
+            grey: false,
             parity: 0,
             reverse: false,
             content: 0,
@@ -201,8 +206,11 @@ impl Viewer {
         let Some(mut job) = self.sheets_quietly(cx) else {
             return;
         };
-        // The preview is the same either way, and pictures are slow.
+        // The preview is the same either way, and pictures are slow: grey
+        // is shown by greying the sheet drawn.
         job.pictures = false;
+        let grey = job.grey;
+        job.grey = false;
         let Some(printing) = self.printing.as_mut() else {
             return;
         };
@@ -217,11 +225,12 @@ impl Viewer {
                     let doc = crate::engine::engine().open(Arc::new(bytes), "").ok()?;
                     let count = doc.page_count();
                     let sheet = keep.min(count.saturating_sub(1));
-                    let image = draw_sheet(doc.as_ref(), sheet);
+                    let image = draw_sheet(doc.as_ref(), sheet, grey);
                     Some(Preview {
                         doc,
                         count,
                         sheet,
+                        grey,
                         image,
                     })
                 })
@@ -249,10 +258,11 @@ impl Viewer {
         }
         preview.sheet = sheet;
         let doc = preview.doc.clone();
+        let grey = preview.grey;
         cx.spawn(async move |this, cx| {
             let image = cx
                 .background_executor()
-                .spawn(async move { draw_sheet(doc.as_ref(), sheet) })
+                .spawn(async move { draw_sheet(doc.as_ref(), sheet, grey) })
                 .await;
             this.update(cx, |this, cx| {
                 if let Some(p) = this.printing.as_mut().and_then(|p| p.preview.as_mut())
@@ -440,6 +450,28 @@ impl Viewer {
                     .text_color(th.text)
                     .child(t("print-pictures", &[])),
             );
+        let grey = div()
+            .id("print-grey")
+            .flex()
+            .items_center()
+            .gap(px(space::S2))
+            .cursor_pointer()
+            .on_click(cx.listener(|this, _, _, cx| {
+                if let Some(p) = this.printing.as_mut() {
+                    p.grey = !p.grey;
+                }
+                this.preview_sheets(cx);
+                cx.notify();
+            }))
+            .child(check_box(printing.grey, th))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .text_size(px(text::BODY))
+                    .text_color(th.text)
+                    .child(t("print-grey", &[])),
+            );
         let settings = div()
             .flex_1()
             .min_w_0()
@@ -487,6 +519,7 @@ impl Viewer {
                     .child(which)
                     .child(parities)
                     .child(div().pt(px(space::S2)).child(pictures))
+                    .child(grey)
                     .child(
                         div()
                             .pt(px(space::S2))
@@ -672,7 +705,8 @@ impl Viewer {
                 auto_turn: true,
                 ..Sheet::of(PAPERS[printing.paper].1, sideways)
             },
-            pictures: printing.pictures,
+            pictures: printing.pictures || printing.grey,
+            grey: printing.grey,
             all_pages,
             content: CONTENTS[printing.content].1,
             pages,
@@ -808,9 +842,15 @@ impl Viewer {
 fn draw_sheet(
     doc: &dyn katna_pdf_render::Document,
     sheet: usize,
+    grey: bool,
 ) -> Option<Arc<gpui::RenderImage>> {
     let (w, h) = doc.page_size(sheet)?;
     let scale = (PREVIEW_W / w).min(PREVIEW_H / h) * 2.0;
+    if grey {
+        let mut bitmap = doc.render(sheet, scale)?;
+        greyed(&mut bitmap);
+        return super::render_image(bitmap);
+    }
     super::draw(
         doc,
         sheet,
@@ -847,6 +887,8 @@ struct Job {
     layout: Option<SheetLayout>,
     sheet: Sheet,
     pictures: bool,
+    /// The pictures in shades of grey.
+    grey: bool,
     all_pages: bool,
     content: OnPaper,
     pages: Vec<usize>,
@@ -903,7 +945,7 @@ fn sheets(job: &Job) -> Result<Vec<u8>, String> {
     let (doc, pages) = if job.pictures {
         let mut pictures = Vec::new();
         for &page in &job.pages {
-            let (data, width, height) = scanned_page(drawn.as_ref(), page, PICTURE_DPI, false)
+            let (data, width, height) = print_page(drawn.as_ref(), page, PICTURE_DPI, job.grey)
                 .ok_or_else(|| t("export-undrawn", &[("page", &(page + 1).to_string())]))?;
             let size = drawn.page_size(page).unwrap_or((612.0, 792.0));
             pictures.push((
@@ -911,7 +953,7 @@ fn sheets(job: &Job) -> Result<Vec<u8>, String> {
                     data,
                     width,
                     height,
-                    components: 3,
+                    components: if job.grey { 1 } else { 3 },
                 },
                 size,
             ));
