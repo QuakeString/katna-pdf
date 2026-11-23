@@ -7,7 +7,7 @@
 use std::collections::{BTreeMap, HashSet};
 
 use crate::forms::text_object;
-use crate::links::Link;
+use crate::links::{Link, LinkFit, LinkStyle};
 use crate::outline::{Destination, OutlineItem, OutlineReader};
 use crate::write::Update;
 use crate::{Dict, Document, LinkTarget, Object, Ref, UpdateError, text_string};
@@ -44,6 +44,25 @@ impl From<UpdateError> for NavError {
     fn from(e: UpdateError) -> Self {
         NavError::Update(e)
     }
+}
+
+/// A destination showing its page as `fit` says.
+fn fitted_dest(pages: &[Ref], dest: &Destination, fit: LinkFit) -> Result<Object, NavError> {
+    let page = *pages.get(dest.page).ok_or(NavError::NoPage(dest.page))?;
+    let top = dest
+        .top
+        .map_or(Object::Null, |t| Object::Real(f64::from(t)));
+    Ok(Object::Array(match fit {
+        LinkFit::Page => vec![Object::Ref(page), Object::name("Fit")],
+        LinkFit::Width => vec![Object::Ref(page), Object::name("FitH"), top],
+        LinkFit::AsNow => vec![
+            Object::Ref(page),
+            Object::name("XYZ"),
+            Object::Null,
+            top,
+            Object::Null,
+        ],
+    }))
 }
 
 /// A destination as written: `[page /XYZ null top null]`, or the whole
@@ -149,6 +168,33 @@ impl Document {
         remove: &[usize],
         add: &[Link],
     ) -> Result<Vec<u8>, NavError> {
+        let add: Vec<(Link, LinkStyle)> = add
+            .iter()
+            .map(|link| {
+                let fit = match &link.target {
+                    LinkTarget::Page(Destination { top: Some(_), .. }) => LinkFit::AsNow,
+                    _ => LinkFit::Page,
+                };
+                let style = LinkStyle {
+                    fit,
+                    ..LinkStyle::default()
+                };
+                (link.clone(), style)
+            })
+            .collect();
+        self.change_links_styled(page, remove, &add)
+    }
+
+    /// The same, each new link showing its page and looking as its
+    /// style says: fitted to the page or its width or at the reader's
+    /// zoom, with a box drawn round it, or going to a named place by
+    /// its name.
+    pub fn change_links_styled(
+        &self,
+        page: usize,
+        remove: &[usize],
+        add: &[(Link, LinkStyle)],
+    ) -> Result<Vec<u8>, NavError> {
         let mut up = self.update()?;
         let pages = self.pages();
         let page_ref = *pages.get(page).ok_or(NavError::NoPage(page))?;
@@ -180,7 +226,7 @@ impl Document {
             .filter(|(i, _)| !gone.contains(i))
             .map(|(_, a)| a)
             .collect();
-        for link in add {
+        for (link, style) in add {
             let mut d = Dict::new();
             d.set("Type", Object::name("Annot"));
             d.set("Subtype", Object::name("Link"));
@@ -193,13 +239,63 @@ impl Document {
             );
             d.set(
                 "Border",
-                vec![Object::Int(0), Object::Int(0), Object::Int(0)],
+                vec![
+                    Object::Int(0),
+                    Object::Int(0),
+                    Object::Int(i64::from(style.boxed)),
+                ],
             );
+            if style.boxed {
+                // Drawn by its own appearance, as readers needn't draw a
+                // link's border themselves.
+                let [l, b, r, t] = link.rect;
+                let (w, h) = ((r - l).abs(), (t - b).abs());
+                let data = format!(
+                    "0.15 0.39 0.92 RG 1 w 0.5 0.5 {:.2} {:.2} re S",
+                    (w - 1.0).max(0.0),
+                    (h - 1.0).max(0.0),
+                )
+                .into_bytes();
+                let mut form = Dict::new();
+                form.set("Type", Object::name("XObject"));
+                form.set("Subtype", Object::name("Form"));
+                form.set(
+                    "BBox",
+                    vec![
+                        Object::Int(0),
+                        Object::Int(0),
+                        Object::Real(f64::from(w)),
+                        Object::Real(f64::from(h)),
+                    ],
+                );
+                form.set("Length", data.len() as i64);
+                let form = up.add(Object::Stream(crate::Stream { dict: form, data }));
+                let mut ap = Dict::new();
+                ap.set("N", form);
+                d.set("AP", ap);
+                d.set(
+                    "C",
+                    vec![Object::Real(0.15), Object::Real(0.39), Object::Real(0.92)],
+                );
+            }
             d.set("F", 4i64);
             d.set("P", page_ref);
-            match &link.target {
-                LinkTarget::Page(dest) => d.set("Dest", dest_array(&pages, dest)?),
-                LinkTarget::Uri(uri) => {
+            match (&link.target, &style.named) {
+                (LinkTarget::Page(_), Some(name)) => {
+                    let bytes = name.as_bytes().to_vec();
+                    d.set(
+                        "Dest",
+                        if reader.in_dests(&bytes) {
+                            Object::Name(crate::Name::new(name))
+                        } else {
+                            Object::String { bytes, hex: false }
+                        },
+                    );
+                }
+                (LinkTarget::Page(dest), None) => {
+                    d.set("Dest", fitted_dest(&pages, dest, style.fit)?)
+                }
+                (LinkTarget::Uri(uri), _) => {
                     let mut a = Dict::new();
                     a.set("S", Object::name("URI"));
                     a.set(

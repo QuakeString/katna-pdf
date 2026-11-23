@@ -649,22 +649,22 @@ impl Viewer {
         cx: &mut Context<Self>,
     ) -> Vec<AnyElement> {
         // The tools' own boxes, shown in any mode.
-        let tools = |this: &Self| {
+        let tools = |this: &Self, cx: &Context<Self>| {
             let mut out = this.redact_overlay(page);
-            out.extend(this.link_overlay(page));
+            out.extend(this.link_overlay(page, cx));
             out.extend(this.design_overlay(page));
             out
         };
         // While cropping, presses on paragraphs make the box.
         if !self.text_editing || self.cropping {
-            return tools(self);
+            return tools(self, cx);
         }
         let Some(transform) = transform else {
-            return tools(self);
+            return tools(self, cx);
         };
         let Some(blocks) = self.runs.pages.get(&page).cloned() else {
             self.read_runs(page, cx);
-            return tools(self);
+            return tools(self, cx);
         };
         if let Some((_, [x, y], next)) = self.runs.next.take_if(|(p, _, _)| *p == page)
             && let Some(i) = blocks.iter().position(|b| {
@@ -781,7 +781,7 @@ impl Viewer {
         }
         out.extend(self.objects_overlay(page, cx));
         out.extend(self.insert_preview(page));
-        out.extend(tools(self));
+        out.extend(tools(self, cx));
         out
     }
 

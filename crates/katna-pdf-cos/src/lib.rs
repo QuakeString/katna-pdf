@@ -83,7 +83,7 @@ pub use impose::{Parity, Sheet, SheetLayout, SheetScale, impose, print_order};
 pub use insert::{Image, Insert, ShapeKind};
 pub use labels::{LabelRange, LabelStyle, labels_of};
 pub use layers::Layer;
-pub use links::{Link, LinkTarget};
+pub use links::{Link, LinkFit, LinkStyle, LinkTarget};
 pub use lock::LockError;
 pub use mdp::{Allowed, Change, Lock};
 pub use measure::Scale;

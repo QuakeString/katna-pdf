@@ -3507,6 +3507,38 @@ impl Viewer {
         }
     }
 
+    /// Reads the file as it is now, changes not saved too, in the
+    /// background, and hands what `read` finds in it to `then`.
+    pub(super) fn read_cos<T: Send + 'static>(
+        &self,
+        read: impl FnOnce(&katna_pdf_cos::Document) -> T + Send + 'static,
+        then: impl FnOnce(&mut Self, T, &mut Context<Self>) + 'static,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(path) = self.path.clone() else {
+            return;
+        };
+        let key = self.key.clone();
+        let current = self.unsaved();
+        cx.spawn(async move |this, cx| {
+            let found = cx
+                .background_executor()
+                .spawn(async move {
+                    let bytes = match current {
+                        Some(bytes) => bytes.to_vec(),
+                        None => std::fs::read(&path).ok()?,
+                    };
+                    let doc = cos(bytes, key.as_deref()).ok()?;
+                    Some(read(&doc))
+                })
+                .await;
+            if let Some(found) = found {
+                this.update(cx, |this, cx| then(this, found, cx)).ok();
+            }
+        })
+        .detach();
+    }
+
     /// Whether the tab may close: not at first when there are changes
     /// not saved; the notice says so, and closing again closes.
     pub fn may_close(&mut self, cx: &mut Context<Self>) -> bool {

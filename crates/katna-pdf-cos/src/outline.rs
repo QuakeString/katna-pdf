@@ -122,6 +122,25 @@ impl<'a> OutlineReader<'a> {
         self.destination(&dest, 0)
     }
 
+    /// A named destination's array as written, looked up by its name.
+    pub(crate) fn raw_destination(&self, name: &Object) -> Option<Object> {
+        let found = match name {
+            Object::Name(n) => self.named_in_dests(n.as_bytes())?,
+            Object::String { bytes, .. } => self.named_in_tree(bytes)?,
+            _ => return None,
+        };
+        match self.doc.resolve(&found) {
+            Object::Dict(d) => Some(self.doc.resolve_key(&d, "D")),
+            other => Some(other),
+        }
+    }
+
+    /// Whether `name` is a key of the catalog's `/Dests`, rather than of
+    /// the `/Names` tree.
+    pub(crate) fn in_dests(&self, name: &[u8]) -> bool {
+        self.named_in_dests(name).is_some()
+    }
+
     /// An explicit destination array, or a named one looked up.
     pub(crate) fn destination(&mut self, dest: &Object, depth: usize) -> Option<Destination> {
         match dest {
