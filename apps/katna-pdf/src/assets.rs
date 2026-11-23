@@ -319,6 +319,8 @@ const FLOAT: &[(&str, &[u8])] = float_icons![
     "bwd",
     "cal",
     "callout",
+    "caret",
+    "caretx",
     "check",
     "checkbox",
     "chev",

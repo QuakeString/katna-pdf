@@ -4435,7 +4435,7 @@ fn annots(args: &[String], json: bool) -> Done {
         if json {
             items.push(format!(
                 "{{\"page\":{},\"kind\":{},\"rect\":[{}],\"author\":{},\"contents\":{},\"modified\":{},\
-                 \"hidden\":{},\"print\":{},\"locked\":{},\"reply\":{},\"state\":{},\"status\":{}}}",
+                 \"hidden\":{},\"print\":{},\"locked\":{},\"reply\":{},\"grouped\":{},\"state\":{},\"status\":{}}}",
                 a.page + 1,
                 string(&kind),
                 a.rect.iter().map(|v| num(*v)).collect::<Vec<_>>().join(","),
@@ -4445,13 +4445,16 @@ fn annots(args: &[String], json: bool) -> Done {
                 a.flags.hidden,
                 a.flags.print,
                 a.flags.locked,
-                a.reply_to.is_some(),
+                a.reply_to.is_some() && !a.grouped,
+                a.grouped,
                 a.state.as_deref().map_or("null".into(), string),
                 status.map_or("null".into(), string),
             ));
         } else {
             let _ = write!(out, "page {:<4} {kind}", a.page + 1);
-            if a.reply_to.is_some() {
+            if a.grouped {
+                out.push_str(" (part of a replacement)");
+            } else if a.reply_to.is_some() {
                 out.push_str(" (reply)");
             }
             if !a.author.is_empty() {

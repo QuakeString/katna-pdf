@@ -114,10 +114,12 @@ fn file() -> Option<PathBuf> {
 }
 
 /// The tool whose look `tool` shares: the typewriter makes the same
-/// text comments as the text box.
+/// text comments as the text box, replacing the same carets as
+/// inserting.
 fn key(tool: Tool) -> Tool {
     match tool {
         Tool::Typewriter => Tool::FreeText,
+        Tool::Replace => Tool::Insert,
         t => t,
     }
 }
@@ -146,6 +148,7 @@ pub(super) fn tool_of(a: &Annotation) -> Option<Tool> {
         AnnotKind::PolyLine(_) => Tool::Polyline,
         AnnotKind::Stamp(_) => Tool::Stamp,
         AnnotKind::FileAttachment { .. } => Tool::Attach,
+        AnnotKind::Caret => Tool::Insert,
         AnnotKind::Other(_) => return None,
     })
 }

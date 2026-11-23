@@ -63,8 +63,9 @@ impl Viewer {
         if tool.clicks_points() {
             self.start_measuring(cx);
         }
-        // Highlighting tells the text from the space around it.
-        if self.tool == Some(Tool::Highlight) {
+        // Highlighting tells the text from the space around it, and a
+        // caret goes between its letters.
+        if matches!(self.tool, Some(Tool::Highlight | Tool::Insert)) {
             let page = self.current_page();
             for p in page.saturating_sub(1)..(page + 2).min(self.page_count()) {
                 self.read_text(p, cx);
@@ -123,8 +124,11 @@ impl Viewer {
             );
         }
         row = row.child(float::vsep(&th));
-        // The look kept for the tool in hand shows its colour as picked.
-        let kept = self.kept_look().map(|l| l.colour);
+        // The look kept for the tool in hand shows its colour as picked,
+        // and text put in or replaced shows blue for yellow.
+        let kept = self.kept_look().map(|l| l.colour).or_else(|| {
+            matches!(self.tool, Some(Tool::Insert | Tool::Replace)).then(|| self.edit_colour())
+        });
         for (i, [r, g, b]) in COLOURS.into_iter().enumerate() {
             let on = match kept {
                 Some(c) => c.iter().zip([r, g, b]).all(|(x, y)| (x - y).abs() < 0.005),
@@ -382,6 +386,13 @@ impl Viewer {
     /// The pointer let go: what was drawn, or the text selected with a
     /// markup tool, becomes an annotation. Returns whether it did.
     pub(super) fn annot_release(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.tool == Some(Tool::Insert)
+            && let Some(draft) = self.draft.take()
+        {
+            self.insert_caret(draft, cx);
+            cx.notify();
+            return true;
+        }
         if self.tool == Some(Tool::Eraser)
             && let Some(draft) = self.draft.take()
         {
@@ -461,6 +472,65 @@ impl Viewer {
         false
     }
 
+    /// Puts a caret where `draft` was let go: between the letters
+    /// nearest on the line there, or just there off the text. Its words
+    /// are typed next.
+    fn insert_caret(&mut self, draft: Draft, cx: &mut Context<Self>) {
+        let Some(&point) = draft.path.last() else {
+            return;
+        };
+        let Some(inv) = self.inverse(draft.page) else {
+            return;
+        };
+        let text = self
+            .texts
+            .as_ref()
+            .and_then(|t| t.get(draft.page))
+            .and_then(|t| t.get());
+        // The letter boxes on the line under the pointer; the edge
+        // nearest it.
+        let near = text.and_then(|text| {
+            text.boxes
+                .iter()
+                .zip(text.text.chars())
+                .filter(|(b, c)| {
+                    !c.is_whitespace()
+                        && b[2] > b[0]
+                        && point[1] >= b[1] - 2.0
+                        && point[1] <= b[3] + 2.0
+                })
+                .map(|(b, _)| b)
+                .flat_map(|b| [(b[0], b), (b[2], b)])
+                .min_by(|x, y| (x.0 - point[0]).abs().total_cmp(&(y.0 - point[0]).abs()))
+                .filter(|(x, _)| (x - point[0]).abs() < 24.0)
+                .map(|(x, b)| (x, b[3], b[3] - b[1]))
+        });
+        let (x, bottom, height) = near.unwrap_or((point[0], point[1] + 6.0, 12.0));
+        let mut a = annotate::caret(draft.page, x, bottom, height, inv);
+        a.colour = self.edit_colour();
+        a.author = author();
+        self.with_kept_look(&mut a);
+        self.comment_next = true;
+        self.change_annotations(
+            AnnotChanges {
+                put: vec![a],
+                remove: Vec::new(),
+            },
+            cx,
+        );
+    }
+
+    /// The colour of text to put in or replace: blue unless another
+    /// colour, or a look kept for the tool, was picked; yellow would not
+    /// show on paper.
+    fn edit_colour(&self) -> [f32; 3] {
+        if self.kept_look().is_none() && self.colour == 0 {
+            COLOURS[2]
+        } else {
+            self.drawing_colour()
+        }
+    }
+
     /// Marks the text selected in `style`, one annotation per page.
     fn mark_selection(&mut self, style: katna_pdf_cos::MarkupStyle, cx: &mut Context<Self>) {
         let (Some(selection), Some(texts)) = (self.selection.take(), self.texts.clone()) else {
@@ -471,7 +541,9 @@ impl Viewer {
         } else {
             (selection.head.page, selection.anchor.page)
         };
+        let replace = self.tool == Some(Tool::Replace);
         let mut put = Vec::new();
+        let mut last_line = None;
         for page in from..=to {
             let (Some(text), Some(inv)) =
                 (texts.get(page).and_then(|t| t.get()), self.inverse(page))
@@ -481,12 +553,37 @@ impl Viewer {
             let Some(range) = selection.on_page(page, text.boxes.len()) else {
                 continue;
             };
-            if let Some(mut a) = annotate::markup(style, page, &text.line_boxes(range), inv) {
+            let lines = text.line_boxes(range);
+            if let Some(mut a) = annotate::markup(style, page, &lines, inv) {
                 a.colour = COLOURS[self.colour];
                 a.author = author();
-                self.with_kept_look(&mut a);
+                if replace {
+                    // Struck out as part of the caret that follows.
+                    a.grouped = true;
+                    a.colour = self.edit_colour();
+                    a.answers = Some(String::new());
+                } else {
+                    self.with_kept_look(&mut a);
+                }
                 put.push(a);
+                last_line = lines.last().map(|&l| (page, l, inv));
             }
+        }
+        // A replacement: a caret after the last word struck out, the
+        // words to put in typed next.
+        if replace && let Some((page, [_, top, right, bottom], inv)) = last_line {
+            let mut caret = annotate::caret(page, right, bottom, bottom - top, inv);
+            caret.colour = self.edit_colour();
+            caret.author = author();
+            self.with_kept_look(&mut caret);
+            caret.name = format!("katna-caret-{}", unique_suffix());
+            for strike in &mut put {
+                strike.answers = Some(caret.name.clone());
+                strike.colour = caret.colour;
+                strike.opacity = caret.opacity;
+            }
+            put.push(caret);
+            self.comment_next = true;
         }
         if !put.is_empty() {
             self.change_annotations(
@@ -652,7 +749,12 @@ impl Viewer {
                 }
             }
         }
-        let new_on = changes.put.iter().find(|a| a.id.is_none()).map(|a| a.page);
+        let new_on = changes
+            .put
+            .iter()
+            .rev()
+            .find(|a| a.id.is_none())
+            .map(|a| a.page);
         let what = if self.tool == Some(Tool::Eraser) {
             "undo-what-erase"
         } else if new_on.is_some() {
@@ -1073,6 +1175,15 @@ impl Viewer {
 }
 
 /// Who annotations are by: the name the person logged in with.
+/// A suffix that makes a name not given before.
+fn unique_suffix() -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    format!("{now:x}")
+}
+
 pub(super) fn author() -> String {
     if let Some(name) = crate::profile::Profile::load().author() {
         return name;

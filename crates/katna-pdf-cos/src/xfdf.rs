@@ -99,6 +99,7 @@ pub fn to_xfdf(annots: &[Vec<Annotation>], file: &str) -> String {
             AnnotKind::Polygon(_) => ("polygon", format!(" width=\"{}\"", num(a.width))),
             AnnotKind::PolyLine(_) => ("polyline", format!(" width=\"{}\"", num(a.width))),
             AnnotKind::Stamp(name) => ("stamp", format!(" icon=\"{}\"", escape(name))),
+            AnnotKind::Caret => ("caret", String::from(" symbol=\"None\"")),
             // The file itself does not go in XML.
             AnnotKind::FileAttachment { .. } | AnnotKind::Other(_) => continue,
         };
@@ -125,6 +126,9 @@ pub fn to_xfdf(annots: &[Vec<Annotation>], file: &str) -> String {
         .collect();
         if !flags.is_empty() {
             let _ = write!(out, " flags=\"{}\"", flags.join(","));
+        }
+        if a.grouped && a.reply_to.is_some() {
+            out.push_str(" replyType=\"group\"");
         }
         if let (Some(state), Some(_)) = (&a.state, a.reply_to) {
             let _ = write!(
@@ -267,6 +271,7 @@ pub fn from_xfdf(xml: &str) -> Result<Vec<XfdfAnnotation>, XfdfError> {
                 AnnotKind::PolyLine(child("vertices").map(|v| pts(&v)).unwrap_or_default())
             }
             "stamp" => AnnotKind::Stamp(attr("icon").unwrap_or("Draft").to_owned()),
+            "caret" => AnnotKind::Caret,
             _ => continue,
         };
         let Some(page) = attr("page").and_then(|p| p.parse().ok()) else {
@@ -298,6 +303,7 @@ pub fn from_xfdf(xml: &str) -> Result<Vec<XfdfAnnotation>, XfdfError> {
             };
         }
         a.state = attr("state").map(str::to_owned);
+        a.grouped = attr("replyType") == Some("group");
         a.contents = child("contents").unwrap_or_default();
         a.author = attr("title").unwrap_or_default().to_owned();
         a.modified = attr("date").map(str::to_owned);

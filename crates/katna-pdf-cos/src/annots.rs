@@ -75,6 +75,10 @@ pub enum AnnotKind {
     /// its bytes when it is being added (`None` once read; see
     /// [`Document::attached_file`]).
     FileAttachment { name: String, data: Option<Vec<u8>> },
+    /// A caret where text is to go in (`/Caret`), its words the comment.
+    /// With a strike-out grouped to it (see [`Annotation::grouped`]) it
+    /// proposes those words in place of the text struck out.
+    Caret,
     /// Something else (a file attachment, a sound, a caret...), by its
     /// subtype; read and removed, never written.
     Other(String),
@@ -126,6 +130,9 @@ pub struct Annotation {
     /// `Rejected`, `Cancelled`, `Completed` or `None` (`/State`). Such a
     /// reply is not a comment to read.
     pub state: Option<String>,
+    /// Part of the annotation `reply_to` names rather than a reply to it
+    /// (`/RT /Group`): a replacement's strike-out, grouped to its caret.
+    pub grouped: bool,
 }
 
 /// An annotation's flags (`/F`): whether it is shown, printed and may
@@ -215,10 +222,9 @@ pub fn comments_text(all: &[Vec<Annotation>]) -> String {
             if let Some(status) = a.id.and_then(|id| annotation_status(all, id)) {
                 let _ = writeln!(out, "    [{status}]");
             }
-            for reply in annots
-                .iter()
-                .filter(|r| r.state.is_none() && r.reply_to.is_some() && r.reply_to == a.id)
-            {
+            for reply in annots.iter().filter(|r| {
+                r.state.is_none() && !r.grouped && r.reply_to.is_some() && r.reply_to == a.id
+            }) {
                 comment_line(&mut out, reply, 4);
             }
         }
@@ -275,6 +281,7 @@ impl AnnotKind {
             AnnotKind::PolyLine(_) => "Polyline".into(),
             AnnotKind::Stamp(name) => format!("Stamp {}", stamp_label(name)),
             AnnotKind::FileAttachment { name, .. } => format!("Attachment {name}"),
+            AnnotKind::Caret => "Caret".into(),
             AnnotKind::Other(subtype) => subtype.clone(),
         }
     }
@@ -350,6 +357,7 @@ impl Annotation {
             cloudy: false,
             flags: AnnotFlags::default(),
             state: None,
+            grouped: false,
         };
         a.rect = a.bounds();
         a
@@ -602,6 +610,7 @@ impl Document {
                 },
                 data: None,
             },
+            "Caret" => AnnotKind::Caret,
             _ => AnnotKind::Other(subtype),
         };
         let text = |key: &str| match self.resolve_key(&d, key) {
@@ -662,6 +671,7 @@ impl Document {
                 self.resolve_key(&d, "F").as_number().unwrap_or(4.0) as i64
             ),
             state: text("State").filter(|_| d.get("IRT").is_some()),
+            grouped: d.get("IRT").is_some() && d.name("RT") == Some(b"Group"),
             kind,
         })
     }
@@ -774,6 +784,7 @@ impl Document {
                     | AnnotKind::Circle { .. }
                     | AnnotKind::Stamp(_)
                     | AnnotKind::FileAttachment { .. }
+                    | AnnotKind::Caret
             ) {
                 annot.rect = annot.bounds();
             }
@@ -905,6 +916,7 @@ pub(crate) fn write_dict(dict: &mut Dict, a: &Annotation, page: Ref) {
         AnnotKind::PolyLine(_) => "PolyLine",
         AnnotKind::Stamp(_) => "Stamp",
         AnnotKind::FileAttachment { .. } => "FileAttachment",
+        AnnotKind::Caret => "Caret",
         AnnotKind::Other(_) => "",
     };
     dict.set("Type", Object::name("Annot"));
@@ -957,6 +969,11 @@ pub(crate) fn write_dict(dict: &mut Dict, a: &Annotation, page: Ref) {
         None => {
             dict.remove("IRT");
         }
+    }
+    if a.grouped && a.reply_to.is_some() {
+        dict.set("RT", Object::name("Group"));
+    } else if dict.name("RT") == Some(b"Group") {
+        dict.remove("RT");
     }
     match (&a.state, a.reply_to) {
         (Some(state), Some(_)) => {
@@ -1051,6 +1068,9 @@ pub(crate) fn write_dict(dict: &mut Dict, a: &Annotation, page: Ref) {
         }
         AnnotKind::FileAttachment { .. } => {
             dict.set("Name", Object::name("Paperclip"));
+        }
+        AnnotKind::Caret => {
+            dict.set("Sy", Object::name("None"));
         }
         AnnotKind::Other(_) => {}
     }
@@ -1421,6 +1441,18 @@ pub(crate) fn appearance(a: &Annotation) -> Object {
                 at(10.0, 17.0),
                 at(10.0, 14.0),
                 at(10.0, 7.0)
+            );
+        }
+        AnnotKind::Caret => {
+            // A filled caret: two curved sides meeting at the top.
+            let [x0, y0, x1, y1] = normal(a.rect);
+            let (mx, h) = ((x0 + x1) / 2.0, y1 - y0);
+            let _ = writeln!(
+                c,
+                "{fill} {x0:.2} {y0:.2} m {mx:.2} {:.2} {mx:.2} {y1:.2} {mx:.2} {y1:.2} c \
+                 {mx:.2} {y1:.2} {mx:.2} {:.2} {x1:.2} {y0:.2} c h f",
+                y0 + h * 0.3,
+                y0 + h * 0.3
             );
         }
         AnnotKind::Other(_) => {}
