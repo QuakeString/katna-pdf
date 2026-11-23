@@ -14,7 +14,7 @@ use katna_pdf_cos::{Sheet, SheetLayout};
 use katna_pdf_render::export::scanned_page;
 use katna_ui::px;
 use katna_ui::text_input::{InputEvent, TextInput};
-use katna_ui::tokens::{radius, space, text};
+use katna_ui::tokens::{space, text};
 
 use super::sign::check_box;
 use super::{Content, Viewer};
@@ -289,7 +289,7 @@ impl Viewer {
                     this.preview_sheets(cx);
                     cx.notify();
                 }))
-                .child(radio(on, th))
+                .child(float::radio(on, &th))
                 .child(
                     div()
                         .text_size(px(text::BODY))
@@ -350,17 +350,7 @@ impl Viewer {
                             .text_color(th.text)
                             .child(t("print-title", &[])),
                     )
-                    .child(
-                        div()
-                            .px(px(space::S2))
-                            .py(px(2.0))
-                            .rounded(px(radius::XS))
-                            .border_1()
-                            .border_color(th.line)
-                            .text_size(px(text::MICRO))
-                            .text_color(th.dim)
-                            .child("Ctrl P"),
-                    ),
+                    .child(float::kbd("Ctrl P", &th)),
             )
             .child(
                 div()
@@ -687,21 +677,6 @@ fn draw_sheet(
         scale,
         katna_pdf_render::recolor::PageColors::Normal,
     )
-}
-
-/// A round choice, filled when it is the one chosen.
-fn radio(on: bool, th: crate::theme::Theme) -> gpui::Div {
-    div()
-        .size(px(16.0))
-        .flex()
-        .items_center()
-        .justify_center()
-        .rounded(px(8.0))
-        .border_1()
-        .border_color(if on { th.accent } else { th.dim })
-        .when(on, |d| {
-            d.child(div().size(px(8.0)).rounded(px(4.0)).bg(th.accent))
-        })
 }
 
 /// Whether `target` was chosen to keep, not made to print.

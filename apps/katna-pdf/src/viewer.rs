@@ -3689,7 +3689,7 @@ impl Render for Viewer {
         let signing_card = self.signing_card(cx);
         let marks_card = self.marks_card(cx);
         let redact_card = self.redact_card(cx);
-        let export_card = self.export_card(cx);
+        let export_card = self.export_card(window, cx);
         let print_card = self.print_card(window, cx);
         let link_card = self.link_card(window, cx);
         let numbering_card = self.numbering_card(cx);

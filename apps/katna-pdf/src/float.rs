@@ -563,6 +563,144 @@ pub fn input_box(
         .child(input.clone())
 }
 
+/// A round choice (`.radio`), filled when it is the one chosen.
+pub fn radio(on: bool, th: &Theme) -> Div {
+    div()
+        .size(px(16.0))
+        .flex()
+        .flex_none()
+        .items_center()
+        .justify_center()
+        .rounded(px(8.0))
+        .border_1()
+        .border_color(if on { th.accent } else { th.dim })
+        .when(on, |d| {
+            d.child(div().size(px(8.0)).rounded(px(4.0)).bg(th.accent))
+        })
+}
+
+/// Keys as a dialog's heading shows them (`.kbd`).
+pub fn kbd(keys: impl Into<SharedString>, th: &Theme) -> Div {
+    div()
+        .flex_none()
+        .px(px(space::S2))
+        .py(px(2.0))
+        .rounded(px(radius::XS))
+        .border_1()
+        .border_color(th.line)
+        .text_size(px(text::MICRO))
+        .text_color(th.dim)
+        .child(keys.into())
+}
+
+/// A dialog's frame (`.dlg`): the card, rounded, lifted, with its
+/// heading (and keys) at the top and `foot` along the bottom, the body
+/// between them.
+pub fn dialog_card(
+    id: impl Into<ElementId>,
+    title: impl Into<SharedString>,
+    keys: Option<&str>,
+    width: f32,
+    body: impl IntoElement,
+    foot: impl IntoElement,
+    th: &Theme,
+) -> Stateful<Div> {
+    div()
+        .id(id)
+        .w(px(width))
+        .flex()
+        .flex_col()
+        .overflow_hidden()
+        .rounded(px(12.0))
+        .bg(th.card)
+        .shadow(th.lifted())
+        .when(th.dark, |d| d.border_1().border_color(th.line))
+        .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .px(px(space::S5))
+                .pt(px(space::S4))
+                .pb(px(space::S2))
+                .child(
+                    div()
+                        .flex_1()
+                        .text_size(px(text::SUBTITLE))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(th.text)
+                        .child(title.into()),
+                )
+                .children(keys.map(|k| kbd(k.to_owned(), th))),
+        )
+        .child(
+            div()
+                .px(px(space::S5))
+                .pb(px(space::S4))
+                .flex()
+                .flex_col()
+                .gap(px(space::S2))
+                .child(body),
+        )
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .justify_end()
+                .gap(px(space::S2))
+                .px(px(space::S5))
+                .py(px(space::S3))
+                .border_t_1()
+                .border_color(th.line)
+                .child(foot),
+        )
+}
+
+/// A choice shown as a small card (`.opt`): its name and a line under
+/// it, the accent's line round it when chosen.
+pub fn option_card(
+    id: impl Into<ElementId>,
+    name: impl Into<SharedString>,
+    detail: impl Into<SharedString>,
+    on: bool,
+    th: &Theme,
+) -> Stateful<Div> {
+    let hover = th.hover;
+    div()
+        .id(id)
+        .flex_1()
+        .min_w_0()
+        .min_h(px(52.0))
+        .px(px(10.0))
+        .py(px(space::S2))
+        .flex()
+        .flex_col()
+        .gap(px(2.0))
+        .rounded(px(7.0))
+        .border_1()
+        .cursor_pointer()
+        .map(|d| {
+            if on {
+                d.border_color(th.accent).bg(th.accent_soft.opacity(0.5))
+            } else {
+                d.border_color(th.line).hover(move |s| s.bg(hover))
+            }
+        })
+        .child(
+            div()
+                .text_size(px(text::SMALL))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(th.text)
+                .child(name.into()),
+        )
+        .child(
+            div()
+                .text_size(px(text::CAPTION))
+                .text_color(th.dim)
+                .child(detail.into()),
+        )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

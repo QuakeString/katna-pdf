@@ -8,15 +8,14 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use gpui::{AnyElement, Context, Entity, Subscription, div, prelude::*};
+use gpui::{AnyElement, App, Context, Entity, Subscription, div, prelude::*};
 use katna_pdf_render::export::{PictureKind, page_picture, scanned_page};
 use katna_ui::px;
 use katna_ui::text_input::{InputEvent, TextInput};
-use katna_ui::tokens::{radius, space, text};
-use katna_ui::widgets;
+use katna_ui::tokens::{space, text};
 
-use super::sign::check_box;
 use super::{Content, Viewer};
+use crate::float;
 use crate::text::t;
 
 /// What is written out.
@@ -67,13 +66,15 @@ impl ExportKind {
 }
 
 /// The resolutions offered, in dots to the inch.
-const DPIS: [u16; 3] = [72, 150, 300];
+const DPIS: [u16; 4] = [72, 150, 300, 600];
 
 pub(super) struct Exporting {
     kind: ExportKind,
     /// Into `DPIS`.
     dpi: usize,
     grey: bool,
+    /// Only the pages typed, not all.
+    these: bool,
     pages: Entity<TextInput>,
     working: bool,
     _sub: Subscription,
@@ -100,15 +101,21 @@ impl Viewer {
             input.set_accent(accent);
             input
         });
-        let sub = cx.subscribe(&pages, |this, _, event, cx| {
-            if let InputEvent::Submit = event {
-                this.run_export(cx);
+        let sub = cx.subscribe(&pages, |this, _, event, cx| match event {
+            InputEvent::Submit => this.run_export(cx),
+            InputEvent::Changed => {
+                if let Some(e) = this.exporting.as_mut() {
+                    e.these = true;
+                }
+                cx.notify();
             }
+            InputEvent::Cancel => {}
         });
         self.exporting = Some(Exporting {
             kind: ExportKind::Png,
             dpi: 1,
             grey: false,
+            these: false,
             pages,
             working: false,
             _sub: sub,
@@ -116,70 +123,72 @@ impl Viewer {
         cx.notify();
     }
 
-    pub(super) fn export_card(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+    /// The export dialog (R18): what to write out as cards, then the
+    /// resolution and colour for pages drawn, then which pages and the
+    /// files that will be written.
+    pub(super) fn export_card(
+        &self,
+        window: &gpui::Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
         let exporting = self.exporting.as_ref()?;
         let th = self.theme;
         let label = |id: &str| {
             div()
+                .pt(px(space::S2))
                 .text_size(px(text::SMALL))
+                .font_weight(gpui::FontWeight::MEDIUM)
                 .text_color(th.dim)
                 .child(t(id, &[]))
         };
-        let chip = |id: gpui::ElementId, label: String, on: bool| {
-            let chip = if on {
-                widgets::filled_button(id, label, &th.katna)
-            } else {
-                widgets::outlined_button(id, label, &th.katna)
-            };
-            chip.h(px(28.0))
-                .px(px(space::S3))
-                .text_size(px(text::SMALL))
+        let option = |i: usize, kind: ExportKind, id: &'static str| {
+            float::option_card(
+                ("export-kind", i),
+                t(id, &[]),
+                t(&format!("{id}-detail"), &[]),
+                exporting.kind == kind,
+                &th,
+            )
+            .on_click(cx.listener(move |this, _, _, cx| {
+                if let Some(e) = this.exporting.as_mut() {
+                    e.kind = kind;
+                }
+                cx.notify();
+            }))
         };
-        let mut kinds = div().flex().flex_wrap().gap(px(space::S1));
-        for (i, (kind, id)) in ExportKind::ALL.into_iter().enumerate() {
-            kinds = kinds.child(
-                chip(
-                    ("export-kind", i).into(),
-                    t(id, &[]),
-                    exporting.kind == kind,
-                )
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    if let Some(e) = this.exporting.as_mut() {
-                        e.kind = kind;
-                    }
-                    cx.notify();
-                })),
-            );
-        }
-        let mut card = div()
-            .id("export-card")
-            .w(px(480.0))
-            .p(px(space::S4))
+        let kinds = ExportKind::ALL;
+        let grid = div()
             .flex()
             .flex_col()
             .gap(px(space::S2))
-            .rounded(px(10.0))
-            .bg(th.card)
-            .shadow(th.lifted())
-            .when(th.dark, |d| d.border_1().border_color(th.line))
-            .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .child(
                 div()
-                    .text_size(px(text::BODY))
-                    .font_weight(gpui::FontWeight::SEMIBOLD)
-                    .text_color(th.text)
-                    .child(t("export-title", &[])),
+                    .flex()
+                    .gap(px(space::S2))
+                    .children((0..3).map(|i| option(i, kinds[i].0, kinds[i].1))),
             )
+            .child(
+                div()
+                    .flex()
+                    .gap(px(space::S2))
+                    .children((3..6).map(|i| option(i, kinds[i].0, kinds[i].1))),
+            );
+        let mut body = div()
+            .flex()
+            .flex_col()
+            .gap(px(space::S2))
             .child(label("export-what"))
-            .child(kinds);
+            .child(grid);
         if exporting.kind.drawn() {
-            let mut dpis = div().flex().gap(px(space::S1));
+            let mut dpis = float::seg(&th);
             for (i, dpi) in DPIS.into_iter().enumerate() {
                 dpis = dpis.child(
-                    chip(
-                        ("export-dpi", i).into(),
-                        t("export-dpi", &[("dpi", &dpi.to_string())]),
+                    float::seg_item(
+                        ("export-dpi", i),
+                        None,
+                        Some(dpi.to_string().into()),
                         exporting.dpi == i,
+                        &th,
                     )
                     .on_click(cx.listener(move |this, _, _, cx| {
                         if let Some(e) = this.exporting.as_mut() {
@@ -189,76 +198,182 @@ impl Viewer {
                     })),
                 );
             }
-            card = card.child(label("export-dpi-label")).child(dpis);
-        }
-        if exporting.kind == ExportKind::Scanned {
-            let grey = exporting.grey;
-            card = card.child(
+            let dpis = dpis.child(
                 div()
-                    .id("export-grey")
                     .flex()
                     .items_center()
-                    .gap(px(space::S2))
-                    .cursor_pointer()
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        if let Some(e) = this.exporting.as_mut() {
-                            e.grey = !e.grey;
-                        }
-                        cx.notify();
-                    }))
-                    .child(check_box(grey, th))
-                    .child(
-                        div()
-                            .text_size(px(text::BODY))
-                            .text_color(th.text)
-                            .child(t("export-grey", &[])),
-                    ),
+                    .px(px(space::S2))
+                    .text_size(px(text::CAPTION))
+                    .text_color(th.dim)
+                    .child("dpi"),
             );
+            let mut row = div().flex().gap(px(space::S5)).child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(space::S1))
+                    .child(label("export-dpi-label"))
+                    .child(dpis),
+            );
+            if exporting.kind == ExportKind::Scanned {
+                let mut colours = float::seg(&th);
+                for (grey, id) in [(false, "export-colour"), (true, "export-grey")] {
+                    colours = colours.child(
+                        float::seg_item(
+                            ("export-colour", grey as usize),
+                            None,
+                            Some(t(id, &[]).into()),
+                            exporting.grey == grey,
+                            &th,
+                        )
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            if let Some(e) = this.exporting.as_mut() {
+                                e.grey = grey;
+                            }
+                            cx.notify();
+                        })),
+                    );
+                }
+                row = row.child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(space::S1))
+                        .child(label("export-colour-label"))
+                        .child(colours),
+                );
+            }
+            body = body.child(row);
         }
-        card = card
+        let count = self.page_count();
+        let these = exporting.these;
+        let choice = |id: &'static str, on: bool, words: String, pick: bool| {
+            div()
+                .id(id)
+                .flex()
+                .items_center()
+                .gap(px(space::S2))
+                .cursor_pointer()
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if let Some(e) = this.exporting.as_mut() {
+                        e.these = pick;
+                    }
+                    cx.notify();
+                }))
+                .child(float::radio(on, &th))
+                .child(
+                    div()
+                        .text_size(px(text::BODY))
+                        .text_color(th.text)
+                        .child(words),
+                )
+        };
+        body = body
             .child(label("export-pages-label"))
             .child(
                 div()
-                    .h(px(36.0))
                     .flex()
                     .items_center()
-                    .px(px(space::S3))
-                    .rounded(px(radius::SM))
-                    .bg(th.field)
-                    .text_size(px(text::BODY))
-                    .text_color(th.text)
-                    .child(exporting.pages.clone()),
+                    .gap(px(space::S4))
+                    .child(choice(
+                        "export-all",
+                        !these,
+                        t("print-all", &[("count", &count.to_string())]),
+                        false,
+                    ))
+                    .child(choice("export-these", these, t("print-these", &[]), true))
+                    .child(div().flex_1().min_w_0().child(float::input_box(
+                        &exporting.pages,
+                        window,
+                        cx,
+                        &th,
+                    ))),
             )
             .child(
                 div()
-                    .flex()
-                    .justify_end()
-                    .gap(px(space::S2))
-                    .child(
-                        widgets::outlined_button(
-                            "export-cancel",
-                            t("export-cancel", &[]),
-                            &th.katna,
-                        )
-                        .on_click(cx.listener(|this, _, _, cx| this.toggle_exporting(cx))),
-                    )
-                    .child(
-                        widgets::filled_button(
-                            "export-go",
-                            t(
-                                if exporting.working {
-                                    "export-working"
-                                } else {
-                                    "export-go"
-                                },
-                                &[],
-                            ),
-                            &th.katna,
-                        )
-                        .on_click(cx.listener(|this, _, _, cx| this.run_export(cx))),
-                    ),
+                    .text_size(px(text::CAPTION))
+                    .text_color(th.dim)
+                    .child(self.export_outcome(exporting, cx)),
             );
-        Some(card.into_any_element())
+        let foot = div()
+            .flex()
+            .gap(px(space::S2))
+            .child(
+                float::button("export-cancel", t("export-cancel", &[]), false, &th)
+                    .on_click(cx.listener(|this, _, _, cx| this.toggle_exporting(cx))),
+            )
+            .child(
+                float::button(
+                    "export-go",
+                    t(
+                        if exporting.working {
+                            "export-working"
+                        } else {
+                            "export-go"
+                        },
+                        &[],
+                    ),
+                    true,
+                    &th,
+                )
+                .on_click(cx.listener(|this, _, _, cx| this.run_export(cx))),
+            );
+        Some(
+            float::dialog_card(
+                "export-card",
+                t("export-title", &[]),
+                Some("Ctrl Shift E"),
+                520.0,
+                body,
+                foot,
+                &th,
+            )
+            .into_any_element(),
+        )
+    }
+
+    /// What the export will write, in a line: the files, or the file.
+    fn export_outcome(&self, exporting: &Exporting, cx: &App) -> String {
+        let stem = self
+            .path
+            .as_ref()
+            .and_then(|p| p.file_stem())
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "page".into());
+        let count = self.page_count();
+        let spec = exporting.pages.read(cx).text().trim().to_owned();
+        let pages = if exporting.these && !spec.is_empty() {
+            match katna_pdf_cos::ranges::parse(&spec, count) {
+                Ok(pages) => pages,
+                Err(error) => return error.to_string(),
+            }
+        } else {
+            (0..count).collect()
+        };
+        let kind = exporting.kind;
+        match (kind.folder(), pages.first(), pages.last()) {
+            (true, Some(first), Some(last)) => {
+                let ext = kind.extension();
+                t(
+                    "export-files",
+                    &[
+                        ("count", &pages.len().to_string()),
+                        ("first", &format!("{stem}-{}.{ext}", first + 1)),
+                        ("last", &format!("{stem}-{}.{ext}", last + 1)),
+                    ],
+                )
+            }
+            _ => {
+                let name = match kind {
+                    ExportKind::Scanned => format!("{stem}-scanned.pdf"),
+                    _ => format!("{stem}.{}", kind.extension()),
+                };
+                t(
+                    "export-file",
+                    &[("name", &name), ("count", &pages.len().to_string())],
+                )
+            }
+        }
     }
 
     /// Asks where the export goes, then writes it there.
@@ -274,7 +389,11 @@ impl Viewer {
         let kind = exporting.kind;
         let dpi = f32::from(DPIS[exporting.dpi]);
         let grey = exporting.grey;
-        let spec = exporting.pages.read(cx).text().trim().to_owned();
+        let spec = if exporting.these {
+            exporting.pages.read(cx).text().trim().to_owned()
+        } else {
+            String::new()
+        };
         let count = opened.doc.page_count();
         let pages: Vec<usize> = if spec.is_empty() {
             (0..count).collect()
