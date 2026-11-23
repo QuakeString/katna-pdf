@@ -478,7 +478,7 @@ form.js-debugger	form	JavaScript debugger	pro	n	skip	-	-		acrobat
 form.edit-all-javascripts	form	Edit all JavaScripts in one editor	pro	y	partial	P2	#109 view only		acrobat
 form.js-security	form	JavaScript enable switch and sandboxing	reader	y	shipped	P2	scripts never run		acrobat
 form.folder-level-js	form	Folder-level JavaScript	pro	n	skip	-	-		acrobat
-form.xfa-static	form	View and fill static XFA forms	reader	y	todo	P2	-		acrobat
+form.xfa-static	form	View and fill static XFA forms	reader	y	deferred	P2	-	XFA later (owner, 2026-11-23)	acrobat
 form.xfa-dynamic	form	View and fill dynamic XFA forms	reader	y	skip	-	-		acrobat
 form.xfa-formcalc	form	FormCalc scripting	reader	n	skip	-	-		acrobat
 form.xfa-data	form	XFA XML data import and export	pro	n	skip	-	-		acrobat

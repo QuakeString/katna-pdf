@@ -28,7 +28,7 @@ the feature.
 | Editing content (`edit`) | 83 | 52 | 11 | 16 | 1 | 3 |
 | Pages and document (`organize`) | 83 | 30 | 19 | 28 | 1 | 5 |
 | Comments and review (`comment`) | 77 | 39 | 11 | 19 | 0 | 8 |
-| Forms (`form`) | 89 | 48 | 16 | 12 | 3 | 10 |
+| Forms (`form`) | 89 | 48 | 16 | 11 | 4 | 10 |
 | Security and redaction (`protect`) | 46 | 20 | 9 | 10 | 2 | 5 |
 | Digital signatures (`sign`) | 59 | 40 | 2 | 14 | 0 | 3 |
 | Scanning and OCR (`ocr`) | 31 | 0 | 0 | 3 | 25 | 3 |
@@ -39,16 +39,16 @@ the feature.
 | Compare, automation, settings, cloud (`misc`) | 101 | 14 | 20 | 34 | 2 | 31 |
 | Library (`library`, ours) | 9 | 9 | 0 | 0 | 0 | 0 |
 | Ideas (`idea`, ours, proposed) | 11 | 0 | 0 | 10 | 1 | 0 |
-| **All** | **959** | **366** | **137** | **290** | **38** | **128** |
+| **All** | **959** | **366** | **137** | **289** | **39** | **128** |
 
 Against each product, counting only what is in scope (not `skip`):
 
 | Against | In scope | Shipped | Partial | To do | Deferred |
 |---|---:|---:|---:|---:|---:|
-| Acrobat Reader (free) | 332 | 175 (52 %) | 66 | 88 | 3 |
+| Acrobat Reader (free) | 332 | 175 (52 %) | 66 | 87 | 4 |
 | Acrobat Standard (Reader + Standard) | 552 | 283 (51 %) | 102 | 159 | 8 |
 | Acrobat Pro (everything below Studio) | 736 | 321 (43 %) | 128 | 252 | 35 |
-| Master PDF Editor | 436 | 275 (63 %) | 67 | 73 | 21 |
+| Master PDF Editor | 436 | 275 (63 %) | 67 | 72 | 22 |
 | Only in Katna PDF | 59 | 29 | 5 | 23 | 2 |
 
 Many of Acrobat Pro's open rows are accessibility tagging (49 rows, nothing built
@@ -57,7 +57,7 @@ areas, Pro parity is 319 of 655 shipped (49 %), 68 % with partial rows counted.
 
 Out of scope (`skip`): Adobe's cloud services and accounts, shared reviews, Acrobat
 Sign requests, PDF Spaces and the generative AI features, prepress (separations,
-trapping, PDF/X, preflight fix-ups), 3D, Flash, dynamic XFA and the web app. A
+trapping, PDF/X, preflight fix-ups), 3D, Flash, dynamic XFA and the web app. Static XFA is deferred (owner, 2026-11-23). A
 private on-device assistant is proposed instead (`idea.local-ai`).
 
 To recount after editing the file:
@@ -78,7 +78,7 @@ fonts list in Properties; signing with the Windows certificate store and macOS
 Keychain; self-signed digital IDs; the preferences window (identity, documents,
 commenting, forms, full screen, search); screen-reader support (AccessKit).
 
-**Master PDF Editor gaps** (`mpe` y, `katna` todo, 73 rows): autosave and backup
+**Master PDF Editor gaps** (`mpe` y, `katna` todo, 72 rows): autosave and backup
 on save; status bar; rotate view; snapshot; find options; spell check; object tree
 pane; edit inside form XObjects; links made from URLs in the text; a text box with
 several fonts; split by size; bookmarks for combined or inserted files; drag pages
