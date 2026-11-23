@@ -27,6 +27,7 @@ mod mail;
 mod menu;
 mod menus;
 mod organize;
+mod prefs;
 mod print;
 mod profile;
 mod search;
@@ -118,16 +119,24 @@ fn main() -> ExitCode {
             cx.set_global(history::History::load());
             cx.set_global(look::Look::load());
             cx.set_global(profile::Profile::load());
+            cx.set_global(prefs::Prefs::load());
             katna_ui::text_input::bind_keys(cx);
             katna_ui::text_area::bind_keys(cx);
             viewer::bind_keys(cx);
             // Before the window opens, so it carries the menu's address.
             #[cfg(target_os = "linux")]
             let clicks = menu::serve(cx);
+            let reopen =
+                files.is_empty() && compare.is_none() && cx.global::<prefs::Prefs>().reopen_session;
             let Some(window) = open_window(std::mem::take(&mut files), cx) else {
                 cx.quit();
                 return;
             };
+            if reopen {
+                window
+                    .update(cx, |tabs, window, cx| tabs.reopen_session(window, cx))
+                    .ok();
+            }
             if let Some(older) = compare.take() {
                 window
                     .update(cx, |tabs, _, cx| tabs.compare_with(older, cx))

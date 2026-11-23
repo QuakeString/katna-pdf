@@ -537,7 +537,14 @@ impl Viewer {
         let Some(picked) = self.picked_object.as_ref() else {
             return;
         };
-        let values = [b[0], b[1], b[2] - b[0], b[3] - b[1], angle];
+        let units = cx.global::<crate::prefs::Prefs>().units.points();
+        let values = [
+            b[0] / units,
+            b[1] / units,
+            (b[2] - b[0]) / units,
+            (b[3] - b[1]) / units,
+            angle,
+        ];
         for (field, value) in picked.fields.iter().zip(values) {
             let shown = format!("{:.1}", value);
             field.update(cx, |f, cx| f.set_text(shown, cx));
@@ -687,12 +694,13 @@ impl Viewer {
 
     /// The inspector's numbers typed: the picked objects go there.
     fn apply_inspector(&mut self, cx: &mut Context<Self>) {
+        let units = cx.global::<crate::prefs::Prefs>().units.points();
         let Some(picked) = self.picked_object.as_ref() else {
             return;
         };
         let values: Option<Vec<f32>> = picked.fields[..4]
             .iter()
-            .map(|f| length(f.read(cx).text()))
+            .map(|f| length_in(f.read(cx).text(), units))
             .collect();
         let Some(&[l, t, w, h]) = values.as_deref() else {
             return;
@@ -1785,6 +1793,7 @@ impl Viewer {
             Some(ObjectKind::Text) => t("objcard-text", &[]),
             _ => t("objcard-shape", &[]),
         };
+        let unit = cx.global::<crate::prefs::Prefs>().units.suffix();
         let input = |field: &gpui::Entity<katna_ui::text_input::TextInput>, label: &'static str| {
             div()
                 .flex_1()
@@ -1801,6 +1810,15 @@ impl Viewer {
                 .text_size(px(text::SMALL))
                 .child(div().flex_none().text_color(th.dim).child(label))
                 .child(div().flex_1().min_w_0().child(field.clone()))
+                .when(matches!(label, "X" | "Y" | "W" | "H"), |d| {
+                    d.child(
+                        div()
+                            .flex_none()
+                            .pr(px(space::S2))
+                            .text_color(th.dim)
+                            .child(unit),
+                    )
+                })
         };
         let f = &picked.fields;
         let mut card = div()
@@ -2248,35 +2266,41 @@ fn picture_bytes(picture: PictureFile) -> Result<(Vec<u8>, &'static str), String
 /// sums, differences, products and quotients of those (`2cm+5`,
 /// `210mm/2`).
 pub(super) fn length(typed: &str) -> Option<f32> {
+    length_in(typed, 1.0)
+}
+
+/// The same, a number without a unit counted in units of `plain`
+/// points (Settings > Editing > Units).
+pub(super) fn length_in(typed: &str, plain: f32) -> Option<f32> {
     let s: String = typed.chars().filter(|c| !c.is_whitespace()).collect();
     let s = s.replace(',', ".");
-    let (value, rest) = sum(&s)?;
+    let (value, rest) = sum(&s, plain)?;
     rest.is_empty().then_some(value)
 }
 
-fn sum(s: &str) -> Option<(f32, &str)> {
-    let (mut value, mut rest) = product(s)?;
+fn sum(s: &str, plain: f32) -> Option<(f32, &str)> {
+    let (mut value, mut rest) = product(s, plain)?;
     loop {
         let sign = match rest.chars().next() {
             Some('+') => 1.0,
             Some('-') => -1.0,
             _ => return Some((value, rest)),
         };
-        let (next, after) = product(&rest[1..])?;
+        let (next, after) = product(&rest[1..], plain)?;
         value += sign * next;
         rest = after;
     }
 }
 
-fn product(s: &str) -> Option<(f32, &str)> {
-    let (mut value, mut rest) = factor(s)?;
+fn product(s: &str, plain: f32) -> Option<(f32, &str)> {
+    let (mut value, mut rest) = factor(s, plain)?;
     loop {
         let times = match rest.chars().next() {
             Some('*') | Some('×') => true,
             Some('/') => false,
             _ => return Some((value, rest)),
         };
-        let (next, after) = factor(&rest[rest.chars().next()?.len_utf8()..])?;
+        let (next, after) = factor(&rest[rest.chars().next()?.len_utf8()..], 1.0)?;
         value = if times {
             value * next
         } else if next.abs() > 1e-9 {
@@ -2288,7 +2312,7 @@ fn product(s: &str) -> Option<(f32, &str)> {
     }
 }
 
-fn factor(s: &str) -> Option<(f32, &str)> {
+fn factor(s: &str, plain: f32) -> Option<(f32, &str)> {
     let (sign, s) = match s.strip_prefix('-') {
         Some(rest) => (-1.0, rest),
         None => (1.0, s.strip_prefix('+').unwrap_or(s)),
@@ -2311,7 +2335,7 @@ fn factor(s: &str) -> Option<(f32, &str)> {
     } else if let Some(r) = rest.strip_prefix("pt") {
         (1.0, r)
     } else {
-        (1.0, rest)
+        (plain, rest)
     };
     Some((sign * number * scale, rest))
 }
@@ -2457,5 +2481,16 @@ mod tests {
         assert_eq!(length("abc"), None);
         assert_eq!(length("10/0"), None);
         assert_eq!(length(""), None);
+    }
+
+    #[test]
+    fn bare_numbers_count_in_the_chosen_unit() {
+        let mm = 72.0 / 25.4;
+        let near = |a: Option<f32>, b: f32| (a.unwrap() - b).abs() < 1e-3;
+        assert!(near(length_in("25.4", mm), 72.0));
+        assert!(near(length_in("1in", mm), 72.0));
+        assert!(near(length_in("2*12.7", mm), 72.0));
+        assert!(near(length_in("50.8/2", mm), 72.0));
+        assert!(near(length_in("10pt+10", mm), 10.0 + 10.0 * mm));
     }
 }

@@ -70,6 +70,7 @@ use crate::float::{self, FloatTip};
 use crate::form::{Editing, Form};
 use crate::history::History;
 use crate::organize::{self, PageOp};
+use crate::prefs::{Prefs, StartZoom};
 use crate::search::{self, Found, Hit, Texts};
 use crate::select::{self, Selection, Spot};
 use crate::spread::Spread;
@@ -637,12 +638,17 @@ impl Viewer {
             })
             .ok();
         });
+        let prefs = cx.global::<Prefs>().clone();
         let mut this = Self {
             focus,
             path: None,
             content: Content::Empty,
-            zoom: Zoom::FitWidth,
-            spread: Spread::default(),
+            zoom: match prefs.zoom {
+                StartZoom::FitWidth => Zoom::FitWidth,
+                StartZoom::FitPage => Zoom::FitPage,
+                StartZoom::Actual => Zoom::Fixed(1.0),
+            },
+            spread: prefs.layout,
             shown: 1.0,
             list,
             bar: ScrollBar::default(),
@@ -716,7 +722,7 @@ impl Viewer {
             properties: None,
             moving: None,
             band: None,
-            gridded: false,
+            gridded: prefs.grid,
             text_moving: None,
             tool: None,
             colour: 0,
@@ -933,6 +939,9 @@ impl Viewer {
                         this.list.reset(this.spread.rows(opened.doc.page_count()));
                         // The page asked for, or where it was left last time.
                         let page = this.start_page.take().or_else(|| {
+                            if !cx.global::<Prefs>().open_at_last {
+                                return None;
+                            }
                             this.path
                                 .as_deref()
                                 .and_then(|p| cx.global::<History>().page(p))
@@ -3490,6 +3499,23 @@ pub fn kept_initials() -> Vec<String> {
 /// The person's own stamps, as Settings lists them.
 pub fn kept_stamps() -> Vec<String> {
     stamps::load_custom()
+}
+
+pub use sign::SigningDefaults;
+
+/// What signing starts with: timestamping, its server, long-term proof.
+pub fn signing_defaults() -> SigningDefaults {
+    sign::signing_defaults()
+}
+
+pub fn set_signing_defaults(defaults: &SigningDefaults) {
+    sign::set_signing_defaults(defaults);
+}
+
+/// The folder of roots the person trusts beside the system's and the
+/// ones built in.
+pub fn trusted_folder() -> Option<PathBuf> {
+    sign::trusted_folder()
 }
 
 /// The file name of the picture signatures show, if one was chosen.

@@ -2457,6 +2457,31 @@ fn remembered_certificate() -> Option<PathBuf> {
 }
 
 /// Whether to timestamp, and the server: `on` or `off`, then the URL.
+/// What signing starts with, as Settings > Signing shows and changes it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SigningDefaults {
+    pub timestamp: bool,
+    pub server: String,
+    pub long_term: bool,
+}
+
+pub(super) fn signing_defaults() -> SigningDefaults {
+    let (timestamp, server) = remembered_timestamp();
+    SigningDefaults {
+        timestamp,
+        server,
+        long_term: read_note("long-term").as_deref().map(str::trim) != Some("off"),
+    }
+}
+
+pub(super) fn set_signing_defaults(defaults: &SigningDefaults) {
+    let server = defaults.server.trim();
+    let server = if server.is_empty() { TSA } else { server };
+    let on = if defaults.timestamp { "on" } else { "off" };
+    write_note("timestamp", &format!("{on}\n{server}\n"));
+    write_note("long-term", if defaults.long_term { "on" } else { "off" });
+}
+
 fn remembered_timestamp() -> (bool, String) {
     let text = read_note("timestamp").unwrap_or_default();
     let mut lines = text.lines();
