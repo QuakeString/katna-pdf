@@ -123,7 +123,6 @@ impl CacheKey for ShadingPattern {
 #[derive(Clone)]
 pub struct TilingPattern<'a> {
     cache_key: u128,
-    ctx_bbox: Rect,
     /// The bbox of the tiling pattern.
     pub bbox: Rect,
     /// The step in the x direction.
@@ -169,7 +168,6 @@ impl<'a> TilingPattern<'a> {
             .unwrap_or_default();
 
         let state = ctx.get().clone();
-        let ctx_bbox = ctx.bbox();
 
         let fill_cs = state
             .graphics_state
@@ -201,7 +199,6 @@ impl<'a> TilingPattern<'a> {
             x_step,
             y_step,
             matrix,
-            ctx_bbox,
             is_color,
             stream,
             stroke_paint,
@@ -225,8 +222,11 @@ impl<'a> TilingPattern<'a> {
 
         let mut context = Context::new_with(
             state.ctm,
-            // TODO: bbox?
-            (initial_transform * self.ctx_bbox.to_path(0.1)).bounding_box(),
+            // Katna PDF patch: the cell is drawn in its own space, so the
+            // box it may paint is the pattern's bbox there. The using page's
+            // clip box is in device space and mostly missed the cell, so `sh`
+            // and form XObjects in a cell drew nothing (KATNA.md).
+            (initial_transform * self.bbox.to_path(0.1)).bounding_box(),
             &self.cache,
             self.xref,
             self.settings.clone(),
