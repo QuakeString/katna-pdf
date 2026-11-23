@@ -916,6 +916,9 @@ impl Viewer {
             return;
         };
         let current = self.unsaved();
+        // A password-protected file is signed with the password it was
+        // opened with, and stays protected.
+        let key = self.key.clone();
         let Some(signing) = self.signing.as_mut() else {
             return;
         };
@@ -1069,7 +1072,7 @@ impl Viewer {
                     } else {
                         free_name(&target, &path)
                     };
-                    sign_one(bytes, &what, id.as_ref(), &first)?;
+                    sign_one(bytes, key.as_deref(), &what, id.as_ref(), &first)?;
                     let mut done = 1;
                     let mut failed = Vec::new();
                     for other in &others {
@@ -1077,7 +1080,13 @@ impl Viewer {
                             std::fs::read(other)
                                 .map_err(|e| e.to_string())
                                 .and_then(|bytes| {
-                                    sign_one(bytes, &what, id.as_ref(), &free_name(&target, other))
+                                    sign_one(
+                                        bytes,
+                                        None,
+                                        &what,
+                                        id.as_ref(),
+                                        &free_name(&target, other),
+                                    )
                                 });
                         match signed {
                             Ok(()) => done += 1,
@@ -2617,11 +2626,12 @@ struct What {
 /// the file is shorter.
 fn sign_one(
     bytes: Vec<u8>,
+    key: Option<&str>,
     what: &What,
     id: &dyn katna_pdf_sign::Signer,
     target: &Path,
 ) -> Result<(), String> {
-    let doc = katna_pdf_cos::Document::load(bytes).map_err(|e| e.to_string())?;
+    let doc = super::cos(bytes, key)?;
     let time = std::time::SystemTime::now();
     let lines = || {
         katna_pdf_sign::appearance_lines(
@@ -2677,7 +2687,7 @@ fn sign_one(
     // The chain and OCSP answers or CRLs, fetched now; a signature whose
     // data could not all be had is kept as it is with what was.
     let signed = if what.long_term {
-        let doc = katna_pdf_cos::Document::load(signed).map_err(|e| e.to_string())?;
+        let doc = super::cos(signed, key)?;
         katna_pdf_sign::add_validation_data(
             &doc,
             &roots(),
@@ -2692,7 +2702,7 @@ fn sign_one(
     // timestamped after it (PAdES B-LTA).
     let signed = match server.as_ref().filter(|_| what.long_term) {
         Some(server) => {
-            let doc = katna_pdf_cos::Document::load(signed).map_err(|e| e.to_string())?;
+            let doc = super::cos(signed, key)?;
             katna_pdf_sign::timestamp_document(&doc, server, katna_pdf_sign::Digest::Sha256)
                 .map_err(|e| e.to_string())?
         }
@@ -2857,10 +2867,10 @@ mod tests {
         };
         let file = Path::new("/somewhere/report.pdf");
         let first = free_name(&folder, file);
-        sign_one(pdf.clone(), &what, &id, &first).unwrap();
+        sign_one(pdf.clone(), None, &what, &id, &first).unwrap();
         let second = free_name(&folder, file);
         assert_ne!(first, second);
-        sign_one(pdf.clone(), &what, &id, &second).unwrap();
+        sign_one(pdf.clone(), None, &what, &id, &second).unwrap();
         for target in [first, second] {
             let doc = katna_pdf_cos::Document::load(std::fs::read(&target).unwrap()).unwrap();
             let checks = katna_pdf_sign::check(&doc, doc.bytes(), &Roots::new());
@@ -2868,7 +2878,22 @@ mod tests {
             // Page 6 asked for; the file has 2.
             assert_eq!(checks[0].signature.page, Some(1));
         }
-        assert!(sign_one(b"nope".to_vec(), &what, &id, &folder.join("x.pdf")).is_err());
+        assert!(sign_one(b"nope".to_vec(), None, &what, &id, &folder.join("x.pdf")).is_err());
+
+        // A password-protected file: signed with its password, it stays
+        // protected, and the signature checks once it is opened.
+        let locked = katna_pdf_cos::Document::load(pdf.clone())
+            .unwrap()
+            .lock("secret", "", katna_pdf_cos::Permissions::ALL)
+            .unwrap();
+        let target = folder.join("locked.pdf");
+        assert!(sign_one(locked.clone(), None, &what, &id, &target).is_err());
+        sign_one(locked, Some("secret"), &what, &id, &target).unwrap();
+        let mut doc = katna_pdf_cos::Document::load(std::fs::read(&target).unwrap()).unwrap();
+        assert!(doc.is_locked());
+        doc.unlock("secret").unwrap();
+        let checks = katna_pdf_sign::check(&doc, doc.bytes(), &Roots::new());
+        assert!(checks[0].intact(), "{:?}", checks[0].coverage);
 
         // Into a field of the file, certifying it: then the field is
         // found as signed, and the file as certified.
@@ -2889,7 +2914,7 @@ mod tests {
             ..what
         };
         let target = folder.join("certified.pdf");
-        sign_one(form, &what, &id, &target).unwrap();
+        sign_one(form, None, &what, &id, &target).unwrap();
         let doc = katna_pdf_cos::Document::load(std::fs::read(&target).unwrap()).unwrap();
         let after = signable(&doc);
         assert!(after.fields.is_empty() && after.signed);

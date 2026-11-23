@@ -549,7 +549,7 @@ protect.scripts-never-run	protect	Every script and action listed; none run outsi
 sign.pkcs12	sign	Sign with a PKCS#12 (.p12/.pfx) digital ID	reader	y	shipped	P0	#39 p12.rs		acrobat
 sign.macos-keychain	sign	Sign with macOS Keychain identities	reader	y	todo	P2	-		acrobat
 sign.windows-cert-store	sign	Sign with the Windows certificate store	reader	y	todo	P1	-		acrobat
-sign.encrypted-documents	sign	Sign and timestamp password-protected (encrypted) documents	reader	n	partial	P1	#63		acrobat
+sign.encrypted-documents	sign	Sign and timestamp password-protected (encrypted) documents	reader	n	shipped	P1	#188		acrobat
 sign.pkcs11	sign	Sign with PKCS#11 tokens and smart cards	reader	y	shipped	P0	#39 pkcs11.rs	OpenSC, ePass2003, others' drivers	acrobat
 sign.self-signed-id	sign	Create a self-signed digital ID	reader	y	todo	P2	-		acrobat
 sign.export-certificate	sign	Export a public certificate	reader	y	todo	P2	-		acrobat

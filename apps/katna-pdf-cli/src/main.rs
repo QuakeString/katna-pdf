@@ -1302,7 +1302,17 @@ fn long_term(
     stamper: Option<&dyn katna_pdf_sign::tsa::Stamper>,
 ) -> Result<Vec<u8>, Failure> {
     let fail = |e: &dyn std::fmt::Display| failed(format!("{file}: {e}"));
-    let doc = Document::load(bytes).map_err(|e| fail(&e))?;
+    // A locked file was signed with its password, and is opened with it.
+    let load = |bytes: Vec<u8>| -> Result<Document, Failure> {
+        let mut doc = Document::load(bytes).map_err(|e| fail(&e))?;
+        if let Ok(password) = std::env::var("KATNA_PDF_OPEN_PASSWORD")
+            && doc.is_locked()
+        {
+            doc.unlock(&password).map_err(|e| fail(&e))?;
+        }
+        Ok(doc)
+    };
+    let doc = load(bytes)?;
     let (bytes, untold) =
         katna_pdf_sign::add_validation_data(&doc, roots, fetch).map_err(|e| fail(&e))?;
     for why in untold {
@@ -1311,7 +1321,7 @@ fn long_term(
     let Some(stamper) = stamper else {
         return Ok(bytes);
     };
-    let doc = Document::load(bytes).map_err(|e| fail(&e))?;
+    let doc = load(bytes)?;
     katna_pdf_sign::timestamp_document(&doc, stamper, Digest::Sha256).map_err(|e| fail(&e))
 }
 
@@ -3683,8 +3693,9 @@ fn token_check(args: &[String], json: bool) -> Done {
 fn verify(args: &[String], json: bool) -> Done {
     let args = Args::parse(args)?;
     let [file] = args.words()?;
-    let bytes = std::fs::read(file).map_err(|e| failed(format!("{file}: {e}")))?;
-    let doc = Document::load(bytes.clone()).map_err(|e| failed(format!("{file}: {e}")))?;
+    // A locked file's signatures are checked once it is open.
+    let doc = open(file)?;
+    let bytes = doc.bytes().to_vec();
     let roots = trusted(&args)?;
     let mut checks = katna_pdf_sign::check(&doc, &bytes, &roots);
     if args.flag("--online") {
