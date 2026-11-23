@@ -99,10 +99,7 @@ impl Viewer {
 
     /// The picture's bytes and kind, drawing it from the page when the
     /// file's own cannot be read out.
-    fn menu_picture(
-        &self,
-        cx: &mut Context<Self>,
-    ) -> Option<gpui::Task<Option<Picture>>> {
+    fn menu_picture(&self, cx: &mut Context<Self>) -> Option<gpui::Task<Option<Picture>>> {
         let menu = self.picture_menu.as_ref()?;
         if let Some(picture) = &menu.picture {
             let picture = picture.clone();
