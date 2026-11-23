@@ -23,6 +23,8 @@ use super::{Content, PaneTab, Viewer, file_name, icon_button};
 use crate::float::{self, FloatTip};
 use crate::text::t;
 
+mod newid;
+
 /// A drag shorter than this, in points, places nothing.
 const CLICK: f32 = 4.0;
 
@@ -437,6 +439,10 @@ pub(super) struct Signing {
     busy: bool,
     /// Put the keys in the password field on the next frame.
     focus: bool,
+    /// Making a digital ID of one's own, when the form is open.
+    new_id: Option<newid::IdForm>,
+    /// Put the keys in the form's first field on the next frame.
+    focus_id: bool,
     _inputs: Vec<Subscription>,
 }
 
@@ -583,6 +589,8 @@ impl Viewer {
             pin: None,
             busy: false,
             focus: false,
+            new_id: None,
+            focus_id: false,
             _inputs: subs,
         });
         self.set_source(source, cx);
@@ -1158,6 +1166,7 @@ impl Viewer {
 
     /// Puts the keys in the password field when asked to.
     pub(super) fn focus_signing(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.focus_id_form(window, cx);
         if let Some(signing) = self.signing.as_mut()
             && std::mem::take(&mut signing.focus)
         {
@@ -1270,6 +1279,95 @@ impl Viewer {
 
     /// The card over the pages while signing: where to put the
     /// signature, then the certificate and its password.
+    /// The certificate file to sign with, and how to choose another or
+    /// make one's own.
+    fn certificate_row(&self, cx: &mut Context<Self>) -> AnyElement {
+        let Some(signing) = self.signing.as_ref() else {
+            return div().into_any_element();
+        };
+        let th = self.theme;
+        let certificate = signing
+            .certificate
+            .as_deref()
+            .map_or_else(|| t("sign-certificate-none", &[]), file_name);
+        let folder = signing
+            .certificate
+            .as_deref()
+            .and_then(Path::parent)
+            .map(home_short);
+        let row = div()
+            .flex()
+            .items_center()
+            .gap(px(space::S3))
+            .px(px(space::S3))
+            .py(px(space::S3))
+            .rounded(px(radius::SM))
+            .border_1()
+            .border_color(th.line)
+            .child(float::icon("file", 18.0, th.text2))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.0))
+                    .child(
+                        div()
+                            .truncate()
+                            .text_size(px(text::BODY))
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .text_color(if signing.certificate.is_some() {
+                                th.text
+                            } else {
+                                th.dim
+                            })
+                            .child(certificate),
+                    )
+                    .child(
+                        div()
+                            .truncate()
+                            .text_size(px(text::CAPTION))
+                            .text_color(th.dim)
+                            .child(folder.unwrap_or_else(|| t("sign-certificate", &[]))),
+                    ),
+            )
+            .child(
+                float::button(
+                    "sign-choose",
+                    t(
+                        if signing.certificate.is_some() {
+                            "sign-change"
+                        } else {
+                            "sign-choose"
+                        },
+                        &[],
+                    ),
+                    false,
+                    &th,
+                )
+                .ftip(t("sign-choose-tip", &[]), &th)
+                .on_click(cx.listener(|this, _, _, cx| this.choose_certificate(cx))),
+            );
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(space::S1))
+            .child(row)
+            .child(
+                div()
+                    .id("newid-open")
+                    .self_start()
+                    .text_size(px(text::SMALL))
+                    .text_color(th.accent)
+                    .cursor_pointer()
+                    .hover(|d| d.underline())
+                    .child(t("newid-open", &[]))
+                    .on_click(cx.listener(|this, _, _, cx| this.open_id_form(cx))),
+            )
+            .into_any_element()
+    }
+
     pub(super) fn signing_card(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let signing = self.signing.as_ref()?;
         signing.placed.as_ref()?;
@@ -1331,10 +1429,6 @@ impl Viewer {
         } else {
             "sign-password-label"
         };
-        let certificate = signing
-            .certificate
-            .as_deref()
-            .map_or_else(|| t("sign-certificate-none", &[]), file_name);
         let busy = signing.busy;
         let card = div()
             .id("signing-card")
@@ -1353,70 +1447,9 @@ impl Viewer {
                     .child(t("sign-title", &[])),
             )
             .child(self.source_switch(cx))
-            .when(signing.source == Source::File, |d| {
-                let folder = signing
-                    .certificate
-                    .as_deref()
-                    .and_then(Path::parent)
-                    .map(home_short);
-                d.child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(px(space::S3))
-                        .px(px(space::S3))
-                        .py(px(space::S3))
-                        .rounded(px(radius::SM))
-                        .border_1()
-                        .border_color(th.line)
-                        .child(float::icon("file", 18.0, th.text2))
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .flex()
-                                .flex_col()
-                                .gap(px(2.0))
-                                .child(
-                                    div()
-                                        .truncate()
-                                        .text_size(px(text::BODY))
-                                        .font_weight(gpui::FontWeight::SEMIBOLD)
-                                        .text_color(if signing.certificate.is_some() {
-                                            th.text
-                                        } else {
-                                            th.dim
-                                        })
-                                        .child(certificate),
-                                )
-                                .child(
-                                    div()
-                                        .truncate()
-                                        .text_size(px(text::CAPTION))
-                                        .text_color(th.dim)
-                                        .child(
-                                            folder.unwrap_or_else(|| t("sign-certificate", &[])),
-                                        ),
-                                ),
-                        )
-                        .child(
-                            float::button(
-                                "sign-choose",
-                                t(
-                                    if signing.certificate.is_some() {
-                                        "sign-change"
-                                    } else {
-                                        "sign-choose"
-                                    },
-                                    &[],
-                                ),
-                                false,
-                                &th,
-                            )
-                            .ftip(t("sign-choose-tip", &[]), &th)
-                            .on_click(cx.listener(|this, _, _, cx| this.choose_certificate(cx))),
-                        ),
-                )
+            .when(signing.source == Source::File, |d| match &signing.new_id {
+                Some(form) => d.child(self.id_form(form, cx)),
+                None => d.child(self.certificate_row(cx)),
             })
             .when(signing.source == Source::Token, |d| {
                 d.child(self.token_list(cx))

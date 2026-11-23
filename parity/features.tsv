@@ -551,8 +551,8 @@ sign.macos-keychain	sign	Sign with macOS Keychain identities	reader	y	todo	P2	-	
 sign.windows-cert-store	sign	Sign with the Windows certificate store	reader	y	todo	P1	-		acrobat
 sign.encrypted-documents	sign	Sign and timestamp password-protected (encrypted) documents	reader	n	shipped	P1	#188		acrobat
 sign.pkcs11	sign	Sign with PKCS#11 tokens and smart cards	reader	y	shipped	P0	#39 pkcs11.rs	OpenSC, ePass2003, others' drivers	acrobat
-sign.self-signed-id	sign	Create a self-signed digital ID	reader	y	todo	P2	-		acrobat
-sign.export-certificate	sign	Export a public certificate	reader	y	todo	P2	-		acrobat
+sign.self-signed-id	sign	Create a self-signed digital ID	reader	y	shipped	P2	#195		acrobat
+sign.export-certificate	sign	Export a public certificate	reader	y	shipped	P2	#195		acrobat
 sign.visible-signature	sign	Visible signature by drawing a rectangle	reader	y	shipped	P0	#39		acrobat
 sign.sign-existing-field	sign	Sign an existing signature field	reader	y	shipped	P0	#39		acrobat
 sign.invisible-signature	sign	Invisible signature	reader	y	shipped	P0	#39 sign-hidden		acrobat
