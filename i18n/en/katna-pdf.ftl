@@ -939,6 +939,7 @@ undo-what-password = changing the password
 undo-what-shrink = making the file smaller
 undo-what-font = changing the font
 undo-what-edit = editing the page
+undo-what-repair = repairing the file
 undo-failed = The change could not be undone: { $error }
 save-failed = The file could not be saved: { $error }
 unsaved-title = Save the changes to { $name }?
@@ -1744,3 +1745,18 @@ read-mode-on = Read mode: just the pages. Ctrl+H or Escape brings the tools back
 
 # Fit visible (Ctrl+5)
 fit-visible-blank = Nothing is drawn on this page, so the whole page is shown.
+
+# A damaged file, repaired as it opened (viewer/repair.rs).
+file-repaired = This file was damaged and has been repaired. Save it to keep the repair; File properties lists what was done.
+repair-failed = The repaired file could not be written: { $error }
+properties-repairs = Repaired when opened
+repair-no-startxref = The file does not say where its table of objects is.
+repair-table-unreadable = The table of objects at byte { $at } could not be read.
+repair-no-catalog = The table of objects leads to no document catalog.
+repair-table-wrong = The table of objects has some objects in the wrong place.
+repair-objects-found = The table was made again from { $count } objects found in the file.
+repair-objects-moved = Objects found away from where the table said: { $count }.
+repair-objects-in-streams = Objects found inside object streams: { $count }.
+repair-trailer-keyword = The trailer was taken from the last one in the file.
+repair-trailer-xref-stream = The trailer was taken from the newest cross-reference stream.
+repair-catalog-by-type = No trailer was found; the document catalog was found by its type.

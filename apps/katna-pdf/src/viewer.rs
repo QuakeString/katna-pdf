@@ -65,6 +65,7 @@ mod present;
 mod printing;
 mod properties;
 mod redact;
+mod repair;
 mod setup;
 mod sharp;
 pub(crate) mod sign;
@@ -769,6 +770,9 @@ pub struct Viewer {
     colour_chosen: bool,
     /// The comment looks kept for new comments, by tool.
     looks: looks::Looks,
+    /// What was done to open the file shown, when it was damaged
+    /// (`repair.rs`).
+    repairs: Vec<katna_pdf_cos::Repair>,
     /// Each page's annotations, once read.
     annots: Option<Arc<Vec<Vec<katna_pdf_cos::Annotation>>>>,
     /// An annotation being drawn with the pointer.
@@ -1004,6 +1008,7 @@ impl Viewer {
             colour: 0,
             colour_chosen: false,
             looks: looks::Looks::load(),
+            repairs: Vec::new(),
             annots: None,
             draft: None,
             chosen: None,
@@ -1153,6 +1158,7 @@ impl Viewer {
         let generation = self.generation;
         self.content = Content::Opening(name.clone());
         self.contents = None;
+        self.repairs.clear();
         self.renaming = None;
         self.label_ranges.clear();
         self.numbering = None;
@@ -1255,6 +1261,9 @@ impl Viewer {
                         this.visible = 0..1;
                         this.content = Content::Ready(opened);
                         this.watch_file(cx);
+                        if this.recover_after.is_none() {
+                            this.check_repairs(cx);
+                        }
                         this.apply_recovered(cx);
                         this.password = None;
                         if let Some(older) = this.compare_after.take() {

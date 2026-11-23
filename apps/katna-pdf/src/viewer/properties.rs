@@ -649,6 +649,21 @@ impl Viewer {
                             )
                     })),
             )
+            .when(!self.repairs.is_empty(), |d| {
+                d.child(section(t("properties-repairs", &[]), th)).child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(space::S1))
+                        .text_size(px(text::SMALL))
+                        .text_color(th.text)
+                        .children(
+                            self.repairs
+                                .iter()
+                                .map(|r| div().child(super::repair::said(r))),
+                        ),
+                )
+            })
             .into_any_element()
     }
 
