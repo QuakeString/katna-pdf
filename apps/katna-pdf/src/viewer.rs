@@ -158,6 +158,14 @@ actions!(
 );
 
 /// Our object layer's copy of `bytes`, a locked file opened with `key`.
+/// What to do with changes not saved when the tab closes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CloseAnswer {
+    Cancel,
+    Leave,
+    Save,
+}
+
 /// A line in the notice bar, and whether it tells of something that
 /// went wrong (in the error's colours) or only what happened.
 #[derive(Debug, Clone, PartialEq)]
@@ -360,6 +368,8 @@ pub enum ViewerEvent {
     Dropped(Vec<PathBuf>),
     /// The library button was pressed.
     ShowLibrary,
+    /// The tab is to close: its changes were saved, or left.
+    Close,
 }
 
 /// A change to the pages, as [`Viewer::change_pages`] writes it.
@@ -548,6 +558,8 @@ pub struct Viewer {
     /// the keys in it on the next frame.
     password: Option<(Entity<TextInput>, Subscription)>,
     focus_password: bool,
+    /// The password typed is shown, not dotted.
+    password_shown: bool,
     /// The password the file was opened with, for our object layer's
     /// copies too.
     key: Option<Arc<str>>,
@@ -556,6 +568,11 @@ pub struct Viewer {
     notice: Option<Notice>,
     /// The form's changes the person was told closing would lose.
     close_warned: Option<u64>,
+    /// Closing was asked with changes not saved: the dialog asks what
+    /// to do with them.
+    asking_close: bool,
+    /// The tab closes once the save under way is done.
+    close_after_save: bool,
     /// The text selected with the pointer, and whether it is being
     /// dragged out now.
     selection: Option<Selection>,
@@ -797,9 +814,12 @@ impl Viewer {
             turn: 0,
             password: None,
             focus_password: false,
+            password_shown: false,
             key: None,
             notice: None,
             close_warned: None,
+            asking_close: false,
+            close_after_save: false,
             selection: None,
             selecting: false,
             hand: false,
@@ -3045,14 +3065,114 @@ impl Viewer {
         if !self.dirty() {
             return true;
         }
-        let mark = self.revision + self.form.as_ref().map_or(0, |f| f.generation << 32);
+        let mark = self.revision_mark();
         if self.close_warned == Some(mark) {
             return true;
         }
-        self.close_warned = Some(mark);
-        self.notice = Some(said("unsaved-close", &[]));
+        self.asking_close = true;
         cx.notify();
         false
+    }
+
+    /// What the unsaved dialog was answered with.
+    fn answer_close(&mut self, answer: CloseAnswer, cx: &mut Context<Self>) {
+        self.asking_close = false;
+        match answer {
+            CloseAnswer::Cancel => {}
+            CloseAnswer::Leave => {
+                self.close_warned = Some(self.revision_mark());
+                cx.emit(ViewerEvent::Close);
+            }
+            CloseAnswer::Save => {
+                self.close_after_save = true;
+                self.save(cx);
+            }
+        }
+        cx.notify();
+    }
+
+    /// The changes as they stand, to tell when they change again.
+    fn revision_mark(&self) -> u64 {
+        self.revision + self.form.as_ref().map_or(0, |f| f.generation << 32)
+    }
+
+    /// The dialog asking what to do with changes not saved (S07).
+    fn unsaved_card(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if !self.asking_close {
+            return None;
+        }
+        let th = self.theme;
+        let name = match &self.content {
+            Content::Ready(opened) => opened.name.clone(),
+            _ => self.path.as_deref().map(file_name).unwrap_or_default(),
+        };
+        let quiet = |id: &'static str, words: String| {
+            float::button(id, words, false, &th)
+                .border_color(gpui::transparent_black())
+                .bg(gpui::transparent_black())
+        };
+        Some(
+            div()
+                .id("unsaved-card")
+                .w(px(400.0))
+                .flex()
+                .flex_col()
+                .overflow_hidden()
+                .rounded(px(12.0))
+                .bg(th.card)
+                .shadow(th.lifted())
+                .when(th.dark, |d| d.border_1().border_color(th.line))
+                .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .child(
+                    div()
+                        .px(px(space::S4))
+                        .pt(px(space::S4))
+                        .pb(px(space::S4))
+                        .flex()
+                        .flex_col()
+                        .gap(px(space::S2))
+                        .child(
+                            div()
+                                .text_size(px(text::SUBTITLE))
+                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                .text_color(th.text)
+                                .child(t("unsaved-title", &[("name", &name)])),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(text::SMALL))
+                                .text_color(th.text2)
+                                .child(t("unsaved-detail", &[])),
+                        ),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(space::S2))
+                        .px(px(space::S4))
+                        .py(px(space::S3))
+                        .border_t_1()
+                        .border_color(th.line)
+                        .child(quiet("unsaved-leave", t("unsaved-leave", &[])).on_click(
+                            cx.listener(|this, _, _, cx| this.answer_close(CloseAnswer::Leave, cx)),
+                        ))
+                        .child(div().flex_1())
+                        .child(
+                            float::button("unsaved-cancel", t("unsaved-cancel", &[]), false, &th)
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.answer_close(CloseAnswer::Cancel, cx)
+                                })),
+                        )
+                        .child(
+                            float::button("unsaved-save", t("unsaved-save", &[]), true, &th)
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.answer_close(CloseAnswer::Save, cx)
+                                })),
+                        ),
+                )
+                .into_any_element(),
+        )
     }
 
     /// Writes the changed file (a form filled in, pages changed) over
@@ -3095,8 +3215,15 @@ impl Viewer {
                         }
                         this.notice = None;
                         back = true;
+                        if std::mem::take(&mut this.close_after_save) {
+                            this.close_warned = Some(this.revision_mark());
+                            cx.emit(ViewerEvent::Close);
+                        }
                     }
-                    Err(error) => this.notice = Some(said("save-failed", &[("error", &error)])),
+                    Err(error) => {
+                        this.close_after_save = false;
+                        this.notice = Some(said("save-failed", &[("error", &error)]));
+                    }
                 }
                 cx.notify();
             })
@@ -3562,7 +3689,7 @@ impl Viewer {
     /// The bar of tools, `width` points wide: when that is too little for
     /// every button, the ones with keys of their own (fit to width and
     /// page, facing pages, print) are left out rather than cut off.
-    fn message(&self, cx: &mut Context<Self>) -> AnyElement {
+    fn message(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         if matches!(self.content, Content::Empty) {
             return self.start_screen(cx);
         }
@@ -3575,50 +3702,125 @@ impl Viewer {
             .max_w(px(420.0));
         let body = match &self.content {
             Content::Locked { name, wrong } => {
+                let wrong = *wrong;
+                let shown = self.password_shown;
                 let field = self.password.as_ref().map(|(input, _)| {
-                    div()
-                        .w(px(280.0))
-                        .h(px(36.0))
-                        .flex()
-                        .items_center()
-                        .px(px(space::S3))
-                        .rounded(px(radius::SM))
-                        .bg(th.field)
-                        .text_size(px(text::BODY))
-                        .text_color(th.text)
-                        .child(input.clone())
+                    float::input_box(input, window, cx, &th)
+                        .w_full()
+                        .gap(px(space::S2))
+                        .when(wrong, |d| d.border_color(th.error))
+                        .child(div().flex_1())
+                        .child(
+                            float::sized_ib(
+                                "password-eye",
+                                if shown { "eyeoff" } else { "eye" },
+                                26.0,
+                                15.0,
+                                t(if shown { "locked-hide" } else { "locked-show" }, &[]),
+                                false,
+                                &th,
+                            )
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.password_shown = !this.password_shown;
+                                let masked = !this.password_shown;
+                                if let Some((input, _)) = &this.password {
+                                    input.update(cx, |i, cx| i.set_masked(masked, cx));
+                                }
+                                cx.notify();
+                            })),
+                        )
                 });
-                body.child(
-                    svg()
-                        .path("icons/lock.svg")
-                        .size(px(48.0))
-                        .text_color(th.dim),
-                )
-                .child(
-                    div()
-                        .text_size(px(text::TITLE))
-                        .text_color(th.text)
-                        .text_center()
-                        .child(t("locked-title", &[("name", name)])),
-                )
-                .child(
-                    div()
-                        .text_size(px(text::SMALL))
-                        .text_color(if *wrong { th.error } else { th.dim })
-                        .child(t(
-                            if *wrong {
-                                "locked-wrong"
-                            } else {
-                                "locked-detail"
-                            },
-                            &[],
-                        )),
-                )
-                .children(field)
-                .child(
-                    widgets::filled_button("unlock", t("locked-open", &[]), &th.katna)
-                        .on_click(cx.listener(|this, _, _, cx| this.unlock(cx))),
-                )
+                let field = div()
+                    .w_full()
+                    .relative()
+                    .children(field.map(|f| f.pl(px(34.0))))
+                    .child(
+                        div()
+                            .absolute()
+                            .left(px(space::S3))
+                            .top(px(10.0))
+                            .child(float::icon("key", 15.0, th.dim)),
+                    );
+                let card = div()
+                    .id("locked-card")
+                    .w(px(340.0))
+                    .flex()
+                    .flex_col()
+                    .overflow_hidden()
+                    .rounded(px(12.0))
+                    .bg(th.card)
+                    .shadow(th.lifted())
+                    .when(th.dark, |d| d.border_1().border_color(th.line))
+                    .child(
+                        div()
+                            .px(px(space::S4))
+                            .pt(px(space::S5))
+                            .pb(px(space::S4))
+                            .flex()
+                            .flex_col()
+                            .items_center()
+                            .gap(px(space::S2))
+                            .child(
+                                div()
+                                    .size(px(48.0))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .rounded(px(10.0))
+                                    .bg(th.accent_soft)
+                                    .child(float::icon("lock", 20.0, th.accent_text)),
+                            )
+                            .child(
+                                div()
+                                    .pt(px(space::S2))
+                                    .text_size(px(text::SUBTITLE))
+                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .text_color(th.text)
+                                    .text_center()
+                                    .child(t("locked-title", &[("name", name)])),
+                            )
+                            .child(
+                                div()
+                                    .pb(px(space::S3))
+                                    .text_size(px(text::SMALL))
+                                    .text_color(th.text2)
+                                    .text_center()
+                                    .child(t("locked-detail", &[])),
+                            )
+                            .child(field)
+                            .when(wrong, |d| {
+                                d.child(
+                                    div()
+                                        .w_full()
+                                        .text_size(px(text::CAPTION))
+                                        .text_color(th.error)
+                                        .child(t("locked-wrong", &[])),
+                                )
+                            }),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .px(px(space::S4))
+                            .py(px(space::S3))
+                            .border_t_1()
+                            .border_color(th.line)
+                            .child(
+                                float::button("locked-cancel", t("locked-cancel", &[]), false, &th)
+                                    .border_color(gpui::transparent_black())
+                                    .bg(gpui::transparent_black())
+                                    .on_click(|_, window, cx| {
+                                        window.dispatch_action(Box::new(CloseTab), cx);
+                                    }),
+                            )
+                            .child(div().flex_1())
+                            .child(
+                                float::button("unlock", t("locked-open", &[]), true, &th)
+                                    .on_click(cx.listener(|this, _, _, cx| this.unlock(cx))),
+                            ),
+                    );
+                body.child(card)
             }
             Content::Opening(name) => body.child(
                 div()
@@ -3626,13 +3828,57 @@ impl Viewer {
                     .text_color(th.dim)
                     .child(t("opening", &[("name", name)])),
             ),
-            Content::Failed(message) => body.child(
-                div()
-                    .text_size(px(text::BODY))
-                    .text_color(th.error)
-                    .text_center()
-                    .child(message.clone()),
-            ),
+            Content::Failed(message) => {
+                let path = self.path.clone();
+                body.child(
+                    div()
+                        .size(px(56.0))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded(px(12.0))
+                        .bg(th.error_soft)
+                        .child(float::icon("alert", 22.0, th.error)),
+                )
+                .child(
+                    div()
+                        .text_size(px(text::TITLE))
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .text_color(th.text)
+                        .text_center()
+                        .child(message.clone()),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .gap(px(space::S2))
+                        .when_some(path, |d, path| {
+                            d.child(
+                                float::button(
+                                    "failed-folder",
+                                    t("failed-show-folder", &[]),
+                                    false,
+                                    &th,
+                                )
+                                .on_click(move |_, _, cx| cx.reveal_path(&path)),
+                            )
+                        })
+                        .child(
+                            float::button("failed-open", t("failed-open-another", &[]), false, &th)
+                                .on_click(cx.listener(|_, _, _, cx| {
+                                    cx.emit(ViewerEvent::ChooseFiles);
+                                })),
+                        )
+                        .child(
+                            float::button("failed-close", t("failed-close-tab", &[]), false, &th)
+                                .border_color(gpui::transparent_black())
+                                .bg(gpui::transparent_black())
+                                .on_click(|_, window, cx| {
+                                    window.dispatch_action(Box::new(CloseTab), cx);
+                                }),
+                        ),
+                )
+            }
             _ => body,
         };
         div()
@@ -3790,6 +4036,7 @@ impl Render for Viewer {
         let signatures_line = self.signatures_line(cx);
         let signing_card = self.signing_card(cx);
         let marks_card = self.marks_card(window, cx);
+        let unsaved_card = self.unsaved_card(cx);
         let redact_card = self.redact_card(window, cx);
         let redact_confirm = self.redact_confirm_card(window, cx);
         let export_card = self.export_card(window, cx);
@@ -3811,10 +4058,10 @@ impl Render for Viewer {
         let design_card = self.design_card(side_room, cx);
         let find_bar = self.find_bar(cx);
         let notice = self.notice.clone().map(|notice| {
-            let (bg, fg, glyph) = if notice.error {
-                (th.error_soft, th.error, "alert")
+            let (bg, fg, glyph, mark) = if notice.error {
+                (th.error_soft, th.error, "alert", th.error)
             } else {
-                (th.inverse, th.on_inverse, "info")
+                (th.card, th.text, "info", th.accent)
             };
             div()
                 .id("notice")
@@ -3831,7 +4078,8 @@ impl Render for Viewer {
                 .shadow(th.shadow())
                 .text_size(px(12.5))
                 .text_color(fg)
-                .child(float::icon(glyph, 15.0, fg))
+                .when(!notice.error, |d| d.border_1().border_color(th.line))
+                .child(float::icon(glyph, 15.0, mark))
                 .child(div().flex_1().min_w_0().child(notice.words))
                 .child(icon_button(
                     "notice-close",
@@ -3972,7 +4220,7 @@ impl Render for Viewer {
                     ))
                     .into_any_element()
             }
-            _ => self.message(cx).into_any_element(),
+            _ => self.message(window, cx).into_any_element(),
         };
         div()
             .id("katna-pdf")
@@ -4245,6 +4493,13 @@ impl Render for Viewer {
                 )
             }))
             .children(design_card.map(|c| float::appear_over("design_card", c, -6.0)))
+            .children(unsaved_card.map(|card| {
+                dialog(
+                    th,
+                    card,
+                    cx.listener(|this, _, _, cx| this.answer_close(CloseAnswer::Cancel, cx)),
+                )
+            }))
             .children(properties_card.map(|card| {
                 dialog(
                     th,

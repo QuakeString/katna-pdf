@@ -359,12 +359,21 @@ impl Tabs {
 
     fn push(&mut self, file: Option<PathBuf>, window: &mut Window, cx: &mut Context<Self>) {
         let viewer = cx.new(|cx| Viewer::new(file, window, cx));
-        let events = cx.subscribe_in(&viewer, window, |this, _, event, window, cx| match event {
-            ViewerEvent::ChooseFiles => this.choose_files(window, cx),
-            ViewerEvent::ReopenSession => this.reopen_session(window, cx),
-            ViewerEvent::Dropped(paths) => this.open_files(paths.clone(), window, cx),
-            ViewerEvent::ShowLibrary => this.toggle_library(window, cx),
-        });
+        let events = cx.subscribe_in(
+            &viewer,
+            window,
+            |this, viewer, event, window, cx| match event {
+                ViewerEvent::ChooseFiles => this.choose_files(window, cx),
+                ViewerEvent::ReopenSession => this.reopen_session(window, cx),
+                ViewerEvent::Dropped(paths) => this.open_files(paths.clone(), window, cx),
+                ViewerEvent::ShowLibrary => this.toggle_library(window, cx),
+                ViewerEvent::Close => {
+                    if let Some(i) = this.tabs.iter().position(|t| t.viewer == *viewer) {
+                        this.close(i, window, cx);
+                    }
+                }
+            },
+        );
         let changes = cx.observe(&viewer, |this, _, cx| {
             this.note_session(cx);
             cx.notify();
