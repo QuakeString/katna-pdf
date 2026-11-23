@@ -204,6 +204,10 @@ impl Viewer {
                     },
                 )),
             )
+            .child(
+                button(n + 6, "ruler", None, "guides-tool", self.guides.on)
+                    .on_click(cx.listener(|this, _, _, cx| this.toggle_guides(cx))),
+            )
             .child(float::vsep(&th));
         for (i, ink) in INKS.into_iter().enumerate() {
             let fill: gpui::Hsla = colour(ink).into();

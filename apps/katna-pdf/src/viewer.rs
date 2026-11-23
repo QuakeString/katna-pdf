@@ -53,6 +53,7 @@ mod find;
 mod fitvisible;
 mod fonts;
 mod goto;
+mod guides;
 mod initials;
 mod insert;
 mod linking;
@@ -785,6 +786,9 @@ pub struct Viewer {
     reading_text: std::collections::HashSet<usize>,
     /// Where each page shown was laid out last frame, in the window.
     page_bounds: Rc<RefCell<HashMap<usize, gpui::Bounds<gpui::Pixels>>>>,
+    /// Where each page was laid out the frame before, for what is laid
+    /// out by where a page is (the rulers kept in sight).
+    ruler_bounds: Rc<RefCell<HashMap<usize, gpui::Bounds<gpui::Pixels>>>>,
     /// The size of the pages' view, as laid out last frame.
     view_size: Rc<std::cell::Cell<Option<gpui::Size<gpui::Pixels>>>>,
     /// Where the pages' view is in the window, as laid out this frame.
@@ -872,6 +876,8 @@ pub struct Viewer {
     /// Comments open in pop-up notes, and the one being moved.
     popups: Vec<popups::Popup>,
     popup_dragging: Option<popups::PopupDrag>,
+    /// The rulers and guides while editing.
+    guides: guides::Guides,
     comment: Option<annots::Comment>,
     /// A reply being typed, and which comments the list shows.
     reply: Option<comments::Reply>,
@@ -1104,6 +1110,7 @@ impl Viewer {
             pan_x: 0.0,
             reading_text: Default::default(),
             page_bounds: Rc::default(),
+            ruler_bounds: Rc::default(),
             view_size: Rc::default(),
             view_bounds: Rc::default(),
             sharp: HashMap::new(),
@@ -1149,6 +1156,7 @@ impl Viewer {
             annot_hover: None,
             popups: Vec::new(),
             popup_dragging: None,
+            guides: guides::Guides::default(),
             comment: None,
             reply: None,
             comment_filter: Default::default(),
@@ -1944,6 +1952,7 @@ impl Viewer {
             return;
         }
         if self.popup_drag(event.position, cx)
+            || self.guide_drag(event.position, cx)
             || self.loupe_move(event.position, cx)
             || self.area_drag(event.position, cx)
             || self.crop_drag(event.position, cx)
@@ -1998,6 +2007,7 @@ impl Viewer {
         }
         self.selecting = false;
         if self.popup_release(cx)
+            || self.guide_release(cx)
             || self.area_release(cx)
             || self.text_move_release(window, cx)
             || self.measure_release(cx)
@@ -4481,6 +4491,7 @@ impl Viewer {
         overlays.extend(self.measure_overlay(page));
         overlays.extend(self.sign_overlay(page, cx));
         overlays.extend(self.text_edit_overlay(page, transform, w, window, cx));
+        overlays.extend(self.guides_overlay(page, cx));
         // Matches on this page, the current one stronger, and the
         // selected text.
         let accent = self.theme.katna.accent & 0xffff_ff00;
@@ -4547,10 +4558,18 @@ impl Viewer {
                 // Notes where the page is, for the pointer: where it is
                 // painted, as the list may lay a page out elsewhere first.
                 let record = self.page_bounds.clone();
+                // The rulers are laid out by where the page was; when it
+                // has moved since, they are laid out again.
+                let rulers = self.guides.on.then(|| self.ruler_bounds.clone());
                 gpui::canvas(
                     |_, _, _| {},
-                    move |bounds, _, _, cx| {
+                    move |bounds, _, window, cx| {
                         record.borrow_mut().insert(page, bounds);
+                        if let Some(rulers) = &rulers
+                            && rulers.borrow().get(&page) != Some(&bounds)
+                        {
+                            window.refresh();
+                        }
                         if let Some(wish) = &wish {
                             wish.painted(bounds, cx);
                         }
@@ -5104,7 +5123,8 @@ impl Render for Viewer {
                 let thumb = th.katna.text_dim & 0xffff_ff00 | 0x99;
                 // Pages laid out last frame are noted again as they are
                 // laid out now.
-                self.page_bounds.borrow_mut().clear();
+                *self.ruler_bounds.borrow_mut() =
+                    std::mem::take(&mut *self.page_bounds.borrow_mut());
                 div()
                     .flex_1()
                     .min_h_0()
