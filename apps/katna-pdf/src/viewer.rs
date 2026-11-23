@@ -3776,18 +3776,34 @@ impl Viewer {
         let mine = self.form.as_ref().map_or(0, |f| f.generation);
         let revision = self.revision;
         let written = path.clone();
+        // Undo steps back to the file as opened read it from disk, which
+        // saving changes: they keep the file as it was instead.
+        let keep_old = self
+            .undo
+            .iter()
+            .chain(&self.redo)
+            .any(|s| s.bytes.is_none());
         cx.spawn(async move |this, cx| {
             let saved = cx
                 .background_executor()
                 .spawn(async move {
+                    let old = keep_old
+                        .then(|| std::fs::read(&written).ok().map(Arc::new))
+                        .flatten();
                     save_over(&written, &bytes).map_err(|e| e.to_string())?;
-                    cos(bytes.to_vec(), key.as_deref()).map_err(|e| e.to_string())
+                    let source = cos(bytes.to_vec(), key.as_deref()).map_err(|e| e.to_string())?;
+                    Ok::<_, String>((source, old))
                 })
                 .await;
             let mut back = false;
             this.update(cx, |this, cx| {
                 match saved {
-                    Ok(source) => {
+                    Ok((source, old)) => {
+                        if let Some(old) = old {
+                            for step in this.undo.iter_mut().chain(this.redo.iter_mut()) {
+                                step.bytes.get_or_insert_with(|| old.clone());
+                            }
+                        }
                         if let Some(form) = this.form.as_mut()
                             && form.generation == mine
                         {
