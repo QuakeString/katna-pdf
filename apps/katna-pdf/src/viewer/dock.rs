@@ -296,6 +296,10 @@ impl Viewer {
             .area
             .as_ref()
             .is_some_and(|a| a.kind == super::area::AreaKind::Zoom);
+        let loupe = self
+            .area
+            .as_ref()
+            .is_some_and(|a| a.kind == super::area::AreaKind::Loupe);
         let body = menu("zoom-card", 250.0, &th)
             .on_mouse_down_out(cx.listener(|this, _, _, cx| {
                 this.zoom_card = false;
@@ -370,12 +374,26 @@ impl Viewer {
                 })),
             )
             .child(
+                menu_item(
+                    "zoom-loupe",
+                    Some("eye"),
+                    t("zoom-card-loupe", &[]),
+                    None,
+                    &th,
+                )
+                .when(loupe, |d| d.bg(th.accent_soft).text_color(th.accent_text))
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.zoom_card = false;
+                    this.toggle_area_tool(super::area::AreaKind::Loupe, cx)
+                })),
+            )
+            .child(
                 div()
                     .flex()
                     .child(
                         menu_item(
                             "zoom-turn-left",
-                            Some("rotate-ccw"),
+                            Some("rotl"),
                             t("zoom-card-rotate-left", &[]),
                             None,
                             &th,
@@ -386,7 +404,7 @@ impl Viewer {
                     .child(
                         menu_item(
                             "zoom-turn-right",
-                            Some("rotate-cw"),
+                            Some("rot"),
                             t("zoom-card-rotate-right", &[]),
                             None,
                             &th,
