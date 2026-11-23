@@ -342,6 +342,7 @@ const FLOAT: &[(&str, &[u8])] = float_icons![
     "drag",
     "drop",
     "edit",
+    "eraser",
     "expand",
     "eye",
     "eyeoff",

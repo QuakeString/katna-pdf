@@ -21,6 +21,8 @@ pub enum Tool {
     /// A text box with a line pointing at something.
     Callout,
     Ink,
+    /// Rubs out the parts of pen strokes it passes over.
+    Eraser,
     Rectangle,
     Ellipse,
     Line,
@@ -43,7 +45,7 @@ pub enum Tool {
 }
 
 impl Tool {
-    pub const ALL: [Tool; 21] = [
+    pub const ALL: [Tool; 22] = [
         Tool::Highlight,
         Tool::Underline,
         Tool::StrikeOut,
@@ -53,6 +55,7 @@ impl Tool {
         Tool::Typewriter,
         Tool::Callout,
         Tool::Ink,
+        Tool::Eraser,
         Tool::Rectangle,
         Tool::Ellipse,
         Tool::Line,
@@ -79,6 +82,7 @@ impl Tool {
             Tool::Typewriter => "typew",
             Tool::Callout => "callout",
             Tool::Ink => "pen",
+            Tool::Eraser => "eraser",
             Tool::Rectangle => "sq",
             Tool::Ellipse => "circ",
             Tool::Line => "line",
@@ -106,6 +110,7 @@ impl Tool {
             Tool::Typewriter => "tool-typewriter-name",
             Tool::Callout => "tool-callout-name",
             Tool::Ink => "tool-ink-name",
+            Tool::Eraser => "tool-eraser-name",
             Tool::Rectangle => "tool-rectangle-name",
             Tool::Ellipse => "tool-ellipse-name",
             Tool::Line => "tool-line-name",
@@ -133,6 +138,7 @@ impl Tool {
             Tool::Typewriter => "tool-typewriter",
             Tool::Callout => "tool-callout",
             Tool::Ink => "tool-ink",
+            Tool::Eraser => "tool-eraser",
             Tool::Rectangle => "tool-rectangle",
             Tool::Ellipse => "tool-ellipse",
             Tool::Line => "tool-line",
@@ -291,6 +297,7 @@ pub fn drawn(tool: Tool, page: usize, path: &[[f32; 2]], inv: Inverse) -> Option
         Tool::Highlight | Tool::Underline | Tool::StrikeOut | Tool::Squiggly => return None,
         // Measuring and polygons have their own pointer handling
         // (`viewer::measure`).
+        Tool::Eraser => return None,
         Tool::Distance
         | Tool::Perimeter
         | Tool::Area
@@ -368,6 +375,85 @@ pub fn at(annots: &[Annotation], point: [f32; 2]) -> Option<usize> {
             && point[1] >= r[1]
             && point[1] <= r[3]
     })
+}
+
+/// Pen strokes with the parts within `reach` of the eraser's `path` (all
+/// in the page's own space) rubbed out: a stroke cut through becomes two.
+/// `None` when the eraser touched none of them.
+pub fn erase(
+    strokes: &[Vec<[f32; 2]>],
+    path: &[[f32; 2]],
+    reach: f32,
+) -> Option<Vec<Vec<[f32; 2]>>> {
+    let near = |a: [f32; 2], b: [f32; 2]| {
+        if path.len() == 1 {
+            return segment_distance(a, b, path[0], path[0]) <= reach;
+        }
+        path.windows(2)
+            .any(|e| segment_distance(a, b, e[0], e[1]) <= reach)
+    };
+    let mut touched = false;
+    let mut out = Vec::new();
+    for stroke in strokes {
+        if stroke.len() == 1 {
+            if near(stroke[0], stroke[0]) {
+                touched = true;
+            } else {
+                out.push(stroke.clone());
+            }
+            continue;
+        }
+        let mut piece: Vec<[f32; 2]> = Vec::new();
+        for pair in stroke.windows(2) {
+            if near(pair[0], pair[1]) {
+                touched = true;
+                if piece.len() > 1 {
+                    out.push(std::mem::take(&mut piece));
+                }
+                piece.clear();
+            } else {
+                if piece.is_empty() {
+                    piece.push(pair[0]);
+                }
+                piece.push(pair[1]);
+            }
+        }
+        if piece.len() > 1 {
+            out.push(piece);
+        }
+    }
+    touched.then_some(out)
+}
+
+/// The least distance between segments `a`–`b` and `c`–`d`.
+fn segment_distance(a: [f32; 2], b: [f32; 2], c: [f32; 2], d: [f32; 2]) -> f32 {
+    let cross = |o: [f32; 2], p: [f32; 2], q: [f32; 2]| {
+        (p[0] - o[0]) * (q[1] - o[1]) - (p[1] - o[1]) * (q[0] - o[0])
+    };
+    let (d1, d2) = (cross(c, d, a), cross(c, d, b));
+    let (d3, d4) = (cross(a, b, c), cross(a, b, d));
+    if ((d1 > 0.0 && d2 < 0.0) || (d1 < 0.0 && d2 > 0.0))
+        && ((d3 > 0.0 && d4 < 0.0) || (d3 < 0.0 && d4 > 0.0))
+    {
+        return 0.0;
+    }
+    point_distance(a, c, d)
+        .min(point_distance(b, c, d))
+        .min(point_distance(c, a, b))
+        .min(point_distance(d, a, b))
+}
+
+/// The distance from `p` to segment `a`–`b`.
+fn point_distance(p: [f32; 2], a: [f32; 2], b: [f32; 2]) -> f32 {
+    let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+    let length = dx * dx + dy * dy;
+    let t = if length > 0.0 {
+        (((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / length).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    let (x, y) = (a[0] + t * dx - p[0], a[1] + t * dy - p[1]);
+    (x * x + y * y).sqrt()
 }
 
 #[cfg(test)]
@@ -449,5 +535,28 @@ mod tests {
         assert_eq!(at(&annots, [30.0, 30.0]), Some(1));
         assert_eq!(at(&annots, [10.0, 10.0]), Some(0));
         assert_eq!(at(&annots, [90.0, 90.0]), None);
+    }
+
+    #[test]
+    fn the_eraser_cuts_strokes_it_crosses() {
+        let strokes = vec![
+            vec![[0.0, 0.0], [10.0, 0.0], [20.0, 0.0], [30.0, 0.0]],
+            vec![[0.0, 50.0], [30.0, 50.0]],
+        ];
+        // Across the first stroke's middle segment, nowhere near the other.
+        let out = erase(&strokes, &[[15.0, -5.0], [15.0, 5.0]], 1.0).unwrap();
+        assert_eq!(
+            out,
+            vec![
+                vec![[0.0, 0.0], [10.0, 0.0]],
+                vec![[20.0, 0.0], [30.0, 0.0]],
+                vec![[0.0, 50.0], [30.0, 50.0]],
+            ]
+        );
+        // Missing them all changes nothing.
+        assert!(erase(&strokes, &[[15.0, 20.0], [16.0, 21.0]], 1.0).is_none());
+        // Over a whole stroke, it goes.
+        let out = erase(&strokes, &[[-1.0, 50.0], [31.0, 50.0]], 1.0).unwrap();
+        assert_eq!(out.len(), 1);
     }
 }

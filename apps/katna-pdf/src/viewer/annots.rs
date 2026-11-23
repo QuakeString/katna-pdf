@@ -95,7 +95,7 @@ impl Viewer {
         let mut row = float::tray("annotation-tools", &th);
         for (i, tool) in Tool::ALL.into_iter().enumerate() {
             let on = self.tool == Some(tool);
-            if i == 4 || i == 8 || i == 15 || i == 17 {
+            if matches!(tool, Tool::Note | Tool::Ink | Tool::Stamp | Tool::Distance) {
                 row = row.child(float::vsep(&th));
             }
             row = row.child(
@@ -256,7 +256,7 @@ impl Viewer {
             ((position.x - b.left()) / shown).clamp(0.0, (b.size.width / shown).max(0.0)),
             ((position.y - b.top()) / shown).clamp(0.0, (b.size.height / shown).max(0.0)),
         ];
-        let ink = self.tool == Some(Tool::Ink);
+        let ink = matches!(self.tool, Some(Tool::Ink | Tool::Eraser));
         if let Some(draft) = self.draft.as_mut() {
             if ink || draft.path.len() < 2 {
                 draft.path.push(point);
@@ -268,9 +268,52 @@ impl Viewer {
         true
     }
 
+    /// Rubs out the parts of the pen strokes on the draft's page that the
+    /// eraser passed over; locked ones are left.
+    fn erase_ink(&mut self, draft: Draft, cx: &mut Context<Self>) {
+        let (Some(inv), Some(all)) = (self.inverse(draft.page), self.annots.clone()) else {
+            return;
+        };
+        let path: Vec<[f32; 2]> = draft.path.iter().map(|p| inv.map(*p)).collect();
+        // About eight pixels either side, however far in it is zoomed.
+        let reach = (8.0 / self.shown).max(1.0);
+        let mut changes = AnnotChanges {
+            put: Vec::new(),
+            remove: Vec::new(),
+        };
+        for a in all.get(draft.page).into_iter().flatten() {
+            let (Some(id), AnnotKind::Ink(strokes)) = (a.id, &a.kind) else {
+                continue;
+            };
+            if a.flags.locked {
+                continue;
+            }
+            match annotate::erase(strokes, &path, reach + a.width / 2.0) {
+                None => {}
+                Some(left) if left.is_empty() => changes.remove.push(id),
+                Some(left) => {
+                    let mut a = a.clone();
+                    a.kind = AnnotKind::Ink(left);
+                    a.rect = a.bounds();
+                    changes.put.push(a);
+                }
+            }
+        }
+        if !changes.put.is_empty() || !changes.remove.is_empty() {
+            self.change_annotations(changes, cx);
+        }
+    }
+
     /// The pointer let go: what was drawn, or the text selected with a
     /// markup tool, becomes an annotation. Returns whether it did.
     pub(super) fn annot_release(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.tool == Some(Tool::Eraser)
+            && let Some(draft) = self.draft.take()
+        {
+            self.erase_ink(draft, cx);
+            cx.notify();
+            return true;
+        }
         if let Some(draft) = self.draft.take() {
             let made = self
                 .tool
@@ -525,7 +568,9 @@ impl Viewer {
             }
         }
         let new_on = changes.put.iter().find(|a| a.id.is_none()).map(|a| a.page);
-        let what = if new_on.is_some() {
+        let what = if self.tool == Some(Tool::Eraser) {
+            "undo-what-erase"
+        } else if new_on.is_some() {
             "undo-what-add-comment"
         } else if changes.put.is_empty() {
             "undo-what-delete-comment"
@@ -712,6 +757,40 @@ impl Viewer {
             (b * 255.0) as u8,
         ]));
         match self.tool {
+            Some(Tool::Eraser) => {
+                let path = draft.path.clone();
+                let grey = gpui::hsla(0.0, 0.0, 0.5, 0.35);
+                out.push(
+                    gpui::canvas(
+                        |_, _, _| {},
+                        move |bounds, _, window, _| {
+                            let mut builder = gpui::PathBuilder::stroke(desktop_px(16.0));
+                            for (i, p) in path.iter().enumerate() {
+                                let at = bounds.origin
+                                    + gpui::point(
+                                        desktop_px(p[0] * shown),
+                                        desktop_px(p[1] * shown),
+                                    );
+                                if i == 0 {
+                                    builder.move_to(at);
+                                } else {
+                                    builder.line_to(at);
+                                }
+                            }
+                            if path.len() > 1
+                                && let Ok(path) = builder.build()
+                            {
+                                window.paint_path(path, grey);
+                            }
+                        },
+                    )
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .size_full()
+                    .into_any_element(),
+                );
+            }
             Some(Tool::Ink | Tool::Line | Tool::Arrow | Tool::Callout) => {
                 // A callout shows its line from the first point to the
                 // last; the box comes when the pointer lets go.
