@@ -1101,7 +1101,7 @@ impl Viewer {
             .flex_col()
             .gap(px(space::S2))
             .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation());
-        match self.comment.as_ref().filter(|c| c.id == id) {
+        match self.comment.as_ref().filter(|c| c.id == id && !c.in_popup) {
             Some(comment) => open = open.child(div().flex().child(field(&comment.input))),
             None if !what.is_empty() => {
                 open = open.child(
@@ -1423,7 +1423,7 @@ fn kind_name(kind: &AnnotKind) -> &'static str {
 
 /// How long ago a PDF date (`D:YYYYMMDDHHmmSS` and its offset) was:
 /// "now", minutes, hours, "yesterday", else the day.
-fn age(date: &str) -> Option<String> {
+pub(super) fn age(date: &str) -> Option<String> {
     let then = pdf_time(date)?;
     let secs = jiff::Timestamp::now().as_second() - then.as_second();
     Some(match secs {

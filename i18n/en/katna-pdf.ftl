@@ -2101,3 +2101,9 @@ weblink-open = Open
 weblink-always = Always open { $site }
 weblink-cancel = Cancel
 weblink-blocked = Not opened: links to websites ({ $site }) are off in Settings
+
+# A comment open in a pop-up note (viewer/popups.rs).
+popup-close = Close
+popup-no-author = Comment
+popup-type = Click to write a comment
+popup-empty = No comment

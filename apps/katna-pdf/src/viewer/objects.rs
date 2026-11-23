@@ -136,7 +136,7 @@ impl Viewer {
         Some((object, b))
     }
 
-    fn page_transform(&self, page: usize) -> Option<[f64; 6]> {
+    pub(super) fn page_transform(&self, page: usize) -> Option<[f64; 6]> {
         match &self.content {
             super::Content::Ready(opened) => opened.doc.page_transform(page),
             _ => None,

@@ -63,6 +63,7 @@ mod numbering;
 mod objects;
 mod organizer;
 mod picmenu;
+mod popups;
 mod present;
 mod printing;
 mod properties;
@@ -868,6 +869,9 @@ pub struct Viewer {
     chosen: Option<katna_pdf_cos::Ref>,
     /// The comment under the pointer, its words shown beside it.
     annot_hover: Option<katna_pdf_cos::Ref>,
+    /// Comments open in pop-up notes, and the one being moved.
+    popups: Vec<popups::Popup>,
+    popup_dragging: Option<popups::PopupDrag>,
     comment: Option<annots::Comment>,
     /// A reply being typed, and which comments the list shows.
     reply: Option<comments::Reply>,
@@ -1143,6 +1147,8 @@ impl Viewer {
             draft: None,
             chosen: None,
             annot_hover: None,
+            popups: Vec::new(),
+            popup_dragging: None,
             comment: None,
             reply: None,
             comment_filter: Default::default(),
@@ -1796,6 +1802,10 @@ impl Viewer {
             || self.text_edit_press(cx)
             || self.annot_press(event.position, cx)
         {
+            // A double-click on a comment opens it in a pop-up note.
+            if event.click_count >= 2 && self.tool.is_none() && self.chosen.is_some() {
+                self.open_popup(window, cx);
+            }
             return;
         }
         if self.hand {
@@ -1912,7 +1922,8 @@ impl Viewer {
             cx.notify();
             return;
         }
-        if self.loupe_move(event.position, cx)
+        if self.popup_drag(event.position, cx)
+            || self.loupe_move(event.position, cx)
             || self.area_drag(event.position, cx)
             || self.crop_drag(event.position, cx)
             || self.measure_move(event.position, cx)
@@ -1965,7 +1976,8 @@ impl Viewer {
             cx.notify();
         }
         self.selecting = false;
-        if self.area_release(cx)
+        if self.popup_release(cx)
+            || self.area_release(cx)
             || self.text_move_release(window, cx)
             || self.measure_release(cx)
             || self.sign_release(cx)
@@ -4507,6 +4519,7 @@ impl Viewer {
             .children(links)
             .children(fields)
             .children(self.annot_hover_card(page, transform))
+            .children(self.popup_notes(page, window, cx))
             .children(self.lens_overlay(page))
             .child({
                 // Notes where the page is, for the pointer: where it is
@@ -4947,6 +4960,7 @@ impl Render for Viewer {
         let redact_confirm = self.redact_confirm_card(window, cx);
         let export_card = self.export_card(window, cx);
         let print_card = self.print_card(window, cx);
+        self.prune_popups();
         let link_card = self.link_card(window, cx);
         let numbering_card = self.numbering_card(window, cx);
         let paste_many_card = self.paste_many_card(window, cx);
