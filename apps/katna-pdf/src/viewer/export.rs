@@ -109,7 +109,10 @@ impl Viewer {
                 }
                 cx.notify();
             }
-            InputEvent::Cancel => {}
+            InputEvent::Cancel => {
+                this.exporting = None;
+                cx.notify();
+            }
         });
         self.exporting = Some(Exporting {
             kind: ExportKind::Png,

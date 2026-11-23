@@ -598,6 +598,7 @@ impl Viewer {
             .into_any_element();
         Some(super::dialog(
             th,
+            &self.dialog_focus,
             card,
             cx.listener(|this, _, _, cx| this.close_initials_card(cx)),
         ))
@@ -689,7 +690,11 @@ impl Viewer {
             .into_any_element()
     }
 
-    fn close_initials_card(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn initials_card_open(&self) -> bool {
+        self.initials.as_ref().is_some_and(|i| i.card.is_some())
+    }
+
+    pub(super) fn close_initials_card(&mut self, cx: &mut Context<Self>) {
         if let Some(initials) = self.initials.as_mut() {
             initials.card = None;
         }

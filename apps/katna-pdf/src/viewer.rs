@@ -77,6 +77,7 @@ mod start;
 mod strokes;
 mod textedit;
 mod watch;
+mod weblink;
 
 use crate::annotate::Tool;
 use crate::contents::{self, Contents};
@@ -665,6 +666,16 @@ pub struct Viewer {
     numbering: Option<numbering::Numbering>,
     /// The card for pasting copied objects on many pages, while open.
     pasting_many: Option<objects::PastingMany>,
+    /// A web address a link asked to open, waiting on the person.
+    asking_link: Option<String>,
+    /// The card's keys (Enter opens, Escape cancels); whether it has
+    /// taken them yet.
+    link_focus: gpui::FocusHandle,
+    link_focused: bool,
+    /// The keys of whichever card is over the window (Escape closes it).
+    dialog_focus: gpui::FocusHandle,
+    /// Whether such a card was showing when last drawn.
+    carded: bool,
     /// The Go to page bar, while open.
     going_to: Option<goto::GoingTo>,
     /// Scrolling by itself, while it goes.
@@ -1009,6 +1020,11 @@ impl Viewer {
             compare_count: 0,
             numbering: None,
             pasting_many: None,
+            asking_link: None,
+            link_focus: cx.focus_handle(),
+            link_focused: false,
+            dialog_focus: cx.focus_handle(),
+            carded: false,
             going_to: None,
             coords_shown: false,
             read_mode: false,
@@ -2140,20 +2156,42 @@ impl Viewer {
         cx.notify();
     }
 
+    /// Escape on a card in the middle of the window: closes it (the one
+    /// on top when there are several), as a click beside it does.
+    fn close_top_card(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        if self.asking_link.is_some() {
+            self.close_link_ask(cx);
+        } else if self.asking_close {
+            self.answer_close(CloseAnswer::Cancel, cx);
+        } else if self.properties.is_some() {
+            self.properties = None;
+        } else if self.initials_card_open() {
+            self.close_initials_card(cx);
+        } else if self.pasting_many.is_some() {
+            self.toggle_paste_many(window, cx);
+        } else if self.numbering.is_some() {
+            self.numbering = None;
+        } else if self.setup.is_some() {
+            self.setup = None;
+        } else if self.printing.is_some() {
+            self.printing = None;
+        } else if self.exporting.is_some() {
+            self.exporting = None;
+        } else if self.marking.is_some() {
+            self.marking = None;
+        } else if !self.close_redact_confirm() {
+            return false;
+        }
+        cx.notify();
+        true
+    }
+
     /// A link was clicked: go to its place, or open its address in the
-    /// browser (web and mail addresses only).
+    /// browser (web and mail addresses only; web ones as Settings say).
     fn follow(&mut self, target: &katna_pdf_cos::LinkTarget, cx: &mut Context<Self>) {
         match target {
             katna_pdf_cos::LinkTarget::Page(dest) => self.go_to(*dest, cx),
-            katna_pdf_cos::LinkTarget::Uri(uri) => {
-                let lower = uri.trim().to_ascii_lowercase();
-                if ["http://", "https://", "mailto:"]
-                    .iter()
-                    .any(|scheme| lower.starts_with(scheme))
-                {
-                    cx.open_url(uri.trim());
-                }
-            }
+            katna_pdf_cos::LinkTarget::Uri(uri) => self.open_address(uri, cx),
         }
     }
 
@@ -4661,6 +4699,7 @@ impl Render for Viewer {
         let link_card = self.link_card(window, cx);
         let numbering_card = self.numbering_card(window, cx);
         let paste_many_card = self.paste_many_card(window, cx);
+        let link_ask_card = self.link_ask_card(window, cx);
         let setup_card = self.setup_card(cx);
         // The properties card scrolls when the window is shorter than it.
         let card_height = unpx(window.viewport_size().height) * katna_ui::scale::scale()
@@ -4672,6 +4711,31 @@ impl Render for Viewer {
         let object_card = self.object_card(side_room, cx);
         let measure_card = self.measure_card(cx);
         let initials_card = self.initials_card(cx);
+        // A card in the middle takes the keys from whatever had them (a
+        // form field, say) so Escape reaches the viewer and closes it;
+        // when it goes, they come back here.
+        let carded = marks_card.is_some()
+            || redact_confirm.is_some()
+            || export_card.is_some()
+            || print_card.is_some()
+            || numbering_card.is_some()
+            || paste_many_card.is_some()
+            || link_ask_card.is_some()
+            || setup_card.is_some()
+            || unsaved_card.is_some()
+            || properties_card.is_some()
+            || initials_card.is_some();
+        if carded {
+            // The website card keeps its own keys (Enter opens).
+            if !self.dialog_focus.contains_focused(window, cx)
+                && !self.link_focus.is_focused(window)
+            {
+                window.focus(&self.dialog_focus, cx);
+            }
+        } else if self.carded {
+            window.focus(&self.focus, cx);
+        }
+        self.carded = carded;
         let design_card = self.design_card(side_room, cx);
         let find_bar = self.find_bar(cx);
         let compare_banner = self.compare_banner(cx);
@@ -4992,8 +5056,9 @@ impl Render for Viewer {
                 }
             }))
             .on_action(cx.listener(|this, _: &ReadMode, _, cx| this.toggle_read_mode(cx)))
-            .on_action(cx.listener(|this, _: &PutToolDown, _, cx| {
-                if this.read_mode {
+            .on_action(cx.listener(|this, _: &PutToolDown, window, cx| {
+                if this.close_top_card(window, cx) {
+                } else if this.read_mode {
                     this.toggle_read_mode(cx);
                 } else if this.auto_scroll.is_some() {
                     this.toggle_auto_scroll(cx);
@@ -5130,6 +5195,7 @@ impl Render for Viewer {
             .children(marks_card.map(|card| {
                 dialog(
                     th,
+                    &self.dialog_focus,
                     card,
                     cx.listener(|this, _, _, cx| {
                         this.marking = None;
@@ -5141,6 +5207,7 @@ impl Render for Viewer {
             .children(redact_confirm.map(|card| {
                 dialog(
                     th,
+                    &self.dialog_focus,
                     card,
                     cx.listener(|this, _, _, cx| {
                         this.close_redact_confirm();
@@ -5151,6 +5218,7 @@ impl Render for Viewer {
             .children(export_card.map(|card| {
                 dialog(
                     th,
+                    &self.dialog_focus,
                     card,
                     cx.listener(|this, _, _, cx| {
                         this.exporting = None;
@@ -5161,6 +5229,7 @@ impl Render for Viewer {
             .children(print_card.map(|card| {
                 dialog(
                     th,
+                    &self.dialog_focus,
                     card,
                     cx.listener(|this, _, _, cx| {
                         this.printing = None;
@@ -5172,6 +5241,7 @@ impl Render for Viewer {
             .children(numbering_card.map(|card| {
                 dialog(
                     th,
+                    &self.dialog_focus,
                     card,
                     cx.listener(|this, _, _, cx| {
                         this.numbering = None;
@@ -5182,15 +5252,28 @@ impl Render for Viewer {
             .children(paste_many_card.map(|card| {
                 dialog(
                     th,
+                    &self.dialog_focus,
                     card,
                     cx.listener(|this, _, window, cx| {
                         this.toggle_paste_many(window, cx);
                     }),
                 )
             }))
+            .children(link_ask_card.map(|card| {
+                dialog(
+                    th,
+                    &self.dialog_focus,
+                    card,
+                    cx.listener(|this, _, window, cx| {
+                        this.close_link_ask(cx);
+                        window.focus(&this.focus, cx);
+                    }),
+                )
+            }))
             .children(setup_card.map(|card| {
                 dialog(
                     th,
+                    &self.dialog_focus,
                     card,
                     cx.listener(|this, _, _, cx| {
                         this.setup = None;
@@ -5202,6 +5285,7 @@ impl Render for Viewer {
             .children(unsaved_card.map(|card| {
                 dialog(
                     th,
+                    &self.dialog_focus,
                     card,
                     cx.listener(|this, _, _, cx| this.answer_close(CloseAnswer::Cancel, cx)),
                 )
@@ -5209,6 +5293,7 @@ impl Render for Viewer {
             .children(properties_card.map(|card| {
                 dialog(
                     th,
+                    &self.dialog_focus,
                     card,
                     cx.listener(|this, _, _, cx| {
                         this.properties = None;
@@ -5226,6 +5311,7 @@ impl Render for Viewer {
 /// scrim that closes it when clicked.
 fn dialog(
     th: Theme,
+    focus: &gpui::FocusHandle,
     card: AnyElement,
     close: impl Fn(&gpui::MouseDownEvent, &mut Window, &mut App) + 'static,
 ) -> AnyElement {
@@ -5238,6 +5324,7 @@ fn dialog(
         .flex()
         .items_center()
         .justify_center()
+        .track_focus(focus)
         .on_mouse_down(gpui::MouseButton::Left, close)
         .child(float::appear("dialog-card", card, 8.0))
         .with_animation(

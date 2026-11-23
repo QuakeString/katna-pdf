@@ -50,6 +50,18 @@ impl Units {
     }
 }
 
+/// What a link in a file to a web address does when clicked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum WebLinks {
+    /// Asks first, unless the site is one the person trusts.
+    #[default]
+    Ask,
+    /// Opens it in the browser.
+    Open,
+    /// Never opens it.
+    Never,
+}
+
 /// Whether the app's motion (cards coming on, panes sliding) runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Motion {
@@ -85,6 +97,10 @@ pub struct Prefs {
     /// The voice that reads aloud (`speech::Voice::voices`' id); empty
     /// for the desktop's own.
     pub voice: String,
+    /// What links to web addresses do.
+    pub web_links: WebLinks,
+    /// Sites (host names) whose addresses open without asking.
+    pub web_sites: Vec<String>,
     /// The pages' colours when the window is dark (X09).
     pub night_pages: PageColors,
     /// The size of everything, over the desktop's scale.
@@ -153,6 +169,8 @@ impl Default for Prefs {
             speed: 1.0,
             pitch: 0.0,
             voice: String::new(),
+            web_links: WebLinks::Ask,
+            web_sites: Vec::new(),
             night_pages: PageColors::Night,
             size: 1.0,
             dock_labels: true,
@@ -240,6 +258,20 @@ impl Prefs {
                     }
                 }
                 "read-voice" => value.trim().clone_into(&mut prefs.voice),
+                "web-links" => {
+                    prefs.web_links = match value {
+                        "open" => WebLinks::Open,
+                        "never" => WebLinks::Never,
+                        _ => WebLinks::Ask,
+                    }
+                }
+                "web-sites" => {
+                    prefs.web_sites = value
+                        .split(',')
+                        .map(|s| s.trim().to_ascii_lowercase())
+                        .filter(|s| !s.is_empty())
+                        .collect();
+                }
                 "night-pages" => {
                     if let Some(&(colors, _)) = PAGE_COLORS.iter().find(|(_, w)| *w == value) {
                         prefs.night_pages = colors;
@@ -313,13 +345,18 @@ impl Prefs {
             .iter()
             .find(|(c, _)| *c == self.night_pages)
             .map_or("night", |(_, w)| w);
+        let web = match self.web_links {
+            WebLinks::Ask => "ask",
+            WebLinks::Open => "open",
+            WebLinks::Never => "never",
+        };
         let motion = match self.motion {
             Motion::Desktop => "desktop",
             Motion::Less => "less",
             Motion::Normal => "normal",
         };
         format!(
-            "open-at={}\nzoom={zoom}\nlayout={layout}\nreopen-session={}\nnew-window={}\nworkers={}\nunits={}\ngrid={}\nread-speed={}\nnight-pages={night}\nsize={}\ndock-labels={}\nform-scripts={}\nrecovery={}\nrecovery-every={}\nrecent={}\ncomment-hover={}\ncomment-every={}\nfield-tint={}\ndate-calendar={}\npresent-seconds={}\npresent-loop={}\nfind-case={}\nfind-words={}\nfind-accents={}\nmotion={motion}\nread-pitch={}\nread-voice={}\n",
+            "open-at={}\nzoom={zoom}\nlayout={layout}\nreopen-session={}\nnew-window={}\nworkers={}\nunits={}\ngrid={}\nread-speed={}\nnight-pages={night}\nsize={}\ndock-labels={}\nform-scripts={}\nrecovery={}\nrecovery-every={}\nrecent={}\ncomment-hover={}\ncomment-every={}\nfield-tint={}\ndate-calendar={}\npresent-seconds={}\npresent-loop={}\nfind-case={}\nfind-words={}\nfind-accents={}\nmotion={motion}\nread-pitch={}\nread-voice={}\nweb-links={web}\nweb-sites={}\n",
             if self.open_at_last { "last" } else { "first" },
             on(self.reopen_session),
             on(self.new_window),
@@ -344,6 +381,7 @@ impl Prefs {
             on(self.find_accents),
             self.pitch,
             self.voice.replace('\n', " "),
+            self.web_sites.join(","),
         )
     }
 
@@ -414,6 +452,8 @@ mod tests {
             speed: 1.25,
             pitch: -0.5,
             voice: "en-gb".into(),
+            web_links: WebLinks::Never,
+            web_sites: vec!["example.org".into(), "katna.invenia.in".into()],
             night_pages: PageColors::Sepia,
             size: 1.1,
             dock_labels: false,
