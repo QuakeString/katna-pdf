@@ -137,7 +137,7 @@ impl Theme {
             th.line_soft = c(0x252930);
             th.text2 = c(0xc4c9d2);
             th.accent_text = c(0xa9c1ff);
-            th.on_accent = c(0x0b1020);
+            th.on_accent = c(0xffffff);
         } else {
             th.field = c(0xf5f6f8);
             th.sunk = c(0xeceef2);

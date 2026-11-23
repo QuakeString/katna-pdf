@@ -3682,7 +3682,7 @@ impl Render for Viewer {
         let marks_card = self.marks_card(cx);
         let redact_card = self.redact_card(cx);
         let export_card = self.export_card(cx);
-        let print_card = self.print_card(cx);
+        let print_card = self.print_card(window, cx);
         let link_card = self.link_card(window, cx);
         let numbering_card = self.numbering_card(cx);
         let paste_many_card = self.paste_many_card(cx);
@@ -4246,7 +4246,7 @@ pub(super) fn file_name(path: &Path) -> String {
 }
 
 /// Page `page` drawn at `scale` in `colors`, ready to show.
-fn draw(
+pub(super) fn draw(
     doc: &dyn Document,
     page: usize,
     scale: f32,
