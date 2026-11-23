@@ -42,6 +42,8 @@ pub(super) struct Properties {
     fonts: Option<Vec<katna_pdf_cos::FontUse>>,
     /// What was wrong with the file, when it had to be repaired.
     repairs: Vec<katna_pdf_cos::Repair>,
+    /// Each time the file was saved by adding to it.
+    revisions: Vec<katna_pdf_cos::Revision>,
     fields: [Entity<TextInput>; 4],
     /// A new password to put on: the one that opens the file, and the
     /// owner's, which opens it fully.
@@ -132,6 +134,7 @@ impl Viewer {
             pdfa: None,
             fonts: None,
             repairs: Vec::new(),
+            revisions: Vec::new(),
             fields,
             password,
             owner,
@@ -161,6 +164,7 @@ impl Viewer {
                             d.pdfa_issues(),
                             d.fonts(),
                             d.repairs().to_vec(),
+                            d.revisions(),
                         )
                     })
                 })
@@ -169,9 +173,11 @@ impl Viewer {
                 let Some(properties) = this.properties.as_mut() else {
                     return;
                 };
-                let (meta, locked, size, actions, pdfa, fonts, repairs) = meta.unwrap_or_default();
+                let (meta, locked, size, actions, pdfa, fonts, repairs, revisions) =
+                    meta.unwrap_or_default();
                 properties.fonts = Some(fonts);
                 properties.repairs = repairs;
+                properties.revisions = revisions;
                 properties.locked = Some(locked);
                 properties.size = Some(size);
                 properties.actions = Some(actions);
@@ -429,6 +435,7 @@ impl Viewer {
             .filter(|p| match p {
                 Part::Form => fields > 0,
                 Part::Comments => comments > 0,
+                Part::Versions => properties.revisions.len() > 1,
                 _ => true,
             })
             .collect();
@@ -495,6 +502,7 @@ impl Viewer {
             Part::Size => self.size_part(properties, cx),
             Part::Pdfa => self.pdfa_part(properties, cx),
             Part::Fonts => self.fonts_part(properties),
+            Part::Versions => self.versions_part(properties, cx),
             Part::Form => self.form_part(fields, cx),
             Part::Comments => self.comments_part(comments, cx),
             Part::Scripts => self.scripts_part(properties, cx),
@@ -1082,6 +1090,139 @@ impl Viewer {
             .into_any_element()
     }
 
+    /// The file's versions: each time it was saved by adding to it, what
+    /// that changed, and each earlier one to open or compare.
+    fn versions_part(&self, properties: &Properties, cx: &mut Context<Self>) -> AnyElement {
+        let th = self.theme;
+        let all = &properties.revisions;
+        let last = all.len().saturating_sub(1);
+        let rows = all.iter().enumerate().rev().map(|(i, r)| {
+            let n = (i + 1).to_string();
+            let what = if i == 0 {
+                t("properties-version-first", &[])
+            } else if r.changes.is_empty() {
+                t("properties-version-same", &[])
+            } else {
+                r.changes
+                    .iter()
+                    .map(|c| t(super::sign::change_id(*c), &[]))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
+            let end = r.end;
+            let size = crate::library::size_text(end as u64);
+            div()
+                .flex()
+                .items_center()
+                .gap(px(space::S3))
+                .px(px(space::S3))
+                .py(px(space::S2))
+                .when(i < last, |d| d.border_t_1().border_color(th.line))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .flex()
+                        .flex_col()
+                        .child(div().text_size(px(text::BODY)).text_color(th.text).child(
+                            if i == last {
+                                t("properties-version-now", &[("n", &n)])
+                            } else {
+                                t("properties-version", &[("n", &n)])
+                            },
+                        ))
+                        .child(
+                            div()
+                                .text_size(px(text::CAPTION))
+                                .text_color(th.dim)
+                                .child(t(
+                                    "properties-version-line",
+                                    &[("what", &what), ("size", &size)],
+                                )),
+                        ),
+                )
+                .when(i < last, |d| {
+                    d.child(
+                        float::button(
+                            ("properties-version-open", i),
+                            t("properties-version-open", &[]),
+                            false,
+                            &th,
+                        )
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.open_version(i + 1, end, false, cx)
+                        })),
+                    )
+                    .child(
+                        float::button(
+                            ("properties-version-compare", i),
+                            t("properties-version-compare", &[]),
+                            false,
+                            &th,
+                        )
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.open_version(i + 1, end, true, cx)
+                        })),
+                    )
+                })
+        });
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(space::S3))
+            .child(note(t("properties-versions-note", &[]), th))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .rounded(px(radius::SM))
+                    .border_1()
+                    .border_color(th.line)
+                    .overflow_hidden()
+                    .children(rows),
+            )
+            .into_any_element()
+    }
+
+    /// Version `n` of the file, its first `end` bytes, opened in a tab of
+    /// its own (a copy; the file is left as it is), or compared with the
+    /// file as it is now.
+    fn open_version(&mut self, n: usize, end: usize, compare: bool, cx: &mut Context<Self>) {
+        let Some(path) = self.path.clone() else {
+            return;
+        };
+        let stem = path
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let name = t(
+            "properties-version-file",
+            &[("name", &stem), ("n", &n.to_string())],
+        );
+        let written = std::fs::read(&path).and_then(|bytes| {
+            let bytes = bytes
+                .get(..end)
+                .ok_or_else(|| std::io::Error::other("the file is shorter than it was"))?;
+            let folder = std::env::temp_dir().join("katna-pdf");
+            std::fs::create_dir_all(&folder)?;
+            let file = folder.join(name.replace(['/', '\\'], "-"));
+            std::fs::write(&file, bytes)?;
+            Ok(file)
+        });
+        match written {
+            Ok(file) => {
+                self.properties = None;
+                if compare {
+                    self.compare_with(file, cx);
+                } else {
+                    cx.emit(super::ViewerEvent::Dropped(vec![file]));
+                }
+            }
+            Err(e) => self.notice = Some(super::Notice::error(e.to_string())),
+        }
+        cx.notify();
+    }
+
     fn scripts_part(&self, properties: &Properties, cx: &mut Context<Self>) -> AnyElement {
         let th = self.theme;
         let Some(actions) = properties.actions.as_ref() else {
@@ -1170,18 +1311,20 @@ pub(super) enum Part {
     Size,
     Pdfa,
     Fonts,
+    Versions,
     Form,
     Comments,
     Scripts,
 }
 
 impl Part {
-    const ALL: [Part; 8] = [
+    const ALL: [Part; 9] = [
         Part::Description,
         Part::Password,
         Part::Size,
         Part::Pdfa,
         Part::Fonts,
+        Part::Versions,
         Part::Form,
         Part::Comments,
         Part::Scripts,
@@ -1194,6 +1337,7 @@ impl Part {
             Part::Size => "properties-size",
             Part::Pdfa => "pdfa-heading",
             Part::Fonts => "properties-fonts",
+            Part::Versions => "properties-versions",
             Part::Form => "properties-form",
             Part::Comments => "properties-comments",
             Part::Scripts => "properties-tab-scripts",

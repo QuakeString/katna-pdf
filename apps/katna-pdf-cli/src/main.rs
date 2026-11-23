@@ -213,6 +213,10 @@ usage: katna-pdf-cli COMMAND [--json] ...
                                   is named)
   add-field FILE -o OUT --rect L,B,R,T [--page N] [--name NAME]
                                   an empty signature field, for someone to sign later
+  revisions FILE [--save N -o OUT]
+                                  each time the file was saved by adding to it
+                                  (an incremental update), and what that changed;
+                                  --save writes revision N as it was then
   ltv FILE -o OUT [--trust PATH] [--tsa URL]
                                   long-term validation data added to a signed file,
                                   and a document timestamp with --tsa (renews B-LTA)
@@ -361,6 +365,7 @@ fn main() -> ExitCode {
         "labels" => labels(rest, json),
         "object" => object(rest, json),
         "ltv" => ltv(rest, json),
+        "revisions" => revisions(rest, json),
         "tokens" => tokens(rest, json),
         "token-check" => token_check(rest, json),
         "text" => text(rest, json),
@@ -1323,6 +1328,63 @@ fn long_term(
     };
     let doc = load(bytes)?;
     katna_pdf_sign::timestamp_document(&doc, stamper, Digest::Sha256).map_err(|e| fail(&e))
+}
+
+/// The file's revisions, or one of them written out.
+fn revisions(args: &[String], json: bool) -> Done {
+    let args = Args::parse(args)?;
+    let [file] = args.words()?;
+    let doc = open(file)?;
+    let all = doc.revisions();
+    if let Some(n) = args.option("--save") {
+        let out = args.output()?;
+        let n: usize = n
+            .parse()
+            .ok()
+            .filter(|n| (1..=all.len()).contains(n))
+            .ok_or_else(|| Failure::Usage(format!("--save 1 to {}", all.len())))?;
+        let end = all[n - 1].end;
+        write(&out, &doc.bytes()[..end])?;
+        let pages = Document::load(doc.bytes()[..end].to_vec())
+            .map(|d| d.pages().len())
+            .unwrap_or(0);
+        return Ok(wrote(&[(out, pages)], json));
+    }
+    let what = |r: &katna_pdf_cos::Revision| -> Vec<&'static str> {
+        r.changes
+            .iter()
+            .map(|c| katna_pdf_sign::change_text(*c))
+            .collect()
+    };
+    let mut out = String::new();
+    if json {
+        let items: Vec<String> = all
+            .iter()
+            .enumerate()
+            .map(|(i, r)| {
+                let changes: Vec<String> = what(r).into_iter().map(string).collect();
+                format!(
+                    "{{\"revision\":{},\"end\":{},\"changes\":[{}]}}",
+                    i + 1,
+                    r.end,
+                    changes.join(",")
+                )
+            })
+            .collect();
+        let _ = writeln!(out, "[{}]", items.join(","));
+    } else {
+        for (i, r) in all.iter().enumerate() {
+            let said = if i == 0 {
+                "first saved".to_owned()
+            } else if r.changes.is_empty() {
+                "saved again, nothing changed".to_owned()
+            } else {
+                what(r).join(", ")
+            };
+            let _ = writeln!(out, "{:>3}  {:>10} bytes  {said}", i + 1, r.end);
+        }
+    }
+    Ok(out)
 }
 
 /// Adds validation data to the signatures of a file signed already.

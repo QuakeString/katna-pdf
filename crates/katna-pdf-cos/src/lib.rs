@@ -85,7 +85,7 @@ pub use labels::{LabelRange, LabelStyle, labels_of};
 pub use layers::Layer;
 pub use links::{Link, LinkFit, LinkStyle, LinkTarget};
 pub use lock::LockError;
-pub use mdp::{Allowed, Change, Lock};
+pub use mdp::{Allowed, Change, Lock, Revision};
 pub use measure::Scale;
 pub use meta::Metadata;
 pub use nav::NavError;

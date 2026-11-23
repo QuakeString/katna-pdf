@@ -53,6 +53,14 @@ impl Allowed {
     }
 }
 
+/// One saving of a file: where it ended, and what it changed from the
+/// one before (nothing for the first).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Revision {
+    pub end: usize,
+    pub changes: BTreeSet<Change>,
+}
+
 /// A kind of change made to a file in a later revision.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Change {
@@ -261,6 +269,76 @@ impl Document {
             };
             Some(Allowed::from_level(p.unwrap_or(2)))
         })
+    }
+
+    /// The file's revisions, oldest first: each time it was saved by
+    /// adding to what was there (an incremental update), the byte it
+    /// ended at and what that save changed. The last is the file as it
+    /// is. A part of a file that can't be read alone (the first part of
+    /// a linearized file, say) is not one.
+    pub fn revisions(&self) -> Vec<Revision> {
+        let bytes = self.bytes();
+        let mut ends = Vec::new();
+        let mut from = 0;
+        while let Some(at) = crate::parse::find(&bytes[from..], b"%%EOF").map(|a| a + from) {
+            let mut end = at + 5;
+            // The end of line after it belongs to it.
+            while end < bytes.len() && matches!(bytes[end], b'\r' | b'\n') && end - at < 7 {
+                end += 1;
+            }
+            ends.push(end);
+            from = at + 5;
+        }
+        // The file as it is, even when it ends without one.
+        let whole = bytes.len();
+        if ends
+            .last()
+            .is_none_or(|&e| bytes[e..].iter().any(|b| !b.is_ascii_whitespace()))
+        {
+            ends.push(whole);
+        }
+        let mut out: Vec<Revision> = Vec::new();
+        let last = ends.len().saturating_sub(1);
+        for (i, &end) in ends.iter().enumerate() {
+            let readable = if i == last {
+                !self.was_repaired()
+            } else {
+                self.revision(end)
+                    .is_some_and(|d| !d.was_repaired() && !d.pages().is_empty())
+            };
+            if !readable {
+                continue;
+            }
+            let changes = match out.last() {
+                None => BTreeSet::new(),
+                Some(before) if i == last => self.changes_since(before.end),
+                Some(before) => self
+                    .revision(end)
+                    .map(|d| d.changes_since(before.end))
+                    .unwrap_or_default(),
+            };
+            let end = if i == last { whole } else { end };
+            out.push(Revision { end, changes });
+        }
+        // A save that ends where a signature's bytes end is that
+        // signing: its new field is the signature's.
+        for sig in self.signatures() {
+            let [_, _, b, c] = sig.byte_range[..] else {
+                continue;
+            };
+            let signed_end = usize::try_from(b + c).unwrap_or(0);
+            if let Some(r) = out.iter_mut().skip(1).find(|r| r.end == signed_end) {
+                r.changes.remove(&Change::NewField);
+                r.changes.insert(Change::Signed);
+            }
+        }
+        if out.is_empty() {
+            out.push(Revision {
+                end: whole,
+                changes: BTreeSet::new(),
+            });
+        }
+        out
     }
 
     /// The kinds of change made since the revision of the file that
