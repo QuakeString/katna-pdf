@@ -77,6 +77,9 @@ impl Viewer {
     /// Shows or leaves the organizer; the annotation tools are put away
     /// while it shows.
     pub(super) fn toggle_organizer(&mut self, cx: &mut Context<Self>) {
+        if !self.organizer && !self.allows(super::Allow::Assemble, cx) {
+            return;
+        }
         self.organizer = !self.organizer && matches!(self.content, Content::Ready(_));
         if self.organizer {
             self.leave_text_edit(cx);

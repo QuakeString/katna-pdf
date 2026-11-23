@@ -248,6 +248,9 @@ impl Viewer {
             cx.notify();
             return;
         }
+        if !self.allows(super::Allow::Change, cx) {
+            return;
+        }
         self.pick_adding(None, cx);
         self.properties = None;
         self.redacting = None;

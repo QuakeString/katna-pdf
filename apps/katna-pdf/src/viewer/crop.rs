@@ -17,6 +17,9 @@ impl Viewer {
     /// Turns cropping on or off; the annotation tool is put down and the
     /// pages shown, to drag on.
     pub(super) fn toggle_crop(&mut self, cx: &mut Context<Self>) {
+        if !self.cropping && !self.allows(super::Allow::Assemble, cx) {
+            return;
+        }
         self.cropping = !self.cropping;
         if self.cropping {
             self.leave_text_edit(cx);

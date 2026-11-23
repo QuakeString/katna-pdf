@@ -393,6 +393,17 @@ struct View {
     zoom: Zoom,
 }
 
+/// What a locked file may forbid.
+#[derive(Debug, Clone, Copy)]
+pub(super) enum Allow {
+    Print,
+    Copy,
+    Change,
+    Comment,
+    Fill,
+    Assemble,
+}
+
 /// Views remembered at most.
 const VIEWS: usize = 50;
 
@@ -523,6 +534,9 @@ pub struct Viewer {
     /// The file whose changes not saved have a copy kept
     /// (`crate::recovery`), and which changes those were.
     kept: Option<(PathBuf, u64)>,
+    /// What the file lets be done (all, unless locked with limits and
+    /// opened without the owner's password).
+    permissions: katna_pdf_cos::Permissions,
     /// Views jumped away from (Previous view), and back from (Next view).
     views_back: Vec<View>,
     views_forward: Vec<View>,
@@ -780,6 +794,7 @@ impl Viewer {
             area: None,
             area_focus: None,
             kept: None,
+            permissions: katna_pdf_cos::Permissions::ALL,
             views_back: Vec::new(),
             views_forward: Vec::new(),
             recover_after: None,
@@ -948,6 +963,7 @@ impl Viewer {
         if self.kept.as_ref().is_some_and(|(kept, _)| *kept != path) {
             self.forget_kept(cx);
         }
+        self.permissions = katna_pdf_cos::Permissions::ALL;
         let name = file_name(&path);
         if self.path.as_deref() != Some(path.as_path()) {
             self.views_back.clear();
@@ -1117,7 +1133,7 @@ impl Viewer {
                             Vec::new(),
                             sign::Signable::default(),
                             Vec::new(),
-                            (Vec::new(), Vec::new()),
+                            (Vec::new(), Vec::new(), katna_pdf_cos::Permissions::ALL),
                         );
                     };
                     let show = doc
@@ -1128,7 +1144,7 @@ impl Viewer {
                     let ranges = doc.page_label_ranges();
                     let signatures = sign::check(&doc);
                     let signable = sign::signable(&doc);
-                    let extras = (doc.attachments(), doc.layers());
+                    let extras = (doc.attachments(), doc.layers(), doc.permissions());
                     // The object layer's copy is kept only for a form.
                     let form = (!fields.is_empty()).then(|| (Arc::new(doc), fields));
                     (
@@ -1150,6 +1166,7 @@ impl Viewer {
                 }
                 this.signatures = Some(Arc::new(signatures));
                 this.extras.set(extras.0, extras.1);
+                this.set_permissions(extras.2);
                 this.signable = Arc::new(signable);
                 if links.iter().any(|l| !l.is_empty()) {
                     this.links = Some(Arc::new(links));
@@ -1515,6 +1532,9 @@ impl Viewer {
     }
 
     fn copy_text(&mut self, cx: &mut Context<Self>) {
+        if self.selection.is_some() && !self.allows(Allow::Copy, cx) {
+            return;
+        }
         if let Some(text) = self.selected_text() {
             cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
         }
@@ -2167,6 +2187,47 @@ impl Viewer {
         cx.notify();
     }
 
+    /// Takes the file's permissions in, saying once what it does not
+    /// let be done.
+    fn set_permissions(&mut self, permissions: katna_pdf_cos::Permissions) {
+        self.permissions = permissions;
+        let p = permissions;
+        let barred: Vec<String> = [
+            (p.print, "restricted-print"),
+            (p.copy, "restricted-copy"),
+            (p.change, "restricted-change"),
+            (p.comment, "restricted-comment"),
+            (p.fill_forms, "restricted-fill"),
+            (p.assemble, "restricted-assemble"),
+        ]
+        .into_iter()
+        .filter(|(on, _)| !on)
+        .map(|(_, id)| t(id, &[]))
+        .collect();
+        if !barred.is_empty() && self.notice.is_none() {
+            self.notice = Some(t("restricted", &[("what", &barred.join(", "))]));
+        }
+    }
+
+    /// Whether the file lets `what` be done; when not, the notice says
+    /// so.
+    pub(super) fn allows(&mut self, what: Allow, cx: &mut Context<Self>) -> bool {
+        let p = self.permissions;
+        let (on, id) = match what {
+            Allow::Print => (p.print, "restricted-print"),
+            Allow::Copy => (p.copy, "restricted-copy"),
+            Allow::Change => (p.change, "restricted-change"),
+            Allow::Comment => (p.comment, "restricted-comment"),
+            Allow::Fill => (p.fill_forms, "restricted-fill"),
+            Allow::Assemble => (p.assemble, "restricted-assemble"),
+        };
+        if !on {
+            self.notice = Some(t("restricted-refused", &[("what", &t(id, &[]))]));
+            cx.notify();
+        }
+        on
+    }
+
     /// Notes the view shown before a jump to row `row`: one further than
     /// the next or last row (paging on is not a jump).
     fn note_jump(&mut self, row: usize) {
@@ -2238,6 +2299,9 @@ impl Viewer {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.form.is_some() && !self.allows(Allow::Fill, cx) {
+            return;
+        }
         let Some(form) = self.form.as_mut() else {
             return;
         };
@@ -2937,6 +3001,7 @@ impl Viewer {
         self.annots = Some(Arc::new(cos.annotations()));
         self.signatures = Some(Arc::new(sign::check(&cos)));
         self.extras.set(cos.attachments(), cos.layers());
+        self.permissions = cos.permissions();
         self.signable = Arc::new(sign::signable(&cos));
         self.chosen = None;
         self.comment = None;
@@ -3257,6 +3322,9 @@ impl Viewer {
 
     /// Hands the open file to the desktop's print dialog.
     fn print(&mut self, cx: &mut Context<Self>) {
+        if !self.allows(Allow::Print, cx) {
+            return;
+        }
         let (Some(path), Content::Ready(opened)) = (self.path.clone(), &self.content) else {
             return;
         };
