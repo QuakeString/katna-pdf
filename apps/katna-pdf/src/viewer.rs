@@ -2299,7 +2299,7 @@ impl Viewer {
         .map(|(_, id)| t(id, &[]))
         .collect();
         if !barred.is_empty() && self.notice.is_none() {
-            self.notice = Some(t("restricted", &[("what", &barred.join(", "))]));
+            self.notice = Some(said("restricted", &[("what", &barred.join(", "))]));
         }
     }
 
@@ -2316,7 +2316,7 @@ impl Viewer {
             Allow::Assemble => (p.assemble, "restricted-assemble"),
         };
         if !on {
-            self.notice = Some(t("restricted-refused", &[("what", &t(id, &[]))]));
+            self.notice = Some(said("restricted-refused", &[("what", &t(id, &[]))]));
             cx.notify();
         }
         on
