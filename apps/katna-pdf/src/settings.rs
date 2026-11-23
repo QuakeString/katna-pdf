@@ -1656,6 +1656,11 @@ impl Settings {
             .flat_map(|(_, entries)| entries.iter().flatten())
             .filter(|(_, keys)| !keys.is_empty())
             .map(|(id, keys)| (plain(&t(id, &[])), keys_text(keys)))
+            .chain(
+                crate::menus::MORE_KEYS
+                    .iter()
+                    .map(|(id, keys)| (t(id, &[]), (*keys).to_owned())),
+            )
             .filter(|(words, keys)| {
                 find.is_empty()
                     || words.to_lowercase().contains(&find)

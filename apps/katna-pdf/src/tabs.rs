@@ -21,7 +21,7 @@ use crate::text::t;
 use crate::theme::Theme;
 use crate::update::{self, InstallError, Offer, Seen};
 use crate::viewer::{
-    CloseTab, NextTab, Open, PreviousTab, ReopenSession, ShowLibrary, Viewer, ViewerEvent,
+    CloseAll, CloseTab, NextTab, Open, PreviousTab, ReopenSession, ShowLibrary, Viewer, ViewerEvent,
 };
 
 pub(crate) struct Tab {
@@ -547,6 +547,22 @@ impl Tabs {
         self.activate(next, window, cx);
     }
 
+    /// Closes every tab, last first, stopping at one with changes not
+    /// saved (which says so; Close all again closes it too).
+    pub(crate) fn close_all(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        for i in (0..self.tabs.len()).rev() {
+            let viewer = self.tabs[i].viewer.entity_id();
+            self.close(i, window, cx);
+            if self
+                .tabs
+                .get(i)
+                .is_some_and(|tab| tab.viewer.entity_id() == viewer)
+            {
+                break;
+            }
+        }
+    }
+
     /// Closes tab `i`. The last tab is emptied rather than closed, so the
     /// window always has somewhere to open a file.
     pub(crate) fn close(&mut self, i: usize, window: &mut Window, cx: &mut Context<Self>) {
@@ -661,7 +677,7 @@ impl Render for Tabs {
             .on_action(cx.listener(|_, _: &crate::viewer::OpenSettings, _, cx| {
                 crate::settings::open(crate::settings::Page::Appearance, cx)
             }))
-            .on_action(cx.listener(|_, _: &crate::viewer::ShowShortcuts, _, cx| {
+            .on_action(cx.listener(|_, _: &crate::viewer::Shortcuts, _, cx| {
                 crate::settings::open(crate::settings::Page::Shortcuts, cx)
             }))
             .on_action(cx.listener(|_, _: &crate::viewer::ReportProblem, _, cx| {
@@ -677,6 +693,7 @@ impl Render for Tabs {
                 let i = this.active;
                 this.close(i, window, cx);
             }))
+            .on_action(cx.listener(|this, _: &CloseAll, window, cx| this.close_all(window, cx)))
             .on_action(cx.listener(|this, _: &NextTab, window, cx| this.cycle(1, window, cx)))
             .on_action(cx.listener(|this, _: &PreviousTab, window, cx| this.cycle(-1, window, cx)))
             .on_action(

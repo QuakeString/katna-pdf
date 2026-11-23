@@ -7,12 +7,12 @@
 use gpui::Action;
 
 use crate::viewer::{
-    ActualSize, AddBookmark, Annotate, CloseTab, Compare, CopyText, Export, Find, FindNext,
-    FindPrevious, FitHeight, FitPage, FitWidth, Loupe, NewWindow, NextPage, NextSpread, NextTab,
-    Open, OpenSettings, Organize, Present, PreviousPage, PreviousTab, Print, Properties, Quit,
-    ReadAloud, ReopenSession, ReportProblem, RotateViewLeft, RotateViewRight, Save, ShowAbout,
-    ShowLibrary, ShowShortcuts, Sign, Snapshot, ToggleContents, ToggleNight, ZoomIn, ZoomOut,
-    ZoomToArea,
+    ActualSize, AddBookmark, Annotate, CloseAll, CloseTab, Compare, CopyText, Export, Find,
+    FindNext, FindPrevious, FitHeight, FitPage, FitWidth, Loupe, NewWindow, NextPage, NextSpread,
+    NextTab, Open, OpenSettings, Organize, Present, PreviousPage, PreviousTab, Print, Properties,
+    Quit, ReadAloud, ReopenSession, ReportProblem, Revert, RotateViewLeft, RotateViewRight, Save,
+    Shortcuts, ShowAbout, ShowLibrary, Sign, Snapshot, ToggleContents, ToggleNight, ZoomIn,
+    ZoomOut, ZoomToArea,
 };
 
 /// An item: its id (and the id of its words), and its keys as
@@ -39,7 +39,10 @@ pub const MENUS: &[(&str, &[Entry])] = &[
             None,
             Some(("menu-sign", &[])),
             None,
+            Some(("menu-revert", &[])),
+            None,
             Some(("menu-close-tab", &["Control", "W"])),
+            Some(("menu-close-all", &["Control", "Shift", "W"])),
             Some(("menu-quit", &["Control", "Q"])),
         ],
     ),
@@ -93,12 +96,30 @@ pub const MENUS: &[(&str, &[Entry])] = &[
         "menu-help",
         &[
             Some(("menu-settings", &["Control", ","])),
-            Some(("menu-shortcuts", &[])),
+            Some(("menu-shortcuts", &["F1"])),
             Some(("menu-report", &[])),
             None,
             Some(("menu-about", &[])),
         ],
     ),
+];
+
+/// Keys no menu item shows: the words' id and the keys.
+pub const MORE_KEYS: &[(&str, &str)] = &[
+    ("shortcut-undo", "Ctrl Z"),
+    ("shortcut-redo", "Ctrl Shift Z, Ctrl Y"),
+    ("shortcut-select-all", "Ctrl A"),
+    ("shortcut-cut", "Ctrl X"),
+    ("shortcut-paste", "Ctrl V"),
+    ("shortcut-paste-in-place", "Ctrl Shift V"),
+    ("shortcut-paste-to-pages", "Ctrl Alt V"),
+    ("shortcut-delete", "Delete"),
+    ("shortcut-nudge", "← → ↑ ↓, Shift for more"),
+    ("shortcut-put-down", "Escape"),
+    ("shortcut-layout", "Ctrl 3"),
+    ("shortcut-close-tab", "Ctrl F4"),
+    ("shortcut-tabs", "Ctrl Page Up, Ctrl Page Down"),
+    ("shortcut-present-keys", "Space ← → Home End B W"),
 ];
 
 /// The action an item runs.
@@ -129,6 +150,9 @@ pub fn action(id: &str) -> Option<Box<dyn Action>> {
         "menu-fit-page" => Box::new(FitPage),
         "menu-fit-height" => Box::new(FitHeight),
         "menu-zoom-area" => Box::new(ZoomToArea),
+        "menu-revert" => Box::new(Revert),
+        "menu-close-all" => Box::new(CloseAll),
+        "menu-shortcuts" => Box::new(Shortcuts),
         "menu-loupe" => Box::new(Loupe),
         "menu-rotate-right" => Box::new(RotateViewRight),
         "menu-rotate-left" => Box::new(RotateViewLeft),
@@ -144,7 +168,6 @@ pub fn action(id: &str) -> Option<Box<dyn Action>> {
         "menu-next-tab" => Box::new(NextTab),
         "menu-previous-tab" => Box::new(PreviousTab),
         "menu-settings" => Box::new(OpenSettings),
-        "menu-shortcuts" => Box::new(ShowShortcuts),
         "menu-about" => Box::new(ShowAbout),
         "menu-report" => Box::new(ReportProblem),
         _ => return None,

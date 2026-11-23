@@ -87,7 +87,6 @@ actions!(
         Open,
         NewWindow,
         OpenSettings,
-        ShowShortcuts,
         ShowAbout,
         ReportProblem,
         ReopenSession,
@@ -130,6 +129,9 @@ actions!(
         CopyText,
         ScrollUp,
         CloseTab,
+        CloseAll,
+        Revert,
+        Shortcuts,
         NextTab,
         PreviousTab,
         DeleteAnnotation,
@@ -311,6 +313,8 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl-shift-n", ToggleNight, None),
         KeyBinding::new("ctrl-w", CloseTab, None),
         KeyBinding::new("ctrl-f4", CloseTab, None),
+        KeyBinding::new("ctrl-shift-w", CloseAll, None),
+        KeyBinding::new("f1", Shortcuts, None),
         KeyBinding::new("ctrl-tab", NextTab, None),
         KeyBinding::new("ctrl-pagedown", NextTab, None),
         KeyBinding::new("ctrl-shift-tab", PreviousTab, None),
@@ -3175,6 +3179,23 @@ impl Viewer {
         )
     }
 
+    /// Revert: shows the file as it was last saved. Undo brings the
+    /// changes back.
+    fn revert(&mut self, cx: &mut Context<Self>) {
+        self.finish_typing(false, cx);
+        self.finish_text_edit(false, cx);
+        if !self.dirty() {
+            self.notice = Some(said("revert-nothing", &[]));
+            cx.notify();
+            return;
+        }
+        self.record_change();
+        self.redo.clear();
+        self.restore(None, cx);
+        self.notice = Some(said("reverted", &[]));
+        cx.notify();
+    }
+
     /// Writes the changed file (a form filled in, pages changed) over
     /// the file opened.
     fn save(&mut self, cx: &mut Context<Self>) {
@@ -4306,6 +4327,7 @@ impl Render for Viewer {
             .on_action(cx.listener(|this, _: &Sign, _, cx| this.toggle_signing(cx)))
             .on_action(cx.listener(|this, _: &Properties, _, cx| this.toggle_properties(cx)))
             .on_action(cx.listener(|this, _: &Export, _, cx| this.toggle_exporting(cx)))
+            .on_action(cx.listener(|this, _: &Revert, _, cx| this.revert(cx)))
             .on_action(cx.listener(|this, _: &Compare, _, cx| this.choose_compare(cx)))
             .on_action(cx.listener(|this, _: &ReadAloud, _, cx| this.toggle_reading(cx)))
             .on_action(cx.listener(|this, _: &Present, window, cx| {

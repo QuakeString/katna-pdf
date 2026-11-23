@@ -23,13 +23,13 @@ katna-pdf-js = { path = "crates/katna-pdf-js" }
 # Katna's shared UI crates, at a pinned commit of the Katna repository
 # (docs/PLAN.md §2.2). Move the pin deliberately, together with the
 # [patch.crates-io] entries below.
-katna-core = { git = "https://github.com/QuakeString/katna", rev = "097ee0fa49ee03ae9f80dc7630716821321e24c4" }
-katna-ui = { git = "https://github.com/QuakeString/katna", rev = "097ee0fa49ee03ae9f80dc7630716821321e24c4" }
-katna-platform = { git = "https://github.com/QuakeString/katna", rev = "097ee0fa49ee03ae9f80dc7630716821321e24c4" }
+katna-core = { git = "https://github.com/QuakeString/katna", rev = "c71e2dc6a3105e67b2614daf8ebe67ab709b2aef" }
+katna-ui = { git = "https://github.com/QuakeString/katna", rev = "c71e2dc6a3105e67b2614daf8ebe67ab709b2aef" }
+katna-platform = { git = "https://github.com/QuakeString/katna", rev = "c71e2dc6a3105e67b2614daf8ebe67ab709b2aef" }
 # The Katna daemon's D-Bus API: cloud drives of Katna Mail's accounts.
-katna-dbus = { git = "https://github.com/QuakeString/katna", rev = "097ee0fa49ee03ae9f80dc7630716821321e24c4" }
+katna-dbus = { git = "https://github.com/QuakeString/katna", rev = "c71e2dc6a3105e67b2614daf8ebe67ab709b2aef" }
 # Katna Mail's store, read-only: the PDFs attached to mail.
-katna-store = { git = "https://github.com/QuakeString/katna", rev = "097ee0fa49ee03ae9f80dc7630716821321e24c4" }
+katna-store = { git = "https://github.com/QuakeString/katna", rev = "c71e2dc6a3105e67b2614daf8ebe67ab709b2aef" }
 
 # GPUI as Katna builds it: the same versions, patched from Katna's vendor/.
 gpui = { package = "gpui-pre", version = "=0.3.6" }
@@ -94,7 +94,7 @@ regex = { version = "1", default-features = false, features = ["std", "unicode-p
 zune-core = "0.5"
 # The library's catalog and full-text index (docs/PLAN.md §4.6): SQLite
 # with FTS5, at the version Katna uses.
-rusqlite = { version = "0.40", features = ["bundled"] }
+rusqlite = { version = "0.41", features = ["bundled"] }
 # Watched folders read again when their PDFs change (the library).
 mail-parser = "0.11.9"
 notify = { version = "8", default-features = false, features = ["macos_fsevent"] }
@@ -126,7 +126,7 @@ strip = true
 hayro = { path = "vendor/hayro" }
 hayro-interpret = { path = "vendor/hayro-interpret" }
 hayro-syntax = { path = "vendor/hayro-syntax" }
-gpui-pre = { git = "https://github.com/QuakeString/katna", rev = "097ee0fa49ee03ae9f80dc7630716821321e24c4" }
-gpui-pre-linux = { git = "https://github.com/QuakeString/katna", rev = "097ee0fa49ee03ae9f80dc7630716821321e24c4" }
-gpui-pre-wgpu = { git = "https://github.com/QuakeString/katna", rev = "097ee0fa49ee03ae9f80dc7630716821321e24c4" }
-gpui-pre-windows = { git = "https://github.com/QuakeString/katna", rev = "097ee0fa49ee03ae9f80dc7630716821321e24c4" }
+gpui-pre = { git = "https://github.com/QuakeString/katna", rev = "c71e2dc6a3105e67b2614daf8ebe67ab709b2aef" }
+gpui-pre-linux = { git = "https://github.com/QuakeString/katna", rev = "c71e2dc6a3105e67b2614daf8ebe67ab709b2aef" }
+gpui-pre-wgpu = { git = "https://github.com/QuakeString/katna", rev = "c71e2dc6a3105e67b2614daf8ebe67ab709b2aef" }
+gpui-pre-windows = { git = "https://github.com/QuakeString/katna", rev = "c71e2dc6a3105e67b2614daf8ebe67ab709b2aef" }
