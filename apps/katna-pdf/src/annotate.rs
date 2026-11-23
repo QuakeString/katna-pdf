@@ -294,6 +294,10 @@ pub fn drawn(tool: Tool, page: usize, path: &[[f32; 2]], inv: Inverse) -> Option
         }
     };
     let kind = match tool {
+        // An area highlighted, dragged out away from the text.
+        Tool::Highlight if !click => {
+            return markup(MarkupStyle::Highlight, page, &[boxed([0.0, 0.0])], inv);
+        }
         Tool::Highlight | Tool::Underline | Tool::StrikeOut | Tool::Squiggly => return None,
         // Measuring and polygons have their own pointer handling
         // (`viewer::measure`).
@@ -503,7 +507,7 @@ mod tests {
         let square = drawn(Tool::Rectangle, 0, &drag, inv).unwrap();
         assert_eq!(square.rect, [10.0, 750.0, 60.0, 790.0]);
         assert!(drawn(Tool::Rectangle, 0, &click, inv).is_none());
-        assert!(drawn(Tool::Highlight, 0, &drag, inv).is_none());
+        assert!(drawn(Tool::Underline, 0, &drag, inv).is_none());
         // A note's icon hangs from the click.
         let note = drawn(Tool::Note, 0, &click, inv).unwrap();
         assert_eq!(note.rect, [10.0, 770.0, 30.0, 790.0]);
@@ -558,5 +562,18 @@ mod tests {
         // Over a whole stroke, it goes.
         let out = erase(&strokes, &[[-1.0, 50.0], [31.0, 50.0]], 1.0).unwrap();
         assert_eq!(out.len(), 1);
+    }
+
+    #[test]
+    fn highlight_dragged_marks_the_area() {
+        let inv = Inverse::of([1.0, 0.0, 0.0, -1.0, 0.0, 100.0]).unwrap();
+        let a = drawn(Tool::Highlight, 0, &[[10.0, 10.0], [40.0, 30.0]], inv).unwrap();
+        let AnnotKind::Markup(MarkupStyle::Highlight, quads) = &a.kind else {
+            panic!("not a highlight: {:?}", a.kind);
+        };
+        assert_eq!(quads.len(), 1);
+        assert_eq!(a.rect, [9.0, 69.0, 41.0, 91.0]);
+        // A click marks nothing.
+        assert!(drawn(Tool::Highlight, 0, &[[10.0, 10.0], [10.5, 10.0]], inv).is_none());
     }
 }

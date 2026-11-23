@@ -355,7 +355,7 @@ comment.oval	comment	Oval	reader	y	shipped	P0	#32		acrobat
 comment.polygon	comment	Polygon	reader	y	shipped	P0	#103		acrobat
 comment.polyline	comment	Connected lines (polyline)	reader	n	shipped	P0	#147	Connected lines tool: click points, double-click to finish	acrobat
 comment.cloud	comment	Cloud shape	reader	y	shipped	P1	#103		acrobat
-comment.area-highlight	comment	Area highlight	reader	n	todo	P1	-		acrobat
+comment.area-highlight	comment	Area highlight	reader	n	shipped	P1	#158	Highlight dragged away from text marks the area	acrobat
 comment.attach-file-comment	comment	Attach a file as a comment	reader	y	shipped	P1	#105		acrobat
 comment.record-audio	comment	Sound comments	reader	n	skip	-	-		acrobat
 comment.image-comment	comment	Add an image as a comment	reader	n	todo	P2	-		acrobat
