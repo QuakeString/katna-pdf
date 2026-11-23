@@ -468,14 +468,20 @@ impl Tabs {
             )
             .on_click(cx.listener(move |_, _, _, cx| Look::set(cx, |look| look.mode = mode)))
         });
-        let mut schemes: Vec<(String, &'static str, crate::theme::Five, crate::theme::Five)> =
+        let mut schemes: Vec<(String, String, crate::theme::Five, crate::theme::Five)> =
             look::schemes()
                 .into_iter()
-                .map(|s| (s.id.to_owned(), s.name, s.day, s.night))
+                .map(|s| (s.id.to_owned(), t(s.name, &[]), s.day, s.night))
                 .collect();
+        schemes.extend(
+            current
+                .mine
+                .iter()
+                .map(|m| (m.id.clone(), m.name.clone(), m.day, m.night)),
+        );
         schemes.push((
             look::SYSTEM.to_owned(),
-            "scheme-system",
+            t("scheme-system", &[]),
             current.five_for(look::SYSTEM, false),
             current.five_for(look::SYSTEM, true),
         ));
@@ -492,7 +498,7 @@ impl Tabs {
                     .rounded(px(13.0))
                     .cursor_pointer()
                     .when(on, |d| d.border_2().border_color(th.accent))
-                    .ftip(t(name, &[]), &th)
+                    .ftip(name, &th)
                     .on_click(cx.listener(move |_, _, _, cx| {
                         let id = id.clone();
                         Look::set(cx, move |look| look.scheme = id);

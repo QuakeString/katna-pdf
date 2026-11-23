@@ -16,7 +16,7 @@ use katna_ui::text_input::{InputEvent, TextInput};
 use katna_ui::tokens::{space, text};
 
 use crate::float::{self, avatar, button, icon, seg, seg_item};
-use crate::look::{self, Look, Mode};
+use crate::look::{self, Look, Mine, Mode};
 use crate::menus::{MENUS, keys_text, plain};
 use crate::prefs::{Prefs, StartZoom, Units};
 use crate::profile::Profile;
@@ -101,8 +101,32 @@ pub struct Settings {
     signing: SigningDefaults,
     /// The library's watched folders and the files found in each.
     folders: Vec<(std::path::PathBuf, usize)>,
+    /// A scheme being made or changed (X10).
+    editor: Option<Editor>,
+    /// Why the last scheme file could not be brought in (X11).
+    notice: Option<String>,
     _subs: Vec<Subscription>,
 }
+
+/// The scheme editor's state: its name, which side is shown, and the
+/// five colours of each side as typed.
+struct Editor {
+    /// The scheme changed, or a new id.
+    id: String,
+    name: Entity<TextInput>,
+    night: bool,
+    /// Day's five, then night's: page, card, text, faint, accent.
+    fields: [[Entity<TextInput>; 5]; 2],
+    _subs: Vec<Subscription>,
+}
+
+const FIVE_WORDS: [&str; 5] = [
+    "settings-colour-page",
+    "settings-colour-card",
+    "settings-colour-text",
+    "settings-colour-faint",
+    "settings-colour-accent",
+];
 
 impl Settings {
     fn new(page: Page, window: &mut Window, cx: &mut Context<Self>) -> Self {
@@ -158,6 +182,8 @@ impl Settings {
             server,
             signing,
             folders: watched(),
+            editor: None,
+            notice: None,
             _subs: subs,
         }
     }
@@ -537,6 +563,107 @@ impl Settings {
             current.five_for(look::SYSTEM, true),
             cx,
         );
+        let mine: Vec<_> = current
+            .mine
+            .iter()
+            .enumerate()
+            .map(|(i, m)| {
+                tile(
+                    2000 + i,
+                    m.id.clone(),
+                    m.name.clone().into(),
+                    m.day,
+                    m.night,
+                    cx,
+                )
+                .into_any_element()
+            })
+            .collect();
+        let add_tile = |id: &'static str, glyph: &'static str, words: &'static str| {
+            div()
+                .id(id)
+                .w(px(70.0))
+                .flex()
+                .flex_col()
+                .gap(px(space::S1))
+                .cursor_pointer()
+                .child(
+                    div()
+                        .h(px(46.0))
+                        .rounded(px(7.0))
+                        .border_1()
+                        .border_dashed()
+                        .border_color(th.line)
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .child(icon(glyph, 16.0, th.dim)),
+                )
+                .child(
+                    div()
+                        .text_size(px(text::CAPTION))
+                        .text_color(th.dim)
+                        .truncate()
+                        .child(t(words, &[])),
+                )
+        };
+        let make = add_tile("settings-scheme-make", "plus", "settings-scheme-make")
+            .on_click(cx.listener(|this, _, window, cx| this.open_editor(None, window, cx)))
+            .into_any_element();
+        let import = add_tile("settings-scheme-import", "upload", "settings-scheme-import")
+            .on_click(cx.listener(|this, _, window, cx| this.import_scheme(window, cx)))
+            .into_any_element();
+        let chosen_mine = current
+            .mine
+            .iter()
+            .find(|m| m.id == current.scheme)
+            .cloned();
+        let own_actions = chosen_mine.map(|m| {
+            let id = m.id.clone();
+            div()
+                .mt(px(space::S3))
+                .flex()
+                .gap(px(space::S2))
+                .child(
+                    button(
+                        "settings-scheme-change",
+                        t("settings-scheme-change", &[]),
+                        false,
+                        &th,
+                    )
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.open_editor(Some(m.clone()), window, cx)
+                    })),
+                )
+                .child(
+                    button(
+                        "settings-scheme-delete",
+                        t("settings-scheme-delete", &[]),
+                        false,
+                        &th,
+                    )
+                    .on_click(cx.listener(move |_, _, _, cx| {
+                        let id = id.clone();
+                        Look::set(cx, move |look| {
+                            look.mine.retain(|m| m.id != id);
+                            look.scheme = look::FLOAT.into();
+                        });
+                    })),
+                )
+        });
+        let notice = self.notice.clone().map(|words| {
+            div()
+                .mt(px(space::S3))
+                .p(px(space::S3))
+                .flex()
+                .gap(px(space::S2))
+                .rounded(px(7.0))
+                .bg(th.error_soft)
+                .text_color(th.error)
+                .text_size(px(text::CAPTION))
+                .child(icon("alert", 14.0, th.error))
+                .child(words)
+        });
         let heading = |words: &str| {
             div()
                 .mt(px(space::S4))
@@ -583,8 +710,34 @@ impl Settings {
                     .gap(px(space::S3))
                     .children(built_in),
             )
-            .child(heading("settings-from-desktop"))
-            .child(div().flex().child(system))
+            .child(
+                div()
+                    .flex()
+                    .gap(px(space::S6))
+                    .child(
+                        div()
+                            .flex_none()
+                            .child(heading("settings-from-desktop"))
+                            .child(system),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .child(heading("settings-yours"))
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_wrap()
+                                    .gap(px(space::S3))
+                                    .children(mine)
+                                    .child(make)
+                                    .child(import),
+                            ),
+                    ),
+            )
+            .children(own_actions)
+            .children(notice)
             .into_any_element()
     }
 
@@ -823,6 +976,290 @@ impl Settings {
                 None,
                 open,
             ))
+            .into_any_element()
+    }
+
+    /// Opens the scheme editor on `scheme`, or on a copy of the scheme
+    /// in use for a new one.
+    fn open_editor(&mut self, scheme: Option<Mine>, window: &mut Window, cx: &mut Context<Self>) {
+        let look = cx.global::<Look>().clone();
+        let dark = look.dark(window.appearance());
+        let scheme = scheme.unwrap_or_else(|| Mine {
+            id: Mine::new_id(&look.mine),
+            name: String::new(),
+            day: look.five(false),
+            night: look.five(true),
+        });
+        let accent = self.theme.accent;
+        let mut subs = Vec::new();
+        let mut field = |text: String, placeholder: String, cx: &mut Context<Self>| {
+            let input = cx.new(|cx| {
+                let mut input = TextInput::new(placeholder, cx);
+                input.set_accent(accent);
+                input.set_text(text, cx);
+                input
+            });
+            subs.push(
+                cx.subscribe(&input, |this, _, event: &InputEvent, cx| match event {
+                    InputEvent::Submit => this.save_editor(cx),
+                    InputEvent::Cancel => {
+                        this.editor = None;
+                        cx.notify();
+                    }
+                    InputEvent::Changed => cx.notify(),
+                }),
+            );
+            input
+        };
+        let colours = |five: Five| [five.page, five.card, five.text, five.faint, five.accent];
+        let day = colours(scheme.day).map(|c| field(format!("#{c:06x}"), "#rrggbb".into(), cx));
+        let night = colours(scheme.night).map(|c| field(format!("#{c:06x}"), "#rrggbb".into(), cx));
+        let name = field(scheme.name.clone(), t("settings-scheme-name-hint", &[]), cx);
+        window.focus(&gpui::Focusable::focus_handle(&name, cx), cx);
+        self.notice = None;
+        self.editor = Some(Editor {
+            id: scheme.id,
+            name,
+            night: dark,
+            fields: [day, night],
+            _subs: subs,
+        });
+        cx.notify();
+    }
+
+    /// The five colours typed for one side, when each is a colour.
+    fn typed_five(&self, editor: &Editor, night: bool, cx: &App) -> Option<Five> {
+        let c: Vec<u32> = editor.fields[night as usize]
+            .iter()
+            .filter_map(|f| look::parse_hex(f.read(cx).text()))
+            .collect();
+        match c.as_slice() {
+            &[page, card, text, faint, accent] => Some(Five::new(page, card, text, faint, accent)),
+            _ => None,
+        }
+    }
+
+    fn save_editor(&mut self, cx: &mut Context<Self>) {
+        let Some(editor) = self.editor.as_ref() else {
+            return;
+        };
+        let (Some(day), Some(night)) = (
+            self.typed_five(editor, false, cx),
+            self.typed_five(editor, true, cx),
+        ) else {
+            return;
+        };
+        let name = editor.name.read(cx).text().trim().to_owned();
+        let name = if name.is_empty() {
+            t("settings-scheme-untitled", &[])
+        } else {
+            name
+        };
+        let scheme = Mine {
+            id: editor.id.clone(),
+            name,
+            day,
+            night,
+        };
+        self.editor = None;
+        Look::set(cx, move |look| {
+            look.scheme = scheme.id.clone();
+            match look.mine.iter_mut().find(|m| m.id == scheme.id) {
+                Some(kept) => *kept = scheme,
+                None => look.mine.push(scheme),
+            }
+        });
+        cx.notify();
+    }
+
+    /// Asks for a KDE `.colors` file and opens it in the editor.
+    fn import_scheme(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let chosen = cx.prompt_for_paths(gpui::PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: None,
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            let Ok(Ok(Some(paths))) = chosen.await else {
+                return;
+            };
+            let Some(path) = paths.into_iter().next() else {
+                return;
+            };
+            this.update_in(cx, |this, window, cx| this.import_file(&path, window, cx))
+                .ok();
+        })
+        .detach();
+    }
+
+    fn import_file(&mut self, path: &std::path::Path, window: &mut Window, cx: &mut Context<Self>) {
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let stem = path
+            .file_stem()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let read = std::fs::read_to_string(path);
+        let mine = cx.global::<Look>().mine.clone();
+        match read.map(|text| look::import_kde(&text, &stem, &mine)) {
+            Ok(Ok(scheme)) => self.open_editor(Some(scheme), window, cx),
+            _ => {
+                self.notice = Some(t("settings-scheme-not-one", &[("file", &name)]));
+                cx.notify();
+            }
+        }
+    }
+
+    /// The scheme editor over the page (X10): its name, Day and Night,
+    /// five colours a side, and a preview of the side shown.
+    fn editor_card(&self, editor: &Editor, cx: &mut Context<Self>) -> AnyElement {
+        let th = self.theme;
+        let side = editor.night as usize;
+        let sides = [
+            (false, "sun", "settings-scheme-day"),
+            (true, "moon", "settings-scheme-night"),
+        ]
+        .map(|(night, glyph, words)| {
+            seg_item(
+                ("settings-scheme-side", night as usize),
+                Some(glyph),
+                Some(t(words, &[]).into()),
+                editor.night == night,
+                &th,
+            )
+            .on_click(cx.listener(move |this, _, _, cx| {
+                if let Some(editor) = this.editor.as_mut() {
+                    editor.night = night;
+                }
+                cx.notify();
+            }))
+        });
+        let rows = editor.fields[side]
+            .iter()
+            .zip(FIVE_WORDS)
+            .map(|(field, words)| {
+                let colour = look::parse_hex(field.read(cx).text());
+                div()
+                    .h(px(44.0))
+                    .flex()
+                    .items_center()
+                    .gap(px(space::S3))
+                    .border_t_1()
+                    .border_color(th.line_soft)
+                    .child(
+                        div()
+                            .flex_1()
+                            .text_size(px(text::BODY))
+                            .child(t(words, &[])),
+                    )
+                    .child(
+                        div()
+                            .size(px(22.0))
+                            .rounded_full()
+                            .border_1()
+                            .border_color(th.line)
+                            .when_some(colour, |d, c| d.bg(gpui::rgb(c))),
+                    )
+                    .child(
+                        div()
+                            .w(px(100.0))
+                            .h(px(30.0))
+                            .flex()
+                            .items_center()
+                            .px(px(space::S3))
+                            .rounded(px(6.0))
+                            .border_1()
+                            .border_color(if colour.is_some() { th.line } else { th.error })
+                            .bg(th.field)
+                            .text_size(px(text::SMALL))
+                            .child(field.clone()),
+                    )
+            });
+        let ready = self.typed_five(editor, false, cx).is_some()
+            && self.typed_five(editor, true, cx).is_some();
+        let preview = self.typed_five(editor, editor.night, cx).map(preview);
+        let form = div()
+            .flex_1()
+            .min_w_0()
+            .p(px(space::S5))
+            .flex()
+            .flex_col()
+            .gap(px(space::S3))
+            .child(
+                div()
+                    .text_size(px(text::SUBTITLE))
+                    .font_weight(FontWeight::BOLD)
+                    .child(t("settings-scheme-title", &[])),
+            )
+            .child(self.boxed("settings-scheme-name", &editor.name))
+            .child(seg(&th).children(sides))
+            .child(div().flex().flex_col().children(rows))
+            .child(
+                div()
+                    .mt(px(space::S2))
+                    .flex()
+                    .justify_end()
+                    .gap(px(space::S2))
+                    .child(
+                        button(
+                            "settings-scheme-cancel",
+                            t("settings-cancel", &[]),
+                            false,
+                            &th,
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.editor = None;
+                            cx.notify();
+                        })),
+                    )
+                    .child(
+                        button("settings-scheme-save", t("settings-save", &[]), true, &th)
+                            .when(!ready, |b| b.opacity(0.5))
+                            .on_click(cx.listener(|this, _, _, cx| this.save_editor(cx))),
+                    ),
+            );
+        div()
+            .id("settings-editor-backdrop")
+            .absolute()
+            .inset_0()
+            .flex()
+            .items_center()
+            .justify_center()
+            .bg(gpui::black().opacity(0.35))
+            .occlude()
+            .child(
+                div()
+                    .id("settings-editor")
+                    .w(px(600.0))
+                    .max_w(px(740.0))
+                    .flex()
+                    .rounded(px(12.0))
+                    .overflow_hidden()
+                    .bg(th.card)
+                    .shadow(th.lifted())
+                    .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .child(form)
+                    .child(
+                        div()
+                            .w(px(200.0))
+                            .flex_none()
+                            .p(px(space::S4))
+                            .flex()
+                            .flex_col()
+                            .gap(px(space::S2))
+                            .bg(th.page)
+                            .child(
+                                div()
+                                    .text_size(px(text::CAPTION))
+                                    .text_color(th.dim)
+                                    .child(t("settings-scheme-preview", &[])),
+                            )
+                            .children(preview),
+                    ),
+            )
             .into_any_element()
     }
 
@@ -1107,6 +1544,66 @@ impl Settings {
     }
 }
 
+/// A small picture of a scheme's side: a card on its page, text lines,
+/// and the accent as a button.
+fn preview(five: Five) -> impl IntoElement {
+    let c = |rgb: u32| gpui::rgb(rgb);
+    let line = |w: f32, colour: u32| div().h(px(3.0)).w(px(w)).rounded(px(1.5)).bg(c(colour));
+    div()
+        .p(px(space::S3))
+        .flex()
+        .flex_col()
+        .gap(px(space::S3))
+        .rounded(px(8.0))
+        .bg(c(five.page))
+        .child(
+            div()
+                .p(px(space::S3))
+                .flex()
+                .flex_col()
+                .gap(px(5.0))
+                .rounded(px(6.0))
+                .bg(c(five.card))
+                .child(
+                    div()
+                        .text_size(px(text::SMALL))
+                        .text_color(c(five.text))
+                        .child(t("settings-scheme-preview-file", &[])),
+                )
+                .child(line(120.0, five.faint))
+                .child(line(90.0, five.faint)),
+        )
+        .child(
+            div()
+                .h(px(90.0))
+                .p(px(space::S3))
+                .flex()
+                .flex_col()
+                .gap(px(5.0))
+                .rounded(px(6.0))
+                .bg(c(five.card))
+                .child(line(80.0, five.text))
+                .child(line(130.0, five.faint))
+                .child(line(110.0, five.faint)),
+        )
+        .child(
+            div().flex().justify_center().child(
+                div()
+                    .px(px(space::S3))
+                    .py(px(3.0))
+                    .rounded(px(6.0))
+                    .bg(c(five.accent))
+                    .text_size(px(text::CAPTION))
+                    .text_color(c(if (five.accent >> 8 & 0xff) > 0x9a {
+                        0x000000
+                    } else {
+                        0xffffff
+                    }))
+                    .child(t("settings-scheme-preview-button", &[])),
+            ),
+        )
+}
+
 /// The library's watched folders, each with how many files it holds.
 fn watched() -> Vec<(std::path::PathBuf, usize)> {
     let Ok(lib) = katna_pdf_library::Library::open_default() else {
@@ -1155,6 +1652,10 @@ impl Render for Settings {
             Page::Shortcuts => ("settings-shortcuts", self.shortcuts(cx)),
             Page::About => ("settings-about", self.about(cx)),
         };
+        let editor = self
+            .editor
+            .as_ref()
+            .map(|editor| self.editor_card(editor, cx));
         div()
             .id("settings")
             .size_full()
@@ -1162,6 +1663,7 @@ impl Render for Settings {
             .bg(th.card)
             .text_color(th.text)
             .font_family(".SystemUIFont")
+            .relative()
             .child(self.side(cx))
             .child(
                 div()
@@ -1181,5 +1683,6 @@ impl Render for Settings {
                     )
                     .child(body),
             )
+            .children(editor)
     }
 }
