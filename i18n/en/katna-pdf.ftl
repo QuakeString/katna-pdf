@@ -907,6 +907,7 @@ tool-line = Line
 tool-arrow = Arrow
 tool-polygon = Polygon: click the corners, double-click to close
 tool-cloud = Cloud: click the corners, double-click to close
+tool-polyline = Connected lines: click each point, double-click to finish
 tool-stamp = Stamp: pick which below, then click the page
 tool-attach = Attach a file as a comment
 tool-distance = Measure a distance
@@ -927,6 +928,7 @@ tool-line-name = Line
 tool-arrow-name = Arrow
 tool-polygon-name = Polygon
 tool-cloud-name = Cloud
+tool-polyline-name = Connected lines
 tool-stamp-name = Stamp
 tool-attach-name = Attach
 tool-distance-name = Distance
@@ -939,6 +941,7 @@ measure-how-distance = Drag, or click both ends.
 measure-how-perimeter = Click each point; double-click to finish.
 measure-how-area = Click each corner; click the first again to finish.
 measure-how-shape = Click each corner; double-click, or click the first again, to close.
+measure-how-polyline = Click each point; double-click the last to finish.
 measure-scale-paper = Scale: 1 pt = { $scale } (paper)
 measure-scale-file = Scale: 1 pt = { $scale } (from the drawing)
 measure-scale-set = Scale: 1 pt = { $scale } (set by you)
@@ -1031,6 +1034,12 @@ stamp-tab-standard = Standard
 stamp-tab-dated = With date and name
 stamp-tab-mine = Mine
 stamp-make-own = + Make my own
+stamp-tab-marks = Marks
+stamp-mark-check = Tick
+stamp-mark-cross = Cross
+stamp-mark-dot = Dot
+stamp-mark-line = Line
+stamp-mark-circle = Ring
 stamp-dated-under = date · your name
 stamp-card-hint = Click the page to put the stamp there. Your own stamps are kept for every file.
 error-invalid = { $name } is damaged or is not a PDF.

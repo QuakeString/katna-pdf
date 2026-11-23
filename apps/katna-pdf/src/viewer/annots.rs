@@ -255,8 +255,22 @@ impl Viewer {
                 a.colour = COLOURS[self.colour];
                 if let AnnotKind::Stamp(name) = &mut a.kind {
                     name.clone_from(&self.stamp);
-                    // Stamps read red unless another colour was picked.
-                    if self.colour == 0 {
+                    if katna_pdf_cos::stamp_is_mark(name) {
+                        // A quick mark is small, black unless another
+                        // colour was picked, centred where it was put.
+                        let [x0, y0, x1, y1] = a.rect;
+                        let (cx_, cy_) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0);
+                        let (hw, hh) = if name == "#MLine" {
+                            (14.0, 6.0)
+                        } else {
+                            (7.0, 7.0)
+                        };
+                        a.rect = [cx_ - hw, cy_ - hh, cx_ + hw, cy_ + hh];
+                        if self.colour == 0 {
+                            a.colour = [0.0, 0.0, 0.0];
+                        }
+                    } else if self.colour == 0 {
+                        // Stamps read red unless another colour was picked.
                         a.colour = [0.8, 0.1, 0.1];
                     }
                 }

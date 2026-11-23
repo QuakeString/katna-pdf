@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 use gpui::{AnyElement, Context, div, prelude::*};
 use katna_pdf_cos::{
-    AnnotChanges, AnnotKind, Annotation, DYNAMIC_STAMPS, STAMPS, custom_stamp, stamp_label,
+    AnnotChanges, AnnotKind, Annotation, DYNAMIC_STAMPS, MARKS, STAMPS, custom_stamp, stamp_label,
 };
 use katna_ui::px;
 use katna_ui::text_input::{InputEvent, TextInput};
@@ -86,17 +86,22 @@ impl Viewer {
             self.stamp_input = Some((input, sub));
         }
         let tab = self.stamp_tab;
-        let tabs = ["stamp-tab-standard", "stamp-tab-dated", "stamp-tab-mine"]
-            .into_iter()
-            .enumerate()
-            .map(|(i, words)| {
-                float::chip(("stamp-tab", i), t(words, &[]), tab == i, &th).on_click(cx.listener(
-                    move |this, _, _, cx| {
-                        this.stamp_tab = i;
-                        cx.notify();
-                    },
-                ))
-            });
+        let tabs = [
+            "stamp-tab-standard",
+            "stamp-tab-dated",
+            "stamp-tab-mine",
+            "stamp-tab-marks",
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(i, words)| {
+            float::chip(("stamp-tab", i), t(words, &[]), tab == i, &th).on_click(cx.listener(
+                move |this, _, _, cx| {
+                    this.stamp_tab = i;
+                    cx.notify();
+                },
+            ))
+        });
         // A stamp as it will look: its words in its colour, in a box of
         // that colour.
         let cell = |id: gpui::ElementId, name: &str, under: Option<String>, on: bool| {
@@ -179,6 +184,39 @@ impl Viewer {
                             this.stamp = name.into();
                             cx.notify();
                         })),
+                    );
+                }
+            }
+            3 => {
+                for (i, name) in MARKS.into_iter().enumerate() {
+                    let on = self.stamp == name;
+                    grid = grid.child(
+                        div()
+                            .id(("mark", i))
+                            .size(px(40.0))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded(px(4.0))
+                            .border_1()
+                            .border_color(if on { th.accent } else { th.line })
+                            .text_color(th.text)
+                            .text_size(px(text::TITLE))
+                            .cursor_pointer()
+                            .when(on, |d| d.bg(th.accent.opacity(0.14)))
+                            .hover(|s| s.bg(th.accent.opacity(0.08)))
+                            .ftip(
+                                t(
+                                    &format!("stamp-mark-{}", name[2..].to_ascii_lowercase()),
+                                    &[],
+                                ),
+                                &th,
+                            )
+                            .child(stamp_label(name))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.stamp = name.into();
+                                cx.notify();
+                            })),
                     );
                 }
             }

@@ -29,6 +29,8 @@ pub enum Tool {
     Polygon,
     /// A closed shape with a cloudy edge.
     Cloud,
+    /// Connected lines through points clicked, left open.
+    Polyline,
     Stamp,
     /// A file kept in the document, shown as a paper clip.
     Attach,
@@ -41,7 +43,7 @@ pub enum Tool {
 }
 
 impl Tool {
-    pub const ALL: [Tool; 20] = [
+    pub const ALL: [Tool; 21] = [
         Tool::Highlight,
         Tool::Underline,
         Tool::StrikeOut,
@@ -57,6 +59,7 @@ impl Tool {
         Tool::Arrow,
         Tool::Polygon,
         Tool::Cloud,
+        Tool::Polyline,
         Tool::Stamp,
         Tool::Attach,
         Tool::Distance,
@@ -82,6 +85,7 @@ impl Tool {
             Tool::Arrow => "arrow",
             Tool::Polygon => "polygon",
             Tool::Cloud => "cloud",
+            Tool::Polyline => "polyline",
             Tool::Stamp => "stamp",
             Tool::Attach => "clip",
             Tool::Distance => "ruler",
@@ -108,6 +112,7 @@ impl Tool {
             Tool::Arrow => "tool-arrow-name",
             Tool::Polygon => "tool-polygon-name",
             Tool::Cloud => "tool-cloud-name",
+            Tool::Polyline => "tool-polyline-name",
             Tool::Stamp => "tool-stamp-name",
             Tool::Attach => "tool-attach-name",
             Tool::Distance => "tool-distance-name",
@@ -134,6 +139,7 @@ impl Tool {
             Tool::Arrow => "tool-arrow",
             Tool::Polygon => "tool-polygon",
             Tool::Cloud => "tool-cloud",
+            Tool::Polyline => "tool-polyline",
             Tool::Stamp => "tool-stamp",
             Tool::Attach => "tool-attach",
             Tool::Distance => "tool-distance",
@@ -161,7 +167,7 @@ impl Tool {
     /// Whether it takes its points one click at a time (closed with a
     /// double click, or a click on the first point).
     pub fn clicks_points(self) -> bool {
-        self.measures() || matches!(self, Tool::Polygon | Tool::Cloud)
+        self.measures() || matches!(self, Tool::Polygon | Tool::Cloud | Tool::Polyline)
     }
 }
 
@@ -285,7 +291,12 @@ pub fn drawn(tool: Tool, page: usize, path: &[[f32; 2]], inv: Inverse) -> Option
         Tool::Highlight | Tool::Underline | Tool::StrikeOut | Tool::Squiggly => return None,
         // Measuring and polygons have their own pointer handling
         // (`viewer::measure`).
-        Tool::Distance | Tool::Perimeter | Tool::Area | Tool::Polygon | Tool::Cloud => {
+        Tool::Distance
+        | Tool::Perimeter
+        | Tool::Area
+        | Tool::Polygon
+        | Tool::Cloud
+        | Tool::Polyline => {
             return None;
         }
         Tool::Note => AnnotKind::Note,

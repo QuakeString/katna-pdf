@@ -353,7 +353,7 @@ comment.arrow	comment	Arrow	reader	y	shipped	P0	#32		acrobat
 comment.rectangle	comment	Rectangle	reader	y	shipped	P0	#32		acrobat
 comment.oval	comment	Oval	reader	y	shipped	P0	#32		acrobat
 comment.polygon	comment	Polygon	reader	y	shipped	P0	#103		acrobat
-comment.polyline	comment	Connected lines (polyline)	reader	n	partial	P0	#84 perimeter	read and drawn; no plain polyline tool	acrobat
+comment.polyline	comment	Connected lines (polyline)	reader	n	shipped	P0	#147	Connected lines tool: click points, double-click to finish	acrobat
 comment.cloud	comment	Cloud shape	reader	y	shipped	P1	#103		acrobat
 comment.area-highlight	comment	Area highlight	reader	n	todo	P1	-		acrobat
 comment.attach-file-comment	comment	Attach a file as a comment	reader	y	shipped	P1	#105		acrobat
@@ -486,7 +486,7 @@ form.xfa-formcalc	form	FormCalc scripting	reader	n	skip	-	-		acrobat
 form.xfa-data	form	XFA XML data import and export	pro	n	skip	-	-		acrobat
 form.xfa-flatten	form	Flatten XFA forms	pro	n	skip	-	-		acrobat
 form.fill-sign-text	form	Fill & Sign: add text on flat forms	reader	y	shipped	P0	#59 add text		acrobat
-form.fill-sign-marks	form	Fill & Sign: check, cross, dot, line marks	reader	p	partial	P0	stamps	no tick/cross/dot quick marks	acrobat
+form.fill-sign-marks	form	Fill & Sign: check, cross, dot, line marks	reader	p	shipped	P0	#147	stamp card Marks tab: tick, cross, dot, line, ring	acrobat
 form.fill-sign-date	form	Fill & Sign: today's date	reader	n	partial	P1	#105 dynamic stamp		acrobat
 form.fill-sign-signature	form	Fill & Sign: typed, drawn, image or scanned signature and initials	reader	y	shipped	P0	#109 initials, #52 signature pictures		acrobat
 form.fill-sign-flatten	form	Fill & Sign: flatten on save	reader	n	shipped	P1	#106		acrobat

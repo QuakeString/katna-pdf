@@ -381,14 +381,20 @@ impl Viewer {
         let Some(inv) = self.inverse(page) else {
             return;
         };
-        // A polygon or cloud is a shape, not a measurement.
-        if matches!(tool, Tool::Polygon | Tool::Cloud) {
-            if points.len() < 3 {
+        // A polygon, cloud or polyline is a shape, not a measurement.
+        if matches!(tool, Tool::Polygon | Tool::Cloud | Tool::Polyline) {
+            let open = tool == Tool::Polyline;
+            if points.len() < if open { 2 } else { 3 } {
                 return;
             }
+            let on_page = points.iter().map(|p| inv.map(*p)).collect();
             let mut a = Annotation::new(
                 page,
-                AnnotKind::Polygon(points.iter().map(|p| inv.map(*p)).collect()),
+                if open {
+                    AnnotKind::PolyLine(on_page)
+                } else {
+                    AnnotKind::Polygon(on_page)
+                },
             );
             a.colour = COLOURS[self.colour];
             a.width = super::super::annotate::WIDTH;
@@ -612,6 +618,7 @@ impl Viewer {
                         Tool::Distance => "measure-how-distance",
                         Tool::Perimeter => "measure-how-perimeter",
                         Tool::Polygon | Tool::Cloud => "measure-how-shape",
+                        Tool::Polyline => "measure-how-polyline",
                         _ => "measure-how-area",
                     },
                     &[],
