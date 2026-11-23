@@ -19,9 +19,10 @@ use katna_ui::scale::desktop_px;
 use katna_ui::text_area::TextArea;
 use katna_ui::text_input::{InputEvent, TextInput};
 use katna_ui::tokens::{radius, space, text};
-use katna_ui::widgets::{self, Tip};
+use katna_ui::widgets::Tip;
 
 use super::{Content, Viewer, fonts};
+use crate::float::{self, FloatTip};
 use crate::text::t;
 
 /// The paragraphs, pictures and shapes read so far, by page, and the
@@ -795,6 +796,22 @@ impl Viewer {
                     this.text_move_press(page, index, event.position, cx);
                 }),
             );
+        // What can be done to the paragraph floats over it (E01).
+        let inspector = self
+            .text_inspector(cx)
+            .filter(|_| dragged.is_none())
+            .map(|row| {
+                float::popover(
+                    float::bar_shell(&self.theme, 10.0)
+                        .id("text-inspector")
+                        .occlude()
+                        .cursor(gpui::CursorStyle::Arrow)
+                        .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .child(row),
+                    true,
+                    false,
+                )
+            });
         div()
             .id("text-typing")
             .absolute()
@@ -817,6 +834,7 @@ impl Viewer {
             .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .child(handle)
             .child(typing.input.clone())
+            .children(inspector)
             .into_any_element()
     }
 
@@ -1445,15 +1463,27 @@ impl Viewer {
                 .child(label)
                 .on_click(cx.listener(move |this, _, _, cx| this.resize_typed(by, cx)))
         };
-        let toggle = |id: &'static str, icon: &'static str, tip: &'static str, set: bool| {
-            let colour = if set {
-                th.katna.accent >> 8
-            } else {
-                th.katna.text_dim
-            };
-            widgets::icon_button_colored(id, icon, 18.0, colour, &th.katna)
-                .when(set, |b| b.bg(th.hover))
-                .tip(t(tip, &[]), &th.katna)
+        let toggle = |id: &'static str, glyph: &'static str, tip: &'static str, set: bool| {
+            float::ib(id, glyph, t(tip, &[]), set, &th)
+        };
+        // Bold and italic as the letters themselves.
+        let letter = |id: &'static str, letter: &'static str, tip: &'static str, set: bool| {
+            let hover = th.hover;
+            div()
+                .id(id)
+                .size(px(32.0))
+                .flex()
+                .flex_none()
+                .items_center()
+                .justify_center()
+                .rounded(px(6.0))
+                .cursor_pointer()
+                .text_size(px(text::SMALL))
+                .text_color(if set { th.accent_text } else { th.text2 })
+                .when(set, |d| d.bg(th.hover))
+                .hover(move |s| s.bg(hover))
+                .ftip(t(tip, &[]), &th)
+                .child(letter)
         };
         let bold = face.bold;
         let italic = face.italic;
@@ -1480,14 +1510,20 @@ impl Viewer {
                     .children(menu),
             )
             .child(
-                toggle("text-bold", "format-bold", "text-bold", bold).on_click(
-                    cx.listener(move |this, _, _, cx| this.reweigh_typed(Some(!bold), None, cx)),
-                ),
+                letter("text-bold", "B", "text-bold", bold)
+                    .font_weight(gpui::FontWeight::BOLD)
+                    .on_click(
+                        cx.listener(move |this, _, _, cx| {
+                            this.reweigh_typed(Some(!bold), None, cx)
+                        }),
+                    ),
             )
             .child(
-                toggle("text-italic", "format-italic", "text-italic", italic).on_click(
-                    cx.listener(move |this, _, _, cx| this.reweigh_typed(None, Some(!italic), cx)),
-                ),
+                letter("text-italic", "I", "text-italic", italic)
+                    .italic()
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.reweigh_typed(None, Some(!italic), cx)
+                    })),
             )
             .child(step("text-smaller", "A−", "text-smaller", -1.0))
             .child(field(0.0).child(t(
@@ -1495,15 +1531,15 @@ impl Viewer {
                 &[("size", &format!("{}", block.size.round()))],
             )))
             .child(step("text-bigger", "A+", "text-bigger", 1.0))
-            .child(super::separator(th))
+            .child(float::vsep(&th))
             .children(
                 [
-                    (TextAlign::Left, "text-align-left"),
-                    (TextAlign::Center, "text-align-centre"),
-                    (TextAlign::Right, "text-align-right"),
+                    (TextAlign::Left, "text-align-left", "al"),
+                    (TextAlign::Center, "text-align-centre", "ac"),
+                    (TextAlign::Right, "text-align-right", "ar"),
                 ]
-                .map(|(how, id)| {
-                    toggle(id, id, id, align == how)
+                .map(|(how, id, glyph)| {
+                    toggle(id, glyph, id, align == how)
                         .on_click(cx.listener(move |this, _, _, cx| this.align_typed(how, cx)))
                 }),
             )
@@ -1511,25 +1547,25 @@ impl Viewer {
                 div()
                     .relative()
                     .child(
-                        toggle("text-spacing", "spacing", "text-spacing", spacing.is_some())
+                        toggle("text-spacing", "list", "text-spacing", spacing.is_some())
                             .on_click(cx.listener(|this, _, _, cx| this.toggle_spacing_menu(cx))),
                     )
                     .children(spacing),
             )
-            .child(super::separator(th))
+            .child(float::vsep(&th))
             .child(
-                widgets::icon_button("text-copy", "copies", 18.0, &th.katna)
-                    .tip(t("text-copy", &[]), &th.katna)
-                    .on_click(cx.listener(|this, _, _, cx| {
+                float::ib("text-copy", "copy", t("text-copy", &[]), false, &th).on_click(
+                    cx.listener(|this, _, _, cx| {
                         this.copy_typed(cx);
-                    })),
+                    }),
+                ),
             )
             .child(
-                widgets::icon_button("text-delete", "trash", 18.0, &th.katna)
-                    .tip(t("text-delete", &[]), &th.katna)
-                    .on_click(cx.listener(|this, _, _, cx| {
+                float::ib("text-delete", "trash", t("text-delete", &[]), false, &th).on_click(
+                    cx.listener(|this, _, _, cx| {
                         this.delete_typed(cx);
-                    })),
+                    }),
+                ),
             );
         Some(row.into_any_element())
     }

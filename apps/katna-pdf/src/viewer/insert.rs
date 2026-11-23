@@ -9,16 +9,16 @@
 //! pencil draws a freehand line as the pointer goes. A picture file
 //! dropped on a page with Edit text on goes in where it lands.
 
-use gpui::{AnyElement, Context, Window, div, prelude::*};
+use gpui::{AnyElement, Context, SharedString, Window, div, prelude::*};
 use katna_pdf_cos::{Insert, ShapeKind};
 use katna_ui::px;
 use katna_ui::scale::desktop_px;
 use katna_ui::tokens::space;
-use katna_ui::widgets::{self, Tip};
 
 use super::annots::Draft;
 use super::textedit::Target;
-use super::{Content, Viewer, separator};
+use super::{Content, Viewer};
+use crate::float::{self, FloatTip};
 use crate::text::t;
 
 /// A tool for adding to a page.
@@ -47,13 +47,26 @@ impl Adding {
 
     fn icon(self) -> &'static str {
         match self {
-            Adding::Text => "format-text",
-            Adding::Picture => "image",
-            Adding::Rectangle => "shape-square",
-            Adding::Ellipse => "shape-circle",
-            Adding::Line => "shape-line",
+            Adding::Text => "text",
+            Adding::Picture => "img",
+            Adding::Rectangle => "sq",
+            Adding::Ellipse => "circ",
+            Adding::Line => "line",
             Adding::Pencil => "pen",
-            Adding::Initials => "signature",
+            Adding::Initials => "init",
+        }
+    }
+
+    /// Its name, shown beside it while it is in hand.
+    fn name(self) -> &'static str {
+        match self {
+            Adding::Text => "add-text-name",
+            Adding::Picture => "add-picture-name",
+            Adding::Rectangle => "add-rectangle-name",
+            Adding::Ellipse => "add-ellipse-name",
+            Adding::Line => "add-line-name",
+            Adding::Pencil => "add-pencil-name",
+            Adding::Initials => "add-initials-name",
         }
     }
 
@@ -117,107 +130,82 @@ impl Viewer {
             return None;
         }
         let th = self.theme;
-        let mut row = div()
-            .id("edit-tools")
-            .h(px(44.0))
-            .flex_shrink_0()
-            .flex()
-            .items_center()
-            .gap(px(space::S1))
-            .px(px(space::S3))
-            .overflow_x_scroll();
-        let button = |id: usize, icon: &'static str, tip: &'static str, on: bool| {
-            let tint = if on {
-                th.katna.accent
-            } else {
-                th.katna.text_dim
-            };
-            widgets::icon_button_colored(("edit-tool", id), icon, 18.0, tint, &th.katna)
-                .when(on, |b| b.bg(th.field))
-                .tip(t(tip, &[]), &th.katna)
+        let mut row = float::tray("edit-tools", &th);
+        let button = |id: usize,
+                      glyph: &'static str,
+                      name: Option<&'static str>,
+                      tip: &'static str,
+                      on: bool| {
+            float::dk(
+                ("edit-tool", id),
+                glyph,
+                name.filter(|_| on).map(|n| SharedString::from(t(n, &[]))),
+                t(tip, &[]),
+                if on {
+                    float::Pressed::Tool
+                } else {
+                    float::Pressed::No
+                },
+                &th,
+            )
         };
         row = row.child(
-            button(0, "text-edit", "edit-paragraphs", self.adding.is_none())
-                .on_click(cx.listener(|this, _, _, cx| this.pick_adding(None, cx))),
+            button(
+                0,
+                "cursor",
+                Some("edit-paragraphs-name"),
+                "edit-paragraphs",
+                self.adding.is_none(),
+            )
+            .on_click(cx.listener(|this, _, _, cx| this.pick_adding(None, cx))),
         );
-        row = row.child(separator(th));
         for (i, adding) in Adding::ALL.into_iter().enumerate() {
             row = row.child(
                 button(
                     i + 1,
                     adding.icon(),
+                    Some(adding.name()),
                     adding.tip(),
                     self.adding == Some(adding),
                 )
                 .on_click(cx.listener(move |this, _, _, cx| this.pick_adding(Some(adding), cx))),
             );
         }
-        row = row.child(
-            button(
-                Adding::ALL.len() + 1,
-                "water-drop",
-                "page-marks",
-                self.marking.is_some(),
+        let n = Adding::ALL.len();
+        row = row
+            .child(float::vsep(&th))
+            .child(
+                button(n + 1, "link", None, "link-tool", self.linking.is_some())
+                    .on_click(cx.listener(|this, _, _, cx| this.toggle_linking(cx))),
             )
-            .on_click(cx.listener(|this, _, _, cx| this.toggle_marking(cx))),
-        );
-        row = row.child(
-            button(
-                Adding::ALL.len() + 2,
-                "redact",
-                "redact-tool",
-                self.redacting.is_some(),
+            .child(
+                button(
+                    n + 2,
+                    "redact",
+                    None,
+                    "redact-tool",
+                    self.redacting.is_some(),
+                )
+                .on_click(cx.listener(|this, _, _, cx| this.toggle_redacting(cx))),
             )
-            .on_click(cx.listener(|this, _, _, cx| this.toggle_redacting(cx))),
-        );
-        row = row.child(
-            button(
-                Adding::ALL.len() + 3,
-                "form",
-                "form-tool",
-                self.designing.is_some(),
+            .child(
+                button(n + 3, "drop", None, "page-marks", self.marking.is_some())
+                    .on_click(cx.listener(|this, _, _, cx| this.toggle_marking(cx))),
             )
-            .on_click(cx.listener(|this, _, _, cx| this.toggle_designing(cx))),
-        );
-        row = row.child(
-            button(
-                Adding::ALL.len() + 4,
-                "link",
-                "link-tool",
-                self.linking.is_some(),
+            .child(
+                button(n + 4, "grid", None, "grid-tool", self.gridded).on_click(cx.listener(
+                    |this, _, _, cx| {
+                        this.gridded = !this.gridded;
+                        cx.notify();
+                    },
+                )),
             )
-            .on_click(cx.listener(|this, _, _, cx| this.toggle_linking(cx))),
-        );
-        row = row.child(
-            button(
-                Adding::ALL.len() + 5,
-                "view-grid",
-                "grid-tool",
-                self.gridded,
-            )
-            .on_click(cx.listener(|this, _, _, cx| {
-                this.gridded = !this.gridded;
-                cx.notify();
-            })),
-        );
-        row = row.child(separator(th));
+            .child(float::vsep(&th));
         for (i, ink) in INKS.into_iter().enumerate() {
-            let on = self.ink == i;
+            let fill: gpui::Hsla = colour(ink).into();
             row = row.child(
-                div()
-                    .id(("ink", i))
-                    .size(px(28.0))
-                    .flex_none()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .rounded_full()
-                    .cursor_pointer()
-                    .when(on, |d| {
-                        d.border_2().border_color(gpui::rgba(th.katna.accent))
-                    })
-                    .hover(move |s| s.bg(th.hover))
-                    .tip(t("tool-colour", &[]), &th.katna)
+                float::swatch(("ink", i), fill, self.ink == i, &th)
+                    .ftip(t("tool-colour", &[]), &th)
                     .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| {
                         this.ink = i;
                         // A shape picked, or the paragraph being typed
@@ -226,15 +214,7 @@ impl Viewer {
                         this.colour_picked(ink, event.modifiers().shift, cx);
                         this.colour_typed(ink, cx);
                         cx.notify();
-                    }))
-                    .child(
-                        div()
-                            .size(px(18.0))
-                            .rounded_full()
-                            .border_1()
-                            .border_color(th.line)
-                            .bg(colour(ink)),
-                    ),
+                    })),
             );
         }
         Some(row.into_any_element())
@@ -242,33 +222,55 @@ impl Viewer {
 
     /// A row under the row of tools: the paragraph being typed in, or
     /// the objects picked, and what can be done with them.
-    pub(super) fn object_row(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+    pub(super) fn object_row(&self) -> Option<AnyElement> {
         if !self.text_editing || !matches!(self.content, Content::Ready(_)) {
             return None;
         }
         let th = self.theme;
-        // With none picked, how to pick them, so the page does not jump
-        // when the row comes and goes.
-        let inspector = self
-            .text_inspector(cx)
-            .or_else(|| self.inspector(cx))
-            .unwrap_or_else(|| {
-                div()
-                    .text_size(px(katna_ui::tokens::text::SMALL))
-                    .text_color(gpui::rgba(th.katna.text_dim))
-                    .child(t("object-row-hint", &[]))
-                    .into_any_element()
-            });
+        if self.picked_object.is_some() {
+            return None;
+        }
+        // With none picked, how to pick them, as a hint over the tray;
+        // the paragraph being typed in has its own bar over it.
+        if self.typing.is_some() || self.adding.is_some() {
+            return None;
+        }
         Some(
             div()
-                .id("object-tools")
-                .min_h(px(44.0))
-                .py(px(space::S1))
-                .flex_shrink_0()
-                .flex()
-                .items_center()
-                .gap(px(space::S1))
                 .px(px(space::S3))
+                .py(px(6.0))
+                .rounded(px(8.0))
+                .bg(th.inverse)
+                .text_color(th.on_inverse)
+                .text_size(px(katna_ui::tokens::text::CAPTION))
+                .child(t("object-row-hint", &[]))
+                .into_any_element(),
+        )
+    }
+
+    /// The card for the objects picked (E07), at the top right of the
+    /// pages, no taller than `room`.
+    pub(super) fn object_card(&self, room: f32, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if !self.text_editing || !matches!(self.content, Content::Ready(_)) {
+            return None;
+        }
+        let inspector = self.inspector(cx)?;
+        let th = self.theme;
+        Some(
+            div()
+                .id("object-card")
+                .occlude()
+                .absolute()
+                .top(px(space::S2))
+                .right(px(float::GAP))
+                .w(px(272.0))
+                .max_h(px(room))
+                .overflow_y_scroll()
+                .p(px(space::S3))
+                .rounded(px(10.0))
+                .bg(th.card)
+                .shadow(th.lifted())
+                .when(th.dark, |d| d.border_1().border_color(th.line))
                 .child(inspector)
                 .into_any_element(),
         )

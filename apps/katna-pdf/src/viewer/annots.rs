@@ -8,17 +8,17 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use gpui::{AnyElement, Context, Focusable, Window, div, prelude::*};
+use gpui::{AnyElement, Context, Focusable, SharedString, Window, div, prelude::*};
 use katna_pdf_cos::{AnnotChanges, AnnotKind, Annotation, Ref};
 use katna_pdf_render::Document;
 use katna_ui::px;
 use katna_ui::scale::desktop_px;
 use katna_ui::text_input::{InputEvent, TextInput};
-use katna_ui::tokens::{radius, space};
-use katna_ui::widgets::{self, Tip};
+use katna_ui::tokens::radius;
 
-use super::{Content, PaneTab, Viewer, separator};
+use super::{Content, PaneTab, Viewer};
 use crate::annotate::{self, COLOURS, Inverse, Tool};
+use crate::float::{self, FloatTip};
 use crate::text::t;
 
 /// An annotation being drawn with the pointer: its page and the
@@ -89,58 +89,41 @@ impl Viewer {
             return None;
         }
         let th = self.theme;
-        let mut row = div()
-            .id("annotation-tools")
-            .h(px(44.0))
-            .flex_shrink_0()
-            .flex()
-            .items_center()
-            .gap(px(space::S1))
-            .px(px(space::S3))
-            .overflow_x_scroll();
+        let mut row = float::tray("annotation-tools", &th);
         for (i, tool) in Tool::ALL.into_iter().enumerate() {
             let on = self.tool == Some(tool);
-            let colour = if on {
-                th.katna.accent
-            } else {
-                th.katna.text_dim
-            };
-            if i == 4 || i == 8 || i == 17 {
-                row = row.child(separator(th));
+            if i == 4 || i == 8 || i == 15 || i == 17 {
+                row = row.child(float::vsep(&th));
             }
             row = row.child(
-                widgets::icon_button_colored(("tool", i), tool.icon(), 18.0, colour, &th.katna)
-                    .when(on, |b| b.bg(th.field))
-                    .tip(t(tool.tip(), &[]), &th.katna)
-                    .on_click(cx.listener(move |this, _, _, cx| this.pick_tool(tool, cx))),
+                float::dk(
+                    ("tool", i),
+                    tool.icon(),
+                    on.then(|| SharedString::from(t(tool.name(), &[]))),
+                    t(tool.tip(), &[]),
+                    if on {
+                        float::Pressed::Tool
+                    } else {
+                        float::Pressed::No
+                    },
+                    &th,
+                )
+                .on_click(cx.listener(move |this, _, _, cx| this.pick_tool(tool, cx))),
             );
         }
-        row = row.child(separator(th));
+        row = row.child(float::vsep(&th));
         for (i, [r, g, b]) in COLOURS.into_iter().enumerate() {
-            let on = self.colour == i;
-            let fill = gpui::rgb(u32::from_be_bytes([
+            let fill: gpui::Hsla = gpui::rgb(u32::from_be_bytes([
                 0,
                 (r * 255.0) as u8,
                 (g * 255.0) as u8,
                 (b * 255.0) as u8,
-            ]));
+            ]))
+            .into();
             row = row.child(
-                div()
-                    .id(("colour", i))
-                    .size(px(28.0))
-                    .flex_none()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .rounded_full()
-                    .cursor_pointer()
-                    .when(on, |d| {
-                        d.border_2().border_color(gpui::rgba(th.katna.accent))
-                    })
-                    .hover(move |s| s.bg(th.hover))
-                    .tip(t("tool-colour", &[]), &th.katna)
-                    .on_click(cx.listener(move |this, _, _, cx| this.pick_colour(i, cx)))
-                    .child(div().size(px(18.0)).rounded_full().bg(fill)),
+                float::swatch(("colour", i), fill, self.colour == i, &th)
+                    .ftip(t("tool-colour", &[]), &th)
+                    .on_click(cx.listener(move |this, _, _, cx| this.pick_colour(i, cx))),
             );
         }
         Some(row.into_any_element())

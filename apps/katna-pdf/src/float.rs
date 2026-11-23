@@ -187,6 +187,75 @@ pub fn bar_shell(th: &Theme, radius_px: f32) -> Div {
         .whitespace_nowrap()
 }
 
+/// A mode's tool tray (C01, E01): a bar over the dock that scrolls
+/// sideways when the window is too narrow for it.
+pub fn tray(id: impl Into<ElementId>, th: &Theme) -> Stateful<Div> {
+    bar_shell(th, 12.0)
+        .id(id)
+        .occlude()
+        .max_w_full()
+        .flex_none()
+        .overflow_x_scroll()
+}
+
+/// A colour to pick in a tray: a dot, ringed when it is the one picked.
+pub fn swatch(id: impl Into<ElementId>, fill: Hsla, on: bool, th: &Theme) -> Stateful<Div> {
+    let hover = th.hover;
+    div()
+        .id(id)
+        .size(px(26.0))
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded_full()
+        .cursor_pointer()
+        .when(on, |d| d.border_2().border_color(th.text))
+        .when(!on, |d| d.hover(move |s| s.bg(hover)))
+        .child(
+            div()
+                .size(px(16.0))
+                .rounded_full()
+                .border_1()
+                .border_color(th.line)
+                .bg(fill),
+        )
+}
+
+/// An on and off switch (`.sw`).
+pub fn switch(id: impl Into<ElementId>, on: bool, th: &Theme) -> Stateful<Div> {
+    div()
+        .id(id)
+        .w(px(34.0))
+        .h(px(20.0))
+        .flex_none()
+        .p(px(2.0))
+        .flex()
+        .items_center()
+        .when(on, |d| d.justify_end())
+        .rounded_full()
+        .cursor_pointer()
+        .bg(if on { th.accent } else { th.line })
+        .child(div().size(px(16.0)).rounded_full().bg(th.card).shadow_sm())
+}
+
+/// A card's row: its name on the left, what sets it on the right.
+pub fn field_row(words: impl Into<SharedString>, th: &Theme) -> Div {
+    div()
+        .min_h(px(32.0))
+        .flex()
+        .items_center()
+        .gap(px(space::S2))
+        .child(
+            div()
+                .w(px(64.0))
+                .flex_none()
+                .text_size(px(UI_TEXT))
+                .text_color(th.text2)
+                .child(words.into()),
+        )
+}
+
 /// A popover menu's box (`.pop`).
 pub fn menu(id: impl Into<ElementId>, width: f32, th: &Theme) -> Stateful<Div> {
     div()

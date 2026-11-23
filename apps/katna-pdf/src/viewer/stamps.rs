@@ -12,11 +12,11 @@ use katna_pdf_cos::{
 };
 use katna_ui::px;
 use katna_ui::text_input::{InputEvent, TextInput};
-use katna_ui::tokens::{radius, space, text};
-use katna_ui::widgets::{self, Tip};
+use katna_ui::tokens::{space, text};
 
 use super::Viewer;
 use crate::annotate::Tool;
+use crate::float::{self, FloatTip};
 use crate::text::t;
 
 /// Where the person's own stamps are kept, a line each.
@@ -85,96 +85,161 @@ impl Viewer {
             });
             self.stamp_input = Some((input, sub));
         }
-        let chip = |id: gpui::ElementId, label: String, on: bool| {
-            let chip = if on {
-                widgets::filled_button(id, label, &th.katna)
-            } else {
-                widgets::outlined_button(id, label, &th.katna)
-            };
-            chip.h(px(26.0))
-                .px(px(space::S3))
-                .text_size(px(text::SMALL))
+        let tab = self.stamp_tab;
+        let tabs = ["stamp-tab-standard", "stamp-tab-dated", "stamp-tab-mine"]
+            .into_iter()
+            .enumerate()
+            .map(|(i, words)| {
+                float::chip(("stamp-tab", i), t(words, &[]), tab == i, &th).on_click(cx.listener(
+                    move |this, _, _, cx| {
+                        this.stamp_tab = i;
+                        cx.notify();
+                    },
+                ))
+            });
+        // A stamp as it will look: its words in its colour, in a box of
+        // that colour.
+        let cell = |id: gpui::ElementId, name: &str, under: Option<String>, on: bool| {
+            let tone = tone(name, &th);
+            div()
+                .id(id)
+                .w(px(124.0))
+                .h(px(36.0))
+                .flex()
+                .flex_col()
+                .items_center()
+                .justify_center()
+                .rounded(px(4.0))
+                .border_2()
+                .border_color(tone)
+                .text_color(tone)
+                .text_size(px(text::CAPTION))
+                .font_weight(gpui::FontWeight::BOLD)
+                .cursor_pointer()
+                .overflow_hidden()
+                .when(on, |d| d.bg(tone.opacity(0.14)))
+                .hover(move |s| s.bg(tone.opacity(0.08)))
+                .child(div().truncate().px(px(space::S1)).child(stamp_label(name)))
+                .children(under.map(|u| {
+                    div()
+                        .text_size(px(10.0))
+                        .font_weight(gpui::FontWeight::MEDIUM)
+                        .child(u)
+                }))
         };
-        let mut row = div()
-            .flex_shrink_0()
-            .flex()
-            .flex_wrap()
-            .items_center()
-            .gap(px(space::S1))
-            .px(px(space::S3))
-            .py(px(space::S1));
-        for (i, name) in STAMPS.into_iter().enumerate() {
-            let on = self.stamp == name;
-            row = row.child(chip(("stamp", i).into(), stamp_label(name), on).on_click(
-                cx.listener(move |this, _, _, cx| {
-                    this.stamp = name.into();
-                    cx.notify();
-                }),
-            ));
-        }
-        row = row.child(super::separator(th));
-        for (i, name) in DYNAMIC_STAMPS.into_iter().enumerate() {
-            let on = self.stamp == name;
-            row = row.child(
-                chip(
-                    ("dynamic-stamp", i).into(),
-                    format!("{} +", stamp_label(name)),
-                    on,
-                )
-                .tip(t("stamp-dynamic-tip", &[]), &th.katna)
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.stamp = name.into();
-                    cx.notify();
-                })),
-            );
-        }
-        row = row.child(super::separator(th));
-        for (i, name) in self.custom_stamps.clone().into_iter().enumerate() {
-            let on = self.stamp == name;
-            let picked = name.clone();
-            row = row.child(
-                div()
-                    .flex()
-                    .items_center()
-                    .child(
-                        chip(("custom-stamp", i).into(), stamp_label(&name), on).on_click(
+        let mut grid = div().flex().flex_wrap().gap(px(space::S2));
+        match tab {
+            0 => {
+                for (i, name) in STAMPS.into_iter().enumerate() {
+                    grid = grid.child(
+                        cell(("stamp", i).into(), name, None, self.stamp == name).on_click(
                             cx.listener(move |this, _, _, cx| {
-                                this.stamp.clone_from(&picked);
+                                this.stamp = name.into();
                                 cx.notify();
                             }),
                         ),
-                    )
-                    .child(
-                        widgets::icon_button(("forget-stamp", i), "close", 14.0, &th.katna)
-                            .size(px(20.0))
-                            .tip(t("stamp-custom-remove", &[]), &th.katna)
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.custom_stamps.retain(|s| *s != name);
-                                save_custom(&this.custom_stamps);
-                                if this.stamp == name {
-                                    this.stamp = "Approved".into();
-                                }
-                                cx.notify();
-                            })),
-                    ),
-            );
+                    );
+                }
+            }
+            1 => {
+                let under = t("stamp-dated-under", &[]);
+                for (i, name) in DYNAMIC_STAMPS.into_iter().enumerate() {
+                    grid = grid.child(
+                        cell(
+                            ("dynamic-stamp", i).into(),
+                            name,
+                            Some(under.clone()),
+                            self.stamp == name,
+                        )
+                        .ftip(t("stamp-dynamic-tip", &[]), &th)
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.stamp = name.into();
+                            cx.notify();
+                        })),
+                    );
+                }
+            }
+            _ => {
+                for (i, name) in self.custom_stamps.clone().into_iter().enumerate() {
+                    let picked = name.clone();
+                    grid = grid.child(
+                        div()
+                            .relative()
+                            .child(
+                                cell(("custom-stamp", i).into(), &name, None, self.stamp == name)
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.stamp.clone_from(&picked);
+                                        cx.notify();
+                                    })),
+                            )
+                            .child(
+                                div().absolute().top(px(-6.0)).right(px(-6.0)).child(
+                                    div()
+                                        .id(("forget-stamp", i))
+                                        .size(px(18.0))
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .rounded_full()
+                                        .bg(th.inverse)
+                                        .cursor_pointer()
+                                        .ftip(t("stamp-custom-remove", &[]), &th)
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            this.custom_stamps.retain(|s| *s != name);
+                                            save_custom(&this.custom_stamps);
+                                            if this.stamp == name {
+                                                this.stamp = "Approved".into();
+                                            }
+                                            cx.notify();
+                                        }))
+                                        .child(float::icon("x", 11.0, th.on_inverse)),
+                                ),
+                            ),
+                    );
+                }
+                if let Some((input, _)) = &self.stamp_input {
+                    grid = grid.child(
+                        div()
+                            .w(px(256.0))
+                            .h(px(36.0))
+                            .flex()
+                            .items_center()
+                            .px(px(space::S3))
+                            .rounded(px(4.0))
+                            .border_1()
+                            .border_dashed()
+                            .border_color(th.line)
+                            .text_size(px(text::SMALL))
+                            .text_color(th.text)
+                            .child(input.clone()),
+                    );
+                }
+            }
         }
-        if let Some((input, _)) = &self.stamp_input {
-            row = row.child(
-                div()
-                    .w(px(220.0))
-                    .h(px(28.0))
-                    .flex()
-                    .items_center()
-                    .px(px(space::S3))
-                    .rounded(px(radius::SM))
-                    .bg(th.field)
-                    .text_size(px(text::SMALL))
-                    .text_color(th.text)
-                    .child(input.clone()),
-            );
-        }
-        Some(row.into_any_element())
+        Some(
+            div()
+                .id("stamp-card")
+                .occlude()
+                .w(px(420.0))
+                .max_w_full()
+                .p(px(space::S3))
+                .flex()
+                .flex_col()
+                .gap(px(space::S3))
+                .rounded(px(10.0))
+                .bg(th.card)
+                .shadow(th.lifted())
+                .when(th.dark, |d| d.border_1().border_color(th.line))
+                .child(div().flex().gap(px(space::S1)).children(tabs))
+                .child(grid)
+                .child(
+                    div()
+                        .text_size(px(text::CAPTION))
+                        .text_color(th.dim)
+                        .child(t("stamp-card-hint", &[])),
+                )
+                .into_any_element(),
+        )
     }
 
     /// Asks which file to attach as comment `a` (a paper clip placed on
@@ -280,5 +345,24 @@ impl Viewer {
             .ok();
         })
         .detach();
+    }
+}
+
+/// A stamp's colour in the card, by what it says.
+fn tone(name: &str, th: &crate::theme::Theme) -> gpui::Hsla {
+    let word = name.trim_start_matches("#D").to_ascii_lowercase();
+    if ["approved", "final", "received", "asis", "sold"]
+        .iter()
+        .any(|w| word == *w)
+    {
+        gpui::rgb(0x1f9d55).into()
+    } else if word.starts_with("not")
+        || ["confidential", "topsecret", "expired", "void", "rejected"]
+            .iter()
+            .any(|w| word == *w)
+    {
+        th.error
+    } else {
+        th.accent
     }
 }

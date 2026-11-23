@@ -27,9 +27,10 @@ use katna_ui::px;
 use katna_ui::scale::desktop_px;
 use katna_ui::text_input::{InputEvent, TextInput};
 use katna_ui::tokens::{radius, space, text};
-use katna_ui::widgets::{self, Tip};
+use katna_ui::widgets;
 
-use super::{Viewer, separator};
+use super::Viewer;
+use crate::float::{self, FloatTip};
 use crate::text::t;
 
 /// A drag shorter than this, in points, is a click.
@@ -1776,296 +1777,406 @@ impl Viewer {
         };
         let many = indices.len() > 1;
         let th = self.theme;
-        // Wrapping to a second line in a narrow window, so no tool is
-        // out of reach.
-        let mut row = div().flex().flex_wrap().items_center().gap(px(space::S1));
         let style = one.as_ref().and_then(|o| o.style.clone());
-        let labels = ["X", "Y", "W", "H", "∠", "─"];
-        for (i, (field, label)) in picked.fields.iter().zip(labels).enumerate() {
-            // The line width only for one shape.
-            if i == 5 && style.is_none() {
-                break;
-            }
-            row = row.child(
+        let title = match one.as_ref().map(|o| o.kind) {
+            _ if many => t("objcard-many", &[("count", &indices.len().to_string())]),
+            Some(ObjectKind::Picture) => t("objcard-picture", &[]),
+            Some(ObjectKind::Form) => t("objcard-drawing", &[]),
+            Some(ObjectKind::Text) => t("objcard-text", &[]),
+            _ => t("objcard-shape", &[]),
+        };
+        let input = |field: &gpui::Entity<katna_ui::text_input::TextInput>, label: &'static str| {
+            div()
+                .flex_1()
+                .min_w_0()
+                .h(px(30.0))
+                .pl(px(space::S2))
+                .flex()
+                .items_center()
+                .gap(px(space::S1))
+                .rounded(px(6.0))
+                .border_1()
+                .border_color(th.line)
+                .bg(th.card)
+                .text_size(px(text::SMALL))
+                .child(div().flex_none().text_color(th.dim).child(label))
+                .child(div().flex_1().min_w_0().child(field.clone()))
+        };
+        let f = &picked.fields;
+        let mut card = div()
+            .flex()
+            .flex_col()
+            .gap(px(space::S1))
+            .child(
                 div()
+                    .pb(px(space::S1))
                     .text_size(px(text::SMALL))
-                    .text_color(gpui::rgba(th.katna.text_dim))
-                    .child(label),
-            );
-            row = row.child(
+                    .font_weight(gpui::FontWeight::BOLD)
+                    .text_color(th.text)
+                    .child(title),
+            )
+            .child(
                 div()
-                    .w(px(44.0))
-                    .h(px(28.0))
-                    .px(px(space::S1))
                     .flex()
-                    .items_center()
-                    .rounded(px(katna_ui::tokens::radius::XS))
-                    .bg(th.field)
-                    .text_size(px(text::SMALL))
-                    .child(field.clone()),
+                    .gap(px(space::S1))
+                    .child(input(&f[0], "X"))
+                    .child(input(&f[1], "Y")),
+            )
+            .child(
+                div()
+                    .flex()
+                    .gap(px(space::S1))
+                    .child(input(&f[2], "W"))
+                    .child(input(&f[3], "H"))
+                    .child(input(&f[4], "∠")),
             );
-        }
-        let tool = |id: &'static str, icon: &'static str, tip: String| {
-            widgets::icon_button(id, icon, 18.0, &th.katna).tip(tip, &th.katna)
+        let tool = |id: &'static str, glyph: &'static str, tip: String| {
+            float::ib(id, glyph, tip, false, &th)
         };
         if let Some(style) = style {
-            let on = |on: bool| {
-                if on {
-                    th.katna.accent
-                } else {
-                    th.katna.text_dim
-                }
+            let style_change = |cap: Option<u8>, join: Option<u8>| ObjectChange::Style {
+                fill: None,
+                stroke: None,
+                width: None,
+                dash: None,
+                cap,
+                join,
             };
-            let toggle = |id: &'static str, icon: &'static str, lit: bool, tip: &'static str| {
-                widgets::icon_button_colored(id, icon, 18.0, on(lit), &th.katna)
-                    .when(lit, |b| b.bg(th.field))
-                    .tip(t(tip, &[]), &th.katna)
+            let fill_percent = one
+                .as_ref()
+                .map_or(100, |o| (o.opacity * 100.0).round() as u32);
+            let line_percent = (style.stroke_opacity * 100.0).round() as u32;
+            let dot = |c: Option<[f32; 3]>| {
+                let [r, g, b] = c.unwrap_or([1.0, 1.0, 1.0]);
+                div()
+                    .size(px(18.0))
+                    .flex_none()
+                    .rounded_full()
+                    .border_1()
+                    .border_color(th.line)
+                    .bg(gpui::rgb(u32::from_be_bytes([
+                        0,
+                        (r * 255.0) as u8,
+                        (g * 255.0) as u8,
+                        (b * 255.0) as u8,
+                    ])))
             };
-            row = row
+            let percent = |p: u32| {
+                div()
+                    .flex_1()
+                    .text_size(px(text::CAPTION))
+                    .text_color(th.dim)
+                    .child(format!("{p}%"))
+            };
+            let fill_next = less(one.as_ref().map_or(1.0, |o| o.opacity));
+            let line_next = less(style.stroke_opacity);
+            card = card
                 .child(
-                    toggle("object-fill", "fill", style.fill.is_some(), "object-fill")
-                        .on_click(cx.listener(|this, _, _, cx| this.toggle_fill(cx))),
+                    float::field_row(t("objcard-fill", &[]), &th)
+                        .child(dot(style.fill))
+                        .child(
+                            div()
+                                .id("object-fill-opacity")
+                                .flex_1()
+                                .cursor_pointer()
+                                .ftip(
+                                    t(
+                                        "object-fill-opacity",
+                                        &[("percent", &fill_percent.to_string())],
+                                    ),
+                                    &th,
+                                )
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.change_picked(
+                                        ObjectChange::Opacities {
+                                            fill: Some(fill_next),
+                                            stroke: None,
+                                        },
+                                        cx,
+                                    )
+                                }))
+                                .child(percent(fill_percent)),
+                        )
+                        .child(
+                            float::switch("object-fill", style.fill.is_some(), &th)
+                                .ftip(t("object-fill", &[]), &th)
+                                .on_click(cx.listener(|this, _, _, cx| this.toggle_fill(cx))),
+                        ),
                 )
                 .child(
-                    toggle(
-                        "object-stroke",
-                        "stroke",
-                        style.stroke.is_some(),
-                        "object-stroke",
-                    )
-                    .on_click(cx.listener(|this, _, _, cx| this.toggle_stroke(cx))),
+                    float::field_row(t("objcard-line", &[]), &th)
+                        .child(dot(style.stroke))
+                        .child(
+                            div()
+                                .id("object-line-opacity")
+                                .flex_1()
+                                .cursor_pointer()
+                                .ftip(
+                                    t(
+                                        "object-line-opacity",
+                                        &[("percent", &line_percent.to_string())],
+                                    ),
+                                    &th,
+                                )
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.change_picked(
+                                        ObjectChange::Opacities {
+                                            fill: None,
+                                            stroke: Some(line_next),
+                                        },
+                                        cx,
+                                    )
+                                }))
+                                .child(percent(line_percent)),
+                        )
+                        .child(
+                            float::switch("object-stroke", style.stroke.is_some(), &th)
+                                .ftip(t("object-stroke", &[]), &th)
+                                .on_click(cx.listener(|this, _, _, cx| this.toggle_stroke(cx))),
+                        ),
                 )
                 .child(
-                    toggle("object-dash", "dash", !style.dash.is_empty(), "object-dash")
-                        .on_click(cx.listener(|this, _, _, cx| this.toggle_dash(cx))),
+                    float::field_row(t("objcard-width", &[]), &th)
+                        .child(div().w(px(96.0)).child(input(&f[5], "pt"))),
                 );
-            // Its line's ends and corners, each clicked round to the next.
-            let cap = ["object-cap-butt", "object-cap-round", "object-cap-square"];
-            let join = [
-                "object-join-miter",
-                "object-join-round",
-                "object-join-bevel",
-            ];
-            let next_cap = (style.cap + 1) % 3;
-            let next_join = (style.join + 1) % 3;
-            row = row
+            let dashed = !style.dash.is_empty();
+            let seg_of = |id: &'static str, words: [&'static str; 3], now: u8, cap: bool| {
+                float::seg(&th)
+                    .flex_1()
+                    .children(words.into_iter().enumerate().map(|(i, w)| {
+                        let n = i as u8;
+                        float::seg_item((id, i), None, Some(t(w, &[]).into()), now == n, &th)
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.style_picked(
+                                    if cap {
+                                        style_change(Some(n), None)
+                                    } else {
+                                        style_change(None, Some(n))
+                                    },
+                                    cx,
+                                )
+                            }))
+                    }))
+            };
+            card = card
                 .child(
-                    tool(
-                        "object-cap",
-                        "line-cap",
-                        t(
-                            "object-cap",
-                            &[("how", &t(cap[usize::from(style.cap.min(2))], &[]))],
-                        ),
-                    )
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.style_picked(
-                            ObjectChange::Style {
-                                fill: None,
-                                stroke: None,
-                                width: None,
-                                dash: None,
-                                cap: Some(next_cap),
-                                join: None,
-                            },
-                            cx,
-                        )
-                    })),
+                    float::field_row(t("objcard-dashes", &[]), &th).child(
+                        float::seg(&th)
+                            .flex_1()
+                            .child(
+                                float::seg_item(
+                                    "object-solid",
+                                    None,
+                                    Some(t("objcard-solid", &[]).into()),
+                                    !dashed,
+                                    &th,
+                                )
+                                .when(dashed, |d| {
+                                    d.on_click(cx.listener(|this, _, _, cx| this.toggle_dash(cx)))
+                                }),
+                            )
+                            .child(
+                                float::seg_item(
+                                    "object-dash",
+                                    None,
+                                    Some(t("objcard-dashed", &[]).into()),
+                                    dashed,
+                                    &th,
+                                )
+                                .ftip(t("object-dash", &[]), &th)
+                                .when(!dashed, |d| {
+                                    d.on_click(cx.listener(|this, _, _, cx| this.toggle_dash(cx)))
+                                }),
+                            ),
+                    ),
                 )
+                .child(float::field_row(t("objcard-ends", &[]), &th).child(seg_of(
+                    "object-cap",
+                    ["objcard-flat", "objcard-round", "objcard-square"],
+                    style.cap.min(2),
+                    true,
+                )))
                 .child(
-                    tool(
+                    float::field_row(t("objcard-corners", &[]), &th).child(seg_of(
                         "object-join",
-                        "line-join",
-                        t(
-                            "object-join",
-                            &[("how", &t(join[usize::from(style.join.min(2))], &[]))],
-                        ),
-                    )
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.style_picked(
-                            ObjectChange::Style {
-                                fill: None,
-                                stroke: None,
-                                width: None,
-                                dash: None,
-                                cap: None,
-                                join: Some(next_join),
-                            },
-                            cx,
-                        )
-                    })),
+                        ["objcard-sharp", "objcard-round", "objcard-bevel"],
+                        style.join.min(2),
+                        false,
+                    )),
                 );
             if one.as_ref().is_some_and(|o| !o.points.is_empty()) {
-                row = row.child(
-                    toggle("object-points", "points", picked.points, "object-points")
-                        .on_click(cx.listener(|this, _, _, cx| this.toggle_points(cx))),
+                card = card.child(
+                    float::menu_item(
+                        "object-points",
+                        Some("points"),
+                        t("objcard-points", &[]),
+                        None,
+                        &th,
+                    )
+                    .when(picked.points, |d| {
+                        d.bg(th.accent_soft).text_color(th.accent_text)
+                    })
+                    .ftip(t("object-points", &[]), &th)
+                    .on_click(cx.listener(|this, _, _, cx| this.toggle_points(cx))),
                 );
             }
-            row = row.child(separator(th));
+        } else {
+            // A picture, or many at once, faded as a whole.
+            let opacity = one.as_ref().map_or(picked.opacity, |o| o.opacity);
+            let percent = (opacity * 100.0).round() as u32;
+            let next = less(opacity);
+            card = card.child(
+                float::field_row(t("objcard-see", &[]), &th).child(
+                    float::chip("object-opacity", format!("{percent}%"), false, &th)
+                        .ftip(
+                            t("object-opacity", &[("percent", &percent.to_string())]),
+                            &th,
+                        )
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.change_picked(ObjectChange::Opacity(next), cx)
+                        })),
+                ),
+            );
         }
+        card = card
+            .child(float::menu_sep(&th))
+            .child(float::heading(t("objcard-arrange", &[]), &th));
         let suffix = if many { "-together" } else { "-page" };
-        for (id, icon, how) in [
-            ("object-align-left", "align-left", Align::Left),
-            ("object-align-centre", "align-centre", Align::Centre),
-            ("object-align-right", "align-right", Align::Right),
-            ("object-align-top", "align-top", Align::Top),
-            ("object-align-middle", "align-middle", Align::Middle),
-            ("object-align-bottom", "align-bottom", Align::Bottom),
+        let mut align = div().flex().flex_wrap().gap(px(2.0));
+        for (id, glyph, how) in [
+            ("object-align-left", "oal", Align::Left),
+            ("object-align-centre", "oac", Align::Centre),
+            ("object-align-right", "oar", Align::Right),
+            ("object-align-top", "oat", Align::Top),
+            ("object-align-middle", "oam", Align::Middle),
+            ("object-align-bottom", "oab", Align::Bottom),
         ] {
-            row = row.child(
-                tool(id, icon, t(&format!("{id}{suffix}"), &[]))
+            align = align.child(
+                tool(id, glyph, t(&format!("{id}{suffix}"), &[]))
                     .on_click(cx.listener(move |this, _, _, cx| this.align_picked(how, cx))),
             );
         }
-        row = row
-            .child(separator(th))
-            .child(
-                tool("object-rotate", "rotate-cw", t("object-rotate", &[]))
-                    .on_click(cx.listener(|this, _, _, cx| this.rotate_picked(-90.0, cx))),
-            )
-            .child(
-                tool("object-flip-h", "flip-h", t("object-flip-h", &[]))
-                    .on_click(cx.listener(|this, _, _, cx| this.flip_picked(true, cx))),
-            )
-            .child(
-                tool("object-flip-v", "flip-v", t("object-flip-v", &[]))
-                    .on_click(cx.listener(|this, _, _, cx| this.flip_picked(false, cx))),
-            )
-            .child(
-                tool("object-fit", "fit-page", t("object-fit", &[]))
-                    .on_click(cx.listener(|this, _, _, cx| this.fit_picked(cx))),
-            )
-            .child(separator(th))
-            .child(
-                tool("object-forward", "step-forward", t("object-forward", &[])).on_click(
-                    cx.listener(|this, _, _, cx| this.change_picked(ObjectChange::Forward, cx)),
-                ),
-            )
-            .child(
-                tool("object-backward", "step-back", t("object-backward", &[])).on_click(
-                    cx.listener(|this, _, _, cx| this.change_picked(ObjectChange::Backward, cx)),
-                ),
-            )
-            .child(
-                tool("object-front", "to-front", t("object-front", &[])).on_click(
-                    cx.listener(|this, _, _, cx| this.change_picked(ObjectChange::Front, cx)),
-                ),
-            )
-            .child(
-                tool("object-back", "to-back", t("object-back", &[])).on_click(
+        card = card.child(align).child(
+            div()
+                .flex()
+                .flex_wrap()
+                .gap(px(2.0))
+                .child(
+                    tool("object-rotate", "rot", t("object-rotate", &[]))
+                        .on_click(cx.listener(|this, _, _, cx| this.rotate_picked(-90.0, cx))),
+                )
+                .child(
+                    tool("object-flip-h", "flip", t("object-flip-h", &[]))
+                        .on_click(cx.listener(|this, _, _, cx| this.flip_picked(true, cx))),
+                )
+                .child(
+                    tool("object-flip-v", "flipv", t("object-flip-v", &[]))
+                        .on_click(cx.listener(|this, _, _, cx| this.flip_picked(false, cx))),
+                )
+                .child(
+                    tool("object-fit", "expand", t("object-fit", &[]))
+                        .on_click(cx.listener(|this, _, _, cx| this.fit_picked(cx))),
+                )
+                .child(div().w_full())
+                .child(
+                    tool("object-forward", "fwd", t("object-forward", &[])).on_click(
+                        cx.listener(|this, _, _, cx| this.change_picked(ObjectChange::Forward, cx)),
+                    ),
+                )
+                .child(
+                    tool("object-backward", "bwd", t("object-backward", &[])).on_click(
+                        cx.listener(|this, _, _, cx| {
+                            this.change_picked(ObjectChange::Backward, cx)
+                        }),
+                    ),
+                )
+                .child(
+                    tool("object-front", "front", t("object-front", &[])).on_click(
+                        cx.listener(|this, _, _, cx| this.change_picked(ObjectChange::Front, cx)),
+                    ),
+                )
+                .child(tool("object-back", "back", t("object-back", &[])).on_click(
                     cx.listener(|this, _, _, cx| this.change_picked(ObjectChange::Back, cx)),
-                ),
-            );
-        // 100, 75, 50, 25, then fully again.
-        let less = |opacity: f32| if opacity <= 0.3 { 1.0 } else { opacity - 0.25 };
-        let opacity = one.as_ref().map_or(picked.opacity, |o| o.opacity);
-        let percent = (opacity * 100.0).round() as u32;
-        let next = less(opacity);
-        // A shape's inside apart from its line; a picture, or many
-        // objects at once, as a whole.
-        let shape = one.as_ref().is_some_and(|o| o.style.is_some());
-        row = row.child(
-            tool(
-                "object-opacity",
-                "contrast",
-                t(
-                    if shape {
-                        "object-fill-opacity"
-                    } else {
-                        "object-opacity"
-                    },
-                    &[("percent", &percent.to_string())],
-                ),
-            )
-            .on_click(cx.listener(move |this, _, _, cx| {
-                this.change_picked(
-                    if shape {
-                        ObjectChange::Opacities {
-                            fill: Some(next),
-                            stroke: None,
-                        }
-                    } else {
-                        ObjectChange::Opacity(next)
-                    },
-                    cx,
-                )
-            })),
+                )),
         );
-        if let Some(stroke_opacity) = one
-            .as_ref()
-            .and_then(|o| o.style.as_ref())
-            .filter(|s| s.stroke.is_some())
-            .map(|s| s.stroke_opacity)
-        {
-            let percent = (stroke_opacity * 100.0).round() as u32;
-            let next = less(stroke_opacity);
-            row = row.child(
-                tool(
-                    "object-line-opacity",
-                    "line-opacity",
-                    t("object-line-opacity", &[("percent", &percent.to_string())]),
-                )
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.change_picked(
-                        ObjectChange::Opacities {
-                            fill: None,
-                            stroke: Some(next),
-                        },
-                        cx,
-                    )
-                })),
-            );
-        }
+        card = card.child(float::menu_sep(&th));
         if one.as_ref().is_some_and(|o| o.kind == ObjectKind::Picture) {
-            row = row
+            card = card
                 .child(
-                    tool("object-replace", "image", t("object-replace", &[]))
-                        .on_click(cx.listener(|this, _, _, cx| this.replace_picked(cx))),
+                    float::menu_item(
+                        "object-replace",
+                        Some("replace"),
+                        t("objcard-replace", &[]),
+                        None,
+                        &th,
+                    )
+                    .ftip(t("object-replace", &[]), &th)
+                    .on_click(cx.listener(|this, _, _, cx| this.replace_picked(cx))),
                 )
                 .child(
-                    tool(
+                    float::menu_item(
                         "object-save-picture",
-                        "download",
+                        Some("download"),
                         t("object-save-picture", &[]),
+                        None,
+                        &th,
                     )
                     .on_click(cx.listener(|this, _, _, cx| this.save_picked_picture(cx))),
                 );
         }
         if one.as_ref().is_some_and(|o| o.clipped) {
-            row = row.child(
-                tool("object-unclip", "crop", t("object-unclip", &[]))
-                    .on_click(cx.listener(|this, _, _, cx| this.unclip_picked(cx))),
+            card = card.child(
+                float::menu_item(
+                    "object-unclip",
+                    Some("crop"),
+                    t("objcard-unclip", &[]),
+                    None,
+                    &th,
+                )
+                .ftip(t("object-unclip", &[]), &th)
+                .on_click(cx.listener(|this, _, _, cx| this.unclip_picked(cx))),
             );
         }
         let layer = self.picked_layer();
-        let layer_tip = match layer.and_then(|id| self.extras.layers.iter().find(|l| l.id == id)) {
-            Some(l) => t("object-layer", &[("name", &l.name)]),
+        let layer_name = layer
+            .and_then(|id| self.extras.layers.iter().find(|l| l.id == id))
+            .map(|l| l.name.clone());
+        let layer_tip = match &layer_name {
+            Some(name) => t("object-layer", &[("name", name)]),
             None => t("object-layer-none", &[]),
         };
-        row = row.child(
-            widgets::icon_button_colored(
-                "object-layer",
-                "layers",
-                18.0,
-                if layer.is_some() {
-                    th.katna.accent
-                } else {
-                    th.katna.text_dim
-                },
-                &th.katna,
+        card = card
+            .child(
+                float::menu_item(
+                    "object-layer",
+                    Some("layers"),
+                    layer_name.unwrap_or_else(|| t("objcard-no-layer", &[])),
+                    None,
+                    &th,
+                )
+                .ftip(layer_tip, &th)
+                .on_click(cx.listener(|this, _, _, cx| this.cycle_picked_layer(cx))),
             )
-            .tip(layer_tip, &th.katna)
-            .on_click(cx.listener(|this, _, _, cx| this.cycle_picked_layer(cx))),
-        );
-        row = row.child(
-            widgets::icon_button("object-delete", "trash", 18.0, &th.katna)
-                .tip(t("object-delete", &[]), &th.katna)
+            .child(
+                float::menu_item(
+                    "object-delete",
+                    Some("trash"),
+                    t("objcard-delete", &[]),
+                    Some("Del".into()),
+                    &th,
+                )
+                .text_color(th.error)
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.delete_picked_object(cx);
                 })),
-        );
-        Some(row.into_any_element())
+            );
+        Some(card.into_any_element())
     }
+}
+
+/// 100, 75, 50, 25 % see-through, then fully again.
+fn less(opacity: f32) -> f32 {
+    if opacity <= 0.3 { 1.0 } else { opacity - 0.25 }
 }
 
 /// A picture as a file's bytes and the file's extension: a JPEG as it
