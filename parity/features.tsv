@@ -90,7 +90,7 @@ view.dynamic-zoom	view	Dynamic zoom (drag to zoom)	reader	n	todo	P2	-		acrobat
 view.loupe	view	Loupe magnifier tool	reader	n	todo	P1	-		acrobat
 view.pan-and-zoom	view	Pan and zoom overview window	reader	n	todo	P2	-		acrobat
 view.hand-tool	view	Hand tool for panning	reader	y	shipped	P0	#93		acrobat
-view.rotate-view	view	Rotate the view without changing the file	reader	y	todo	P0	-		acrobat
+view.rotate-view	view	Rotate the view without changing the file	reader	y	shipped	P0	#139	Ctrl+R, Ctrl+Shift+R; render turned.rs	acrobat
 view.read-mode	view	Read mode (hide tool chrome)	reader	n	partial	P1	-	tab bar hides with one file; no read mode toggle	acrobat
 view.full-screen	view	Full screen mode	reader	y	shipped	P1	#86 F5		acrobat
 view.full-screen-presentation	view	Full-screen presentation options (auto-advance, loop, click to advance)	reader	n	shipped	P1	#86 present.rs	/Trans, /Dur, black/white screen	acrobat
