@@ -12,11 +12,12 @@ use katna_pdf_cos::{AnnotChanges, AnnotKind, Annotation, REVIEW_STATES, Ref, ann
 use katna_ui::px;
 use katna_ui::text_input::{InputEvent, TextInput};
 use katna_ui::tokens::{radius, space, text};
-use katna_ui::widgets::{self, Tip};
+use katna_ui::widgets;
 
 use super::{PaneTab, Viewer};
-use crate::annotate;
+use crate::float::{self, FloatTip};
 use crate::text::t;
+use crate::theme::Theme;
 
 /// A reply being typed to annotation `to`.
 pub(super) struct Reply {
@@ -358,61 +359,130 @@ impl Viewer {
         .detach();
     }
 
-    /// The buttons above the comments list.
+    /// The head of the comments tab (C03): how many there are, and a menu
+    /// of what can be done with all of them.
     pub(super) fn comment_actions(&self, cx: &mut Context<Self>) -> AnyElement {
         let th = self.theme;
-        let page = self.current_page();
-        let button = |id: &'static str, icon: &'static str, tip: &str| {
-            widgets::icon_button(id, icon, 16.0, &th.katna)
-                .size(px(28.0))
-                .tip(t(tip, &[]), &th.katna)
-        };
-        let filtering = self.comment_filter.shown;
+        let count = self
+            .annots
+            .iter()
+            .flat_map(|all| all.iter().flatten())
+            .filter(|a| a.id.is_some() && a.reply_to.is_none() && a.state.is_none())
+            .count();
         div()
             .h(px(40.0))
             .flex_shrink_0()
             .flex()
             .items_center()
             .justify_between()
-            .px(px(space::S2))
-            .border_b_1()
-            .border_color(th.line_soft)
+            .pl(px(space::S3))
+            .pr(px(space::S2))
             .child(
-                widgets::icon_button_colored(
-                    "comments-filter",
-                    "filter",
-                    18.0,
-                    if filtering {
-                        th.katna.accent
-                    } else {
-                        th.katna.text_dim
+                div()
+                    .text_size(px(text::MICRO))
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .text_color(th.dim)
+                    .child(t("comments-head", &[("n", &count.to_string())]).to_uppercase()),
+            )
+            .child(
+                div()
+                    .relative()
+                    .child(
+                        float::sized_ib(
+                            "comments-more",
+                            "more",
+                            28.0,
+                            16.0,
+                            t("comments-more", &[]),
+                            self.comments_menu,
+                            &th,
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.comments_menu = !this.comments_menu;
+                            cx.notify();
+                        })),
+                    )
+                    .when(self.comments_menu, |d| {
+                        d.child(float::popover(self.comments_menu_card(cx), false, false))
+                    }),
+            )
+            .into_any_element()
+    }
+
+    /// The menu of the comments tab: the filter, saving and bringing in,
+    /// and deleting all.
+    fn comments_menu_card(&self, cx: &mut Context<Self>) -> AnyElement {
+        let th = self.theme;
+        let page = self.current_page();
+        let item = |id: &'static str, glyph: &'static str| {
+            float::menu_item(id, Some(glyph), t(id, &[]), None, &th)
+        };
+        let hover = th.hover;
+        let danger = |id: &'static str| {
+            div()
+                .id(id)
+                .h(px(32.0))
+                .flex()
+                .items_center()
+                .gap(px(10.0))
+                .px(px(10.0))
+                .rounded(px(5.0))
+                .text_size(px(text::SMALL))
+                .text_color(th.error)
+                .cursor_pointer()
+                .hover(move |s| s.bg(hover))
+                .child(float::icon("trash", 16.0, th.error))
+                .child(t(id, &[]))
+        };
+        let close = |this: &mut Viewer| this.comments_menu = false;
+        float::menu("comments-menu", 280.0, &th)
+            .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+                this.comments_menu = false;
+                cx.notify();
+            }))
+            .child(float::heading(
+                t("comments-menu-head", &[]).to_uppercase(),
+                &th,
+            ))
+            .child(item("comments-menu-filter", "filter").on_click(cx.listener(
+                move |this, _, _, cx| {
+                    close(this);
+                    this.toggle_comment_filter(cx);
+                },
+            )))
+            .child(item("comments-menu-text", "file").on_click(cx.listener(
+                move |this, _, _, cx| {
+                    close(this);
+                    this.export_text(cx);
+                },
+            )))
+            .child(item("comments-menu-export", "upload").on_click(cx.listener(
+                move |this, _, _, cx| {
+                    close(this);
+                    this.export_xfdf(cx);
+                },
+            )))
+            .child(
+                item("comments-menu-import", "download").on_click(cx.listener(
+                    move |this, _, _, cx| {
+                        close(this);
+                        this.import_xfdf(cx);
                     },
-                    &th.katna,
-                )
-                .size(px(32.0))
-                .tip(t("comments-filter", &[]), &th.katna)
-                .on_click(cx.listener(|this, _, _, cx| this.toggle_comment_filter(cx))),
+                )),
             )
-            .child(
-                button("comments-text", "document", "comments-text")
-                    .on_click(cx.listener(|this, _, _, cx| this.export_text(cx))),
-            )
-            .child(
-                button("comments-import", "upload", "comments-import")
-                    .on_click(cx.listener(|this, _, _, cx| this.import_xfdf(cx))),
-            )
-            .child(
-                button("comments-export", "download", "comments-export")
-                    .on_click(cx.listener(|this, _, _, cx| this.export_xfdf(cx))),
-            )
-            .child(
-                button("comments-delete-page", "trash", "comments-delete-page")
-                    .on_click(cx.listener(move |this, _, _, cx| this.delete_all(Some(page), cx))),
-            )
-            .child(
-                button("comments-delete-all", "close", "comments-delete-all")
-                    .on_click(cx.listener(|this, _, _, cx| this.delete_all(None, cx))),
-            )
+            .child(float::menu_sep(&th))
+            .child(danger("comments-menu-delete-page").on_click(cx.listener(
+                move |this, _, _, cx| {
+                    close(this);
+                    this.delete_all(Some(page), cx);
+                },
+            )))
+            .child(danger("comments-menu-delete-all").on_click(cx.listener(
+                move |this, _, _, cx| {
+                    close(this);
+                    this.delete_all(None, cx);
+                },
+            )))
             .into_any_element()
     }
 
@@ -562,7 +632,65 @@ impl Viewer {
             .into_any_element()
     }
 
-    /// The comments list: each annotation with its replies under it.
+    /// The quick chips over the list: all, the ones with no status yet,
+    /// and each author's.
+    fn quick_chips(&self, all: &[Vec<Annotation>], cx: &mut Context<Self>) -> AnyElement {
+        let th = self.theme;
+        let f = &self.comment_filter;
+        let mut authors: Vec<String> = all
+            .iter()
+            .flatten()
+            .filter(|a| a.state.is_none() && a.reply_to.is_none() && !a.author.is_empty())
+            .map(|a| a.author.clone())
+            .collect();
+        authors.sort_unstable();
+        authors.dedup();
+        let none = f.kind.is_none() && f.author.is_none() && f.status.is_none();
+        let mut row = div()
+            .flex()
+            .flex_wrap()
+            .gap(px(space::S1))
+            .px(px(space::S3))
+            .pb(px(space::S2))
+            .child(
+                float::chip("comments-all", t("comments-all", &[]), none, &th).on_click(
+                    cx.listener(|this, _, _, cx| {
+                        this.comment_filter.kind = None;
+                        this.comment_filter.author = None;
+                        this.comment_filter.status = None;
+                        cx.notify();
+                    }),
+                ),
+            )
+            .child(
+                float::chip(
+                    "comments-open",
+                    t("comments-open", &[]),
+                    f.status == Some(StatusPick::Open),
+                    &th,
+                )
+                .on_click(cx.listener(|this, _, _, cx| {
+                    let f = &mut this.comment_filter;
+                    f.status = (f.status != Some(StatusPick::Open)).then_some(StatusPick::Open);
+                    cx.notify();
+                })),
+            );
+        for (i, author) in authors.into_iter().enumerate() {
+            let on = f.author.as_deref() == Some(author.as_str());
+            row = row.child(
+                float::chip(("comments-by", i), author.clone(), on, &th).on_click(cx.listener(
+                    move |this, _, _, cx| {
+                        this.comment_filter.author = (!on).then(|| author.clone());
+                        cx.notify();
+                    },
+                )),
+            );
+        }
+        row.into_any_element()
+    }
+
+    /// The comments list: a card for each, its replies counted under it
+    /// and shown when it is chosen.
     pub(super) fn comments(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let th = self.theme;
         let Some(all) = self.annots.clone() else {
@@ -570,12 +698,14 @@ impl Viewer {
         };
         let mut list = div()
             .id("comments-list")
-            .size_full()
+            .flex_1()
+            .min_h_0()
             .overflow_y_scroll()
-            .py(px(space::S2))
+            .px(px(space::S2))
+            .pb(px(space::S2))
             .flex()
             .flex_col()
-            .gap(px(space::S1));
+            .gap(px(space::S2));
         let mut any = false;
         let mut hidden_by_filter = 0;
         let words = self.comment_words(cx);
@@ -594,32 +724,30 @@ impl Viewer {
                     hidden_by_filter += 1;
                     continue;
                 }
-                let status = annotation_status(&all, id);
-                list = list.child(self.comment_row(a, page, status, false, window, cx));
                 // Replies, and replies to them, in the file's order.
                 let mut parents = vec![id];
-                let mut shown = Vec::new();
+                let mut replies: Vec<Annotation> = Vec::new();
                 while let Some(parent) = parents.pop() {
                     for reply in annots
                         .iter()
                         .filter(|r| r.state.is_none() && r.reply_to == Some(parent))
                     {
                         if let Some(rid) = reply.id
-                            && !shown.contains(&rid)
+                            && !replies.iter().any(|r| r.id == Some(rid))
                         {
-                            shown.push(rid);
                             parents.push(rid);
-                            list =
-                                list.child(self.comment_row(reply, page, None, true, window, cx));
+                            replies.push(reply.clone());
                         }
                     }
                 }
+                let status = annotation_status(&all, id);
+                list = list.child(self.comment_card(a, page, status, &replies, window, cx));
             }
         }
         if !any {
             list = list.child(
                 div()
-                    .px(px(space::S4))
+                    .px(px(space::S2))
                     .py(px(space::S4))
                     .text_size(px(text::SMALL))
                     .text_color(th.dim)
@@ -628,7 +756,7 @@ impl Viewer {
         } else if hidden_by_filter > 0 {
             list = list.child(
                 div()
-                    .px(px(space::S4))
+                    .px(px(space::S2))
                     .py(px(space::S2))
                     .text_size(px(text::SMALL))
                     .text_color(th.dim)
@@ -642,25 +770,25 @@ impl Viewer {
             .comment_filter
             .shown
             .then(|| self.filter_rows(&all, cx));
+        let chips = (!self.comment_filter.shown && any).then(|| self.quick_chips(&all, cx));
         div()
             .size_full()
             .flex()
             .flex_col()
             .children(filters)
+            .children(chips)
             .child(list)
             .into_any_element()
     }
 
-    /// One comment in the list; `reply` ones sit indented under what
-    /// they answer. The chosen one shows its comment being typed, its
-    /// status chips and its buttons.
-    #[allow(clippy::too_many_arguments)]
-    fn comment_row(
+    /// One comment's card. The chosen one opens: its comment being
+    /// typed, its replies, a reply box, its status and its buttons.
+    fn comment_card(
         &self,
         a: &Annotation,
         page: usize,
         status: Option<&str>,
-        reply: bool,
+        replies: &[Annotation],
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
@@ -669,48 +797,89 @@ impl Viewer {
             return div().into_any_element();
         };
         let chosen = self.chosen == Some(id);
-        let page_label = (page + 1).to_string();
-        let what = if !a.contents.is_empty() {
-            a.contents.clone()
-        } else {
-            match &a.kind {
-                AnnotKind::Stamp(name) => katna_pdf_cos::stamp_label(name),
-                AnnotKind::FileAttachment { name, .. } => name.clone(),
-                kind => t(annotate::kind_message(kind), &[]),
-            }
-        };
-        let mut meta = t("comment-page", &[("page", &page_label)]);
-        if !a.author.is_empty() {
-            meta = format!("{meta} · {}", a.author);
-        }
-        if let Some(status) = status {
-            meta = format!("{meta} · {}", t(state_message(status), &[]));
-        }
         let [r, g, b] = a.colour;
-        let swatch = gpui::rgb(u32::from_be_bytes([
+        let tone: gpui::Hsla = gpui::rgb(u32::from_be_bytes([
             0,
             (r * 255.0) as u8,
             (g * 255.0) as u8,
             (b * 255.0) as u8,
-        ]));
-        let mark = |name: &'static str| {
+        ]))
+        .into();
+        // Notes are people talking: their name by a round mark. The rest
+        // are marks on the page: their kind by its icon.
+        let talk = matches!(
+            a.kind,
+            AnnotKind::Note | AnnotKind::FreeText { .. } | AnnotKind::FileAttachment { .. }
+        );
+        let who = if talk && !a.author.is_empty() {
+            a.author.clone()
+        } else if talk {
+            t("comment-someone", &[])
+        } else {
+            t(kind_name(&a.kind), &[])
+        };
+        let mark = if talk {
+            let initial = who.chars().next().unwrap_or('?').to_uppercase().to_string();
+            div()
+                .size(px(18.0))
+                .flex_none()
+                .rounded_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .bg(tone)
+                .text_size(px(10.0))
+                .font_weight(gpui::FontWeight::BOLD)
+                .text_color(if tone.l > 0.6 {
+                    gpui::black()
+                } else {
+                    gpui::white()
+                })
+                .child(initial)
+        } else {
             div()
                 .flex_none()
-                .child(widgets::icon(name, th.katna.text_dim, 14.0))
+                .child(float::icon(kind_icon(&a.kind), 15.0, tone))
         };
-        let mut row = div()
+        let mut meta = t("comment-page-short", &[("page", &(page + 1).to_string())]);
+        if let Some(age) = a.modified.as_deref().and_then(age) {
+            meta = format!("{meta} · {age}");
+        }
+        let what = if !a.contents.is_empty() {
+            if talk {
+                a.contents.clone()
+            } else {
+                format!("“{}”", a.contents)
+            }
+        } else {
+            match &a.kind {
+                AnnotKind::Stamp(name) => katna_pdf_cos::stamp_label(name),
+                AnnotKind::FileAttachment { name, .. } => name.clone(),
+                _ => String::new(),
+            }
+        };
+        let flag = |name: &'static str| float::icon(name, 13.0, th.dim);
+        let pill = status_pill(status, talk, &th);
+        let reply_count = (!replies.is_empty()).then(|| {
+            div()
+                .text_size(px(text::CAPTION))
+                .text_color(th.dim)
+                .child(if replies.len() == 1 {
+                    t("comment-one-reply", &[])
+                } else {
+                    t("comment-replies", &[("n", &replies.len().to_string())])
+                })
+        });
+        let mut card = div()
             .id(("comment", id.num as usize))
-            .ml(px(if reply { space::S6 } else { space::S2 }))
-            .mr(px(space::S2))
-            .px(px(space::S3))
-            .py(px(space::S2))
-            .rounded(px(radius::SM))
+            .flex_none()
             .flex()
             .flex_col()
-            .gap(px(space::S1))
+            .rounded(px(radius::SM))
+            .border_1()
+            .border_color(if chosen { th.accent } else { th.line })
+            .bg(th.card)
             .cursor_pointer()
-            .when(chosen, |d| d.bg(th.field))
-            .hover(move |s| s.bg(th.hover))
             .on_click(cx.listener(move |this, _, window, cx| {
                 this.choose(Some(id), cx);
                 this.edit_comment(window, cx);
@@ -718,144 +887,437 @@ impl Viewer {
             }))
             .child(
                 div()
+                    .px(px(space::S3))
+                    .py(px(space::S2))
                     .flex()
-                    .items_center()
-                    .gap(px(space::S2))
-                    .when(!reply, |d| {
-                        d.child(div().size(px(10.0)).flex_none().rounded_full().bg(swatch))
-                    })
+                    .flex_col()
+                    .gap(px(6.0))
                     .child(
                         div()
-                            .flex_1()
-                            .min_w_0()
-                            .overflow_hidden()
-                            .text_ellipsis()
-                            .whitespace_nowrap()
-                            .text_size(px(text::SMALL))
-                            .text_color(th.text)
-                            .child(what),
+                            .flex()
+                            .items_center()
+                            .gap(px(space::S2))
+                            .child(mark)
+                            .child(
+                                div()
+                                    .flex_none()
+                                    .max_w(px(120.0))
+                                    .truncate()
+                                    .text_size(px(text::SMALL))
+                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .text_color(th.text)
+                                    .child(who),
+                            )
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .truncate()
+                                    .text_size(px(text::CAPTION))
+                                    .text_color(th.dim)
+                                    .child(meta),
+                            )
+                            .when(a.flags.locked, |d| d.child(flag("lock")))
+                            .when(a.flags.hidden, |d| d.child(flag("eyeoff")))
+                            .when(!a.flags.print, |d| d.child(flag("print"))),
                     )
-                    .when(a.flags.locked, |d| d.child(mark("lock")))
-                    .when(a.flags.hidden, |d| d.child(mark("eye-off")))
-                    .when(!a.flags.print, |d| d.child(mark("print").opacity(0.4))),
-            )
-            .child(
-                div()
-                    .text_size(px(text::SMALL))
-                    .text_color(th.dim)
-                    .child(meta),
+                    .when(!what.is_empty() && !chosen, |d| {
+                        d.child(
+                            div()
+                                .text_size(px(text::SMALL))
+                                .text_color(if talk { th.text } else { th.text2 })
+                                .child(what.clone()),
+                        )
+                    })
+                    .when(pill.is_some() || reply_count.is_some(), |d| {
+                        d.child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(px(space::S2))
+                                .children(pill)
+                                .children(reply_count),
+                        )
+                    }),
             );
         if !chosen {
-            return row.into_any_element();
+            return card.into_any_element();
         }
-        let typing = |input: &Entity<TextInput>| {
+        let field = |input: &Entity<TextInput>| {
             div()
+                .flex_1()
+                .min_w_0()
+                .h(px(30.0))
+                .flex()
+                .items_center()
                 .px(px(space::S2))
-                .py(px(space::S1))
-                .rounded(px(radius::XS))
+                .rounded(px(radius::SM))
                 .bg(th.card)
                 .border_1()
-                .border_color(th.line)
+                .border_color(th.accent)
                 .text_size(px(text::SMALL))
                 .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .child(input.clone())
         };
-        if let Some(comment) = self.comment.as_ref().filter(|c| c.id == id) {
-            row = row.child(typing(&comment.input));
+        let mut open = div()
+            .px(px(space::S3))
+            .pb(px(space::S3))
+            .flex()
+            .flex_col()
+            .gap(px(space::S2))
+            .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation());
+        match self.comment.as_ref().filter(|c| c.id == id) {
+            Some(comment) => open = open.child(div().flex().child(field(&comment.input))),
+            None if !what.is_empty() => {
+                open = open.child(
+                    div()
+                        .text_size(px(text::SMALL))
+                        .text_color(th.text)
+                        .child(what),
+                )
+            }
+            None => {}
         }
-        if let Some(reply) = self.reply.as_ref().filter(|r| r.to == id) {
-            row = row.child(typing(&reply.input));
+        for reply in replies {
+            let mut head = reply.author.clone();
+            if head.is_empty() {
+                head = t("comment-someone", &[]);
+            }
+            open = open.child(
+                div()
+                    .ml(px(space::S2))
+                    .pl(px(space::S3))
+                    .border_l_2()
+                    .border_color(th.line)
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.0))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(space::S2))
+                            .child(
+                                div()
+                                    .text_size(px(text::CAPTION))
+                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .text_color(th.text)
+                                    .child(head),
+                            )
+                            .children(reply.modified.as_deref().and_then(age).map(|age| {
+                                div()
+                                    .text_size(px(text::CAPTION))
+                                    .text_color(th.dim)
+                                    .child(age)
+                            })),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(text::SMALL))
+                            .text_color(th.text)
+                            .child(reply.contents.clone()),
+                    ),
+            );
         }
-        if !reply {
-            let mut chips = div().flex().flex_wrap().gap(px(space::S1));
+        let replying = self.reply.as_ref().filter(|r| r.to == id);
+        let hover = th.hover;
+        let reply_box = match replying {
+            Some(reply) => field(&reply.input).into_any_element(),
+            None => div()
+                .id("comment-reply-box")
+                .flex_1()
+                .h(px(30.0))
+                .flex()
+                .items_center()
+                .px(px(space::S2))
+                .rounded(px(radius::SM))
+                .border_1()
+                .border_color(th.line)
+                .text_size(px(text::SMALL))
+                .text_color(th.dim)
+                .cursor_text()
+                .hover(move |s| s.bg(hover))
+                .child(t("comment-reply-placeholder", &[]))
+                .on_click(cx.listener(|this, _, window, cx| this.start_reply(window, cx)))
+                .into_any_element(),
+        };
+        let typing = replying.is_some();
+        open = open.child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(space::S2))
+                .child(reply_box)
+                .child(
+                    float::button("comment-reply", t("comment-reply", &[]), true, &th)
+                        .h(px(30.0))
+                        .px(px(space::S3))
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            if typing {
+                                this.finish_reply(true, cx);
+                            } else {
+                                this.start_reply(window, cx);
+                            }
+                        })),
+                ),
+        );
+        if talk || status.is_some() {
+            let mut chips = div()
+                .flex()
+                .flex_wrap()
+                .items_center()
+                .gap(px(space::S1))
+                .child(
+                    div()
+                        .mr(px(space::S1))
+                        .text_size(px(text::CAPTION))
+                        .text_color(th.dim)
+                        .child(t("comments-status", &[])),
+                )
+                .child(
+                    float::chip(
+                        "status-none",
+                        t("comments-status-none", &[]),
+                        status.is_none(),
+                        &th,
+                    )
+                    .on_click(cx.listener(|this, _, _, cx| this.set_status("None", cx))),
+                );
             for (i, state) in REVIEW_STATES.into_iter().enumerate() {
                 let on = status == Some(state);
                 chips = chips.child(
-                    self.chip(("status", i), t(state_message(state), &[]), on)
-                        .tip(t("comments-status-tip", &[]), &th.katna)
-                        .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    float::chip(("status", i), t(state_message(state), &[]), on, &th)
+                        .ftip(t("comments-status-tip", &[]), &th)
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.set_status(if on { "None" } else { state }, cx);
                         })),
                 );
             }
-            row = row.child(chips);
+            open = open.child(chips);
         }
         let locked = a.flags.locked;
-        let button = |id: &'static str, icon: &'static str, tip: &str| {
-            widgets::icon_button(id, icon, 18.0, &th.katna)
-                .tip(t(tip, &[]), &th.katna)
-                .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        let button = |id: &'static str, icon: &'static str, tip: &str, on: bool| {
+            float::sized_ib(id, icon, 28.0, 15.0, t(tip, &[]), on, &th)
         };
         let attachment = matches!(a.kind, AnnotKind::FileAttachment { .. });
-        row = row.child(
-            div()
-                .flex()
-                .items_center()
-                .justify_end()
-                .gap(px(space::S1))
-                .when(attachment, |d| {
-                    d.child(
-                        button("comment-save-file", "download", "comment-save-file")
-                            .on_click(cx.listener(|this, _, _, cx| this.save_attachment(cx))),
+        open =
+            open.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(space::S1))
+                    .pt(px(space::S1))
+                    .border_t_1()
+                    .border_color(th.line_soft)
+                    .when(attachment, |d| {
+                        d.child(
+                            button("comment-save-file", "download", "comment-save-file", false)
+                                .on_click(cx.listener(|this, _, _, cx| this.save_attachment(cx))),
+                        )
+                    })
+                    .child(
+                        button(
+                            "comment-lock",
+                            if locked { "lock" } else { "unlock" },
+                            if locked {
+                                "comment-unlock"
+                            } else {
+                                "comment-lock"
+                            },
+                            locked,
+                        )
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.change_flags(|f| f.locked = !locked, cx)
+                        })),
                     )
-                })
-                .child(
-                    button("comment-reply", "reply", "comment-reply")
-                        .on_click(cx.listener(|this, _, window, cx| this.start_reply(window, cx))),
-                )
-                .child(
-                    button(
-                        "comment-lock",
-                        "lock",
-                        if locked {
-                            "comment-unlock"
-                        } else {
-                            "comment-lock"
-                        },
-                    )
-                    .when(!locked, |b| b.opacity(0.5))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.change_flags(|f| f.locked = !locked, cx)
-                    })),
-                )
-                .child(
-                    button(
-                        "comment-hide",
-                        if a.flags.hidden { "eye-off" } else { "eye" },
-                        if a.flags.hidden {
-                            "comment-show"
-                        } else {
-                            "comment-hide"
-                        },
-                    )
-                    .on_click(
-                        cx.listener(|this, _, _, cx| {
+                    .child(
+                        button(
+                            "comment-hide",
+                            if a.flags.hidden { "eyeoff" } else { "eye" },
+                            if a.flags.hidden {
+                                "comment-show"
+                            } else {
+                                "comment-hide"
+                            },
+                            a.flags.hidden,
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| {
                             this.change_flags(|f| f.hidden = !f.hidden, cx)
-                        }),
-                    ),
-                )
-                .child(
-                    button(
-                        "comment-print",
-                        "print",
-                        if a.flags.print {
-                            "comment-print"
-                        } else {
-                            "comment-no-print"
-                        },
+                        })),
                     )
-                    .when(!a.flags.print, |b| b.opacity(0.5))
-                    .on_click(
-                        cx.listener(|this, _, _, cx| this.change_flags(|f| f.print = !f.print, cx)),
+                    .child(
+                        button(
+                            "comment-print",
+                            "print",
+                            if a.flags.print {
+                                "comment-print"
+                            } else {
+                                "comment-no-print"
+                            },
+                            !a.flags.print,
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.change_flags(|f| f.print = !f.print, cx)
+                        })),
+                    )
+                    .child(div().flex_1())
+                    .child(
+                        button("comment-delete", "trash", "comment-delete", false)
+                            .when(locked, |b| b.opacity(0.4))
+                            .on_click(cx.listener(|this, _, _, cx| this.delete_chosen(cx))),
                     ),
-                )
-                .child(
-                    button("comment-delete", "trash", "comment-delete")
-                        .when(locked, |b| b.opacity(0.4))
-                        .on_click(cx.listener(|this, _, _, cx| this.delete_chosen(cx))),
-                ),
-        );
-        row.into_any_element()
+            );
+        card = card.child(open);
+        card.into_any_element()
+    }
+}
+
+/// A comment's status as a small coloured pill: none for marks on the
+/// page with no status, "Open" for notes with none yet.
+fn status_pill(status: Option<&str>, talk: bool, th: &Theme) -> Option<gpui::Div> {
+    let (words, hue) = match status {
+        Some(state @ ("Accepted" | "Completed")) => (t(state_message(state), &[]), 0.39),
+        Some(state) => (t(state_message(state), &[]), 0.0),
+        None if talk => (t("comments-open", &[]), 0.11),
+        None => return None,
+    };
+    let (fg, bg) = if th.dark {
+        (
+            gpui::hsla(hue, 0.7, 0.7, 1.0),
+            gpui::hsla(hue, 0.6, 0.5, 0.18),
+        )
+    } else {
+        (
+            gpui::hsla(hue, 0.75, 0.3, 1.0),
+            gpui::hsla(hue, 0.8, 0.55, 0.18),
+        )
+    };
+    Some(
+        div()
+            .px(px(6.0))
+            .py(px(1.0))
+            .rounded(px(4.0))
+            .bg(bg)
+            .text_size(px(text::CAPTION))
+            .font_weight(gpui::FontWeight::SEMIBOLD)
+            .text_color(fg)
+            .child(words),
+    )
+}
+
+/// The icon of an annotation's kind, as its tool shows it.
+fn kind_icon(kind: &AnnotKind) -> &'static str {
+    use katna_pdf_cos::MarkupStyle;
+    match kind {
+        AnnotKind::Markup(MarkupStyle::Highlight, _) => "mark",
+        AnnotKind::Markup(MarkupStyle::Underline, _) => "under",
+        AnnotKind::Markup(MarkupStyle::StrikeOut, _) => "strike",
+        AnnotKind::Markup(MarkupStyle::Squiggly, _) => "squig",
+        AnnotKind::Note => "note",
+        AnnotKind::FreeText { .. } => "text",
+        AnnotKind::Ink(_) => "pen",
+        AnnotKind::Square { .. } => "sq",
+        AnnotKind::Circle { .. } => "circ",
+        AnnotKind::Line { arrow: false, .. } => "line",
+        AnnotKind::Line { arrow: true, .. } => "arrow",
+        AnnotKind::Polygon(_) | AnnotKind::PolyLine(_) => "polygon",
+        AnnotKind::Stamp(_) => "stamp",
+        AnnotKind::FileAttachment { .. } => "clip",
+        AnnotKind::Other(_) => "comment",
+    }
+}
+
+/// The short name of an annotation's kind.
+fn kind_name(kind: &AnnotKind) -> &'static str {
+    use katna_pdf_cos::MarkupStyle;
+    match kind {
+        AnnotKind::Markup(MarkupStyle::Highlight, _) => "tool-highlight-name",
+        AnnotKind::Markup(MarkupStyle::Underline, _) => "tool-underline-name",
+        AnnotKind::Markup(MarkupStyle::StrikeOut, _) => "tool-strikeout-name",
+        AnnotKind::Markup(MarkupStyle::Squiggly, _) => "tool-squiggly-name",
+        AnnotKind::Note => "tool-note-name",
+        AnnotKind::FreeText { .. } => "tool-free-text-name",
+        AnnotKind::Ink(_) => "tool-ink-name",
+        AnnotKind::Square { .. } => "tool-rectangle-name",
+        AnnotKind::Circle { .. } => "tool-ellipse-name",
+        AnnotKind::Line { arrow: false, .. } => "tool-line-name",
+        AnnotKind::Line { arrow: true, .. } => "tool-arrow-name",
+        AnnotKind::Polygon(_) | AnnotKind::PolyLine(_) => "tool-polygon-name",
+        AnnotKind::Stamp(_) => "tool-stamp-name",
+        AnnotKind::FileAttachment { .. } => "tool-attach-name",
+        AnnotKind::Other(_) => "annot-other",
+    }
+}
+
+/// How long ago a PDF date (`D:YYYYMMDDHHmmSS` and its offset) was:
+/// "now", minutes, hours, "yesterday", else the day.
+fn age(date: &str) -> Option<String> {
+    let then = pdf_time(date)?;
+    let secs = jiff::Timestamp::now().as_second() - then.as_second();
+    Some(match secs {
+        ..60 => t("comment-age-now", &[]),
+        60..3600 => t("comment-age-min", &[("n", &(secs / 60).to_string())]),
+        3600..86_400 => t("comment-age-h", &[("n", &(secs / 3600).to_string())]),
+        86_400..172_800 => t("comment-age-yesterday", &[]),
+        _ => then
+            .to_zoned(jiff::tz::TimeZone::system())
+            .strftime("%-d %b %Y")
+            .to_string(),
+    })
+}
+
+/// A PDF date as a moment: `D:YYYYMMDDHHmmSS` then `Z`, `+HH'mm'` or
+/// `-HH'mm'` (none read as UTC).
+fn pdf_time(date: &str) -> Option<jiff::Timestamp> {
+    let d = date.strip_prefix("D:").unwrap_or(date);
+    let digits: String = d.chars().take_while(char::is_ascii_digit).collect();
+    if digits.len() < 8 {
+        return None;
+    }
+    let n = |from: usize, len: usize, or: i32| -> i32 {
+        digits
+            .get(from..from + len)
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(or)
+    };
+    let civil = jiff::civil::DateTime::new(
+        n(0, 4, 1970) as i16,
+        n(4, 2, 1) as i8,
+        n(6, 2, 1) as i8,
+        n(8, 2, 0) as i8,
+        n(10, 2, 0) as i8,
+        n(12, 2, 0) as i8,
+        0,
+    )
+    .ok()?;
+    let rest = &d[digits.len()..];
+    let offset = match rest.chars().next() {
+        Some(sign @ ('+' | '-')) => {
+            let num: Vec<i32> = rest[1..]
+                .split(|c: char| !c.is_ascii_digit())
+                .filter(|s| !s.is_empty())
+                .filter_map(|s| s.parse().ok())
+                .collect();
+            let secs =
+                num.first().copied().unwrap_or(0) * 3600 + num.get(1).copied().unwrap_or(0) * 60;
+            if sign == '-' { -secs } else { secs }
+        }
+        _ => 0,
+    };
+    let offset = jiff::tz::Offset::from_seconds(offset).ok()?;
+    offset.to_timestamp(civil).ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pdf_dates_read_with_their_offset() {
+        let utc = pdf_time("D:20261123010000Z").unwrap();
+        let ist = pdf_time("D:20261123063000+05'30'").unwrap();
+        assert_eq!(utc, ist);
+        assert!(pdf_time("D:2026").is_none());
+        assert!(pdf_time("D:20261399000000").is_none());
     }
 }

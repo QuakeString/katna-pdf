@@ -674,6 +674,8 @@ pub struct Viewer {
     /// A reply being typed, and which comments the list shows.
     reply: Option<comments::Reply>,
     comment_filter: comments::CommentFilter,
+    /// The comments tab's menu is open.
+    comments_menu: bool,
     /// Whether the form's fields are tinted so they can be found.
     highlight_fields: bool,
     /// The stamp the stamp tool puts on, and the ones typed in.
@@ -885,6 +887,7 @@ impl Viewer {
             comment: None,
             reply: None,
             comment_filter: Default::default(),
+            comments_menu: false,
             highlight_fields: true,
             stamp: "Approved".into(),
             custom_stamps: stamps::load_custom(),

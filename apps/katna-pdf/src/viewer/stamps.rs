@@ -140,6 +140,29 @@ impl Viewer {
                         ),
                     );
                 }
+                // Last, a way to the person's own.
+                grid = grid.child(
+                    div()
+                        .id("stamp-make-own")
+                        .w(px(124.0))
+                        .h(px(36.0))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded(px(4.0))
+                        .border_1()
+                        .border_dashed()
+                        .border_color(th.line)
+                        .text_size(px(text::CAPTION))
+                        .text_color(th.text2)
+                        .cursor_pointer()
+                        .hover(|s| s.bg(th.hover))
+                        .child(t("stamp-make-own", &[]))
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.stamp_tab = 2;
+                            cx.notify();
+                        })),
+                );
             }
             1 => {
                 let under = t("stamp-dated-under", &[]);
