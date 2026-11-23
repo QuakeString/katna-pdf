@@ -40,6 +40,8 @@ pub(super) struct Properties {
     pdfa: Option<Vec<PdfaIssue>>,
     /// The fonts the pages draw with, once read.
     fonts: Option<Vec<katna_pdf_cos::FontUse>>,
+    /// What was wrong with the file, when it had to be repaired.
+    repairs: Vec<katna_pdf_cos::Repair>,
     fields: [Entity<TextInput>; 4],
     /// A new password to put on: the one that opens the file, and the
     /// owner's, which opens it fully.
@@ -127,6 +129,7 @@ impl Viewer {
             actions: None,
             pdfa: None,
             fonts: None,
+            repairs: Vec::new(),
             fields,
             password,
             owner,
@@ -154,6 +157,7 @@ impl Viewer {
                             d.document_actions(),
                             d.pdfa_issues(),
                             d.fonts(),
+                            d.repairs().to_vec(),
                         )
                     })
                 })
@@ -162,8 +166,9 @@ impl Viewer {
                 let Some(properties) = this.properties.as_mut() else {
                     return;
                 };
-                let (meta, locked, size, actions, pdfa, fonts) = meta.unwrap_or_default();
+                let (meta, locked, size, actions, pdfa, fonts, repairs) = meta.unwrap_or_default();
                 properties.fonts = Some(fonts);
+                properties.repairs = repairs;
                 properties.locked = Some(locked);
                 properties.size = Some(size);
                 properties.actions = Some(actions);
@@ -606,6 +611,12 @@ impl Viewer {
             ];
             facts.extend(rows.into_iter().filter_map(|(id, v)| v.map(|v| (id, v))));
         }
+        if !properties.repairs.is_empty() {
+            facts.push((
+                "properties-repaired",
+                super::repairs_text(&properties.repairs),
+            ));
+        }
         div()
             .flex()
             .flex_col()
@@ -642,8 +653,11 @@ impl Viewer {
                                     .flex_1()
                                     .min_w_0()
                                     .overflow_hidden()
-                                    .text_ellipsis()
-                                    .whitespace_nowrap()
+                                    // A path stays on one line; what was
+                                    // repaired is read whole.
+                                    .when(id != "properties-repaired", |d| {
+                                        d.text_ellipsis().whitespace_nowrap()
+                                    })
                                     .text_color(th.text)
                                     .child(value),
                             )

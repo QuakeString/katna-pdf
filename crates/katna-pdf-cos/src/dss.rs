@@ -75,6 +75,10 @@ impl Document {
     pub fn add_dss(&self, data: &Dss) -> Result<Vec<u8>, UpdateError> {
         let mut all = self.dss();
         all.merge(data);
+        // Written whole, a repaired file's signatures would break.
+        if self.was_repaired() {
+            return Err(UpdateError::Repaired);
+        }
         let mut update = self.update()?;
         let mut dss = Dict::new();
         for (key, list) in KEYS.iter().zip([&all.certs, &all.ocsps, &all.crls]) {

@@ -54,6 +54,21 @@ impl std::fmt::Display for LoadError {
 
 impl std::error::Error for LoadError {}
 
+/// One thing a damaged file needed to be read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Repair {
+    /// It ends early: no `%%EOF` at its end.
+    CutShort,
+    /// No `startxref` to its table of objects.
+    NoTable,
+    /// The table of objects is there but can't be read.
+    BrokenTable,
+    /// The table reads, but doesn't lead to the document's pages.
+    NoCatalog,
+    /// The table was made again from the objects found in the file.
+    Rebuilt { objects: usize },
+}
+
 /// An object stream's contents: object numbers and objects.
 type StreamObjects = Vec<(u32, Object)>;
 
@@ -69,6 +84,8 @@ pub struct Document {
     startxref: usize,
     kind: XrefKind,
     repaired: bool,
+    /// What was wrong, when it was repaired.
+    repairs: Vec<Repair>,
     /// Every `N G obj` in the file, by object number (last one wins);
     /// built on first need.
     scanned: OnceLock<HashMap<u32, (usize, u16)>>,
@@ -98,12 +115,28 @@ impl Document {
             startxref: 0,
             kind: XrefKind::Table,
             repaired: false,
+            repairs: Vec::new(),
             scanned: OnceLock::new(),
             object_streams: Mutex::new(HashMap::new()),
             crypt: None,
         };
-        if !doc.read_xref_chain() || !doc.catalog_ok() {
+        let read = doc.read_xref_chain();
+        if !read || !doc.catalog_ok() {
+            let tail = &doc.data[doc.data.len().saturating_sub(1024)..];
+            if find(tail, b"%%EOF").is_none() {
+                doc.repairs.push(Repair::CutShort);
+            }
+            doc.repairs.push(if doc.find_startxref().is_none() {
+                Repair::NoTable
+            } else if !read {
+                Repair::BrokenTable
+            } else {
+                Repair::NoCatalog
+            });
             doc.repair()?;
+            doc.repairs.push(Repair::Rebuilt {
+                objects: doc.entries.len(),
+            });
         }
         // Most locked files open for anyone, their password empty.
         if doc.is_encrypted() {
@@ -189,6 +222,12 @@ impl Document {
     /// Whether the cross-reference data was broken and rebuilt by scanning.
     pub fn was_repaired(&self) -> bool {
         self.repaired
+    }
+
+    /// What was wrong with the file and how it was put right, when it
+    /// was repaired to be read.
+    pub fn repairs(&self) -> &[Repair] {
+        &self.repairs
     }
 
     pub fn is_encrypted(&self) -> bool {

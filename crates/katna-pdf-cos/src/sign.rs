@@ -333,6 +333,10 @@ impl Document {
     /// The file with a signature field filled but for the signature
     /// itself, as an incremental update.
     pub fn prepare_signature(&self, request: &SignRequest) -> Result<Prepared, SignError> {
+        // Its byte ranges count on the file's bytes staying as they are.
+        if self.was_repaired() {
+            return Err(SignError::Update(UpdateError::Repaired));
+        }
         if request.certify.is_some() && !self.signatures().is_empty() {
             return Err(SignError::AlreadySigned);
         }

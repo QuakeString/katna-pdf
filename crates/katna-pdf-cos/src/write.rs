@@ -15,8 +15,8 @@ use crate::parse::{is_delim, is_white};
 pub enum UpdateError {
     /// Writing into a locked file needs its password.
     Encrypted,
-    /// The file's cross-reference data was broken; appending to it would
-    /// leave a file other readers may not open. Save a full copy instead.
+    /// The file's cross-reference data was broken, and signing appends
+    /// to it; save it once (written whole) and sign that.
     Repaired,
 }
 
@@ -165,9 +165,6 @@ impl Document {
         if self.is_locked() {
             return Err(UpdateError::Encrypted);
         }
-        if self.was_repaired() {
-            return Err(UpdateError::Repaired);
-        }
         Ok(Update {
             doc: self,
             next: self.size(),
@@ -205,8 +202,20 @@ impl Update<'_> {
         &mut self.trailer
     }
 
-    /// The original bytes with the update appended.
+    /// The original bytes with the update appended; a file that had to
+    /// be repaired to be read is written again whole instead, since
+    /// appending to its broken table would leave it as broken.
     pub fn finish(self) -> Vec<u8> {
+        if self.doc.was_repaired()
+            && let Ok(whole) = self.doc.write_whole_with(
+                crate::lock::NewLock::Keep,
+                false,
+                &self.objects,
+                &self.trailer,
+            )
+        {
+            return whole;
+        }
         let mut out = self.doc.bytes().to_vec();
         if !out.ends_with(b"\n") && !out.ends_with(b"\r") {
             out.push(b'\n');

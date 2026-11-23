@@ -78,6 +78,18 @@ impl Document {
         reachable: bool,
         changed: &BTreeMap<u32, (u16, Object)>,
     ) -> Result<Vec<u8>, LockError> {
+        self.write_whole_with(lock, reachable, changed, self.trailer())
+    }
+
+    /// [`Document::write_whole`], with `/Root` and `/Info` from `base`
+    /// (an update's trailer) instead of the file's own.
+    pub(crate) fn write_whole_with(
+        &self,
+        lock: NewLock,
+        reachable: bool,
+        changed: &BTreeMap<u32, (u16, Object)>,
+        base: &crate::object::Dict,
+    ) -> Result<Vec<u8>, LockError> {
         if self.is_locked() {
             return Err(LockError::Locked);
         }
@@ -85,11 +97,7 @@ impl Document {
             return Err(LockError::NotOwner);
         }
         let kept = reachable.then(|| self.reachable(changed));
-        let root = self
-            .trailer()
-            .get("Root")
-            .cloned()
-            .ok_or(LockError::Empty)?;
+        let root = base.get("Root").cloned().ok_or(LockError::Empty)?;
         let old_lock = match lock {
             NewLock::Keep => None,
             _ => self.trailer().get("Encrypt").and_then(Object::as_ref),
@@ -136,7 +144,7 @@ impl Document {
         let mut next = objects.keys().next_back().map_or(1, |n| n + 1);
         let mut trailer = crate::object::Dict::new();
         trailer.set("Root", root);
-        if let Some(info) = self.trailer().get("Info").cloned() {
+        if let Some(info) = base.get("Info").cloned() {
             trailer.set("Info", info);
         }
         let id = match self.trailer().get("ID").map(|i| self.resolve(i)) {
