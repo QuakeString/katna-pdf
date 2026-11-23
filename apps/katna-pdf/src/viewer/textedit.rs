@@ -1612,6 +1612,7 @@ fn what_failed(failed: &str) -> &'static str {
         "properties-failed" => "undo-what-properties",
         "properties-lock-failed" => "undo-what-password",
         "properties-shrink-failed" => "undo-what-shrink",
+        "repair-failed" => "undo-what-repair",
         "text-font-failed" => "undo-what-font",
         _ => "undo-what-edit",
     }

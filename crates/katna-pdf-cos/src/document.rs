@@ -3,7 +3,7 @@
 //! A PDF file's object table: cross-reference tables and streams, object
 //! streams, and repair when they are broken (ISO 32000-2 §7.5).
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::crypt::{Crypt, Permissions, UnlockError};
@@ -62,6 +62,65 @@ const MAX_SECTIONS: usize = 4096;
 /// Deepest page tree walked.
 const MAX_PAGE_DEPTH: usize = 64;
 
+/// One thing done to open a damaged file, as [`Document::repairs`]
+/// lists them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Repair {
+    /// The file does not end by saying where its table is.
+    NoStartxref,
+    /// The table is not where the file says, or cannot be read.
+    TableUnreadable { at: usize },
+    /// The table was read but leads to no document catalog.
+    NoCatalog,
+    /// The table was read but puts some objects in the wrong place.
+    TableWrong,
+    /// The table was rebuilt from the objects found in the file.
+    ObjectsFound(usize),
+    /// Objects the old table put somewhere else were found where they
+    /// really are.
+    ObjectsMoved(usize),
+    /// Objects kept in object streams, found through them.
+    ObjectsInStreams(usize),
+    /// The trailer was taken from the last `trailer` in the file.
+    TrailerFromKeyword,
+    /// The trailer was taken from the newest cross-reference stream.
+    TrailerFromXrefStream,
+    /// No trailer was found; the catalog was found by its type.
+    CatalogByType,
+}
+
+impl std::fmt::Display for Repair {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Repair::NoStartxref => {
+                f.write_str("the file does not say where its table of objects is")
+            }
+            Repair::TableUnreadable { at } => {
+                write!(f, "the table of objects at byte {at} could not be read")
+            }
+            Repair::NoCatalog => f.write_str("the table of objects leads to no document catalog"),
+            Repair::TableWrong => {
+                f.write_str("the table of objects has some objects in the wrong place")
+            }
+            Repair::ObjectsFound(n) => write!(
+                f,
+                "the table was rebuilt from {n} objects found in the file"
+            ),
+            Repair::ObjectsMoved(n) => write!(f, "{n} objects were not where the old table said"),
+            Repair::ObjectsInStreams(n) => write!(f, "{n} objects were found in object streams"),
+            Repair::TrailerFromKeyword => {
+                f.write_str("the trailer was taken from the last one in the file")
+            }
+            Repair::TrailerFromXrefStream => {
+                f.write_str("the trailer was taken from the newest cross-reference stream")
+            }
+            Repair::CatalogByType => {
+                f.write_str("no trailer was found; the catalog was found by its type")
+            }
+        }
+    }
+}
+
 pub struct Document {
     data: Vec<u8>,
     entries: BTreeMap<u32, Entry>,
@@ -69,6 +128,11 @@ pub struct Document {
     startxref: usize,
     kind: XrefKind,
     repaired: bool,
+    /// What was done to open it, when it was damaged.
+    repairs: Vec<Repair>,
+    /// Objects not where the table said, found by the scan as they were
+    /// read.
+    misplaced: Mutex<BTreeSet<u32>>,
     /// Every `N G obj` in the file, by object number (last one wins);
     /// built on first need.
     scanned: OnceLock<HashMap<u32, (usize, u16)>>,
@@ -98,11 +162,24 @@ impl Document {
             startxref: 0,
             kind: XrefKind::Table,
             repaired: false,
+            repairs: Vec::new(),
+            misplaced: Mutex::new(BTreeSet::new()),
             scanned: OnceLock::new(),
             object_streams: Mutex::new(HashMap::new()),
             crypt: None,
         };
-        if !doc.read_xref_chain() || !doc.catalog_ok() {
+        let why = if !doc.read_xref_chain() {
+            Some(match doc.find_startxref() {
+                None => Repair::NoStartxref,
+                Some(at) => Repair::TableUnreadable { at },
+            })
+        } else if !doc.catalog_ok() {
+            Some(Repair::NoCatalog)
+        } else {
+            None
+        };
+        if let Some(why) = why {
+            doc.repairs.push(why);
             doc.repair()?;
         }
         // Most locked files open for anyone, their password empty.
@@ -191,6 +268,22 @@ impl Document {
         self.repaired
     }
 
+    /// What was wrong and what was done to open the file, in order;
+    /// empty for a file that was not damaged. Objects the table put in
+    /// the wrong place are found as they are read, so the list can grow
+    /// as more of the file is read.
+    pub fn repairs(&self) -> Vec<Repair> {
+        let mut out = self.repairs.clone();
+        let misplaced = self.misplaced.lock().map_or(0, |m| m.len());
+        if misplaced > 0 && !self.repaired {
+            if out.is_empty() {
+                out.push(Repair::TableWrong);
+            }
+            out.push(Repair::ObjectsMoved(misplaced));
+        }
+        out
+    }
+
     pub fn is_encrypted(&self) -> bool {
         self.trailer.get("Encrypt").is_some()
     }
@@ -224,7 +317,13 @@ impl Document {
         match self.entries.get(&r.num).copied() {
             Some(Entry::InFile { offset, generation }) => self
                 .object_at(offset, Some(Ref::new(r.num, generation)))
-                .or_else(|| self.scanned_object(r.num)),
+                .or_else(|| {
+                    let found = self.scanned_object(r.num)?;
+                    if let Ok(mut misplaced) = self.misplaced.lock() {
+                        misplaced.insert(r.num);
+                    }
+                    Some(found)
+                }),
             Some(Entry::InStream { stream, index }) => self.stream_object(stream, index, r.num),
             Some(Entry::Free) => None,
             None => self.scanned_object(r.num),
@@ -616,6 +715,18 @@ impl Document {
             .filter(|(_, e)| matches!(e, Entry::InStream { .. }))
             .map(|(n, e)| (*n, *e))
             .collect();
+        let moved = self
+            .entries
+            .iter()
+            .filter(|(n, e)| match (e, scanned.get(n)) {
+                (Entry::InFile { offset, .. }, Some((at, _))) => offset != at,
+                _ => false,
+            })
+            .count();
+        self.repairs.push(Repair::ObjectsFound(scanned.len()));
+        if moved > 0 {
+            self.repairs.push(Repair::ObjectsMoved(moved));
+        }
         self.entries.clear();
         for (num, (offset, generation)) in &scanned {
             self.entries.insert(
@@ -638,6 +749,7 @@ impl Document {
                 stream_objects.push(num);
             }
         }
+        let before = self.entries.len();
         for stream in stream_objects {
             if let Some(objects) = self.object_stream(stream) {
                 for (i, (num, _)) in objects.iter().enumerate() {
@@ -647,6 +759,10 @@ impl Document {
                     });
                 }
             }
+        }
+        if self.entries.len() > before {
+            self.repairs
+                .push(Repair::ObjectsInStreams(self.entries.len() - before));
         }
         // A trailer: the last `trailer` dictionary, else the newest xref
         // stream's dictionary, else a catalog found by type.
@@ -659,6 +775,7 @@ impl Document {
                     && d.get("Root").is_some()
                 {
                     trailer = Some(d);
+                    self.repairs.push(Repair::TrailerFromKeyword);
                     break;
                 }
                 from = at;
@@ -673,6 +790,7 @@ impl Document {
                         && d.get("Root").is_some()
                     {
                         trailer = Some(d.clone());
+                        self.repairs.push(Repair::TrailerFromXrefStream);
                         break;
                     }
                 }
@@ -691,6 +809,7 @@ impl Document {
                 let Some(num) = catalog else {
                     return Err(LoadError::NoCatalog);
                 };
+                self.repairs.push(Repair::CatalogByType);
                 let generation = match self.entries.get(&num) {
                     Some(Entry::InFile { generation, .. }) => *generation,
                     _ => 0,

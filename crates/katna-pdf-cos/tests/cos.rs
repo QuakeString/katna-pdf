@@ -5,7 +5,7 @@
 
 use std::io::Write as _;
 
-use katna_pdf_cos::{Dict, Document, Object, Ref, XrefKind};
+use katna_pdf_cos::{Dict, Document, Object, Ref, Repair, XrefKind};
 
 /// A file with a classic table: catalog, page tree, `n` pages.
 fn classic(n: usize) -> Vec<u8> {
@@ -141,6 +141,15 @@ fn repairs_wrong_offsets_and_a_missing_startxref() {
     shifted.splice(9..9, b"junk junk\n".iter().copied());
     let doc = Document::load(shifted).unwrap();
     assert_eq!(doc.pages().len(), 2);
+    // Each object is found where it is as it is read.
+    let repairs = doc.repairs();
+    assert_eq!(repairs[0], Repair::TableWrong, "{repairs:?}");
+    assert!(
+        repairs
+            .iter()
+            .any(|r| matches!(r, Repair::ObjectsMoved(n) if *n > 0)),
+        "{repairs:?}"
+    );
 
     let mut cut = classic(2);
     let at = cut.windows(9).rposition(|w| w == b"startxref").unwrap();
@@ -148,6 +157,19 @@ fn repairs_wrong_offsets_and_a_missing_startxref() {
     let doc = Document::load(cut).unwrap();
     assert!(doc.was_repaired());
     assert_eq!(doc.pages().len(), 2);
+    assert_eq!(doc.repairs()[0], Repair::NoStartxref);
+    assert!(doc.repairs().contains(&Repair::TrailerFromKeyword));
+    assert_eq!(
+        doc.repairs()[0].to_string(),
+        "the file does not say where its table of objects is"
+    );
+    // Written again whole, it opens sound, and takes changes.
+    let fixed = Document::load(doc.repaired_copy().unwrap()).unwrap();
+    assert!(fixed.repairs().is_empty() && !fixed.was_repaired());
+    assert_eq!(fixed.pages().len(), 2);
+    assert!(fixed.update().is_ok());
+    // A sound file needed none.
+    assert!(Document::load(classic(2)).unwrap().repairs().is_empty());
 }
 
 #[test]

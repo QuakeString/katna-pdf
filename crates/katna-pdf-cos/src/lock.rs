@@ -62,6 +62,13 @@ impl Document {
         self.write_whole(NewLock::Set(dict, crypt), false, &BTreeMap::new())
     }
 
+    /// The file written again whole with a sound table, for one that was
+    /// damaged and repaired as it opened ([`Document::repairs`]); its
+    /// lock, if any, kept. Changes can then be added to it as usual.
+    pub fn repaired_copy(&self) -> Result<Vec<u8>, LockError> {
+        self.write_whole(NewLock::Keep, false, &BTreeMap::new())
+    }
+
     /// The file with no password.
     pub fn without_lock(&self) -> Result<Vec<u8>, LockError> {
         self.write_whole(NewLock::Off, false, &BTreeMap::new())

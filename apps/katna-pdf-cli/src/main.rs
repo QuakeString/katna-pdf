@@ -726,11 +726,16 @@ fn info(args: &[String], json: bool) -> Done {
         let _ = write!(
             out,
             "{{\"file\":{},\"version\":{},\"pages\":{count},\"encrypted\":{},\"repaired\":{},\
-             \"outline_items\":{outline},\"form_fields\":{fields},\"annotations\":{annots},\"info\":{{",
+             \"repairs\":[{}],\"outline_items\":{outline},\"form_fields\":{fields},\"annotations\":{annots},\"info\":{{",
             string(file),
             string(&version),
             doc.is_encrypted(),
-            doc.was_repaired()
+            !doc.repairs().is_empty(),
+            doc.repairs()
+                .iter()
+                .map(|r| string(&r.to_string()))
+                .collect::<Vec<_>>()
+                .join(",")
         );
         let meta: Vec<String> = meta
             .iter()
@@ -771,11 +776,12 @@ fn info(args: &[String], json: bool) -> Done {
             );
         }
         let _ = writeln!(out, "Encrypted:    {}", yes(doc.is_encrypted()));
-        if doc.was_repaired() {
-            let _ = writeln!(
-                out,
-                "Repaired:     yes (its cross-reference table was broken)"
-            );
+        let repairs = doc.repairs();
+        if !repairs.is_empty() {
+            let _ = writeln!(out, "Repaired:     yes");
+            for r in &repairs {
+                let _ = writeln!(out, "              - {r}");
+            }
         }
         let _ = writeln!(out, "Outline:      {outline} items");
         let _ = writeln!(out, "Form fields:  {fields}");
