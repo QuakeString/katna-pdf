@@ -2690,7 +2690,7 @@ impl Viewer {
                 && let Some(file) = paths.into_iter().next()
             {
                 this.update(cx, |this, cx| {
-                    let at = organize::insert_at(this.page_count(), &this.picked);
+                    let at = this.insert_point(cx);
                     this.change_pages(
                         Pages::Insert {
                             from: PagesFrom::File(file),
