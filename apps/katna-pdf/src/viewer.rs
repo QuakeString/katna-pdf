@@ -733,6 +733,9 @@ pub struct Viewer {
     thumbs: Thumbs,
     /// The organizer shows in place of the pages (`organizer.rs`).
     organizer: bool,
+    /// The side pane beside the organizer, which hides it at first so
+    /// the grid has the window (P01).
+    pane_pages: bool,
     /// A box dragged on a page crops it (`crop.rs`).
     cropping: bool,
     crop_box: Option<crop::CropBox>,
@@ -937,6 +940,7 @@ impl Viewer {
             tab: PaneTab::Pages,
             thumbs: Thumbs::new(),
             organizer: false,
+            pane_pages: false,
             cropping: false,
             crop_box: None,
             crop_grip: None,
@@ -1301,7 +1305,11 @@ impl Viewer {
     /// Shows or hides the side pane, once a document is open.
     fn toggle_pane(&mut self, cx: &mut Context<Self>) {
         if matches!(self.content, Content::Ready(_)) {
-            self.pane = !self.pane;
+            if self.organizer {
+                self.pane_pages = !self.pane_pages;
+            } else {
+                self.pane = !self.pane;
+            }
             cx.notify();
         }
     }
@@ -1747,7 +1755,12 @@ impl Viewer {
 
     /// Whether the side pane is shown now.
     fn pane_shown(&self) -> bool {
-        self.pane && matches!(self.content, Content::Ready(_))
+        matches!(self.content, Content::Ready(_))
+            && if self.organizer {
+                self.pane_pages
+            } else {
+                self.pane
+            }
     }
 
     /// Page `page`'s thumbnail, asked for if it is not drawn yet.
