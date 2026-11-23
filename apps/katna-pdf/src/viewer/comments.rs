@@ -36,6 +36,82 @@ pub(super) struct CommentFilter {
     pub status: Option<StatusPick>,
     /// Words to look for in the comments, their replies and authors.
     pub words: Option<(Entity<TextInput>, Subscription)>,
+    /// The order of the list; kept when the filter closes.
+    pub sort: SortBy,
+}
+
+/// The order the comments list goes in.
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+pub(super) enum SortBy {
+    /// Page by page, in the file's order on each.
+    #[default]
+    Page,
+    /// By author's name, then page.
+    Author,
+    /// Newest change first; those with no date last.
+    Date,
+    /// By kind (notes, text, marked text, drawings, stamps), then page.
+    Kind,
+    /// By colour, so each colour's comments come together, then page.
+    Colour,
+}
+
+impl SortBy {
+    const ALL: [SortBy; 5] = [
+        SortBy::Page,
+        SortBy::Author,
+        SortBy::Date,
+        SortBy::Kind,
+        SortBy::Colour,
+    ];
+
+    fn message(self) -> &'static str {
+        match self {
+            SortBy::Page => "comments-sort-page",
+            SortBy::Author => "comments-sort-author",
+            SortBy::Date => "comments-sort-date",
+            SortBy::Kind => "comments-sort-kind",
+            SortBy::Colour => "comments-sort-colour",
+        }
+    }
+
+    /// Puts `list` (page, comment) in this order; ties keep the file's.
+    fn apply(self, list: &mut [(usize, &Annotation)]) {
+        match self {
+            SortBy::Page => {}
+            SortBy::Author => list.sort_by_cached_key(|(_, a)| {
+                (a.author.trim().is_empty(), a.author.trim().to_lowercase())
+            }),
+            SortBy::Date => list.sort_by_cached_key(|(_, a)| {
+                std::cmp::Reverse(a.modified.as_deref().and_then(pdf_time))
+            }),
+            SortBy::Kind => list.sort_by_key(|(_, a)| {
+                KindGroup::of(&a.kind)
+                    .and_then(|k| KindGroup::ALL.iter().position(|g| *g == k))
+                    .unwrap_or(KindGroup::ALL.len())
+            }),
+            SortBy::Colour => list.sort_by_key(|(_, a)| colour_key(a.colour)),
+        }
+    }
+}
+
+/// A colour as hue first, so reds, yellows, greens and blues each come
+/// together; greys last, lightest first.
+fn colour_key([r, g, b]: [f32; 3]) -> (u8, u16, u16) {
+    let max = r.max(g).max(b);
+    let min = r.min(g).min(b);
+    let chroma = max - min;
+    if chroma < 0.08 {
+        return (1, 0, ((1.0 - max) * 1000.0) as u16);
+    }
+    let hue = if max == r {
+        ((g - b) / chroma).rem_euclid(6.0)
+    } else if max == g {
+        (b - r) / chroma + 2.0
+    } else {
+        (r - g) / chroma + 4.0
+    };
+    (0, (hue * 60.0) as u16, ((1.0 - max) * 1000.0) as u16)
 }
 
 /// Kinds of annotation, as the filter groups them.
@@ -162,7 +238,10 @@ impl Viewer {
     pub(super) fn toggle_comment_filter(&mut self, cx: &mut Context<Self>) {
         self.comment_filter.shown = !self.comment_filter.shown;
         if !self.comment_filter.shown {
-            self.comment_filter = Default::default();
+            self.comment_filter = CommentFilter {
+                sort: self.comment_filter.sort,
+                ..Default::default()
+            };
         } else {
             let accent = gpui::rgba(self.theme.katna.accent).into();
             let input = cx.new(|cx| {
@@ -603,6 +682,25 @@ impl Viewer {
                 })),
             );
         }
+        let mut order = row().child(
+            div()
+                .h(px(26.0))
+                .flex()
+                .items_center()
+                .pr(px(space::S1))
+                .text_size(px(text::SMALL))
+                .text_color(th.dim)
+                .child(t("comments-sort", &[])),
+        );
+        for (i, sort) in SortBy::ALL.into_iter().enumerate() {
+            order = order.child(
+                self.chip(("comments-sort", i), t(sort.message(), &[]), f.sort == sort)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.comment_filter.sort = sort;
+                        cx.notify();
+                    })),
+            );
+        }
         div()
             .flex_shrink_0()
             .flex()
@@ -629,6 +727,7 @@ impl Viewer {
             .child(kinds)
             .when(authors.len() > 1, |d| d.child(by))
             .child(statuses)
+            .child(order)
             .into_any_element()
     }
 
@@ -709,40 +808,42 @@ impl Viewer {
         let mut any = false;
         let mut hidden_by_filter = 0;
         let words = self.comment_words(cx);
-        for (page, annots) in all.iter().enumerate() {
-            for a in annots {
-                let Some(id) = a.id else {
-                    continue;
-                };
-                if a.reply_to.is_some() || a.state.is_some() {
-                    continue;
-                }
-                any = true;
-                if !self.passes(a, &all)
-                    || words.as_deref().is_some_and(|w| !thread_says(a, annots, w))
+        let mut tops: Vec<(usize, &Annotation)> = all
+            .iter()
+            .enumerate()
+            .flat_map(|(page, annots)| annots.iter().map(move |a| (page, a)))
+            .filter(|(_, a)| a.id.is_some() && a.reply_to.is_none() && a.state.is_none())
+            .collect();
+        self.comment_filter.sort.apply(&mut tops);
+        for (page, a) in tops {
+            let annots = &all[page];
+            let Some(id) = a.id else {
+                continue;
+            };
+            any = true;
+            if !self.passes(a, &all) || words.as_deref().is_some_and(|w| !thread_says(a, annots, w))
+            {
+                hidden_by_filter += 1;
+                continue;
+            }
+            // Replies, and replies to them, in the file's order.
+            let mut parents = vec![id];
+            let mut replies: Vec<Annotation> = Vec::new();
+            while let Some(parent) = parents.pop() {
+                for reply in annots
+                    .iter()
+                    .filter(|r| r.state.is_none() && r.reply_to == Some(parent))
                 {
-                    hidden_by_filter += 1;
-                    continue;
-                }
-                // Replies, and replies to them, in the file's order.
-                let mut parents = vec![id];
-                let mut replies: Vec<Annotation> = Vec::new();
-                while let Some(parent) = parents.pop() {
-                    for reply in annots
-                        .iter()
-                        .filter(|r| r.state.is_none() && r.reply_to == Some(parent))
+                    if let Some(rid) = reply.id
+                        && !replies.iter().any(|r| r.id == Some(rid))
                     {
-                        if let Some(rid) = reply.id
-                            && !replies.iter().any(|r| r.id == Some(rid))
-                        {
-                            parents.push(rid);
-                            replies.push(reply.clone());
-                        }
+                        parents.push(rid);
+                        replies.push(reply.clone());
                     }
                 }
-                let status = annotation_status(&all, id);
-                list = list.child(self.comment_card(a, page, status, &replies, window, cx));
             }
+            let status = annotation_status(&all, id);
+            list = list.child(self.comment_card(a, page, status, &replies, window, cx));
         }
         if !any {
             list = list.child(
@@ -1333,5 +1434,21 @@ mod tests {
         assert_eq!(utc, ist);
         assert!(pdf_time("D:2026").is_none());
         assert!(pdf_time("D:20261399000000").is_none());
+    }
+
+    #[test]
+    fn newest_first_then_undated() {
+        let at = |d: &str| std::cmp::Reverse(pdf_time(d));
+        assert!(at("D:20261123070000Z") < at("D:20261123064500+05'30'"));
+        assert!(at("D:20250101000000Z") < at("not a date"));
+    }
+
+    #[test]
+    fn colours_come_together_by_hue_greys_last() {
+        let red = colour_key([0.9, 0.1, 0.1]);
+        let yellow = colour_key([1.0, 0.85, 0.0]);
+        let blue = colour_key([0.1, 0.3, 0.9]);
+        let black = colour_key([0.0, 0.0, 0.0]);
+        assert!(red < yellow && yellow < blue && blue < black);
     }
 }
