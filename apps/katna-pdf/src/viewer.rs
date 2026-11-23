@@ -12,7 +12,7 @@
 //! so the viewer only says when it is asked to ([`ViewerEvent`]).
 
 use std::cell::RefCell;
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -393,6 +393,8 @@ pub(super) enum Pages {
         pages: BTreeSet<usize>,
         crop: Option<[f32; 4]>,
     },
+    /// Each page cropped to its own box, in its user space.
+    Crops(BTreeMap<usize, [f32; 4]>),
     /// `pages` cropped by margins (top, right, bottom, left, in points
     /// as each page shows) from their media boxes.
     Margins {
@@ -699,6 +701,11 @@ pub struct Viewer {
     organizer: bool,
     /// A box dragged on a page crops it (`crop.rs`).
     cropping: bool,
+    crop_box: Option<crop::CropBox>,
+    crop_grip: Option<crop::Grip>,
+    crop_which: crop::Which,
+    /// White margins being found.
+    crop_finding: bool,
     /// The file's signatures, checked, once read; and signing, while
     /// under way (`sign.rs`).
     signatures: Option<sign::Rows>,
@@ -893,6 +900,10 @@ impl Viewer {
             thumbs: Thumbs::new(),
             organizer: false,
             cropping: false,
+            crop_box: None,
+            crop_grip: None,
+            crop_which: crop::Which::default(),
+            crop_finding: false,
             signatures: None,
             signable: Arc::default(),
             signing: None,
@@ -1021,6 +1032,7 @@ impl Viewer {
         self.picked.clear();
         self.organizer = false;
         self.cropping = false;
+        self.crop_box = None;
         self.text_editing = false;
         self.typing = None;
         self.adding = None;
@@ -1452,6 +1464,7 @@ impl Viewer {
         self.finish_typing(true, cx);
         window.focus(&self.focus, cx);
         if self.area_press(event.position, cx)
+            || self.crop_press(event.position, cx)
             || self.measure_press(event, cx)
             || self.sign_press(event.position, cx)
             || self.design_press(event.position, cx)
@@ -1460,7 +1473,6 @@ impl Viewer {
             || self.insert_press(event.position, window, cx)
             || self.object_press(event, cx)
             || self.text_edit_press(cx)
-            || self.crop_press(event.position, cx)
             || self.annot_press(event.position, cx)
         {
             return;
@@ -1496,6 +1508,7 @@ impl Viewer {
         }
         if self.loupe_move(event.position, cx)
             || self.area_drag(event.position, cx)
+            || self.crop_drag(event.position, cx)
             || self.measure_move(event.position, cx)
             || self.design_drag(event.position, cx)
             || self.redact_drag(event.position, cx)
@@ -2829,6 +2842,10 @@ impl Viewer {
                             }
                             (all().collect(), None)
                         }
+                        Pages::Crops(each) => {
+                            crops.extend(each);
+                            (all().collect(), None)
+                        }
                         Pages::Margins { pages, margins } => {
                             for page in pages {
                                 let Some(info) = base.page_info(page) else {
@@ -4141,7 +4158,7 @@ impl Render for Viewer {
             .or_else(|| self.pages_tray(cx))
             .or_else(|| self.forms_tray(cx))
             .or_else(|| self.sign_tray(cx));
-        let object_row = self.object_row();
+        let object_row = self.crop_bar(cx).or_else(|| self.object_row());
         let measure_bar = self.measure_bar(cx);
         let stamp_bar = self.stamp_bar(cx);
         let initials_bar = self.initials_bar(cx);

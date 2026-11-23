@@ -1609,6 +1609,9 @@ impl Viewer {
     /// `page`, where they are being dragged to while they are; the band
     /// being dragged over the page; and the grid when shown.
     pub(super) fn objects_overlay(&self, page: usize, cx: &Context<Self>) -> Vec<AnyElement> {
+        if self.cropping {
+            return Vec::new();
+        }
         let shown = self.shown;
         // The frame and handles take the press themselves, so a
         // paragraph's box under them does not.

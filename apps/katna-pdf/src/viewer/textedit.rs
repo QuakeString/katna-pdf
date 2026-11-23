@@ -599,7 +599,8 @@ impl Viewer {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Vec<AnyElement> {
-        if !self.text_editing {
+        // While cropping, presses on paragraphs make the box.
+        if !self.text_editing || self.cropping {
             return Vec::new();
         }
         let Some(transform) = transform else {
