@@ -2446,7 +2446,7 @@ fn write_note(name: &str, text: &str) {
 }
 
 /// The picture last shown in a signature's box, if it is still there.
-fn remembered_picture() -> Option<PathBuf> {
+pub(super) fn remembered_picture() -> Option<PathBuf> {
     let path = PathBuf::from(read_note("picture")?.trim_end_matches('\n'));
     path.is_file().then_some(path)
 }

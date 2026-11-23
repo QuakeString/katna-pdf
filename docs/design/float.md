@@ -83,9 +83,30 @@ buttons, 10 px for floating bars, 12 px for the dock. Text 13 px in bars
 and menus, 11 px small capitals for headings. Icons are the storyboard's
 line icons (`icons/float/`, served as `icons/f/NAME.svg`), 1.7 px strokes.
 
+## Settings
+
+Settings is a window of its own (`settings.rs`, X row), as Okular's is,
+and what changes there applies at once to every window. Pages down the
+left, Close at the foot; the open page on the right under its name.
+Profile and signatures… in the person's menu (or a click on who they
+are) opens it at Profile, Settings… at Appearance, Keyboard shortcuts
+at Shortcuts; asking again brings the open window forward.
+
+- Profile (X00): name, short name, job title and organisation, kept in
+  the state folder (`pdf/profile.txt`, `profile.rs`). Comments and
+  stamps carry the short name, else the name; the person's picture and
+  menu show the name and the job. Under them the initials, the
+  signature picture and the person's own stamps, each saying where it
+  is made.
+- Appearance (X01): Mode as a segmented control, then a tile for each
+  scheme, its day half beside its night half, and the desktop's.
+- Shortcuts (X07): every menu item with keys, and a box to find one.
+- About (X08): the build, whether it looks for updates, and the crash
+  reports folder.
+
 ## Still to come
 
-The Settings
-window with the Profile page and the scheme editor (X, T). The signing
+Settings' Viewing, Editing, Signing, Library and Read aloud pages, the
+scheme editor and import (X10, X11) and the accent row. The signing
 card as a step-by-step dialog (G02-G05) and the token status in the
-profile menu (S14) come with Settings.
+profile menu (S14).

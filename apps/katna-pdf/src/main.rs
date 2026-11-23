@@ -28,8 +28,10 @@ mod menu;
 mod menus;
 mod organize;
 mod print;
+mod profile;
 mod search;
 mod select;
+mod settings;
 mod speech;
 mod spread;
 mod tabs;
@@ -115,6 +117,7 @@ fn main() -> ExitCode {
         .run(move |cx: &mut App| {
             cx.set_global(history::History::load());
             cx.set_global(look::Look::load());
+            cx.set_global(profile::Profile::load());
             katna_ui::text_input::bind_keys(cx);
             katna_ui::text_area::bind_keys(cx);
             viewer::bind_keys(cx);

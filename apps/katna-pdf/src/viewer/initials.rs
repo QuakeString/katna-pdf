@@ -51,7 +51,7 @@ pub(super) enum Initial {
 }
 
 impl Initial {
-    fn label(&self, n: usize) -> String {
+    pub(super) fn label(&self, n: usize) -> String {
         match self {
             Initial::Text { text, .. } => text.clone(),
             Initial::Picture { .. } => t("initials-picture", &[("n", &n.to_string())]),
