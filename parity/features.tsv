@@ -9,7 +9,7 @@ core.hybrid-xref	core	Hybrid-reference files (/XRefStm) and quirky xref subsecti
 core.revision-chain	core	Follow /Prev revision chains with loop protection	reader	n	shipped	P0	cos parse.rs		acrobat
 core.stream-filters	core	Standard stream filters (Flate, LZW, ASCII85, ASCIIHex, RunLength, predictors)	reader	n	shipped	P0	cos filter.rs		acrobat
 core.image-filters	core	Image codecs in the filters crate (DCT, JPX, JBIG2, CCITT)	reader	n	shipped	P0	hayro	JBIG2/JPX/CCITT through hayro	acrobat
-core.decompression-limits	core	Bounded decompression (filter bomb protection)	reader	n	partial	P0	cos filter.rs		acrobat
+core.decompression-limits	core	Bounded decompression (filter bomb protection)	reader	n	shipped	P0	#148	cos 256 MB per stream; renderer Flate/LZW 1 GiB (vendored hayro-syntax)	acrobat
 core.open-rc4	core	Open RC4-encrypted documents (40/128-bit)	reader	y	shipped	P0	cos crypt.rs #63		acrobat
 core.open-aes	core	Open AES-128 and AES-256 encrypted documents (R4-R6)	reader	y	shipped	P0	cos crypt.rs #63		acrobat
 core.password-prompt	core	Ask for the user or owner password, with retry	reader	y	shipped	P0	app locked-* #63		acrobat
