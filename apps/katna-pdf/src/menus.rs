@@ -8,10 +8,11 @@ use gpui::Action;
 
 use crate::viewer::{
     ActualSize, AddBookmark, Annotate, CloseTab, Compare, CopyText, Export, Find, FindNext,
-    FindPrevious, FitHeight, FitPage, FitWidth, NewWindow, NextPage, NextSpread, NextTab, Open,
-    OpenSettings, Organize, Present, PreviousPage, PreviousTab, Print, Properties, Quit, ReadAloud,
-    ReopenSession, ReportProblem, Save, ShowAbout, ShowLibrary, ShowShortcuts, Sign, Snapshot,
-    ToggleContents, ToggleNight, ZoomIn, ZoomOut, ZoomToArea,
+    FindPrevious, FitHeight, FitPage, FitWidth, Loupe, NewWindow, NextPage, NextSpread, NextTab,
+    Open, OpenSettings, Organize, Present, PreviousPage, PreviousTab, Print, Properties, Quit,
+    ReadAloud, ReopenSession, ReportProblem, RotateViewLeft, RotateViewRight, Save, ShowAbout,
+    ShowLibrary, ShowShortcuts, Sign, Snapshot, ToggleContents, ToggleNight, ZoomIn, ZoomOut,
+    ZoomToArea,
 };
 
 /// An item: its id (and the id of its words), and its keys as
@@ -66,6 +67,9 @@ pub const MENUS: &[(&str, &[Entry])] = &[
             Some(("menu-fit-page", &["Control", "2"])),
             Some(("menu-fit-height", &["Control", "4"])),
             Some(("menu-zoom-area", &[])),
+            Some(("menu-loupe", &[])),
+            Some(("menu-rotate-right", &["Control", "R"])),
+            Some(("menu-rotate-left", &["Control", "Shift", "R"])),
             Some(("menu-layout", &["Control", "3"])),
             None,
             Some(("menu-side-pane", &["F7"])),
@@ -125,6 +129,9 @@ pub fn action(id: &str) -> Option<Box<dyn Action>> {
         "menu-fit-page" => Box::new(FitPage),
         "menu-fit-height" => Box::new(FitHeight),
         "menu-zoom-area" => Box::new(ZoomToArea),
+        "menu-loupe" => Box::new(Loupe),
+        "menu-rotate-right" => Box::new(RotateViewRight),
+        "menu-rotate-left" => Box::new(RotateViewLeft),
         "menu-snapshot" => Box::new(Snapshot),
         "menu-layout" => Box::new(NextSpread),
         "menu-side-pane" => Box::new(ToggleContents),

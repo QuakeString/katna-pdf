@@ -108,7 +108,10 @@ actions!(
         FitWidth,
         FitPage,
         FitHeight,
+        RotateViewRight,
+        RotateViewLeft,
         ZoomToArea,
+        Loupe,
         Snapshot,
         ActualSize,
         NextSpread,
@@ -268,6 +271,8 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl-1", FitWidth, None),
         KeyBinding::new("ctrl-2", FitPage, None),
         KeyBinding::new("ctrl-4", FitHeight, None),
+        KeyBinding::new("ctrl-r", RotateViewRight, None),
+        KeyBinding::new("ctrl-shift-r", RotateViewLeft, None),
         KeyBinding::new("ctrl-3", NextSpread, None),
         KeyBinding::new("ctrl-0", ActualSize, None),
         // Keys that mean something else while typing in a field.
@@ -414,11 +419,33 @@ enum Content {
 
 struct Opened {
     name: String,
+    /// The file as it is shown: `plain` turned as Rotate view says.
     doc: Arc<dyn Document>,
+    /// The file as it is, not turned.
+    plain: Arc<dyn Document>,
     /// The widest and the tallest page, in points, for fit width and fit
     /// page.
     widest: f32,
     tallest: f32,
+}
+
+impl Opened {
+    /// `plain` shown turned `turn` quarter turns clockwise.
+    fn new(name: String, plain: Arc<dyn Document>, turn: u8) -> Self {
+        let doc = katna_pdf_render::turned::Turned::wrap(plain.clone(), turn);
+        let (widest, tallest) = (0..doc.page_count())
+            .filter_map(|p| doc.page_size(p))
+            .fold((1.0_f32, 1.0_f32), |(w, h), (pw, ph)| {
+                (w.max(pw), h.max(ph))
+            });
+        Opened {
+            name,
+            doc,
+            plain,
+            widest,
+            tallest,
+        }
+    }
 }
 
 /// A drawn page: the scale (device pixels per point) it was drawn at,
@@ -514,6 +541,9 @@ pub struct Viewer {
     /// After a zoom to an area: its page, the area, and frames waited
     /// for the page to be laid out at the new size.
     area_focus: Option<(usize, [f32; 4], u8)>,
+    /// Rotate view: the pages shown this many quarter turns clockwise,
+    /// the file left as it is.
+    turn: u8,
     /// The password field, while a file asks for one, and whether to put
     /// the keys in it on the next frame.
     password: Option<(Entity<TextInput>, Subscription)>,
@@ -764,6 +794,7 @@ impl Viewer {
             find_list: false,
             area: None,
             area_focus: None,
+            turn: 0,
             password: None,
             focus_password: false,
             key: None,
@@ -991,6 +1022,7 @@ impl Viewer {
         }
         self.forget_pages();
         cx.notify();
+        self.turn = 0;
         self.read_outline(path.clone(), generation, cx);
         cx.spawn(async move |this, cx| {
             let opened = cx
@@ -1013,17 +1045,7 @@ impl Viewer {
                                 Some(t("error-encryption", &[("name", &name)]))
                             }
                         })?;
-                    let (widest, tallest) = (0..doc.page_count())
-                        .filter_map(|p| doc.page_size(p))
-                        .fold((1.0_f32, 1.0_f32), |(w, h), (pw, ph)| {
-                            (w.max(pw), h.max(ph))
-                        });
-                    Ok::<_, Option<String>>(Opened {
-                        name,
-                        doc,
-                        widest,
-                        tallest,
-                    })
+                    Ok::<_, Option<String>>(Opened::new(name, doc, 0))
                 })
                 .await;
             this.update(cx, |this, cx| {
@@ -1436,7 +1458,8 @@ impl Viewer {
             cx.notify();
             return;
         }
-        if self.area_drag(event.position, cx)
+        if self.loupe_move(event.position, cx)
+            || self.area_drag(event.position, cx)
             || self.measure_move(event.position, cx)
             || self.design_drag(event.position, cx)
             || self.redact_drag(event.position, cx)
@@ -2466,13 +2489,50 @@ impl Viewer {
         .detach();
     }
 
+    /// Rotate view: turns the pages shown `quarters` quarter turns
+    /// clockwise, keeping the page that is shown; the file is not changed.
+    fn turn_view(&mut self, quarters: u8, cx: &mut Context<Self>) {
+        let Content::Ready(opened) = &self.content else {
+            return;
+        };
+        let page = self.current_page();
+        self.turn = (self.turn + quarters) % 4;
+        let turned = Opened::new(opened.name.clone(), opened.plain.clone(), self.turn);
+        self.content = Content::Ready(turned);
+        self.forget_pages();
+        self.forget_runs();
+        self.revision += 1;
+        let old = self.thumbs.reset(self.page_count());
+        self.released.extend(old);
+        self.texts = Some(search::texts(self.page_count()));
+        if let Some(bar) = self.search.as_mut() {
+            bar.generation.fetch_add(1, Ordering::Relaxed);
+            bar.found = Found::default();
+        }
+        self.selection = None;
+        self.list.reset(self.spread.rows(self.page_count()));
+        self.list.scroll_to(ListOffset {
+            item_ix: self.spread.row_of(page),
+            offset_in_item: px(0.0),
+        });
+        self.notice = Some(match self.turn {
+            0 => said("turn-view-upright", &[]),
+            turn => said(
+                "turn-view-notice",
+                &[("degrees", &(u32::from(turn) * 90).to_string())],
+            ),
+        });
+        cx.notify();
+    }
+
     /// Shows `doc`, the same file with changes, in place of the one shown;
     /// `pages` are the pages that changed and are drawn again.
     fn swap_doc(&mut self, doc: Arc<dyn Document>, pages: &[usize]) {
         let Content::Ready(opened) = &mut self.content else {
             return;
         };
-        opened.doc = doc;
+        opened.doc = katna_pdf_render::turned::Turned::wrap(doc.clone(), self.turn);
+        opened.plain = doc;
         self.revision += 1;
         self.forget_runs();
         for page in pages {
@@ -2813,11 +2873,6 @@ impl Viewer {
         picked: BTreeSet<usize>,
     ) {
         let count = doc.page_count();
-        let (widest, tallest) = (0..count)
-            .filter_map(|p| doc.page_size(p))
-            .fold((1.0_f32, 1.0_f32), |(w, h), (pw, ph)| {
-                (w.max(pw), h.max(ph))
-            });
         let page = picked
             .first()
             .copied()
@@ -2876,12 +2931,7 @@ impl Viewer {
         self.comment = None;
         // A form's changes are in the file now.
         self.form = self.new_form(Arc::new(cos), fields);
-        self.content = Content::Ready(Opened {
-            name,
-            doc,
-            widest,
-            tallest,
-        });
+        self.content = Content::Ready(Opened::new(name, doc, self.turn));
         self.record_change();
         self.edited = Some(bytes);
         self.anchor = picked.first().copied();
@@ -3441,6 +3491,7 @@ impl Viewer {
             .children(overlays)
             .children(links)
             .children(fields)
+            .children(self.lens_overlay(page))
             .child({
                 // Notes where the page is, for the pointer: where it is
                 // painted, as the list may lay a page out elsewhere first.
@@ -3938,12 +3989,17 @@ impl Render for Viewer {
             .on_action(cx.listener(|this, _: &Snapshot, _, cx| {
                 this.toggle_area_tool(area::AreaKind::Snapshot, cx)
             }))
+            .on_action(cx.listener(|this, _: &Loupe, _, cx| {
+                this.toggle_area_tool(area::AreaKind::Loupe, cx)
+            }))
             .on_action(
                 cx.listener(|this, _: &ActualSize, _, cx| this.set_zoom(Zoom::Fixed(1.0), cx)),
             )
             .on_action(cx.listener(|this, _: &NextPage, _, cx| this.step_page(true, cx)))
             .on_action(cx.listener(|this, _: &PreviousPage, _, cx| this.step_page(false, cx)))
             .on_action(cx.listener(|this, _: &NextSpread, _, cx| this.next_spread(cx)))
+            .on_action(cx.listener(|this, _: &RotateViewRight, _, cx| this.turn_view(1, cx)))
+            .on_action(cx.listener(|this, _: &RotateViewLeft, _, cx| this.turn_view(3, cx)))
             .on_action(cx.listener(|this, _: &Print, _, cx| this.toggle_printing(cx)))
             .on_action(cx.listener(|this, _: &Save, _, cx| this.save(cx)))
             .on_action(cx.listener(|this, _: &Undo, _, cx| this.undo(cx)))

@@ -2,13 +2,21 @@
 
 //! Tools that act on an area dragged out on a page: Zoom to an area
 //! (the area fills the view; a click zooms in a step there) and Snapshot
-//! (the area copied as a picture, drawn sharper than on screen). Both
-//! stay in hand until Escape or picked again.
+//! (the area copied as a picture, drawn sharper than on screen), and
+//! the Loupe, a lens following the pointer that shows the page under it
+//! three times larger, drawn sharp at that size. They stay in hand until
+//! Escape or picked again.
 
-use gpui::{AnyElement, ClipboardItem, Context, Image, ImageFormat, div, prelude::*};
+use std::sync::Arc;
+
+use gpui::{
+    AnyElement, ClipboardItem, Context, Image, ImageFormat, ImageSource, RenderImage, div, img,
+    prelude::*,
+};
 use katna_pdf_render::Region;
 use katna_ui::px;
 use katna_ui::scale::desktop_px;
+use katna_ui::tokens::radius;
 
 use super::{Content, POINT, STEPS, Viewer, Zoom};
 
@@ -17,6 +25,21 @@ use super::{Content, POINT, STEPS, Viewer, Zoom};
 pub(super) enum AreaKind {
     Zoom,
     Snapshot,
+    Loupe,
+}
+
+/// A page and a point on it, in points.
+type Spot = (usize, [f32; 2]);
+
+/// The loupe's lens: where it is, in points on `page`, and the page
+/// under it drawn larger.
+#[derive(Default)]
+pub(super) struct Lens {
+    at: Option<Spot>,
+    /// The drawing shown, and the spot it was drawn for.
+    image: Option<(Spot, Arc<RenderImage>)>,
+    /// Whether a drawing is under way.
+    drawing: bool,
 }
 
 /// An area tool in hand, and the area being dragged out: its page and
@@ -24,7 +47,13 @@ pub(super) enum AreaKind {
 pub(super) struct AreaTool {
     pub(super) kind: AreaKind,
     drag: Option<(usize, [f32; 2], [f32; 2])>,
+    lens: Lens,
 }
+
+/// The loupe's lens is this many logical pixels a side...
+const LENS: f32 = 240.0;
+/// ...and shows the page this many times larger than the view.
+const MAGNIFY: f32 = 3.0;
 
 /// A drag shorter than this, in points, is a click.
 const CLICK: f32 = 3.0;
@@ -41,7 +70,11 @@ impl Viewer {
             self.tool = None;
             self.hand = false;
             self.selection = None;
-            self.area = Some(AreaTool { kind, drag: None });
+            self.area = Some(AreaTool {
+                kind,
+                drag: None,
+                lens: Lens::default(),
+            });
         }
         cx.notify();
     }
@@ -51,8 +84,11 @@ impl Viewer {
         position: gpui::Point<gpui::Pixels>,
         cx: &mut Context<Self>,
     ) -> bool {
-        if self.area.is_none() {
+        let Some(tool) = &self.area else {
             return false;
+        };
+        if tool.kind == AreaKind::Loupe {
+            return true;
         }
         let point = self.page_point(position);
         if let (Some(tool), Some((page, p))) = (self.area.as_mut(), point) {
@@ -83,6 +119,126 @@ impl Viewer {
         }
         cx.notify();
         true
+    }
+
+    /// The pointer moved with the loupe in hand: the lens follows it.
+    pub(super) fn loupe_move(
+        &mut self,
+        position: gpui::Point<gpui::Pixels>,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if self.area.as_ref().is_none_or(|a| a.kind != AreaKind::Loupe) {
+            return false;
+        }
+        let at = self.page_point(position);
+        if let Some(tool) = self.area.as_mut() {
+            tool.lens.at = at;
+        }
+        self.draw_lens(cx);
+        cx.notify();
+        true
+    }
+
+    /// Draws the page under the lens, if it is not drawn there already
+    /// and no drawing is under way (that one, done, starts the next).
+    fn draw_lens(&mut self, cx: &mut Context<Self>) {
+        let Content::Ready(opened) = &self.content else {
+            return;
+        };
+        let doc = opened.doc.clone();
+        let colors = self.page_colors();
+        let shown = self.shown;
+        let Some(tool) = self.area.as_mut() else {
+            return;
+        };
+        let lens = &mut tool.lens;
+        let Some((page, at)) = lens.at else {
+            return;
+        };
+        if lens.drawing
+            || lens
+                .image
+                .as_ref()
+                .is_some_and(|(spot, _)| *spot == (page, at))
+        {
+            return;
+        }
+        lens.drawing = true;
+        let scale = shown * MAGNIFY * 2.0;
+        let side = (LENS * 2.0) as u32;
+        let region = Region {
+            x: (at[0] * scale - side as f32 / 2.0).max(0.0) as u32,
+            y: (at[1] * scale - side as f32 / 2.0).max(0.0) as u32,
+            width: side,
+            height: side,
+        };
+        let drawn = cx.background_executor().spawn(async move {
+            let mut bitmap = doc.render_region(page, scale, region)?;
+            colors.apply(&mut bitmap, &[]);
+            Some(bitmap)
+        });
+        cx.spawn(async move |this, cx| {
+            let bitmap = drawn.await;
+            this.update(cx, |this, cx| {
+                let Some(tool) = this.area.as_mut() else {
+                    return;
+                };
+                tool.lens.drawing = false;
+                if let Some(image) = bitmap.and_then(super::render_image)
+                    && let Some((_, old)) = tool.lens.image.replace(((page, at), image))
+                {
+                    this.released.push(old);
+                }
+                this.draw_lens(cx);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// The loupe's lens over `page`, centred on the pointer.
+    pub(super) fn lens_overlay(&self, page: usize) -> Option<AnyElement> {
+        let tool = self.area.as_ref()?;
+        let (p, at) = tool.lens.at?;
+        if p != page {
+            return None;
+        }
+        let ((_, drawn_at), image) = tool.lens.image.as_ref()?;
+        let shown = self.shown;
+        // The drawing is twice the lens in pixels, so half of it shows
+        // at the lens's size; it starts at the spot it was drawn for
+        // less half the drawing (or the page's edge).
+        let scale = shown * MAGNIFY;
+        let left = (drawn_at[0] * scale - LENS / 2.0).max(0.0);
+        let top = (drawn_at[1] * scale - LENS / 2.0).max(0.0);
+        let x = at[0] * scale - left - LENS / 2.0;
+        let y = at[1] * scale - top - LENS / 2.0;
+        // Drawn at two pixels to the lens's one.
+        let size = image.size(0);
+        let (w, h) = (size.width.0 as f32 / 2.0, size.height.0 as f32 / 2.0);
+        Some(
+            div()
+                .absolute()
+                .left(desktop_px(at[0] * shown - LENS / 2.0))
+                .top(desktop_px(at[1] * shown - LENS / 2.0))
+                .size(desktop_px(LENS))
+                .rounded(px(radius::SM))
+                .overflow_hidden()
+                .border_2()
+                .border_color(self.theme.accent)
+                .bg(self.paper())
+                .shadow(self.theme.page_shadow())
+                .child(
+                    img(ImageSource::Render(image.clone()))
+                        .absolute()
+                        .left(desktop_px(-x))
+                        .top(desktop_px(-y))
+                        .w(desktop_px(w))
+                        .h(desktop_px(h)),
+                )
+                .into_any_element(),
+        )
     }
 
     /// The pointer let go: the area is zoomed to or copied.
@@ -122,6 +278,7 @@ impl Viewer {
             }
             AreaKind::Snapshot if click => {}
             AreaKind::Snapshot => self.snapshot(page, rect, cx),
+            AreaKind::Loupe => {}
         }
         true
     }

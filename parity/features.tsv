@@ -87,10 +87,10 @@ view.zoom-fit-height	view	Fit height	reader	n	shipped	P1	Ctrl+4; zoom card		acro
 view.zoom-fit-visible	view	Fit visible content	reader	n	todo	P1	-		acrobat
 view.marquee-zoom	view	Marquee zoom tool	reader	n	shipped	P0	viewer/area.rs; zoom card	a click zooms in a step there	acrobat
 view.dynamic-zoom	view	Dynamic zoom (drag to zoom)	reader	n	todo	P2	-		acrobat
-view.loupe	view	Loupe magnifier tool	reader	n	todo	P1	-		acrobat
+view.loupe	view	Loupe magnifier tool	reader	n	shipped	P1	#140	zoom card or View > Loupe; lens 3× drawn sharp	acrobat
 view.pan-and-zoom	view	Pan and zoom overview window	reader	n	todo	P2	-		acrobat
 view.hand-tool	view	Hand tool for panning	reader	y	shipped	P0	#93		acrobat
-view.rotate-view	view	Rotate the view without changing the file	reader	y	todo	P0	-		acrobat
+view.rotate-view	view	Rotate the view without changing the file	reader	y	shipped	P0	#139	Ctrl+R, Ctrl+Shift+R; render turned.rs	acrobat
 view.read-mode	view	Read mode (hide tool chrome)	reader	n	partial	P1	-	tab bar hides with one file; no read mode toggle	acrobat
 view.full-screen	view	Full screen mode	reader	y	shipped	P1	#86 F5		acrobat
 view.full-screen-presentation	view	Full-screen presentation options (auto-advance, loop, click to advance)	reader	n	shipped	P1	#86 present.rs	/Trans, /Dur, black/white screen	acrobat
@@ -119,7 +119,7 @@ view.page-labels-display	view	Show page labels (i, ii, 1, 2...)	reader	n	shipped
 view.find	view	Find text across the document	reader	y	shipped	P0	Ctrl+F		acrobat
 view.find-next-previous	view	Find next / previous match	reader	y	shipped	P0	F3 / Shift+F3		acrobat
 view.find-options	view	Find options: whole words, case-sensitive	reader	y	shipped	P0	text.rs find_with; CLI find	match case, whole words, accents; "quotes" for an exact phrase	acrobat
-view.find-in-comments-bookmarks	view	Find in comments and bookmarks	reader	y	todo	P2	-		acrobat
+view.find-in-comments-bookmarks	view	Find in comments and bookmarks	reader	y	partial	P2	#140	comments searched in the Comments tab; bookmarks not yet	acrobat
 view.find-results-panel	view	Find results list	reader	y	shipped	P0	viewer/find.rs	every match with the words around it, a click goes to it	acrobat
 view.find-fuzzy	view	Find close spellings: typing mistakes and a letter or two off	-	n	shipped	P1	text.rs find_with; CLI find --fuzzy	one change per four letters, at most two; swapped letters count once	katna
 view.find-hyphenated	view	Find words hyphenated over two lines, and soft hyphens, whole	-	n	shipped	P1	text.rs Folded		katna
@@ -373,7 +373,7 @@ comment.edit-comment-text	comment	Edit comment text	reader	y	shipped	P0	#32		acr
 comment.copy-comment-text	comment	Copy comment text	reader	n	todo	P1	-		acrobat
 comment.filter-comments	comment	Filter comments (type, author, status, colour, checkmark)	reader	y	shipped	P1	#104		acrobat
 comment.sort-comments	comment	Sort comments (page, author, date, type, colour)	reader	n	partial	P1	page order		acrobat
-comment.search-comments	comment	Search comments	reader	y	todo	P1	-		acrobat
+comment.search-comments	comment	Search comments	reader	y	shipped	P1	#140	Comments tab filter: words in comments, replies and authors, accents ignored	acrobat
 comment.show-hide-comments	comment	Show or hide all comments and pop-ups	reader	y	partial	P1	#104 hidden flag per comment		acrobat
 comment.popups	comment	Open and reposition comment pop-ups	reader	y	partial	P1	#32		acrobat
 comment.connector-lines	comment	Connector lines between markups and pop-ups	reader	n	todo	P2	-		acrobat
