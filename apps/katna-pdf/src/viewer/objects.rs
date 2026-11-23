@@ -186,7 +186,7 @@ impl Viewer {
     }
 
     /// Where the picked objects are being dragged to, lined up with the
-    /// page's edges and middle, the grid when shown, and the other
+    /// page's edges and middle, the grid and guides when shown, and the other
     /// objects' edges and middles when near them, and the lines they
     /// meet (across, then down).
     fn moved_snapped(&self) -> Option<([f32; 4], [Option<f32>; 2])> {
@@ -209,6 +209,9 @@ impl Viewer {
             xs.extend((1..).map(|i| i as f32 * GRID).take_while(|&x| x < size[0]));
             ys.extend((1..).map(|i| i as f32 * GRID).take_while(|&y| y < size[1]));
         }
+        let (gx, gy) = self.guides.snap_lines();
+        xs.extend(gx);
+        ys.extend(gy);
         let count = self.runs.objects.get(&page).map_or(0, |o| o.len());
         for i in (0..count).filter(|i| !indices.contains(i)) {
             if let Some((_, [l, t, r, b])) = self.object_shown(page, i) {
