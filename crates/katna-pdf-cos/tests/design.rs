@@ -464,6 +464,72 @@ fn totals_add_up_and_formats_show() {
 }
 
 #[test]
+fn sums_masks_and_ranges_are_written_and_done() {
+    use katna_pdf_cos::{Calculation, Format, Range};
+    let text = NewField::Text {
+        multiline: false,
+        password: false,
+        max_len: None,
+        comb: false,
+    };
+    let mut fee = spec(0, 700.0, "Fee", text.clone());
+    fee.scripts.validate = Some(Range {
+        min: Some(0.0),
+        max: Some(5000.0),
+    });
+    let postage = spec(0, 660.0, "Postage", text.clone());
+    let mut total = spec(0, 620.0, "Total", text.clone());
+    total.scripts.calculate = Some(Calculation::Expr("Fee * 1.18 + Postage".into()));
+    let mut pan = spec(0, 580.0, "PAN", text);
+    pan.scripts.format = Some(Format::Mask("AAAAA9999A".into()));
+    let doc = designed(
+        &blank(1),
+        &FormDesign {
+            add: vec![fee, postage, total, pan],
+            ..FormDesign::default()
+        },
+    );
+    let form = doc.form();
+    let scripts = doc.form_scripts(&form);
+    assert_eq!(scripts[&form[0].id].validate.unwrap().max, Some(5000.0));
+    assert_eq!(
+        scripts[&form[2].id].calculate,
+        Some(Calculation::Expr("Fee * 1.18 + Postage".into()))
+    );
+    assert_eq!(
+        scripts[&form[3].id].format,
+        Some(Format::Mask("AAAAA9999A".into()))
+    );
+    let filled = Document::load(
+        doc.fill_data(&[
+            ("Fee".into(), "1000".into()),
+            ("Postage".into(), "20".into()),
+            ("PAN".into(), "ABCDE1234F".into()),
+        ])
+        .unwrap(),
+    )
+    .unwrap();
+    let data = filled.form_data();
+    assert_eq!(data.iter().find(|(n, _)| n == "Total").unwrap().1, "1200");
+    // Taking the scripts off takes the range off too.
+    let mut edit = katna_pdf_cos::FieldEdit::new(form[0].id);
+    edit.scripts = Some(katna_pdf_cos::Scripts::default());
+    let cleared = designed(
+        &doc,
+        &FormDesign {
+            edit: vec![edit],
+            ..FormDesign::default()
+        },
+    );
+    let scripts = cleared.form_scripts(&cleared.form());
+    assert!(
+        scripts
+            .get(&form[0].id)
+            .is_none_or(|s| s.validate.is_none())
+    );
+}
+
+#[test]
 fn form_data_goes_through_xfdf_and_fdf() {
     let doc = designed(
         &blank(1),

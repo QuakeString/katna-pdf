@@ -62,7 +62,8 @@ cargo run --release -p katna-pdf-bench -- file.pdf
   page, open an address, reset, hide and show fields, send the data),
   fields and comments drawn into the pages for good
   (`flatten.rs`), form data in and out as JSON, CSV, XFDF and FDF
-  (`formdata.rs`), totals and number, date and percent formats done in
+  (`formdata.rs`), totals, sums in simplified field notation, number ranges,
+  masks and number, date, percent, ZIP and phone formats done in
   Rust from the calls Acrobat's form tools write (`calc.rs`), the
   fields a flat form asks for found from its blanks, boxes, grid cells
   and squares to tick (`detect.rs`), the outline, links and named

@@ -43,7 +43,7 @@ Comments carry the name in Settings > Profile.
 
 Click a field to type in it; Tab goes to the next. Date fields show a calendar, totals add up as you type, and the form's own checks run as it was made. Ctrl+S saves what you filled in.
 
-The form designer, on the edit row, adds text fields, check boxes, radio buttons, lists, buttons and signature fields, sets how they look and what buttons do, and finds the fields a flat form asks for from its lines and boxes.
+The form designer, on the edit row, adds text fields, check boxes, radio buttons, lists, buttons and signature fields, sets how they look and what buttons do, keeps values to a pattern (a PAN, a phone number) or a range of numbers, works out totals and sums such as Fee * 0.18 + Postage, and finds the fields a flat form asks for from its lines and boxes.
 
 ## Editing pages
 

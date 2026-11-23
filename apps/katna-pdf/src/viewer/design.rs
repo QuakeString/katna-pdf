@@ -172,14 +172,64 @@ fn kind_index(kind: &FieldKind) -> usize {
 }
 
 /// The ways a text field's value can be shown: plain, a number, an
-/// amount in rupees, a percentage and a date.
-const SHOWN: [&str; 5] = [
+/// amount in rupees, a percentage, a date and a pattern ([`SPECIAL`]).
+const SHOWN: [&str; 6] = [
     "form-shown-plain",
     "form-shown-number",
     "form-shown-amount",
     "form-shown-percent",
     "form-shown-date",
+    "form-shown-special",
 ];
+
+/// The patterns a value can be kept to: Acrobat's four, and a mask of
+/// one's own.
+const SPECIAL: [&str; 5] = [
+    "form-special-zip",
+    "form-special-zip4",
+    "form-special-phone",
+    "form-special-ssn",
+    "form-special-mask",
+];
+
+/// The mask a field gets when one is first chosen.
+const MASK: &str = "AAAAA9999A";
+
+/// Which of [`SPECIAL`] `format` is, if one.
+fn special_index(format: Option<&Format>) -> Option<usize> {
+    match format {
+        Some(Format::Special(kind)) => Some(usize::from(*kind).min(3)),
+        Some(Format::Mask(_)) => Some(4),
+        _ => None,
+    }
+}
+
+/// What was typed in the Total box: field names separated by commas,
+/// or a sum such as `Fee * 0.18 + Postage`.
+fn typed_total(typed: &str, op: CalcOp) -> Option<Calculation> {
+    let typed = typed.trim();
+    if typed.is_empty() {
+        return None;
+    }
+    let sum = typed.contains(['+', '-', '*', '/', '(']);
+    if sum && katna_pdf_cos::expression_fields(typed).is_some() {
+        return Some(Calculation::Expr(typed.to_owned()));
+    }
+    let fields: Vec<String> = typed
+        .split(',')
+        .map(|o| o.trim().to_owned())
+        .filter(|o| !o.is_empty())
+        .collect();
+    (!fields.is_empty()).then_some(Calculation::Simple { op, fields })
+}
+
+/// A number typed in a range box; empty is none.
+fn typed_number(typed: &str) -> Result<Option<f64>, ()> {
+    match typed.trim() {
+        "" => Ok(None),
+        t => t.parse().map(Some).map_err(|_| ()),
+    }
+}
 
 fn shown_format(shown: usize) -> Option<Format> {
     let number = |currency: &str| Format::Number {
@@ -197,6 +247,7 @@ fn shown_format(shown: usize) -> Option<Format> {
             separators: 0,
         }),
         4 => Some(Format::Date("dd/mm/yyyy".into())),
+        5 => Some(Format::Special(0)),
         _ => None,
     }
 }
@@ -209,7 +260,7 @@ fn shown_index(format: Option<&Format>) -> Option<usize> {
         Some(Format::Number { .. }) => Some(2),
         Some(Format::Percent { .. }) => Some(3),
         Some(Format::Date(_)) => Some(4),
-        Some(Format::Special(_)) => None,
+        Some(Format::Special(_) | Format::Mask(_)) => Some(5),
     }
 }
 
@@ -245,6 +296,11 @@ pub(super) struct Designing {
     max_len: Entity<TextInput>,
     caption: Entity<TextInput>,
     pattern: Entity<TextInput>,
+    /// The mask a value is kept to, and the least and most a number
+    /// may be.
+    mask: Entity<TextInput>,
+    low: Entity<TextInput>,
+    high: Entity<TextInput>,
     /// What a button's action needs: a page, an address or field names.
     action_arg: Entity<TextInput>,
     _inputs: Vec<Subscription>,
@@ -383,6 +439,9 @@ impl Viewer {
         let max_len = input("form-max-len-hint", cx);
         let caption = input("form-caption", cx);
         let pattern = input("form-date-pattern-hint", cx);
+        let mask = input("form-mask-hint", cx);
+        let low = input("form-range-low", cx);
+        let high = input("form-range-high", cx);
         let action_arg = input("form-action-arg", cx);
         let inputs = [
             &name,
@@ -392,6 +451,9 @@ impl Viewer {
             &max_len,
             &caption,
             &pattern,
+            &mask,
+            &low,
+            &high,
             &action_arg,
         ]
         .into_iter()
@@ -434,6 +496,9 @@ impl Viewer {
             max_len,
             caption,
             pattern,
+            mask,
+            low,
+            high,
             action_arg,
             _inputs: inputs,
         });
@@ -529,6 +594,7 @@ impl Viewer {
             .and_then(|s| s.calculate.as_ref())
         {
             Some(Calculation::Simple { fields, .. }) => fields.join(", "),
+            Some(Calculation::Expr(expr)) => expr.clone(),
             None => String::new(),
         };
         let max_len = match field.map(|f| &f.kind) {
@@ -548,6 +614,13 @@ impl Viewer {
             Some(Format::Date(pattern)) => pattern.clone(),
             _ => DATE_PATTERN.to_owned(),
         };
+        let scripts = field.and_then(|f| designing.scripts.get(&f.id));
+        let mask = match scripts.and_then(|s| s.format.as_ref()) {
+            Some(Format::Mask(mask)) => mask.clone(),
+            _ => MASK.to_owned(),
+        };
+        let range = scripts.and_then(|s| s.validate).unwrap_or_default();
+        let number = |n: Option<f64>| n.map(|n| format!("{n}")).unwrap_or_default();
         let (_, action_arg) = action_index(field.and_then(|f| designing.actions.get(&f.id)));
         for (input, value) in [
             (designing.name.clone(), name),
@@ -557,6 +630,9 @@ impl Viewer {
             (designing.max_len.clone(), max_len),
             (designing.caption.clone(), caption),
             (designing.pattern.clone(), pattern),
+            (designing.mask.clone(), mask),
+            (designing.low.clone(), number(range.min)),
+            (designing.high.clone(), number(range.max)),
             (designing.action_arg.clone(), action_arg),
         ] {
             input.update(cx, |i, cx| i.set_text(value, cx));
@@ -850,27 +926,17 @@ impl Viewer {
             edit.options = Some(options);
         }
         if matches!(field.kind, FieldKind::Text { .. }) {
-            let adds: Vec<String> = designing
-                .total
-                .read(cx)
-                .text()
-                .split(',')
-                .map(|o| o.trim().to_owned())
-                .filter(|o| !o.is_empty())
-                .collect();
             let mut scripts = designing
                 .scripts
                 .get(&field.id)
                 .cloned()
                 .unwrap_or_default();
             let was = scripts.calculate.clone();
-            scripts.calculate = (!adds.is_empty()).then_some(Calculation::Simple {
-                op: match &was {
-                    Some(Calculation::Simple { op, .. }) => *op,
-                    None => CalcOp::Sum,
-                },
-                fields: adds,
-            });
+            let op = match &was {
+                Some(Calculation::Simple { op, .. }) => *op,
+                _ => CalcOp::Sum,
+            };
+            scripts.calculate = typed_total(designing.total.read(cx).text(), op);
             let pattern = designing.pattern.read(cx).text().trim().to_owned();
             if let Some(Format::Date(was)) = &scripts.format
                 && !pattern.is_empty()
@@ -878,7 +944,22 @@ impl Viewer {
             {
                 scripts.format = Some(Format::Date(pattern));
             }
+            let mask = designing.mask.read(cx).text().trim().to_owned();
+            if let Some(Format::Mask(was)) = &scripts.format
+                && !mask.is_empty()
+                && *was != mask
+            {
+                scripts.format = Some(Format::Mask(mask));
+            }
+            let low = typed_number(designing.low.read(cx).text());
+            let high = typed_number(designing.high.read(cx).text());
+            if let (Ok(min), Ok(max)) = (low, high) {
+                scripts.validate = Some(katna_pdf_cos::Range { min, max })
+                    .filter(|r| *r != katna_pdf_cos::Range::default());
+            }
+            let validate_was = designing.scripts.get(&field.id).and_then(|s| s.validate);
             if scripts.calculate != was
+                || scripts.validate != validate_was
                 || edit.scripts.is_none()
                     && scripts.format
                         != designing
@@ -1009,10 +1090,42 @@ impl Viewer {
                 *pattern = typed;
             }
         }
-        if scripts.format == format {
+        if scripts.format == format
+            || shown_index(scripts.format.as_ref()) == Some(shown) && shown == 5
+        {
             return;
         }
         scripts.format = format;
+        let mut edit = FieldEdit::new(field.id);
+        edit.scripts = Some(scripts);
+        self.edit_field(&field, edit, cx);
+    }
+
+    /// Keeps the field chosen to pattern `special` (an index into
+    /// [`SPECIAL`]).
+    fn set_special(&mut self, special: usize, cx: &mut Context<Self>) {
+        let Some(field) = self.chosen_field().cloned() else {
+            return;
+        };
+        let Some(designing) = self.designing.as_ref() else {
+            return;
+        };
+        let mut scripts = designing
+            .scripts
+            .get(&field.id)
+            .cloned()
+            .unwrap_or_default();
+        let format = match special {
+            4 => {
+                let typed = designing.mask.read(cx).text().trim().to_owned();
+                Format::Mask(if typed.is_empty() { MASK.into() } else { typed })
+            }
+            kind => Format::Special(kind as u8),
+        };
+        if special_index(scripts.format.as_ref()) == Some(special) {
+            return;
+        }
+        scripts.format = Some(format);
         let mut edit = FieldEdit::new(field.id);
         edit.scripts = Some(scripts);
         self.edit_field(&field, edit, cx);
@@ -1422,9 +1535,48 @@ impl Viewer {
                             .child(label("form-date-pattern"))
                             .child(input(designing.pattern.clone()));
                     }
+                    if let Some(special) = special_index(now) {
+                        let mut row = float::seg(&th).flex_none();
+                        for (i, id) in SPECIAL.iter().enumerate() {
+                            row = row.child(
+                                float::seg_item(
+                                    ("form-special", i),
+                                    None,
+                                    Some(t(id, &[]).into()),
+                                    special == i,
+                                    &th,
+                                )
+                                .px(px(6.0))
+                                .on_click(
+                                    cx.listener(move |this, _, _, cx| this.set_special(i, cx)),
+                                ),
+                            );
+                        }
+                        card = card.child(row);
+                        if special == 4 {
+                            card = card
+                                .child(label("form-mask"))
+                                .child(input(designing.mask.clone()));
+                        }
+                    }
                     card = card
                         .child(label("form-total"))
-                        .child(input(designing.total.clone()));
+                        .child(input(designing.total.clone()))
+                        .child(label("form-range"))
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(px(space::S2))
+                                .child(input(designing.low.clone()).flex_1())
+                                .child(
+                                    div()
+                                        .text_size(px(text::SMALL))
+                                        .text_color(th.dim)
+                                        .child(t("form-range-to", &[])),
+                                )
+                                .child(input(designing.high.clone()).flex_1()),
+                        );
                 }
             }
             if tab == 2 {

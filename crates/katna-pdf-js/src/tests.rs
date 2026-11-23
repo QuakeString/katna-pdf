@@ -239,3 +239,43 @@ fn util_formats_like_acrobat() {
         "string"
     );
 }
+
+#[test]
+fn simplified_field_notation_runs() {
+    let scripts = katna_pdf_cos::Scripts {
+        calculate: Some(katna_pdf_cos::Calculation::Expr("Qty * (Price + 5)".into())),
+        ..Default::default()
+    };
+    let [Some((_, sum)), ..] = katna_pdf_cos::script_text(&scripts) else {
+        panic!()
+    };
+    let widget = |name: &str, rect: &str, extra: &str| {
+        format!(
+            "<< /Type /Annot /Subtype /Widget /FT /Tx /T ({name}) /Rect [{rect}] /P 3 0 R /DA (/Helv 10 Tf 0 g) {extra} >>"
+        )
+    };
+    let objects = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 5 0 R 6 0 R] /CO [6 0 R] >> >>"
+            .to_string(),
+        "<< /Type /Pages /Count 1 /Kids [3 0 R] >>".to_string(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Annots [4 0 R 5 0 R 6 0 R] >>"
+            .to_string(),
+        widget("Qty", "10 700 110 720", ""),
+        widget("Price", "10 650 110 670", ""),
+        widget(
+            "Total",
+            "10 600 110 620",
+            &format!("/AA << /C {} >>", js(&sum)),
+        ),
+    ];
+    let doc = Document::load(pdf(&objects)).unwrap();
+    let fields = doc.form();
+    let mut form = Form::new(&doc, &fields, "sum.pdf").unwrap();
+    assert!(form.errors.is_empty(), "{:?}", form.errors);
+    form.commit("Qty", "3");
+    let out = form.commit("Price", "10");
+    assert!(
+        out.values.contains(&("Total".into(), "45".into())),
+        "{out:?}"
+    );
+}

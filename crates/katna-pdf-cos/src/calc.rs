@@ -3,9 +3,11 @@
 //! Form totals and formats without JavaScript (docs/PLAN.md §4.8):
 //! the calls Acrobat's form tools write into fields' actions
 //! (`AFSimple_Calculate`, `AFNumber_Format`, `AFPercent_Format`,
-//! `AFDate_FormatEx`, `AFDate_Format`, `AFSpecial_Format`) are read and
-//! done in Rust, so Indian government forms add up and show amounts and
-//! dates as they mean to. Other scripts are left alone.
+//! `AFDate_FormatEx`, `AFDate_Format`, `AFSpecial_Format`,
+//! `AFSpecial_KeystrokeEx`, `AFRange_Validate`, and simplified field
+//! notation between `BVCALC` and `EVCALC`) are read and done in Rust, so
+//! Indian government forms add up and show amounts and dates as they
+//! mean to. Other scripts are left alone.
 
 use std::collections::HashMap;
 
@@ -17,6 +19,11 @@ pub enum Calculation {
     /// `SUM`, `PRD`, `AVG`, `MIN` or `MAX` of the fields named (full
     /// names; a name with a trailing dot takes all its kids).
     Simple { op: CalcOp, fields: Vec<String> },
+    /// Acrobat's simplified field notation: field names, numbers,
+    /// `+ - * /` and brackets, as `Fee * 0.18 + Postage`. A character
+    /// that would end a name (a space, an operator) is kept in it with a
+    /// backslash before it.
+    Expr(String),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -49,6 +56,28 @@ pub enum Format {
     /// 0: ZIP code; 1: ZIP+4; 2: phone number; 3: social security
     /// number.
     Special(u8),
+    /// What may be typed, place by place: `9` a digit, `A` a letter, `X`
+    /// a letter or digit, `?` any character, `*` anything from there
+    /// on; other characters stand for themselves.
+    Mask(String),
+}
+
+/// The numbers a field allows (its `/AA /V` `AFRange_Validate`).
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct Range {
+    pub min: Option<f64>,
+    pub max: Option<f64>,
+}
+
+impl Range {
+    /// Whether `value` is allowed: an empty one always is.
+    pub fn allows(&self, value: &str) -> bool {
+        if value.trim().is_empty() {
+            return true;
+        }
+        let n = number(value);
+        self.min.is_none_or(|m| n >= m) && self.max.is_none_or(|m| n <= m)
+    }
 }
 
 /// What a field's scripts do that we can.
@@ -56,6 +85,7 @@ pub enum Format {
 pub struct Scripts {
     pub calculate: Option<Calculation>,
     pub format: Option<Format>,
+    pub validate: Option<Range>,
 }
 
 impl Document {
@@ -72,7 +102,13 @@ impl Document {
             };
             let scripts = Scripts {
                 calculate: self.script(&aa, "C").and_then(|s| calculation(&s)),
-                format: self.script(&aa, "F").and_then(|s| format(&s)),
+                format: self.script(&aa, "F").and_then(|s| format(&s)).or_else(|| {
+                    // Acrobat's arbitrary masks may only check keys.
+                    self.script(&aa, "K")
+                        .and_then(|s| format(&s))
+                        .filter(|f| matches!(f, Format::Mask(_)))
+                }),
+                validate: self.script(&aa, "V").and_then(|s| range(&s)),
             };
             if scripts != Scripts::default() {
                 out.insert(field.id, scripts);
@@ -124,7 +160,16 @@ impl Document {
 
 /// Works out `calc` from `values` (full names to values as typed).
 pub fn calculate(calc: &Calculation, values: &HashMap<String, String>) -> String {
-    let Calculation::Simple { op, fields } = calc;
+    let (op, fields) = match calc {
+        Calculation::Simple { op, fields } => (op, fields),
+        Calculation::Expr(expr) => {
+            let value = |name: &str| values.get(name).map_or(0.0, |v| number(v));
+            return match parse_expr(expr).map(|e| e.eval(&value)) {
+                Some(n) if n.is_finite() => plain_number(n),
+                _ => String::new(),
+            };
+        }
+    };
     let mut numbers = Vec::new();
     for name in fields {
         if let Some(prefix) = name.strip_suffix('.') {
@@ -239,7 +284,198 @@ pub fn show(format: &Format, value: &str) -> String {
                 _ => value.to_owned(),
             }
         }
+        Format::Mask(mask) => fit_mask(mask, value).unwrap_or_else(|| value.to_owned()),
     }
+}
+
+/// `value` written into `mask`, its literals put in where they were
+/// left out; `None` if it does not fit.
+pub fn fit_mask(mask: &str, value: &str) -> Option<String> {
+    let value: Vec<char> = value.chars().collect();
+    let mut out = String::new();
+    let mut v = 0;
+    for k in mask.chars() {
+        let fits = |c: char| match k {
+            '9' => c.is_ascii_digit(),
+            'A' => c.is_ascii_alphabetic(),
+            'X' => c.is_ascii_alphanumeric(),
+            _ => true,
+        };
+        match k {
+            '*' => {
+                out.extend(&value[v..]);
+                return Some(out);
+            }
+            '9' | 'A' | 'X' | '?' => {
+                let c = *value.get(v)?;
+                if !fits(c) {
+                    return None;
+                }
+                out.push(c);
+                v += 1;
+            }
+            k => {
+                if value.get(v) == Some(&k) {
+                    v += 1;
+                }
+                out.push(k);
+            }
+        }
+    }
+    (v == value.len()).then_some(out)
+}
+
+/// A piece of a simplified field notation sum.
+#[derive(Debug, Clone, PartialEq)]
+enum Token {
+    Number(f64),
+    Name(String),
+    Op(char),
+}
+
+fn tokens(expr: &str) -> Option<Vec<Token>> {
+    let mut out = Vec::new();
+    let mut chars = expr.chars().peekable();
+    while let Some(&c) = chars.peek() {
+        match c {
+            c if c.is_whitespace() => {
+                chars.next();
+            }
+            '+' | '-' | '*' | '/' | '(' | ')' => {
+                chars.next();
+                out.push(Token::Op(c));
+            }
+            _ => {
+                let mut word = String::new();
+                let mut escaped = false;
+                while let Some(&c) = chars.peek() {
+                    if c == '\\' {
+                        chars.next();
+                        word.push(chars.next()?);
+                        escaped = true;
+                        continue;
+                    }
+                    if c.is_whitespace() || "+-*/()".contains(c) {
+                        break;
+                    }
+                    word.push(c);
+                    chars.next();
+                }
+                let numeric = !escaped
+                    && word.starts_with(|c: char| c.is_ascii_digit() || c == '.')
+                    && word.chars().all(|c| c.is_ascii_digit() || c == '.');
+                out.push(match numeric {
+                    true => Token::Number(word.parse().ok()?),
+                    false => Token::Name(word),
+                });
+            }
+        }
+    }
+    Some(out)
+}
+
+/// A simplified field notation sum, read.
+#[derive(Debug, Clone, PartialEq)]
+enum Expr {
+    Number(f64),
+    Field(String),
+    Neg(Box<Expr>),
+    Op(char, Box<Expr>, Box<Expr>),
+}
+
+impl Expr {
+    fn eval(&self, value: &dyn Fn(&str) -> f64) -> f64 {
+        match self {
+            Expr::Number(n) => *n,
+            Expr::Field(name) => value(name),
+            Expr::Neg(e) => -e.eval(value),
+            Expr::Op(op, a, b) => {
+                let (a, b) = (a.eval(value), b.eval(value));
+                match op {
+                    '+' => a + b,
+                    '-' => a - b,
+                    '*' => a * b,
+                    _ => a / b,
+                }
+            }
+        }
+    }
+
+    /// The JavaScript Acrobat writes for it.
+    fn script(&self) -> String {
+        match self {
+            Expr::Number(n) => plain_number(*n),
+            Expr::Field(name) => format!(
+                "AFMakeNumber(getField(\"{}\").value)",
+                name.replace('\\', "\\\\").replace('"', "\\\"")
+            ),
+            Expr::Neg(e) => format!("-({})", e.script()),
+            Expr::Op(op, a, b) => format!("({}{op}{})", a.script(), b.script()),
+        }
+    }
+
+    fn fields<'a>(&'a self, out: &mut Vec<&'a str>) {
+        match self {
+            Expr::Number(_) => {}
+            Expr::Field(name) => out.push(name),
+            Expr::Neg(e) => e.fields(out),
+            Expr::Op(_, a, b) => {
+                a.fields(out);
+                b.fields(out);
+            }
+        }
+    }
+}
+
+/// Reads `expr`, or `None` if it is not a sum of fields and numbers.
+fn parse_expr(expr: &str) -> Option<Expr> {
+    let tokens = tokens(expr)?;
+    let mut at = 0;
+    let e = sum(&tokens, &mut at)?;
+    (at == tokens.len()).then_some(e)
+}
+
+fn sum(t: &[Token], at: &mut usize) -> Option<Expr> {
+    let mut e = product(t, at)?;
+    while let Some(Token::Op(op @ ('+' | '-'))) = t.get(*at) {
+        *at += 1;
+        e = Expr::Op(*op, Box::new(e), Box::new(product(t, at)?));
+    }
+    Some(e)
+}
+
+fn product(t: &[Token], at: &mut usize) -> Option<Expr> {
+    let mut e = unary(t, at)?;
+    while let Some(Token::Op(op @ ('*' | '/'))) = t.get(*at) {
+        *at += 1;
+        e = Expr::Op(*op, Box::new(e), Box::new(unary(t, at)?));
+    }
+    Some(e)
+}
+
+fn unary(t: &[Token], at: &mut usize) -> Option<Expr> {
+    let token = t.get(*at)?;
+    *at += 1;
+    match token {
+        Token::Number(n) => Some(Expr::Number(*n)),
+        Token::Name(name) => Some(Expr::Field(name.clone())),
+        Token::Op('-') => Some(Expr::Neg(Box::new(unary(t, at)?))),
+        Token::Op('+') => unary(t, at),
+        Token::Op('(') => {
+            let e = sum(t, at)?;
+            (t.get(*at) == Some(&Token::Op(')'))).then(|| *at += 1)?;
+            Some(e)
+        }
+        Token::Op(_) => None,
+    }
+}
+
+/// Whether `expr` is simplified field notation, and the fields it names.
+pub fn expression_fields(expr: &str) -> Option<Vec<String>> {
+    let e = parse_expr(expr)?;
+    let mut out = Vec::new();
+    e.fields(&mut out);
+    Some(out.into_iter().map(str::to_owned).collect())
 }
 
 /// `n` with `decimals` places, grouped in thousands as `style` says.
@@ -520,6 +756,12 @@ fn call(script: &str, name: &str) -> Option<Vec<String>> {
 
 /// A calculation script we can do ourselves.
 pub fn calculation(script: &str) -> Option<Calculation> {
+    if let Some((_, rest)) = script.split_once("BVCALC")
+        && let Some((expr, _)) = rest.split_once("EVCALC")
+    {
+        let expr = expr.trim();
+        return parse_expr(expr).map(|_| Calculation::Expr(expr.to_owned()));
+    }
     let args = call(script, "AFSimple_Calculate")?;
     let (op, names) = args.split_first()?;
     let op = match op.to_ascii_uppercase().as_str() {
@@ -565,20 +807,42 @@ pub fn format(script: &str) -> Option<Format> {
         let i = int(a.first()).clamp(0, DATE_FORMATS.len() as i64 - 1) as usize;
         return Some(Format::Date(DATE_FORMATS[i].into()));
     }
+    if let Some(a) = call(script, "AFSpecial_KeystrokeEx") {
+        return a.first().map(|m| Format::Mask(m.clone()));
+    }
     if let Some(a) = call(script, "AFSpecial_Format") {
         return Some(Format::Special(int(a.first()).clamp(0, 3) as u8));
     }
     None
 }
 
+/// A validation script we can do ourselves.
+pub fn range(script: &str) -> Option<Range> {
+    let a = call(script, "AFRange_Validate")?;
+    let on = |i: usize| a.get(i).is_some_and(|b| b.trim() == "true");
+    let n = |i: usize| a.get(i).and_then(|n| n.trim().parse::<f64>().ok());
+    let range = Range {
+        min: n(1).filter(|_| on(0)),
+        max: n(3).filter(|_| on(2)),
+    };
+    (range != Range::default()).then_some(range)
+}
+
 /// The scripts that make a field calculate or show itself as asked:
-/// `/AA` entries `C`, `F` and `K`, for the forms designer.
-pub fn script_text(
-    calc: Option<&Calculation>,
-    format: Option<&Format>,
-) -> [Option<(String, String)>; 3] {
+/// `/AA` entries `C`, `F`, `K` and `V`, for the forms designer.
+pub fn script_text(scripts: &Scripts) -> [Option<(String, String)>; 4] {
     let quote = |s: &str| format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""));
-    let c = calc.map(|Calculation::Simple { op, fields }| {
+    let c = scripts.calculate.as_ref().and_then(|calc| {
+        let (op, fields) = match calc {
+            Calculation::Simple { op, fields } => (op, fields),
+            Calculation::Expr(expr) => {
+                let e = parse_expr(expr)?;
+                return Some((
+                    "C".to_string(),
+                    format!("/** BVCALC {expr} EVCALC **/ event.value = {};", e.script()),
+                ));
+            }
+        };
         let op = match op {
             CalcOp::Sum => "SUM",
             CalcOp::Product => "PRD",
@@ -587,16 +851,16 @@ pub fn script_text(
             CalcOp::Max => "MAX",
         };
         let names: Vec<String> = fields.iter().map(|f| quote(f)).collect();
-        (
+        Some((
             "C".to_string(),
             format!(
                 "AFSimple_Calculate({}, new Array ({}));",
                 quote(op),
                 names.join(", ")
             ),
-        )
+        ))
     });
-    let (f, k) = match format {
+    let (f, k) = match &scripts.format {
         Some(Format::Number {
             decimals,
             separators,
@@ -628,12 +892,27 @@ pub fn script_text(
             Some(format!("AFSpecial_Format({kind});")),
             Some(format!("AFSpecial_Keystroke({kind});")),
         ),
+        Some(Format::Mask(mask)) => {
+            let call = format!("AFSpecial_KeystrokeEx({});", quote(mask));
+            (Some(call.clone()), Some(call))
+        }
         None => (None, None),
     };
+    let v = scripts.validate.map(|r| {
+        let n = |n: Option<f64>| plain_number(n.unwrap_or(0.0));
+        format!(
+            "AFRange_Validate({}, {}, {}, {});",
+            r.min.is_some(),
+            n(r.min),
+            r.max.is_some(),
+            n(r.max)
+        )
+    });
     [
         c,
         f.map(|f| ("F".to_string(), f)),
         k.map(|k| ("K".to_string(), k)),
+        v.map(|v| ("V".to_string(), v)),
     ]
 }
 
@@ -700,9 +979,61 @@ mod tests {
             currency: "₹".into(),
             currency_first: true,
         };
-        let [c, f, k] = script_text(Some(&calc), Some(&rupees));
+        let scripts = Scripts {
+            calculate: Some(calc.clone()),
+            format: Some(rupees.clone()),
+            validate: Some(Range {
+                min: Some(0.0),
+                max: None,
+            }),
+        };
+        let [c, f, k, v] = script_text(&scripts);
         assert_eq!(calculation(&c.unwrap().1), Some(calc));
         assert_eq!(format(&f.unwrap().1), Some(rupees));
         assert!(k.unwrap().1.starts_with("AFNumber_Keystroke("));
+        let v = v.unwrap().1;
+        assert_eq!(v, "AFRange_Validate(true, 0, false, 0);");
+        assert_eq!(range(&v), scripts.validate);
+    }
+
+    #[test]
+    fn simplified_notation_is_worked_out() {
+        let values: HashMap<String, String> =
+            [("Fee", "1,000"), ("Postage", "50"), ("Net Pay", "7")]
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect();
+        let calc = Calculation::Expr("Fee * 0.18 + (Postage - 10) / 2 - -Net\\ Pay".into());
+        assert_eq!(calculate(&calc, &values), "207");
+        let scripts = Scripts {
+            calculate: Some(calc.clone()),
+            ..Scripts::default()
+        };
+        let [c, ..] = script_text(&scripts);
+        let js = c.unwrap().1;
+        assert!(
+            js.contains("AFMakeNumber(getField(\"Net Pay\").value)"),
+            "{js}"
+        );
+        assert_eq!(calculation(&js), Some(calc));
+        assert_eq!(
+            expression_fields("A+B*2"),
+            Some(vec!["A".to_string(), "B".to_string()])
+        );
+        assert_eq!(expression_fields("A+"), None);
+        assert_eq!(calculate(&Calculation::Expr("A/0".into()), &values), "");
+    }
+
+    #[test]
+    fn masks_and_ranges() {
+        let mask = format("AFSpecial_KeystrokeEx(\"AA-9999\");").unwrap();
+        assert_eq!(mask, Format::Mask("AA-9999".into()));
+        assert_eq!(show(&mask, "MH1234"), "MH-1234");
+        assert_eq!(show(&mask, "MH-1234"), "MH-1234");
+        assert_eq!(show(&mask, "M1234"), "M1234");
+        assert_eq!(fit_mask("99*", "12abc"), Some("12abc".into()));
+        let r = range("AFRange_Validate(true, 1, true, 100);").unwrap();
+        assert!(r.allows("50") && r.allows("") && !r.allows("0") && !r.allows("101"));
+        assert_eq!(range("AFRange_Validate(false, 0, false, 0);"), None);
     }
 }

@@ -424,10 +424,10 @@ form.rich-text-fields	form	Rich-text field values	standard	n	todo	P2	-		acrobat
 form.af-number	form	Number and currency formatting (AFNumber)	reader	y	shipped	P1	#67 calc.rs		acrobat
 form.af-percent	form	Percentage formatting	reader	y	shipped	P1	#67		acrobat
 form.af-date-time	form	Date and time formatting and parsing	reader	y	shipped	P1	#67		acrobat
-form.af-special	form	Special formats (zip, phone, SSN, arbitrary mask)	reader	y	partial	P1	#67		acrobat
-form.af-range-validate	form	Range validation	reader	y	partial	P1	#67		acrobat
+form.af-special	form	Special formats (zip, phone, SSN, arbitrary mask)	reader	y	shipped	P1	#174		acrobat
+form.af-range-validate	form	Range validation	reader	y	shipped	P1	#174		acrobat
 form.af-simple-calculate	form	Sum, product, average, min, max calculations	reader	y	shipped	P1	#67		acrobat
-form.simplified-notation	form	Simplified field notation calculations	reader	n	partial	P1	#67		acrobat
+form.simplified-notation	form	Simplified field notation calculations	reader	n	shipped	P1	#174		acrobat
 form.custom-scripts	form	Custom format, keystroke, validate and calculate scripts	reader	y	shipped	P2	katna-pdf-js	boa sandbox; off in Settings > Editing	acrobat
 form.calculation-order	form	Calculation order	reader	y	shipped	P1	#67		acrobat
 form.event-order	form	Keystroke, validate, calculate, format event order	reader	y	partial	P2	#67		acrobat
