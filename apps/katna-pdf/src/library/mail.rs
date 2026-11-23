@@ -11,7 +11,8 @@ use katna_ui::px;
 use katna_ui::tokens::{radius, space, text};
 use katna_ui::widgets;
 
-use super::{CELL_HEIGHT, CELL_WIDTH, COVER_BOX, LibraryEvent, LibraryView, size_text};
+use super::context::{Clicked, Then};
+use super::{CELL_HEIGHT, CELL_WIDTH, COVER_BOX, LibraryView, size_text};
 use crate::mail::{self, MailPdf};
 use crate::text::t;
 
@@ -67,6 +68,11 @@ impl LibraryView {
     }
 
     fn open_mail_pdf(&mut self, i: usize, cx: &mut Context<Self>) {
+        self.fetch_mail_pdf(i, Then::Open, cx);
+    }
+
+    /// Fetches the `i`th PDF shown from its mail, then does `then` with it.
+    pub(super) fn fetch_mail_pdf(&mut self, i: usize, then: Then, cx: &mut Context<Self>) {
         let Some(view) = self.mail.as_mut() else {
             return;
         };
@@ -88,7 +94,7 @@ impl LibraryView {
                     view.opening = None;
                 }
                 match opened {
-                    Ok(path) => cx.emit(LibraryEvent::Open(path, None)),
+                    Ok(path) => this.then_with(path, then, cx),
                     Err(e) => this.notice = Some(t("library-mail-open-failed", &[("error", &e)])),
                 }
                 // It may have been downloaded just now.
@@ -146,6 +152,12 @@ impl LibraryView {
         };
         div()
             .id(("mail-pdf", i))
+            .on_mouse_down(
+                gpui::MouseButton::Right,
+                cx.listener(move |this, e: &gpui::MouseDownEvent, _, cx| {
+                    this.show_context(Clicked::Mail(i), e.position, cx)
+                }),
+            )
             .w(px(CELL_WIDTH))
             .h(px(CELL_HEIGHT))
             .flex_none()

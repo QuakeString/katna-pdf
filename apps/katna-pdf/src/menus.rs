@@ -8,10 +8,11 @@ use gpui::Action;
 
 use crate::viewer::{
     ActualSize, AddBookmark, Annotate, CloseAll, CloseTab, Compare, CopyText, Export, Find,
-    FindNext, FindPrevious, FitHeight, FitPage, FitWidth, Loupe, NextPage, NextSpread, NextTab,
-    NextView, Open, Organize, Present, PreviousPage, PreviousTab, PreviousView, Print, Properties,
-    Quit, ReadAloud, ReopenSession, Revert, RotateViewLeft, RotateViewRight, Save, Shortcuts,
-    ShowLibrary, Sign, Snapshot, ToggleContents, ToggleNight, ZoomIn, ZoomOut, ZoomToArea,
+    FindNext, FindPrevious, FitHeight, FitPage, FitWidth, Loupe, NewWindow, NextPage, NextSpread,
+    NextTab, NextView, Open, OpenSettings, Organize, Present, PreviousPage, PreviousTab,
+    PreviousView, Print, Properties, Quit, ReadAloud, ReopenSession, ReportProblem, Revert,
+    RotateViewLeft, RotateViewRight, Save, Shortcuts, ShowAbout, ShowLibrary, Sign, Snapshot,
+    ToggleContents, ToggleNight, ZoomIn, ZoomOut, ZoomToArea,
 };
 
 /// An item: its id (and the id of its words), and its keys as
@@ -27,6 +28,7 @@ pub const MENUS: &[(&str, &[Entry])] = &[
         "menu-file",
         &[
             Some(("menu-open", &["Control", "O"])),
+            Some(("menu-new-window", &["Control", "N"])),
             Some(("menu-reopen-session", &[])),
             Some(("menu-save", &["Control", "S"])),
             Some(("menu-print", &["Control", "P"])),
@@ -92,7 +94,16 @@ pub const MENUS: &[(&str, &[Entry])] = &[
             Some(("menu-previous-tab", &["Control", "Shift", "Tab"])),
         ],
     ),
-    ("menu-help", &[Some(("menu-shortcuts", &["F1"]))]),
+    (
+        "menu-help",
+        &[
+            Some(("menu-settings", &["Control", ","])),
+            Some(("menu-shortcuts", &["F1"])),
+            Some(("menu-report", &[])),
+            None,
+            Some(("menu-about", &[])),
+        ],
+    ),
 ];
 
 /// Keys no menu item shows: the words' id and the keys.
@@ -117,6 +128,7 @@ pub const MORE_KEYS: &[(&str, &str)] = &[
 pub fn action(id: &str) -> Option<Box<dyn Action>> {
     Some(match id {
         "menu-open" => Box::new(Open),
+        "menu-new-window" => Box::new(NewWindow),
         "menu-reopen-session" => Box::new(ReopenSession),
         "menu-save" => Box::new(Save),
         "menu-print" => Box::new(Print),
@@ -159,6 +171,9 @@ pub fn action(id: &str) -> Option<Box<dyn Action>> {
         "menu-add-bookmark" => Box::new(AddBookmark),
         "menu-next-tab" => Box::new(NextTab),
         "menu-previous-tab" => Box::new(PreviousTab),
+        "menu-settings" => Box::new(OpenSettings),
+        "menu-about" => Box::new(ShowAbout),
+        "menu-report" => Box::new(ReportProblem),
         _ => return None,
     })
 }

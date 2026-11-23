@@ -155,7 +155,7 @@ impl Viewer {
                 "cursor",
                 Some("edit-paragraphs-name"),
                 "edit-paragraphs",
-                self.adding.is_none(),
+                self.adding.is_none() && !self.cropping,
             )
             .on_click(cx.listener(|this, _, _, cx| this.pick_adding(None, cx))),
         );
@@ -191,6 +191,10 @@ impl Viewer {
             .child(
                 button(n + 3, "drop", None, "page-marks", self.marking.is_some())
                     .on_click(cx.listener(|this, _, _, cx| this.toggle_marking(cx))),
+            )
+            .child(
+                button(n + 5, "crop", Some("crop-name"), "crop-tool", self.cropping)
+                    .on_click(cx.listener(|this, _, _, cx| this.toggle_crop(cx))),
             )
             .child(
                 button(n + 4, "grid", None, "grid-tool", self.gridded).on_click(cx.listener(
@@ -279,6 +283,8 @@ impl Viewer {
     pub(super) fn pick_adding(&mut self, adding: Option<Adding>, cx: &mut Context<Self>) {
         self.finish_text_edit(true, cx);
         self.adding = adding;
+        self.cropping = false;
+        self.crop_box = None;
         if adding.is_some() {
             self.redacting = None;
             self.linking = None;
@@ -481,7 +487,7 @@ impl Viewer {
             this.update(cx, |this, cx| match read {
                 Ok(image) => this.add_picture(page, boxed, at, image, PICTURE_WIDTH, cx),
                 Err(error) => {
-                    this.notice = Some(t("text-edit-failed", &[("error", &error)]));
+                    this.notice = Some(super::said("text-edit-failed", &[("error", &error)]));
                     cx.notify();
                 }
             })
@@ -583,7 +589,7 @@ impl Viewer {
                     this.add_picture(page, None, at, image, PICTURE_WIDTH, cx);
                 }
                 Err(error) => {
-                    this.notice = Some(t("text-edit-failed", &[("error", &error)]));
+                    this.notice = Some(super::said("text-edit-failed", &[("error", &error)]));
                     cx.notify();
                 }
             })
@@ -630,7 +636,7 @@ impl Viewer {
             this.update(cx, |this, cx| match read {
                 Ok(image) => this.add_picture(page, None, at, image, PICTURE_WIDTH, cx),
                 Err(error) => {
-                    this.notice = Some(t("text-edit-failed", &[("error", &error)]));
+                    this.notice = Some(super::said("text-edit-failed", &[("error", &error)]));
                     cx.notify();
                 }
             })

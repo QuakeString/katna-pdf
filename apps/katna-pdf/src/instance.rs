@@ -36,6 +36,9 @@ pub struct Request {
     /// The launcher's activation token, so the window may take focus on
     /// Wayland (`XDG_ACTIVATION_TOKEN`).
     pub activation_token: Option<String>,
+    /// Asked for with `--new-window`: the files go in a window of their
+    /// own.
+    pub new_window: bool,
 }
 
 /// How this process started.
@@ -50,15 +53,15 @@ pub enum Started {
 
 /// Becomes the running instance, or hands `files` to the one already
 /// running.
-pub fn start(files: &[PathBuf]) -> Started {
+pub fn start(files: &[PathBuf], new_window: bool) -> Started {
     match runtime_dir() {
-        Some(dir) => start_in(&dir, &crate::ids::app_id(), files),
+        Some(dir) => start_in(&dir, &crate::ids::app_id(), files, new_window),
         None => Started::Running(None),
     }
 }
 
 /// [`start`] with its lock and port files in `dir`, named after `name`.
-fn start_in(dir: &Path, name: &str, files: &[PathBuf]) -> Started {
+fn start_in(dir: &Path, name: &str, files: &[PathBuf], new_window: bool) -> Started {
     if std::fs::create_dir_all(dir).is_err() {
         return Started::Running(None);
     }
@@ -78,6 +81,7 @@ fn start_in(dir: &Path, name: &str, files: &[PathBuf]) -> Started {
             let request = Request {
                 files: files.to_vec(),
                 activation_token: std::env::var("XDG_ACTIVATION_TOKEN").ok(),
+                new_window,
             };
             if hand_off(&port_path, &request) {
                 Started::HandedOff
@@ -182,6 +186,9 @@ fn encode(request: &Request) -> Option<String> {
     {
         out.push_str(&format!("activation {token}\n"));
     }
+    if request.new_window {
+        out.push_str("window\n");
+    }
     for file in &request.files {
         let file = file.to_str()?;
         if file.contains(['\n', '\r']) {
@@ -205,6 +212,7 @@ fn parse(text: &str, token: &str) -> Option<Request> {
         match line.split_once(' ') {
             Some(("open", path)) => request.files.push(PathBuf::from(path)),
             Some(("activation", t)) => request.activation_token = Some(t.to_owned()),
+            _ if line == "window" => request.new_window = true,
             _ if line == "end" => return Some(request),
             _ => {}
         }
@@ -264,6 +272,7 @@ mod tests {
         let request = Request {
             files: vec!["/home/kay/Plan A.pdf".into(), "/tmp/b.pdf".into()],
             activation_token: Some("abc_123".into()),
+            new_window: true,
         };
         let text = format!("{HELLO} t0k\n{}", encode(&request).unwrap());
         assert_eq!(parse(&text, "t0k"), Some(request));
@@ -276,6 +285,7 @@ mod tests {
         let request = Request {
             files: vec!["/tmp/two\nlines.pdf".into()],
             activation_token: None,
+            new_window: false,
         };
         assert_eq!(encode(&request), None);
     }
@@ -283,11 +293,14 @@ mod tests {
     #[test]
     fn a_second_launch_hands_its_files_to_the_first() {
         let dir = scratch("hand-off");
-        let Started::Running(Some(requests)) = start_in(&dir, "test", &[]) else {
+        let Started::Running(Some(requests)) = start_in(&dir, "test", &[], false) else {
             panic!("the first launch should run and listen");
         };
         let files = vec![PathBuf::from("/tmp/a.pdf")];
-        assert!(matches!(start_in(&dir, "test", &files), Started::HandedOff));
+        assert!(matches!(
+            start_in(&dir, "test", &files, false),
+            Started::HandedOff
+        ));
         assert_eq!(requests.recv_blocking().unwrap().files, files);
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -295,7 +308,7 @@ mod tests {
     #[test]
     fn a_wrong_token_gets_no_answer() {
         let dir = scratch("token");
-        let Started::Running(Some(requests)) = start_in(&dir, "test", &[]) else {
+        let Started::Running(Some(requests)) = start_in(&dir, "test", &[], false) else {
             panic!("the first launch should run and listen");
         };
         std::fs::write(

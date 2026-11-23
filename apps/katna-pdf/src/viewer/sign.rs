@@ -991,7 +991,7 @@ impl Viewer {
                     let notice = if others.is_empty() {
                         None
                     } else if failed.is_empty() {
-                        Some(t(
+                        Some(super::said(
                             "sign-batch-done",
                             &[
                                 ("count", &done.to_string()),
@@ -999,7 +999,7 @@ impl Viewer {
                             ],
                         ))
                     } else {
-                        Some(t(
+                        Some(super::said(
                             "sign-batch-partial",
                             &[
                                 ("count", &done.to_string()),
@@ -2058,7 +2058,7 @@ impl Viewer {
         match shown {
             Ok(file) => cx.emit(super::ViewerEvent::Dropped(vec![file])),
             Err(e) => {
-                self.notice = Some(e.to_string());
+                self.notice = Some(super::Notice::error(e.to_string()));
                 cx.notify();
             }
         }
@@ -2093,11 +2093,11 @@ impl Viewer {
                 .await;
             this.update(cx, |this, cx| {
                 this.notice = Some(match written {
-                    Ok(target) => t(
+                    Ok(target) => super::said(
                         "signatures-report-saved",
                         &[("name", &super::file_name(&target))],
                     ),
-                    Err(error) => t("signatures-report-failed", &[("error", &error)]),
+                    Err(error) => super::said("signatures-report-failed", &[("error", &error)]),
                 });
                 cx.notify();
             })
@@ -2109,7 +2109,10 @@ impl Viewer {
     /// Trusts `root` from now on, and so every signer it vouches for.
     fn trust(&mut self, root: &Certificate, cx: &mut Context<Self>) {
         if let Err(e) = trust_root(root) {
-            self.notice = Some(t("signer-trust-failed", &[("error", &e.to_string())]));
+            self.notice = Some(super::said(
+                "signer-trust-failed",
+                &[("error", &e.to_string())],
+            ));
             cx.notify();
             return;
         }

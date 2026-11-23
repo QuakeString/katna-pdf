@@ -87,7 +87,7 @@ impl Viewer {
             let Some(voice) = voice else {
                 this.update(cx, |this, cx| {
                     this.reading = None;
-                    this.notice = Some(t("read-no-voice", &[]));
+                    this.notice = Some(super::said("read-no-voice", &[]));
                     cx.notify();
                 })
                 .ok();
@@ -146,7 +146,7 @@ impl Viewer {
                     if said.is_err() {
                         this.update(cx, |this, cx| {
                             this.reading = None;
-                            this.notice = Some(t("read-voice-gone", &[]));
+                            this.notice = Some(super::said("read-voice-gone", &[]));
                             cx.notify();
                         })
                         .ok();
