@@ -34,6 +34,7 @@ mod drive;
 mod mail;
 
 use crate::drives::Drive;
+use crate::float::{self, FloatTip};
 use crate::text::t;
 use crate::theme::Theme;
 use crate::viewer::sign::{Verdict, verdict};
@@ -1087,6 +1088,7 @@ impl Render for LibraryView {
             .flex_1()
             .min_h_0()
             .flex()
+            .bg(th.page)
             .child(self.side(cx))
             .child(self.main(cx))
             .text_color(th.text)
@@ -1096,18 +1098,39 @@ impl Render for LibraryView {
 impl LibraryView {
     fn side(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let th = self.theme;
+        // A card floating clear of the window's edges (L01).
         let mut side = div()
             .id("library-side")
             .w(px(SIDE_WIDTH))
             .flex_none()
+            .m(px(float::GAP))
+            .mr_0()
             .flex()
             .flex_col()
-            .py(px(space::S2))
-            .pr(px(space::S2))
+            .p(px(space::S2))
+            .rounded(px(10.0))
             .bg(th.card)
-            .border_r_1()
-            .border_color(th.line)
-            .overflow_y_scroll();
+            .shadow(th.shadow())
+            .when(th.dark, |d| d.border_1().border_color(th.line))
+            .overflow_y_scroll()
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .pl(px(10.0))
+                    .pb(px(space::S2))
+                    .child(
+                        div()
+                            .flex_1()
+                            .text_size(px(text::BODY))
+                            .font_weight(FontWeight::BOLD)
+                            .child(t("library-title", &[])),
+                    )
+                    .child(
+                        float::ib("library-back", "x", t("library-back", &[]), false, &th)
+                            .on_click(cx.listener(|_, _, _, cx| cx.emit(LibraryEvent::Close))),
+                    ),
+            );
         let counts = [
             (
                 Place::All,
@@ -1132,11 +1155,16 @@ impl LibraryView {
             side = side.child(self.place_row(("place", i), place, icon, name, Some(n), None, cx));
         }
         let th = self.theme;
-        let add = widgets::icon_button("library-add-folder", "plus", 16.0, &th.katna)
-            .size(px(28.0))
-            .tip(t("library-add-folder", &[]), &th.katna)
-            .on_click(cx.listener(|this, _, window, cx| this.add_folder(window, cx)))
-            .into_any_element();
+        let add = float::ib(
+            "library-add-folder",
+            "plus",
+            t("library-add-folder", &[]),
+            false,
+            &th,
+        )
+        .size(px(24.0))
+        .on_click(cx.listener(|this, _, window, cx| this.add_folder(window, cx)))
+        .into_any_element();
         side = side.child(self.heading("library-folders", Some(add)));
         if self.folders.is_empty() {
             side = side.child(
@@ -1259,16 +1287,17 @@ impl LibraryView {
         div()
             .flex()
             .items_center()
-            .pl(px(space::S4))
-            .pt(px(space::S3))
+            .pl(px(10.0))
+            .pr(px(space::S1))
+            .pt(px(14.0))
             .pb(px(space::S1))
             .child(
                 div()
                     .flex_1()
-                    .text_size(px(text::SMALL))
+                    .text_size(px(text::MICRO))
                     .font_weight(FontWeight::SEMIBOLD)
                     .text_color(th.dim)
-                    .child(t(id, &[])),
+                    .child(t(id, &[]).to_uppercase()),
             )
             .children(action)
     }
@@ -1287,41 +1316,34 @@ impl LibraryView {
         let th = self.theme;
         let current = self.place == place;
         let group: gpui::SharedString = format!("{}-{}", id.0, id.1).into();
+        let hover = th.hover;
         div()
             .id(id)
             .group(group.clone())
-            .h(px(36.0))
+            .h(px(32.0))
             .flex()
             .flex_none()
             .items_center()
-            .gap(px(space::S3))
-            .pl(px(space::S4))
+            .gap(px(10.0))
+            .pl(px(10.0))
             .pr(px(space::S2))
-            .rounded_r(px(radius::FULL))
+            .rounded(px(7.0))
             .cursor_pointer()
-            .when(current, |d| {
-                d.bg(gpui::rgba(th.katna.nav_selected))
-                    .text_color(gpui::rgba(th.katna.nav_selected_text))
-            })
-            .when(!current, |d| d.hover(move |s| s.bg(th.hover)))
+            .text_color(th.text)
+            .when(current, |d| d.bg(th.accent_soft).text_color(th.accent_text))
+            .when(!current, |d| d.hover(move |s| s.bg(hover)))
             .on_click(cx.listener(move |this, _, _, cx| this.go(place.clone(), cx)))
-            .child(
-                svg()
-                    .path(format!("icons/{icon}.svg"))
-                    .size(px(18.0))
-                    .flex_none()
-                    .text_color(if current {
-                        gpui::rgba(th.katna.nav_selected_text).into()
-                    } else {
-                        th.dim
-                    }),
-            )
+            .child(float::icon(
+                glyph(icon),
+                16.0,
+                if current { th.accent_text } else { th.text2 },
+            ))
             .child(
                 div()
                     .flex_1()
                     .min_w_0()
                     .truncate()
-                    .text_size(px(text::BODY))
+                    .text_size(px(float::UI_TEXT))
                     .when(current, |d| d.font_weight(FontWeight::SEMIBOLD))
                     .child(name),
             )
@@ -1342,7 +1364,7 @@ impl LibraryView {
             .children(count.map(|n| {
                 div()
                     .flex_none()
-                    .text_size(px(text::SMALL))
+                    .text_size(px(text::CAPTION))
                     .text_color(th.dim)
                     .child(n.to_string())
             }))
@@ -1371,23 +1393,17 @@ impl LibraryView {
         let sort_name = format!("library-sort-{}", self.sort.name());
         let header = div()
             .flex_none()
-            .h(px(48.0))
+            .h(px(56.0))
             .flex()
             .items_center()
-            .gap(px(space::S2))
-            .px(px(space::S3))
-            .border_b_1()
-            .border_color(th.line)
-            .child(
-                widgets::icon_button("library-back", "chevron-left", 18.0, &th.katna)
-                    .tip(t("library-back", &[]), &th.katna)
-                    .on_click(cx.listener(|_, _, _, cx| cx.emit(LibraryEvent::Close))),
-            )
+            .gap(px(space::S3))
+            .px(px(space::S5))
             .child(
                 div()
                     .min_w_0()
                     .truncate()
                     .text_size(px(text::TITLE))
+                    .font_weight(FontWeight::BOLD)
                     .child(self.title()),
             )
             .children(progress)
@@ -1414,16 +1430,12 @@ impl LibraryView {
                     .items_center()
                     .gap(px(space::S2))
                     .px(px(space::S3))
-                    .rounded(px(radius::FULL))
-                    .bg(th.field)
-                    .text_size(px(text::BODY))
-                    .child(
-                        svg()
-                            .path("icons/search.svg")
-                            .size(px(16.0))
-                            .flex_none()
-                            .text_color(th.dim),
-                    )
+                    .rounded(px(8.0))
+                    .border_1()
+                    .border_color(th.line)
+                    .bg(th.card)
+                    .text_size(px(float::UI_TEXT))
+                    .child(float::icon("search", 15.0, th.dim))
                     .child(div().flex_1().min_w_0().child(self.search.clone())),
             )
             .when(has_query, |d| {
@@ -1435,25 +1447,14 @@ impl LibraryView {
             })
             .when(!elsewhere, |d| {
                 d.child(
-                    div()
-                        .id("library-sort")
-                        .h(px(32.0))
-                        .flex()
-                        .items_center()
-                        .px(px(space::S3))
-                        .rounded(px(radius::FULL))
-                        .border_1()
-                        .border_color(th.line)
-                        .text_size(px(text::SMALL))
-                        .cursor_pointer()
-                        .hover(move |s| s.bg(th.hover))
-                        .tip(t("library-sort-tip", &[]), &th.katna)
+                    float::chip("library-sort", t(&sort_name, &[]), false, &th)
+                        .h(px(30.0))
+                        .ftip(t("library-sort-tip", &[]), &th)
                         .on_click(cx.listener(|this, _, _, cx| {
                             let at = Sort::ALL.iter().position(|s| *s == this.sort).unwrap_or(0);
                             this.sort = Sort::ALL[(at + 1) % Sort::ALL.len()];
                             this.reload(cx);
-                        }))
-                        .child(t(&sort_name, &[])),
+                        })),
                 )
             });
         let body: AnyElement = if in_drive {
@@ -1463,10 +1464,11 @@ impl LibraryView {
         } else if let Err(e) = &self.lib {
             self.message(t("library-unavailable", &[("error", e)]), None)
         } else if self.folders.is_empty() {
-            let add = widgets::filled_button(
+            let add = float::button(
                 "library-add-first-folder",
                 t("library-add-folder", &[]),
-                &th.katna,
+                true,
+                &th,
             )
             .on_click(cx.listener(|this, _, window, cx| this.add_folder(window, cx)))
             .into_any_element();
@@ -1527,7 +1529,7 @@ impl LibraryView {
             .min_w_0()
             .flex()
             .flex_col()
-            .bg(th.card)
+            .bg(th.page)
             .overflow_hidden()
             .child(header)
             .children(hits)
@@ -1721,7 +1723,6 @@ impl LibraryView {
         if doc.scanned {
             marks.push(("library-mark-scanned", t("library-mark-scanned", &[])));
         }
-        let accent = gpui::rgba(th.katna.accent);
         div()
             .id(("doc", doc.id as u64 as usize))
             .w(px(CELL_WIDTH))
@@ -1731,9 +1732,9 @@ impl LibraryView {
             .flex()
             .flex_col()
             .gap(px(space::S1))
-            .rounded(px(radius::MD))
+            .rounded(px(10.0))
             .cursor_pointer()
-            .when(selected, |d| d.bg(gpui::rgba(th.katna.row_selected)))
+            .when(selected, |d| d.bg(th.accent_soft))
             .when(!selected, |d| d.hover(move |s| s.bg(th.hover)))
             .on_click(
                 cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
@@ -1757,10 +1758,12 @@ impl LibraryView {
                     .flex_none()
                     .relative()
                     .flex()
-                    .items_end()
+                    .items_center()
                     .justify_center()
-                    .rounded(px(radius::SM))
-                    .bg(th.backdrop)
+                    .rounded(px(8.0))
+                    .bg(th.card)
+                    .shadow(th.shadow())
+                    .when(selected, |d| d.border_2().border_color(th.accent))
                     .overflow_hidden()
                     .child(match cover {
                         Some(cover) => {
@@ -1768,9 +1771,7 @@ impl LibraryView {
                             div()
                                 .w(px(w))
                                 .h(px(h))
-                                .mb(px(space::S2))
                                 .bg(gpui::white())
-                                .shadow(widgets::elevation(&th.katna, 1.0))
                                 .when(doc.missing, |d| d.opacity(0.4))
                                 .child(img(ImageSource::Render(cover)).size_full())
                                 .into_any_element()
@@ -1796,13 +1797,22 @@ impl LibraryView {
                         div()
                             .absolute()
                             .top(px(space::S2))
-                            .left(px(space::S2))
-                            .px(px(space::S2))
-                            .rounded(px(radius::FULL))
-                            .bg(th.card)
-                            .text_size(px(text::SMALL))
+                            .right(px(space::S2))
+                            .px(px(6.0))
+                            .py(px(1.0))
+                            .rounded(px(4.0))
+                            .bg(if doc.missing {
+                                th.error_soft
+                            } else {
+                                th.accent_soft
+                            })
+                            .text_size(px(text::MICRO))
                             .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(if doc.missing { th.error } else { accent.into() })
+                            .text_color(if doc.missing {
+                                th.error
+                            } else {
+                                th.accent_text
+                            })
                             .child(mark.clone())
                     })),
             )
@@ -1833,8 +1843,12 @@ impl LibraryView {
             .gap(px(space::S2))
             .px(px(space::S4))
             .py(px(space::S2))
-            .border_t_1()
-            .border_color(th.line);
+            .m(px(float::GAP))
+            .mt_0()
+            .rounded(px(10.0))
+            .bg(th.card)
+            .shadow(th.lifted())
+            .when(th.dark, |d| d.border_1().border_color(th.line));
         let field = |input: &Entity<TextInput>, icon: &'static str, width: f32| {
             div()
                 .w(px(width))
@@ -1890,10 +1904,11 @@ impl LibraryView {
                         ),
                 )
                 .child(
-                    widgets::outlined_button(
+                    float::button(
                         "library-rename-cancel",
                         t("library-cancel", &[]),
-                        &th.katna,
+                        false,
+                        &th,
                     )
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.renaming = false;
@@ -2103,8 +2118,12 @@ impl LibraryView {
                 .gap(px(space::S3))
                 .px(px(space::S4))
                 .py(px(space::S2))
-                .border_t_1()
-                .border_color(th.line)
+                .m(px(float::GAP))
+                .mt_0()
+                .rounded(px(10.0))
+                .bg(th.card)
+                .shadow(th.lifted())
+                .when(th.dark, |d| d.border_1().border_color(th.line))
                 .child(
                     div()
                         .flex_1()
@@ -2154,21 +2173,15 @@ impl LibraryView {
                 .map(|d| {
                     if doc.missing {
                         d.child(
-                            widgets::outlined_button(
-                                "library-forget",
-                                t("library-forget", &[]),
-                                &th.katna,
-                            )
-                            .on_click(cx.listener(move |this, _, _, cx| this.forget(id, cx))),
+                            float::button("library-forget", t("library-forget", &[]), false, &th)
+                                .on_click(cx.listener(move |this, _, _, cx| this.forget(id, cx))),
                         )
                     } else {
                         d.child(
-                            widgets::filled_button(
-                                "library-open",
-                                t("library-open", &[]),
-                                &th.katna,
-                            )
-                            .on_click(cx.listener(move |this, _, _, cx| this.open(id, None, cx))),
+                            float::button("library-open", t("library-open", &[]), true, &th)
+                                .on_click(
+                                    cx.listener(move |this, _, _, cx| this.open(id, None, cx)),
+                                ),
                         )
                     }
                 }),
@@ -2275,4 +2288,20 @@ fn folder_name(path: &std::path::Path) -> String {
     path.file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| path.to_string_lossy().into_owned())
+}
+
+/// Float's glyph (`icons/float`) for a place's icon.
+fn glyph(icon: &str) -> &'static str {
+    match icon {
+        "clock" => "clock",
+        "star" => "star",
+        "folder" => "folder",
+        "cloud" => "cloud",
+        "attachment" => "mail",
+        "tag" => "tag",
+        "search" => "filter",
+        "copies" => "copy",
+        "shield-alert" => "alert",
+        _ => "file",
+    }
 }
