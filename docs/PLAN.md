@@ -75,7 +75,7 @@ katna-pdf/                           (QuakeString/katna-pdf)
 │  └─ katna-pdf-cli/                 # headless merge/split/sign/verify/ocr/optimize
 ├─ server/
 │  └─ katna-pdf-esign-gateway/       # Aadhaar eSign ASP gateway (§4.4)
-├─ parity/features.toml              # machine-checked feature checklist (§6)
+├─ parity/features.tsv               # feature parity tracker (§6)
 └─ docs/PLAN.md                      # this plan
 
 Shared with Katna (git dependency on QuakeString/katna, pinned to a revision):
@@ -518,7 +518,7 @@ Two things, both on the device, nothing uploaded:
 ## 6. Testing strategy
 
 **Lessons adopted from PdfCraft** ([storytold/pdfcraft](https://github.com/storytold/pdfcraft), an MIT/Apache, pure-Rust, AI-agent-built Acrobat clone, studied 2026-10-16). We write our own engine (decided 2026-10-16) and use PdfCraft only as a reference and as one more output to compare against. Its working methods are worth copying:
-- **A machine-checked parity checklist** (`parity/features.toml`) listing every Acrobat Reader, Master PDF Editor and Okular feature we target, with status and tests. "Shipped" means it exists and is tested, and the plan's progress numbers come from this file.
+- **A machine-checked parity checklist** (`parity/features.tsv`) listing every Acrobat Reader, Acrobat Pro and Master PDF Editor feature, with status and the PR that ships it. "Shipped" means it exists and is tested, and the plan's progress numbers come from this file.
 - **Corpus sweeps on every change:** open, render, edit and save round trips over the pdf.js corpus, reporting crash and failure counts.
 - **External reference tools in CI** (qpdf, hayro, poppler, and PdfCraft's CLI), run as separate processes and never linked in.
 - **Never panic:** every file, setting and keystroke is untrusted, so the code returns errors instead of crashing, and clippy denies `unwrap`/`expect`/`panic` outside tests.
