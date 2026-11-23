@@ -341,8 +341,8 @@ comment.highlight	comment	Highlight text	reader	y	shipped	P0	#32		acrobat
 comment.underline	comment	Underline text	reader	y	shipped	P0	#32		acrobat
 comment.strikeout	comment	Strikethrough text	reader	y	shipped	P0	#32		acrobat
 comment.squiggly	comment	Squiggly underline	reader	p	shipped	P0	#32		acrobat
-comment.replace-text	comment	Replace-text proposal (strikeout + caret)	reader	n	todo	P1	-		acrobat
-comment.insert-text	comment	Insert-text proposal (caret)	reader	n	todo	P1	-		acrobat
+comment.replace-text	comment	Replace-text proposal (strikeout + caret)	reader	n	shipped	P1	#165		acrobat
+comment.insert-text	comment	Insert-text proposal (caret)	reader	n	shipped	P1	#165		acrobat
 comment.typewriter	comment	Add text comment (typewriter)	reader	y	shipped	P0	#103		acrobat
 comment.text-box	comment	Text box comment with rich text	reader	y	partial	P0	#32	plain free text; no rich text	acrobat
 comment.callout	comment	Callout comment	reader	y	shipped	P1	#103		acrobat

@@ -137,7 +137,7 @@ impl KindGroup {
         Some(match kind {
             AnnotKind::Note | AnnotKind::FileAttachment { .. } => KindGroup::Notes,
             AnnotKind::FreeText { .. } => KindGroup::Text,
-            AnnotKind::Markup(..) => KindGroup::Markup,
+            AnnotKind::Markup(..) | AnnotKind::Caret => KindGroup::Markup,
             AnnotKind::Ink(_)
             | AnnotKind::Square { .. }
             | AnnotKind::Circle { .. }
@@ -832,7 +832,7 @@ impl Viewer {
             while let Some(parent) = parents.pop() {
                 for reply in annots
                     .iter()
-                    .filter(|r| r.state.is_none() && r.reply_to == Some(parent))
+                    .filter(|r| r.state.is_none() && !r.grouped && r.reply_to == Some(parent))
                 {
                     if let Some(rid) = reply.id
                         && !replies.iter().any(|r| r.id == Some(rid))
@@ -898,6 +898,13 @@ impl Viewer {
             return div().into_any_element();
         };
         let chosen = self.chosen == Some(id);
+        // A caret with a strike-out grouped to it replaces the words
+        // struck out.
+        let replaces = a.kind == AnnotKind::Caret
+            && self.annots.as_ref().is_some_and(|all| {
+                all.get(page)
+                    .is_some_and(|l| l.iter().any(|g| g.grouped && g.reply_to == Some(id)))
+            });
         let [r, g, b] = a.colour;
         let tone: gpui::Hsla = gpui::rgb(u32::from_be_bytes([
             0,
@@ -917,7 +924,14 @@ impl Viewer {
         } else if talk {
             t("comment-someone", &[])
         } else {
-            t(kind_name(&a.kind), &[])
+            t(
+                if replaces {
+                    "tool-replace-name"
+                } else {
+                    kind_name(&a.kind)
+                },
+                &[],
+            )
         };
         let mark = if talk {
             let initial = who.chars().next().unwrap_or('?').to_uppercase().to_string();
@@ -938,9 +952,15 @@ impl Viewer {
                 })
                 .child(initial)
         } else {
-            div()
-                .flex_none()
-                .child(float::icon(kind_icon(&a.kind), 15.0, tone))
+            div().flex_none().child(float::icon(
+                if replaces {
+                    "caretx"
+                } else {
+                    kind_icon(&a.kind)
+                },
+                15.0,
+                tone,
+            ))
         };
         let mut meta = t("comment-page-short", &[("page", &(page + 1).to_string())]);
         if let Some(age) = a.modified.as_deref().and_then(age) {
@@ -1354,6 +1374,7 @@ fn kind_icon(kind: &AnnotKind) -> &'static str {
         AnnotKind::Polygon(_) | AnnotKind::PolyLine(_) => "polygon",
         AnnotKind::Stamp(_) => "stamp",
         AnnotKind::FileAttachment { .. } => "clip",
+        AnnotKind::Caret => "caret",
         AnnotKind::Other(_) => "comment",
     }
 }
@@ -1376,6 +1397,7 @@ fn kind_name(kind: &AnnotKind) -> &'static str {
         AnnotKind::Polygon(_) | AnnotKind::PolyLine(_) => "tool-polygon-name",
         AnnotKind::Stamp(_) => "tool-stamp-name",
         AnnotKind::FileAttachment { .. } => "tool-attach-name",
+        AnnotKind::Caret => "tool-insert-name",
         AnnotKind::Other(_) => "annot-other",
     }
 }

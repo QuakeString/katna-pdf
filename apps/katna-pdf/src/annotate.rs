@@ -14,6 +14,11 @@ pub enum Tool {
     Underline,
     StrikeOut,
     Squiggly,
+    /// A caret where words are to go in, the words its comment.
+    Insert,
+    /// The text selected struck out and a caret after it, the words to
+    /// put in its place its comment.
+    Replace,
     Note,
     FreeText,
     /// Text typed where the page is clicked, with no box drawn.
@@ -45,11 +50,13 @@ pub enum Tool {
 }
 
 impl Tool {
-    pub const ALL: [Tool; 22] = [
+    pub const ALL: [Tool; 24] = [
         Tool::Highlight,
         Tool::Underline,
         Tool::StrikeOut,
         Tool::Squiggly,
+        Tool::Insert,
+        Tool::Replace,
         Tool::Note,
         Tool::FreeText,
         Tool::Typewriter,
@@ -77,6 +84,8 @@ impl Tool {
             Tool::Underline => "under",
             Tool::StrikeOut => "strike",
             Tool::Squiggly => "squig",
+            Tool::Insert => "caret",
+            Tool::Replace => "caretx",
             Tool::Note => "note",
             Tool::FreeText => "text",
             Tool::Typewriter => "typew",
@@ -105,6 +114,8 @@ impl Tool {
             Tool::Underline => "tool-underline-name",
             Tool::StrikeOut => "tool-strikeout-name",
             Tool::Squiggly => "tool-squiggly-name",
+            Tool::Insert => "tool-insert-name",
+            Tool::Replace => "tool-replace-name",
             Tool::Note => "tool-note-name",
             Tool::FreeText => "tool-free-text-name",
             Tool::Typewriter => "tool-typewriter-name",
@@ -133,6 +144,8 @@ impl Tool {
             Tool::Underline => "tool-underline",
             Tool::StrikeOut => "tool-strikeout",
             Tool::Squiggly => "tool-squiggly",
+            Tool::Insert => "tool-insert",
+            Tool::Replace => "tool-replace",
             Tool::Note => "tool-note",
             Tool::FreeText => "tool-free-text",
             Tool::Typewriter => "tool-typewriter",
@@ -161,6 +174,8 @@ impl Tool {
             Tool::Underline => Some(MarkupStyle::Underline),
             Tool::StrikeOut => Some(MarkupStyle::StrikeOut),
             Tool::Squiggly => Some(MarkupStyle::Squiggly),
+            // The text to replace is selected, then struck out.
+            Tool::Replace => Some(MarkupStyle::StrikeOut),
             _ => None,
         }
     }
@@ -275,6 +290,18 @@ pub fn markup(
     Some(Annotation::new(page, AnnotKind::Markup(style, quads)))
 }
 
+/// A caret on page `page` with its point at `x` and its foot a little
+/// below `bottom`, for a line `height` tall (all in the space the page
+/// is shown in, points from its top left).
+pub fn caret(page: usize, x: f32, bottom: f32, height: f32, inv: Inverse) -> Annotation {
+    let h = (height * 0.55).clamp(4.0, 24.0);
+    let w = h * 0.8;
+    let foot = bottom + h * 0.3;
+    let mut a = Annotation::new(page, AnnotKind::Caret);
+    a.rect = inv.rect([x - w / 2.0, foot - h, x + w / 2.0, foot]);
+    a
+}
+
 /// What `tool` makes of the pointer's path on page `page`: pressed at the
 /// first point, released at the last. `None` when it makes nothing (a
 /// click with a tool that needs a drag).
@@ -298,7 +325,12 @@ pub fn drawn(tool: Tool, page: usize, path: &[[f32; 2]], inv: Inverse) -> Option
         Tool::Highlight if !click => {
             return markup(MarkupStyle::Highlight, page, &[boxed([0.0, 0.0])], inv);
         }
-        Tool::Highlight | Tool::Underline | Tool::StrikeOut | Tool::Squiggly => return None,
+        Tool::Highlight
+        | Tool::Underline
+        | Tool::StrikeOut
+        | Tool::Squiggly
+        | Tool::Insert
+        | Tool::Replace => return None,
         // Measuring and polygons have their own pointer handling
         // (`viewer::measure`).
         Tool::Eraser => return None,

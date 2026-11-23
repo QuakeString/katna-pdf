@@ -64,7 +64,7 @@ fn annotations_are_read() {
     assert_eq!(note.contents, "Look here");
     assert_eq!(note.author, "Asha");
     assert_eq!(note.modified.as_deref(), Some("D:20260101000000Z"));
-    assert_eq!(caret.kind, AnnotKind::Other("Caret".into()));
+    assert_eq!(caret.kind, AnnotKind::Caret);
     assert_eq!(caret.contents, "नमस्ते");
     assert_eq!(caret.reply_to, note.id);
 }
@@ -260,8 +260,8 @@ fn annotations_go_to_xfdf_and_back() {
     let xml = katna_pdf_cos::to_xfdf(&all, "two.pdf");
     assert!(xml.contains("<ink page=\"1\""));
     let back = katna_pdf_cos::from_xfdf(&xml).unwrap();
-    // The note, its caret reply (not ours: left out), the three added.
-    assert_eq!(back.len(), 4);
+    // The note, its caret reply, the three added.
+    assert_eq!(back.len(), 5);
     let want: Vec<_> = all
         .iter()
         .flatten()
@@ -511,6 +511,60 @@ fn flags_states_and_replies_round_trip() {
 }
 
 #[test]
+fn replacements_group_a_strike_out_to_a_caret() {
+    let doc = two();
+    let mut caret = Annotation::new(1, AnnotKind::Caret);
+    caret.rect = [200.0, 495.0, 208.0, 505.0];
+    caret.contents = "quick".into();
+    caret.name = "caret-1".into();
+    caret.colour = [0.0, 0.0, 1.0];
+    let mut strike = Annotation::new(
+        1,
+        AnnotKind::Markup(
+            MarkupStyle::StrikeOut,
+            vec![[100.0, 510.0, 200.0, 510.0, 100.0, 500.0, 200.0, 500.0]],
+        ),
+    );
+    strike.answers = Some("caret-1".into());
+    strike.grouped = true;
+    let out = doc
+        .annotate(&AnnotChanges {
+            put: vec![caret, strike],
+            remove: vec![],
+        })
+        .unwrap();
+    let again = Document::load(out).unwrap();
+    let read = again.annotations();
+    let (caret, strike) = (&read[1][0], &read[1][1]);
+    assert_eq!(caret.kind, AnnotKind::Caret);
+    assert_eq!(caret.contents, "quick");
+    assert_eq!(strike.reply_to, caret.id);
+    assert!(strike.grouped && !caret.grouped);
+    let Some(Object::Dict(dict)) = again.get(strike.id.unwrap()) else {
+        panic!();
+    };
+    assert_eq!(dict.name("RT"), Some(&b"Group"[..]));
+    let Some(Object::Dict(dict)) = again.get(caret.id.unwrap()) else {
+        panic!();
+    };
+    assert_eq!(dict.name("Subtype"), Some(&b"Caret"[..]));
+    assert!(dict.get("AP").is_some());
+    // The strike-out is part of the caret, not a reply under it.
+    let text = katna_pdf_cos::comments_text(&read);
+    assert!(!text.contains("StrikeOut"), "{text}");
+    // Through XFDF.
+    let xml = katna_pdf_cos::to_xfdf(&read, "a.pdf");
+    assert!(xml.contains("<caret "), "{xml}");
+    assert!(xml.contains("replyType=\"group\""), "{xml}");
+    let back = katna_pdf_cos::from_xfdf(&xml).unwrap();
+    assert!(back.iter().any(|a| a.annotation.kind == AnnotKind::Caret));
+    assert!(
+        back.iter()
+            .any(|a| a.annotation.grouped && a.reply_to.is_some())
+    );
+}
+
+#[test]
 fn stamps_attachments_and_fdf_round_trip() {
     let doc = two();
     let mut dynamic = Annotation::new(1, AnnotKind::Stamp("#DApproved".into()));
@@ -585,9 +639,8 @@ fn stamps_attachments_and_fdf_round_trip() {
     let fdf = katna_pdf_cos::to_fdf(&all, "a.pdf");
     assert!(fdf.starts_with(b"%FDF-1.2"));
     let back = katna_pdf_cos::from_fdf(&fdf).unwrap();
-    // Page 1's note (its caret is of a kind not written), and page 2's
-    // two stamps and the reply.
-    assert_eq!(back.len(), 4);
+    // Page 1's note and its caret, and page 2's two stamps and the reply.
+    assert_eq!(back.len(), 5);
     let stamps: Vec<&katna_pdf_cos::XfdfAnnotation> = back
         .iter()
         .filter(|x| matches!(x.annotation.kind, AnnotKind::Stamp(_)))
@@ -603,7 +656,7 @@ fn stamps_attachments_and_fdf_round_trip() {
     assert_eq!(reply.reply_to.as_deref(), Some(all[1][1].name.as_str()));
     // Into a fresh file: the reply still answers the custom stamp.
     let changes = two().fdf_changes(&fdf).unwrap();
-    assert_eq!(changes.put.len(), 4);
+    assert_eq!(changes.put.len(), 5);
     let out = two().annotate(&changes).unwrap();
     let fresh = Document::load(out).unwrap();
     let page2 = &fresh.annotations()[1];
