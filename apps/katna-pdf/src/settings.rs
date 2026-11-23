@@ -13,9 +13,9 @@ use gpui::{
 use katna_ui::px;
 use katna_ui::scale::desktop_px;
 use katna_ui::text_input::{InputEvent, TextInput};
-use katna_ui::tokens::{space, text};
+use katna_ui::tokens::{radius, space, text};
 
-use crate::float::{self, avatar, button, icon, seg, seg_item};
+use crate::float::{self, avatar, button, icon, radio, seg, seg_item};
 use crate::look::{self, Look, Mine, Mode};
 use crate::menus::{MENUS, keys_text, plain};
 use crate::prefs::{self, Motion, Prefs, StartZoom, Units};
@@ -108,6 +108,9 @@ pub struct Settings {
     notice: Option<String>,
     /// Whether the menu of pages at night is open (X09).
     night_menu: bool,
+    /// The voices that can read aloud, once asked for (opening the
+    /// voice is slow, so done off the UI thread).
+    voices: Option<Vec<(String, String)>>,
     _subs: Vec<Subscription>,
 }
 
@@ -176,6 +179,21 @@ impl Settings {
             cx.set_global(Shown(None));
             true
         });
+        cx.spawn(async move |this, cx| {
+            let voices = cx
+                .background_spawn(async move {
+                    crate::speech::voice()
+                        .map(|v| v.voices())
+                        .unwrap_or_default()
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                this.voices = Some(voices);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
         Self {
             page,
             theme: Theme::current(window, cx.global()),
@@ -191,6 +209,7 @@ impl Settings {
             editor: None,
             notice: None,
             night_menu: false,
+            voices: None,
             _subs: subs,
         }
     }
@@ -1808,6 +1827,55 @@ impl Settings {
             |p, v| p.speed = v,
             cx,
         );
+        let pitch = self.choice(
+            "settings-pitch",
+            prefs.pitch,
+            &[
+                (-0.5, "settings-pitch-low"),
+                (0.0, "settings-pitch-normal"),
+                (0.5, "settings-pitch-high"),
+            ],
+            |p, v| p.pitch = v,
+            cx,
+        );
+        // The desktop's own voice first, then each the voice offers.
+        let own = (String::new(), t("settings-voice-own", &[]));
+        let voices: Vec<(String, String)> = std::iter::once(own)
+            .chain(self.voices.iter().flatten().cloned())
+            .collect();
+        let hover = th.hover;
+        let list = div()
+            .id("settings-voices")
+            .mt(px(space::S2))
+            .max_h(px(220.0))
+            .overflow_y_scroll()
+            .rounded(px(radius::MD))
+            .border_1()
+            .border_color(th.line_soft)
+            .py(px(space::S1))
+            .children(voices.into_iter().enumerate().map(|(i, (id, words))| {
+                let on = prefs.voice == id;
+                div()
+                    .id(("settings-voice-item", i))
+                    .h(px(30.0))
+                    .px(px(space::S3))
+                    .flex()
+                    .items_center()
+                    .gap(px(space::S2))
+                    .cursor_pointer()
+                    .hover(move |s| s.bg(hover))
+                    .child(radio(on, &th))
+                    .child(
+                        div()
+                            .text_size(px(text::BODY))
+                            .text_color(th.text)
+                            .child(words),
+                    )
+                    .on_click(cx.listener(move |_, _, _, cx| {
+                        let id = id.clone();
+                        Prefs::set(cx, move |p| p.voice = id);
+                    }))
+            }));
         let try_it = button(
             "settings-try-voice",
             t("settings-try-voice", &[]),
@@ -1836,7 +1904,14 @@ impl Settings {
                 Some(t("settings-voice-detail", &[])),
                 None,
             ))
+            .children(
+                self.voices
+                    .as_ref()
+                    .is_some_and(|v| !v.is_empty())
+                    .then_some(list),
+            )
             .child(self.row(t("settings-speed", &[]), None, None, Some(speed)))
+            .child(self.row(t("settings-pitch", &[]), None, None, Some(pitch)))
             .child(div().mt(px(space::S4)).flex().child(try_it))
             .into_any_element()
     }

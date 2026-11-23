@@ -20,7 +20,7 @@ The library (Ctrl+L) shows every PDF in the folders you choose, with covers, tag
 - F7 opens the side pane: pages, bookmarks, comments, attached files and layers.
 - Ctrl+H hides everything but the pages. Ctrl+Shift+N turns the pages dark for reading at night; Settings > Appearance chooses how.
 - Alt+Left and Alt+Right go back and forward through the places you jumped to.
-- Ctrl+Shift+Y reads the text aloud from the page you are on.
+- Ctrl+Shift+Y reads the text aloud from the page you are on. Settings > Read aloud chooses the voice, its speed and its pitch.
 - F5 presents: full screen, a page at a time, with the file's own transitions. Space and the arrow keys move, B and W blank the screen, Esc stops.
 
 ## Finding text

@@ -13,7 +13,7 @@
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicI32, AtomicU32, Ordering};
 
 /// How fast to speak, 1.0 the voice's own pace, as Settings > Read
 /// aloud sets it (hundredths, so it fits an atomic).
@@ -29,6 +29,33 @@ pub fn set_speed(speed: f32) {
 
 fn speed() -> f32 {
     SPEED.load(Ordering::Relaxed) as f32 / 100.0
+}
+
+/// How high to speak, -100 to 100, 0 the voice's own pitch.
+static PITCH: AtomicI32 = AtomicI32::new(0);
+
+/// The voice chosen in Settings > Read aloud, by the id [`Voice::voices`]
+/// gives it; empty for the desktop's own.
+static CHOSEN: Mutex<String> = Mutex::new(String::new());
+
+/// Sets the voice's pitch, from -1 (low) to 1 (high), and which voice
+/// speaks, from the next sentence.
+pub fn set_tone(pitch: f32, voice: &str) {
+    PITCH.store(
+        (pitch.clamp(-1.0, 1.0) * 100.0).round() as i32,
+        Ordering::Relaxed,
+    );
+    if let Ok(mut chosen) = CHOSEN.lock() {
+        voice.clone_into(&mut chosen);
+    }
+}
+
+fn pitch() -> i32 {
+    PITCH.load(Ordering::Relaxed)
+}
+
+fn chosen() -> String {
+    CHOSEN.lock().map(|c| c.clone()).unwrap_or_default()
 }
 
 /// What reads aloud, once a reading has opened it: Speech Dispatcher,
@@ -77,11 +104,24 @@ enum Kind {
 
 /// Speaks each line of its input and answers `done` after each.
 #[cfg_attr(not(windows), allow(dead_code))]
+/// A line that starts with \u{1} sets the pace, \u{2} the voice by name
+/// and \u{3} the pitch (below 0 low, above high); those are not spoken.
 const POWERSHELL: &str = "[Console]::InputEncoding = [Text.Encoding]::UTF8; Add-Type -AssemblyName System.Speech; \
-    $s = New-Object System.Speech.Synthesis.SpeechSynthesizer; \
+    $s = New-Object System.Speech.Synthesis.SpeechSynthesizer; $p = 0; \
     while (($l = [Console]::In.ReadLine()) -ne $null) { \
-    if ($l.StartsWith([string][char]1)) { $s.Rate = [int]$l.Substring(1); continue }; $s.Speak($l); \
+    if ($l.StartsWith([string][char]1)) { $s.Rate = [int]$l.Substring(1); continue }; \
+    if ($l.StartsWith([string][char]2)) { if ($l.Length -gt 1) { try { $s.SelectVoice($l.Substring(1)) } catch {} }; continue }; \
+    if ($l.StartsWith([string][char]3)) { $p = [int]$l.Substring(1); continue }; \
+    if ($p -eq 0) { $s.Speak($l) } else { \
+    $h = if ($p -gt 0) { 'high' } else { 'low' }; \
+    $s.SpeakSsml(\"<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='\" + $s.Voice.Culture.Name + \"'><prosody pitch='\" + $h + \"'>\" + [Security.SecurityElement]::Escape($l) + '</prosody></speak>') }; \
     [Console]::Out.WriteLine('done'); [Console]::Out.Flush() }";
+
+/// Writes the names of Windows' voices, a line each.
+#[cfg_attr(not(windows), allow(dead_code))]
+const POWERSHELL_VOICES: &str = "[Console]::OutputEncoding = [Text.Encoding]::UTF8; Add-Type -AssemblyName System.Speech; \
+    (New-Object System.Speech.Synthesis.SpeechSynthesizer).GetInstalledVoices() | \
+    Where-Object { $_.Enabled } | ForEach-Object { $_.VoiceInfo.Name }";
 
 /// Windows' flag for a program started without a console window.
 #[cfg(windows)]
@@ -143,13 +183,29 @@ impl Voice {
             #[cfg(unix)]
             Kind::Ssip { reader, writer } => {
                 let mut reader = reader.lock().map_err(|_| ())?;
-                {
-                    // -100 to 100, 0 the voice's own pace.
-                    let rate = ((speed() - 1.0) * 100.0).round().clamp(-100.0, 100.0);
-                    let mut w = writer.lock().map_err(|_| ())?;
-                    send(&mut *w, &format!("SET self RATE {rate}")).map_err(|_| ())?;
+                // -100 to 100, 0 the voice's own pace.
+                let rate = ((speed() - 1.0) * 100.0).round().clamp(-100.0, 100.0);
+                let mut sets = vec![
+                    format!("SET self RATE {rate}"),
+                    format!("SET self PITCH {}", pitch()),
+                ];
+                let name = chosen();
+                if !name.is_empty() {
+                    sets.push(format!("SET self SYNTHESIS_VOICE {name}"));
                 }
-                wait_for(&mut *reader, |code| (200..300).contains(&code))?;
+                for line in sets {
+                    {
+                        let mut w = writer.lock().map_err(|_| ())?;
+                        send(&mut *w, &line).map_err(|_| ())?;
+                    }
+                    // A voice it doesn't have (one chosen when espeak-ng
+                    // read aloud) is turned down, and the sentence still
+                    // read in the voice it has.
+                    let voice = line.contains("SYNTHESIS_VOICE");
+                    wait_for(&mut *reader, |code| {
+                        (200..300).contains(&code) || voice && code >= 300
+                    })?;
+                }
                 {
                     let mut w = writer.lock().map_err(|_| ())?;
                     send(&mut *w, "SPEAK").map_err(|_| ())?;
@@ -175,8 +231,15 @@ impl Voice {
                 // taken for options.
                 // espeak's own pace is 175 words a minute.
                 let words = (175.0 * speed()).round() as u32;
-                let mut child = Command::new(program)
-                    .args(["-s", &words.to_string()])
+                // 0 to 99, 50 the voice's own pitch.
+                let high = (50 + pitch() * 2 / 5).clamp(0, 99);
+                let mut command = Command::new(program);
+                command.args(["-s", &words.to_string(), "-p", &high.to_string()]);
+                let name = chosen();
+                if !name.is_empty() {
+                    command.args(["-v", &name]);
+                }
+                let mut child = command
                     .stdin(Stdio::piped())
                     .stdout(Stdio::null())
                     .stderr(Stdio::null())
@@ -227,6 +290,8 @@ impl Voice {
                     // starts with \u{1} sets it and is not spoken.
                     let rate = ((speed() - 1.0) * 10.0).round().clamp(-10.0, 10.0);
                     writeln!(stdin, "\u{1}{rate}").map_err(|_| ())?;
+                    writeln!(stdin, "\u{2}{}", chosen()).map_err(|_| ())?;
+                    writeln!(stdin, "\u{3}{}", pitch()).map_err(|_| ())?;
                     writeln!(stdin, "{text}").map_err(|_| ())?;
                     stdin.flush().map_err(|_| ())?;
                 }
@@ -247,6 +312,62 @@ impl Voice {
                     }
                 }
                 Ok(())
+            }
+        }
+    }
+
+    /// The voices that can be chosen, as an id to set with
+    /// [`set_tone`] and words to show; slow, so asked for off the UI
+    /// thread.
+    pub fn voices(&self) -> Vec<(String, String)> {
+        match &self.kind {
+            #[cfg(unix)]
+            Kind::Ssip { reader, writer } => {
+                let Ok(mut reader) = reader.lock() else {
+                    return Vec::new();
+                };
+                if writer
+                    .lock()
+                    .map_err(|_| ())
+                    .and_then(|mut w| send(&mut *w, "LIST SYNTHESIS_VOICES").map_err(|_| ()))
+                    .is_err()
+                {
+                    return Vec::new();
+                }
+                ssip_voices(&mut *reader)
+            }
+            Kind::Program { program, .. } => Command::new(program)
+                .arg("--voices")
+                .stderr(Stdio::null())
+                .output()
+                .map(|out| espeak_voices(&String::from_utf8_lossy(&out.stdout)))
+                .unwrap_or_default(),
+            Kind::PowerShell { .. } => {
+                let mut command = Command::new("powershell");
+                #[cfg(windows)]
+                std::os::windows::process::CommandExt::creation_flags(
+                    &mut command,
+                    CREATE_NO_WINDOW,
+                );
+                command
+                    .args([
+                        "-NoProfile",
+                        "-NonInteractive",
+                        "-Command",
+                        POWERSHELL_VOICES,
+                    ])
+                    .stdin(Stdio::null())
+                    .stderr(Stdio::null())
+                    .output()
+                    .map(|out| {
+                        String::from_utf8_lossy(&out.stdout)
+                            .lines()
+                            .map(str::trim)
+                            .filter(|l| !l.is_empty())
+                            .map(|l| (l.to_owned(), l.to_owned()))
+                            .collect()
+                    })
+                    .unwrap_or_default()
             }
         }
     }
@@ -333,6 +454,61 @@ fn connect_ssip(stream: std::os::unix::net::UnixStream) -> Option<Voice> {
             writer: Mutex::new(writer),
         },
     })
+}
+
+/// Speech Dispatcher's answer to `LIST SYNTHESIS_VOICES`: lines of
+/// `249-name<TAB>language<TAB>variant`, then `249 OK VOICE LIST SENT`.
+#[cfg(unix)]
+fn ssip_voices(reader: &mut impl BufRead) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let mut line = String::new();
+    loop {
+        line.clear();
+        if reader.read_line(&mut line).unwrap_or(0) == 0 {
+            return out;
+        }
+        let line = line.trim_end();
+        let Some(code) = line.get(..3).and_then(|c| c.parse::<u16>().ok()) else {
+            continue;
+        };
+        match line.as_bytes().get(3) {
+            Some(b'-') if code == 249 => {
+                let mut parts = line[4..].split('\t');
+                let name = parts.next().unwrap_or_default().trim();
+                let language = parts.next().unwrap_or_default().trim();
+                let variant = parts.next().unwrap_or_default().trim();
+                // espeak through Speech Dispatcher lists each language
+                // again with each of its many variants: those are left out.
+                if !name.is_empty() && matches!(variant, "" | "none") {
+                    let words = match language {
+                        "" | "none" => name.to_owned(),
+                        l => format!("{name} ({l})"),
+                    };
+                    out.push((name.to_owned(), words));
+                }
+            }
+            Some(b' ') => return out,
+            _ => {}
+        }
+    }
+}
+
+/// `espeak-ng --voices`: a heading, then `Pty Language Age/Gender
+/// VoiceName File Other`; chosen by language.
+#[cfg_attr(windows, allow(dead_code))]
+fn espeak_voices(list: &str) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = list
+        .lines()
+        .skip(1)
+        .filter_map(|l| {
+            let mut cols = l.split_whitespace();
+            let language = cols.nth(1)?;
+            let name = cols.nth(1)?.replace('_', " ");
+            Some((language.to_owned(), format!("{name} ({language})")))
+        })
+        .collect();
+    out.dedup_by(|a, b| a.0 == b.0);
+    out
 }
 
 #[cfg(unix)]
@@ -431,6 +607,34 @@ mod tests {
         assert_eq!(sentences("यह वाक्य है। दूसरा।").len(), 2);
     }
 
+    #[test]
+    fn voice_lists_are_read() {
+        let espeak = "Pty Language       Age/Gender VoiceName          File                 Other Languages\n \
+            5  af              --/M      Afrikaans          gmw/af\n \
+            2  en-gb           --/M      English_(Great_Britain) gmw/en           (en 2)\n \
+            5  hi              --/M      Hindi              inc/hi\n";
+        assert_eq!(
+            espeak_voices(espeak),
+            [
+                ("af".to_string(), "Afrikaans (af)".to_string()),
+                ("en-gb".into(), "English (Great Britain) (en-gb)".into()),
+                ("hi".into(), "Hindi (hi)".into()),
+            ]
+        );
+        #[cfg(unix)]
+        {
+            let ssip = "249-Alan\ten\tnone\r\n249-Alan+Max\ten\tMax\r\n249-Kal\thi\tnone\r\n249 OK VOICE LIST SENT\r\n";
+            let voices = ssip_voices(&mut std::io::Cursor::new(ssip));
+            assert_eq!(
+                voices,
+                [
+                    ("Alan".to_string(), "Alan (en)".to_string()),
+                    ("Kal".into(), "Kal (hi)".into())
+                ]
+            );
+        }
+    }
+
     #[cfg(unix)]
     #[test]
     fn speaks_to_speech_dispatcher() {
@@ -468,10 +672,12 @@ mod tests {
             &heard[3..],
             [
                 "SET self RATE 0",
+                "SET self PITCH 0",
                 "SPEAK",
                 "Hello there.",
                 ".",
                 "SET self RATE 0",
+                "SET self PITCH 0",
                 "SPEAK",
                 "..dot first",
                 ".",

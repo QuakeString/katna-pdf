@@ -834,7 +834,7 @@ a11y.set-title-display	a11y	Show the document title in the window	pro	n	partial	
 a11y.make-accessible-action	a11y	Make Accessible guided action	pro	n	todo	P2	-		acrobat
 a11y.setup-assistant	a11y	Accessibility setup assistant	reader	n	skip	-	-		acrobat
 a11y.read-aloud	a11y	Read out loud (platform TTS)	reader	n	shipped	P1	#85 Ctrl+Shift+Y		acrobat
-a11y.read-aloud-options	a11y	Read-aloud voice, pitch and speed	reader	n	partial	P1	#85 voice		acrobat
+a11y.read-aloud-options	a11y	Read-aloud voice, pitch and speed	reader	n	shipped	P1	#175		acrobat
 a11y.replace-page-colors	a11y	Replace page colours (high contrast)	reader	y	shipped	P0	#29 page colours		acrobat
 a11y.reflow-tagged	a11y	Reflow tagged content	reader	n	todo	P2	-		acrobat
 a11y.keyboard-selection-cursor	a11y	Always show the keyboard selection cursor	reader	n	todo	P2	-		acrobat
