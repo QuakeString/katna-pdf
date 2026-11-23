@@ -99,7 +99,7 @@ view.page-navigation	view	Page navigation (next, previous, first, last, go to pa
 view.goto-page-label	view	Go to a page by its label (logical page numbers)	reader	n	shipped	P1	#151	Ctrl+G Go to page takes a number or a label	acrobat
 view.view-history	view	Previous view / next view	reader	y	shipped	P0	Phase 1, #143	Alt+Left/Alt+Right, Go menu, mouse back/forward buttons; zoom too	acrobat
 view.follow-links	view	Follow links and destinations	reader	y	shipped	P0	Phase 1		acrobat
-view.annotation-hover	view	Show comment text on hover	reader	n	todo	P1	-		acrobat
+view.annotation-hover	view	Show comment text on hover	reader	n	shipped	P1	#152	author and words in a card under the comment	acrobat
 view.page-size-hover	view	Page size on hover (bottom-left of the page view)	reader	y	todo	P2	-		acrobat
 view.document-tabs	view	Tabbed documents	reader	y	shipped	P0	Phase 0 tabs.rs		acrobat
 view.multiple-windows	view	Multiple windows; drag a tab out into a window	reader	y	partial	P0	instance.rs	new windows; no drag-out of tabs	acrobat
@@ -370,7 +370,7 @@ comment.set-status	comment	Set review status (accepted, rejected, cancelled, com
 comment.checkmark	comment	Mark comments with a checkmark	reader	n	todo	P2	-		acrobat
 comment.delete-comment	comment	Delete comments	reader	y	shipped	P0	#32, #104		acrobat
 comment.edit-comment-text	comment	Edit comment text	reader	y	shipped	P0	#32		acrobat
-comment.copy-comment-text	comment	Copy comment text	reader	n	todo	P1	-		acrobat
+comment.copy-comment-text	comment	Copy comment text	reader	n	shipped	P1	#152	copy button on the chosen comment	acrobat
 comment.filter-comments	comment	Filter comments (type, author, status, colour, checkmark)	reader	y	shipped	P1	#104		acrobat
 comment.sort-comments	comment	Sort comments (page, author, date, type, colour)	reader	n	partial	P1	page order		acrobat
 comment.search-comments	comment	Search comments	reader	y	shipped	P1	#140	Comments tab filter: words in comments, replies and authors, accents ignored	acrobat

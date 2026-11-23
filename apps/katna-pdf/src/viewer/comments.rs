@@ -1115,6 +1115,20 @@ impl Viewer {
                                 .on_click(cx.listener(|this, _, _, cx| this.save_attachment(cx))),
                         )
                     })
+                    .when(!a.contents.trim().is_empty(), |d| {
+                        let words = a.contents.clone();
+                        d.child(
+                            button("comment-copy", "copy", "comment-copy", false).on_click(
+                                cx.listener(move |this, _, _, cx| {
+                                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(
+                                        words.clone(),
+                                    ));
+                                    this.notice = Some(super::said("comment-copied", &[]));
+                                    cx.notify();
+                                }),
+                            ),
+                        )
+                    })
                     .child(
                         button(
                             "comment-lock",
