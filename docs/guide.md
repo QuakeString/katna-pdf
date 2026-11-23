@@ -21,6 +21,8 @@ The library (Ctrl+L) shows every PDF in the folders you choose, with covers, tag
 - Ctrl+H hides everything but the pages. Ctrl+Shift+N turns the pages dark for reading at night; Settings > Appearance chooses how.
 - Alt+Left and Alt+Right go back and forward through the places you jumped to.
 - Right-click a picture on a page to copy it or save it as a file.
+- A link to a website asks first, naming the site, since opening it tells the site you opened the file. Always open trusts that site from then on; Settings > Viewing opens such links without asking, or never, and forgets the sites you trusted.
+- Esc closes the card in the middle of the window (print, export, properties and the rest), as a click beside it does.
 - Ctrl+Shift+Y reads the text aloud from the page you are on. Settings > Read aloud chooses the voice, its speed and its pitch.
 - F5 presents: full screen, a page at a time, with the file's own transitions. Space and the arrow keys move, B and W blank the screen, Esc stops.
 

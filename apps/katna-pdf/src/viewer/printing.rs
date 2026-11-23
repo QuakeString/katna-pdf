@@ -200,7 +200,7 @@ impl Viewer {
                 }
                 this.preview_sheets(cx);
             }
-            InputEvent::Cancel => {}
+            InputEvent::Cancel => this.close_printing(cx),
         });
         let percent = cx.new(|cx| {
             let mut input = TextInput::new("100".to_string(), cx);
@@ -208,10 +208,10 @@ impl Viewer {
             input.set_text("100".to_string(), cx);
             input
         });
-        let percent_sub = cx.subscribe(&percent, |this, _, event, cx| {
-            if let InputEvent::Changed = event {
-                this.preview_sheets(cx);
-            }
+        let percent_sub = cx.subscribe(&percent, |this, _, event, cx| match event {
+            InputEvent::Changed => this.preview_sheets(cx),
+            InputEvent::Submit => this.print_sheets(None, cx),
+            InputEvent::Cancel => this.close_printing(cx),
         });
         self.printing = Some(Printing {
             layout: 0,
@@ -339,6 +339,12 @@ impl Viewer {
 
     /// The print dialog (R19): the sheets as they will print on the
     /// left, a sheet at a time; how to print them on the right.
+    /// Escape in one of the card's boxes: closes it.
+    fn close_printing(&mut self, cx: &mut Context<Self>) {
+        self.printing = None;
+        cx.notify();
+    }
+
     pub(super) fn print_card(
         &self,
         window: &gpui::Window,

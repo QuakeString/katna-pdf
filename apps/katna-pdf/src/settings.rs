@@ -18,7 +18,7 @@ use katna_ui::tokens::{radius, space, text};
 use crate::float::{self, avatar, button, icon, radio, seg, seg_item};
 use crate::look::{self, Look, Mine, Mode};
 use crate::menus::{MENUS, keys_text, plain};
-use crate::prefs::{self, Motion, Prefs, StartZoom, Units};
+use crate::prefs::{self, Motion, Prefs, StartZoom, Units, WebLinks};
 use crate::profile::Profile;
 use crate::spread::Spread;
 use crate::text::t;
@@ -1032,6 +1032,27 @@ impl Settings {
 
     fn viewing(&self, cx: &mut Context<Self>) -> AnyElement {
         let prefs = cx.global::<Prefs>().clone();
+        let web_links = self.choice(
+            "settings-web-links",
+            prefs.web_links,
+            &[
+                (WebLinks::Ask, "settings-web-ask"),
+                (WebLinks::Open, "settings-web-open"),
+                (WebLinks::Never, "settings-web-never"),
+            ],
+            |p, v| p.web_links = v,
+            cx,
+        );
+        let forget_sites = (!prefs.web_sites.is_empty()).then(|| {
+            float::button(
+                "settings-web-forget",
+                t("settings-web-forget", &[]),
+                false,
+                &self.theme,
+            )
+            .on_click(cx.listener(|_, _, _, cx| Prefs::set(cx, |p| p.web_sites.clear())))
+            .into_any_element()
+        });
         let open_at = self.choice(
             "settings-open-at",
             prefs.open_at_last,
@@ -1188,6 +1209,25 @@ impl Settings {
                 None,
                 Some(present_loop),
             ))
+            .child(self.group("settings-group-web"))
+            .child(self.row(
+                t("settings-web-links", &[]),
+                None,
+                Some(t("settings-web-links-detail", &[])),
+                Some(web_links),
+            ))
+            .when(prefs.web_links == WebLinks::Ask, |d| {
+                d.child(self.row(
+                    t("settings-web-sites", &[]),
+                    Some(if prefs.web_sites.is_empty() {
+                        t("settings-web-sites-none", &[])
+                    } else {
+                        prefs.web_sites.join(", ")
+                    }),
+                    None,
+                    forget_sites,
+                ))
+            })
             .into_any_element()
     }
 

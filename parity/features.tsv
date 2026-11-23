@@ -540,7 +540,7 @@ protect.sanitize	protect	Sanitize document (remove all hidden information)	pro	n
 protect.audit-faux-redactions	protect	Audit: detect faux redactions (opaque covers over extractable text, unapplied marks)	pro	n	todo	P2	-		acrobat
 protect.remove-hidden-on-close	protect	Remove hidden information when closing or sending	pro	n	todo	P2	-		acrobat
 protect.attachment-trust	protect	Block opening risky attachment types	reader	n	shipped	P1	#108	saved, never opened by us without asking	acrobat
-protect.url-access-control	protect	Control internet access from PDFs	reader	n	partial	P1	links ask nothing yet		acrobat
+protect.url-access-control	protect	Control internet access from PDFs	reader	n	shipped	P1	#181		acrobat
 protect.protected-view	protect	Open untrusted files in a restricted view	reader	n	shipped	P1	scripts never run, worker processes		acrobat
 protect.security-envelope	protect	Security envelopes	standard	n	skip	-	-		acrobat
 protect.redaction-overlay-repeat	protect	Overlay text auto-sized and repeated across the mark	pro	y	partial	P2	#109	one line	mpe
