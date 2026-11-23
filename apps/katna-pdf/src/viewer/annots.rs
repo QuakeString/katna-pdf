@@ -33,6 +33,8 @@ pub(super) struct Comment {
     pub id: Ref,
     pub input: gpui::Entity<TextInput>,
     pub _input: gpui::Subscription,
+    /// Typed in a pop-up note rather than the comments tab.
+    pub in_popup: bool,
 }
 
 impl Viewer {
@@ -697,13 +699,29 @@ impl Viewer {
     /// Opens the chosen annotation's comment for typing, in the comments
     /// tab.
     pub(super) fn edit_comment(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.edit_comment_in(false, window, cx);
+    }
+
+    /// Opens the chosen annotation's comment for typing: in its pop-up
+    /// note, or in the comments tab.
+    pub(super) fn edit_comment_in(
+        &mut self,
+        popup: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(a) = self.chosen_annotation().cloned() else {
             return;
         };
         let Some(id) = a.id else {
             return;
         };
-        if a.flags.locked || self.comment.as_ref().is_some_and(|c| c.id == id) {
+        if a.flags.locked
+            || self
+                .comment
+                .as_ref()
+                .is_some_and(|c| c.id == id && c.in_popup == popup)
+        {
             return;
         }
         self.finish_comment(true, cx);
@@ -720,12 +738,15 @@ impl Viewer {
             InputEvent::Changed => {}
         });
         window.focus(&input.focus_handle(cx), cx);
-        self.pane = true;
-        self.tab = PaneTab::Comments;
+        if !popup {
+            self.pane = true;
+            self.tab = PaneTab::Comments;
+        }
         self.comment = Some(super::annots::Comment {
             id,
             input,
             _input: sub,
+            in_popup: popup,
         });
         cx.notify();
     }
@@ -945,6 +966,8 @@ impl Viewer {
         let shown = self.shown;
         if let (Some(id), Some(transform)) = (self.annot_hover, transform)
             && self.chosen != Some(id)
+            // Open in a pop-up note already.
+            && !self.popups.iter().any(|p| p.id == id)
             && let Some(a) = self
                 .annots
                 .as_ref()
