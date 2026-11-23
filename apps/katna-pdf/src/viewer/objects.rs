@@ -2605,7 +2605,7 @@ fn less(opacity: f32) -> f32 {
 
 /// A picture as a file's bytes and the file's extension: a JPEG as it
 /// is, else a PNG.
-fn picture_bytes(picture: PictureFile) -> Result<(Vec<u8>, &'static str), String> {
+pub(super) fn picture_bytes(picture: PictureFile) -> Result<(Vec<u8>, &'static str), String> {
     use image::{DynamicImage, GrayImage, RgbImage};
     let (width, height, components, bits, data) = match picture {
         PictureFile::Jpeg(bytes) => return Ok((bytes, "jpg")),
