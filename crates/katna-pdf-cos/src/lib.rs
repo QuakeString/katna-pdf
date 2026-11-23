@@ -78,7 +78,7 @@ pub use formdata::{
     data_to_json, data_to_xfdf, read_data,
 };
 pub use forms::{Border, Display, Field, FieldKind, FieldValue, FillExtras, Look, Widget};
-pub use impose::{Sheet, SheetLayout, impose};
+pub use impose::{Parity, Sheet, SheetLayout, SheetScale, impose, print_order};
 pub use insert::{Image, Insert, ShapeKind};
 pub use labels::{LabelRange, LabelStyle, labels_of};
 pub use layers::Layer;

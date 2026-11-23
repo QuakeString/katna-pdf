@@ -26,6 +26,18 @@ pub enum SheetLayout {
     Poster { across: u32, down: u32 },
 }
 
+/// How big each page is drawn in its place on the sheet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SheetScale {
+    /// As big as fits.
+    #[default]
+    Fit,
+    /// At its own size, whether it fits or not.
+    Actual,
+    /// At its own size, made smaller only when it would not fit.
+    Shrink,
+}
+
 /// A sheet's size in points, and the space left around each page.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Sheet {
@@ -33,6 +45,39 @@ pub struct Sheet {
     pub height: f32,
     /// Space between pages and from the edge, in points.
     pub gap: f32,
+    pub scale: SheetScale,
+    /// With one page a sheet, each sheet turned to the page's way up
+    /// (portrait or landscape).
+    pub auto_turn: bool,
+}
+
+/// Which of the pages chosen to print.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Parity {
+    #[default]
+    All,
+    /// Pages 1, 3, 5…
+    Odd,
+    /// Pages 2, 4, 6…
+    Even,
+}
+
+/// `pages` (indices from 0) kept as `parity` says, last first when
+/// `reverse`.
+pub fn print_order(pages: &[usize], parity: Parity, reverse: bool) -> Vec<usize> {
+    let mut kept: Vec<usize> = pages
+        .iter()
+        .copied()
+        .filter(|p| match parity {
+            Parity::All => true,
+            Parity::Odd => p % 2 == 0,
+            Parity::Even => p % 2 == 1,
+        })
+        .collect();
+    if reverse {
+        kept.reverse();
+    }
+    kept
 }
 
 impl Sheet {
@@ -50,6 +95,8 @@ impl Sheet {
             width: w,
             height: h,
             gap: 18.0,
+            scale: SheetScale::Fit,
+            auto_turn: false,
         }
     }
 }
@@ -97,12 +144,25 @@ pub fn impose(
     // Each sheet: the cells on it, each a page (or none) scaled into a
     // part of the sheet (left, bottom, width, height), with an offset
     // within the page for poster tiles.
-    let mut sheets: Vec<Vec<Cell>> = Vec::new();
+    let mut sheets: Vec<(Sheet, Vec<Cell>)> = Vec::new();
     match layout {
         SheetLayout::NUp { across, down } => {
             let (across, down) = (across.max(1), down.max(1));
             let per = (across * down) as usize;
             for chunk in pages.chunks(per) {
+                // One a sheet: the sheet the page's way up, if asked.
+                let sheet = match (per, form_of_page(chunk[0])) {
+                    (1, Some((_, _, w, h))) if sheet.auto_turn => {
+                        let (a, b) = (sheet.width.min(sheet.height), sheet.width.max(sheet.height));
+                        let (width, height) = if w > h { (b, a) } else { (a, b) };
+                        Sheet {
+                            width,
+                            height,
+                            ..sheet
+                        }
+                    }
+                    _ => sheet,
+                };
                 let mut cells = Vec::new();
                 for (i, &page) in chunk.iter().enumerate() {
                     let (col, row) = (i as u32 % across, i as u32 / across);
@@ -112,7 +172,7 @@ pub fn impose(
                         tile: None,
                     });
                 }
-                sheets.push(cells);
+                sheets.push((sheet, cells));
             }
         }
         SheetLayout::Booklet => {
@@ -134,7 +194,7 @@ pub fn impose(
                             })
                         })
                         .collect();
-                    sheets.push(cells);
+                    sheets.push((sheet, cells));
                 }
             }
         }
@@ -143,11 +203,14 @@ pub fn impose(
             for &page in pages {
                 for row in 0..down {
                     for col in 0..across {
-                        sheets.push(vec![Cell {
-                            page,
-                            area: grid_cell(sheet, 1, 1, 0, 0),
-                            tile: Some((col, row, across, down)),
-                        }]);
+                        sheets.push((
+                            sheet,
+                            vec![Cell {
+                                page,
+                                area: grid_cell(sheet, 1, 1, 0, 0),
+                                tile: Some((col, row, across, down)),
+                            }],
+                        ));
                     }
                 }
             }
@@ -155,7 +218,7 @@ pub fn impose(
     }
 
     let mut kids = Vec::new();
-    for cells in sheets {
+    for (sheet, cells) in sheets {
         let mut content = String::new();
         let mut xobjects = Dict::new();
         for (i, cell) in cells.iter().enumerate() {
@@ -167,8 +230,13 @@ pub fn impose(
             let [left, bottom, cw, ch] = cell.area;
             let (scale, dx, dy) = match cell.tile {
                 None => {
-                    // As big as fits the cell, in its middle.
-                    let s = (cw / w).min(ch / h);
+                    // As big as fits the cell (or as asked), in its middle.
+                    let fits = (cw / w).min(ch / h);
+                    let s = match sheet.scale {
+                        SheetScale::Fit => fits,
+                        SheetScale::Actual => 1.0,
+                        SheetScale::Shrink => fits.min(1.0),
+                    };
                     (s, left + (cw - w * s) / 2.0, bottom + (ch - h * s) / 2.0)
                 }
                 Some((col, row, across, down)) => {
@@ -320,12 +388,22 @@ mod tests {
             width: 100.0,
             height: 200.0,
             gap: 10.0,
+            scale: SheetScale::Fit,
+            auto_turn: false,
         };
         let [l, b, w, h] = grid_cell(sheet, 2, 2, 0, 0);
         assert_eq!((l, w, h), (10.0, 35.0, 85.0));
         assert_eq!(b, 200.0 - 10.0 - 85.0);
         let [l2, b2, _, _] = grid_cell(sheet, 2, 2, 1, 1);
         assert_eq!((l2, b2), (55.0, 10.0));
+    }
+
+    #[test]
+    fn odd_even_and_reverse() {
+        let pages = [0, 1, 2, 3, 4];
+        assert_eq!(print_order(&pages, Parity::Odd, false), [0, 2, 4]);
+        assert_eq!(print_order(&pages, Parity::Even, true), [3, 1]);
+        assert_eq!(print_order(&pages, Parity::All, true), [4, 3, 2, 1, 0]);
     }
 
     #[test]
