@@ -3,7 +3,7 @@ core.word-count	core	Word and character count	reader	n	todo	P2	-	text is there (
 core.open-pdf	core	Open PDF files	reader	y	shipped	P0	Phase 1		acrobat
 core.repair-broken-files	core	Open damaged files by reconstructing the cross-reference table	reader	n	shipped	P0	cos parse.rs #4		acrobat
 core.malformed-input-safety	core	Reject garbage or hostile input without crashing	-	n	shipped	P0	cos, cos-check	never-panic sweeps over a corpus	acrobat
-core.repair-log	core	Record repairs and show them to the user	reader	n	todo	P1	-	repairs happen silently	acrobat
+core.repair-log	core	Record repairs and show them to the user	reader	n	shipped	P1	#185		acrobat
 core.xref-streams	core	Read cross-reference streams and compressed object streams	reader	n	shipped	P0	cos #4, #77		acrobat
 core.hybrid-xref	core	Hybrid-reference files (/XRefStm) and quirky xref subsections	reader	n	shipped	P0	cos parse.rs		acrobat
 core.revision-chain	core	Follow /Prev revision chains with loop protection	reader	n	shipped	P0	cos parse.rs		acrobat

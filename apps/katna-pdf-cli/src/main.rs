@@ -795,10 +795,24 @@ fn info(args: &[String], json: bool) -> Done {
             }
         }
         if doc.was_repaired() {
-            let _ = writeln!(
-                out,
-                "Repaired:     yes (its cross-reference table was broken)"
-            );
+            let what: Vec<String> = doc
+                .repairs()
+                .iter()
+                .map(|r| match r {
+                    katna_pdf_cos::Repair::CutShort => "it ends early".to_owned(),
+                    katna_pdf_cos::Repair::NoTable => "no cross-reference table".to_owned(),
+                    katna_pdf_cos::Repair::BrokenTable => {
+                        "its cross-reference table was broken".to_owned()
+                    }
+                    katna_pdf_cos::Repair::NoCatalog => {
+                        "its table didn't lead to the pages".to_owned()
+                    }
+                    katna_pdf_cos::Repair::Rebuilt { objects } => {
+                        format!("rebuilt from {objects} objects")
+                    }
+                })
+                .collect();
+            let _ = writeln!(out, "Repaired:     yes ({})", what.join("; "));
         }
         let _ = writeln!(out, "Outline:      {outline} items");
         let _ = writeln!(out, "Form fields:  {fields}");

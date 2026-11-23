@@ -5,7 +5,7 @@
 
 use std::io::Write as _;
 
-use katna_pdf_cos::{Dict, Document, Object, Ref, XrefKind};
+use katna_pdf_cos::{Dict, Document, Object, Ref, Repair, XrefKind};
 
 /// A file with a classic table: catalog, page tree, `n` pages.
 fn classic(n: usize) -> Vec<u8> {
@@ -148,6 +148,27 @@ fn repairs_wrong_offsets_and_a_missing_startxref() {
     let doc = Document::load(cut).unwrap();
     assert!(doc.was_repaired());
     assert_eq!(doc.pages().len(), 2);
+    // What was wrong, said.
+    let repairs = doc.repairs();
+    assert_eq!(
+        repairs[..2],
+        [Repair::CutShort, Repair::NoTable],
+        "{repairs:?}"
+    );
+    assert!(matches!(repairs[2], Repair::Rebuilt { objects } if objects >= 4));
+    // A whole file needs none.
+    assert!(Document::load(classic(2)).unwrap().repairs().is_empty());
+
+    // A change to it is saved by writing it whole, so it reads cleanly.
+    let mut update = doc.update().unwrap();
+    let mut info = Dict::new();
+    info.set("Title", Object::string("Mended"));
+    let info = update.add(Object::Dict(info));
+    update.trailer_mut().set("Info", Object::Ref(info));
+    let saved = Document::load(update.finish()).unwrap();
+    assert!(!saved.was_repaired(), "{saved:?}");
+    assert_eq!(saved.pages().len(), 2);
+    assert!(saved.trailer().get("Info").is_some());
 }
 
 #[test]

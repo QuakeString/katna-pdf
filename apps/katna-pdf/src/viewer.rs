@@ -1469,7 +1469,12 @@ impl Viewer {
                             Vec::new(),
                             sign::Signable::default(),
                             Vec::new(),
-                            (Vec::new(), Vec::new(), katna_pdf_cos::Permissions::ALL),
+                            (
+                                Vec::new(),
+                                Vec::new(),
+                                katna_pdf_cos::Permissions::ALL,
+                                Vec::new(),
+                            ),
                         );
                     };
                     let show = doc
@@ -1480,7 +1485,12 @@ impl Viewer {
                     let ranges = doc.page_label_ranges();
                     let signatures = sign::check(&doc);
                     let signable = sign::signable(&doc);
-                    let extras = (doc.attachments(), doc.layers(), doc.permissions());
+                    let extras = (
+                        doc.attachments(),
+                        doc.layers(),
+                        doc.permissions(),
+                        doc.repairs().to_vec(),
+                    );
                     // The object layer's copy is kept only for a form.
                     let form = (!fields.is_empty()).then(|| (Arc::new(doc), fields));
                     (
@@ -1503,6 +1513,19 @@ impl Viewer {
                 this.signatures = Some(Arc::new(signatures));
                 this.extras.set(extras.0, extras.1);
                 this.set_permissions(extras.2);
+                // A damaged file read anyway: say so, and what was wrong.
+                if !extras.3.is_empty() {
+                    let name = this
+                        .path
+                        .as_ref()
+                        .and_then(|p| p.file_name())
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_default();
+                    this.notice = Some(said(
+                        "repaired-notice",
+                        &[("name", &name), ("what", &repairs_text(&extras.3))],
+                    ));
+                }
                 this.signable = Arc::new(signable);
                 if links.iter().any(|l| !l.is_empty()) {
                     this.links = Some(Arc::new(links));
@@ -5561,6 +5584,24 @@ impl Render for Viewer {
             .children(self.side_menu_element(cx))
             .into_any_element()
     }
+}
+
+/// What was wrong with a damaged file, in a few words.
+pub(crate) fn repairs_text(repairs: &[katna_pdf_cos::Repair]) -> String {
+    use katna_pdf_cos::Repair;
+    repairs
+        .iter()
+        .map(|r| match r {
+            Repair::CutShort => t("repaired-cut-short", &[]),
+            Repair::NoTable => t("repaired-no-table", &[]),
+            Repair::BrokenTable => t("repaired-broken-table", &[]),
+            Repair::NoCatalog => t("repaired-no-catalog", &[]),
+            Repair::Rebuilt { objects } => {
+                t("repaired-rebuilt", &[("count", &objects.to_string())])
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("; ")
 }
 
 /// Why a locked file can't be opened, and what to do, by how it is
