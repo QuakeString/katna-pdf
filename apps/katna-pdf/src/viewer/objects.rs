@@ -73,6 +73,9 @@ pub(super) struct Picked {
     opacity: f32,
     /// Whether a shape's own points are shown, to drag one at a time.
     points: bool,
+    /// Whether the card shows lining up and ordering (and a shape's
+    /// place and size).
+    arrange: bool,
 }
 
 /// The card asking which pages the copied objects go on.
@@ -497,6 +500,7 @@ impl Viewer {
             _fields: subs,
             opacity: 1.0,
             points: false,
+            arrange: false,
         });
         self.refresh_inspector(cx);
     }
@@ -654,16 +658,11 @@ impl Viewer {
     }
 
     /// The picked shape's line dashed, or solid again.
-    fn toggle_dash(&mut self, cx: &mut Context<Self>) {
+    fn set_dashes(&mut self, dashes: Dashes, cx: &mut Context<Self>) {
         let Some(style) = self.picked_style() else {
             return;
         };
-        let dash = if style.dash.is_empty() {
-            let w = style.width.max(1.0);
-            vec![w * 3.0, w * 2.0]
-        } else {
-            Vec::new()
-        };
+        let dash = dashes.pattern(style.width);
         self.style_picked(
             ObjectChange::Style {
                 fill: None,
@@ -1214,6 +1213,28 @@ impl Viewer {
     /// Ctrl+C with objects picked: copies them, for Ctrl+V on any page of
     /// any open file. Returns whether any were picked.
     pub(super) fn copy_picked_objects(&mut self, cx: &mut Context<Self>) -> bool {
+        self.copy_picked(None, cx)
+    }
+
+    /// Copies the objects picked, then does `then` once they are.
+    fn copy_picked_then(
+        &mut self,
+        then: fn(&mut Self, &mut Window, &mut Context<Self>),
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let window = window.window_handle();
+        self.copy_picked(Some((then, window)), cx);
+    }
+
+    fn copy_picked(
+        &mut self,
+        then: Option<(
+            fn(&mut Self, &mut Window, &mut Context<Self>),
+            gpui::AnyWindowHandle,
+        )>,
+        cx: &mut Context<Self>,
+    ) -> bool {
         let Some((page, indices)) = self.picked_indices() else {
             return false;
         };
@@ -1248,6 +1269,13 @@ impl Viewer {
                 cx.write_to_clipboard(gpui::ClipboardItem::new_string(COPIED_MARK.into()));
             })
             .ok();
+            if let Some((then, window)) = then {
+                window
+                    .update(cx, |_, window, cx| {
+                        this.update(cx, |this, cx| then(this, window, cx)).ok();
+                    })
+                    .ok();
+            }
         })
         .detach();
         true
@@ -1843,7 +1871,167 @@ impl Viewer {
                     .into_any_element(),
             );
         }
+        // Many picked: what can be done to them all, under them (E06).
+        if indices.len() > 1 && self.moving.is_none() && self.pasting_many.is_none() {
+            out.push(self.many_bar(indices.len(), [b[0] * shown, b[3] * shown], cx));
+        }
         out
+    }
+
+    /// The dark bar under many objects picked, at `at` on the page, with
+    /// how to pick and move them under it.
+    fn many_bar(&self, count: usize, at: [f32; 2], cx: &Context<Self>) -> AnyElement {
+        let th = self.theme;
+        let ink = th.on_inverse;
+        let tool = |id: &'static str, glyph: &'static str, tip: String| {
+            div()
+                .id(id)
+                .size(px(28.0))
+                .flex()
+                .flex_none()
+                .items_center()
+                .justify_center()
+                .rounded(px(6.0))
+                .cursor_pointer()
+                .hover(|s| s.bg(gpui::rgba(0xffff_ff1f)))
+                .child(float::icon(glyph, 15.0, ink))
+                .ftip(tip, &th)
+        };
+        let sep = || {
+            div()
+                .w(px(1.0))
+                .h(px(18.0))
+                .mx(px(space::S1))
+                .bg(gpui::rgba(0xffff_ff33))
+        };
+        let mut bar = div()
+            .flex()
+            .items_center()
+            .gap(px(2.0))
+            .p(px(space::S1))
+            .rounded(px(10.0))
+            .bg(th.inverse)
+            .text_color(ink)
+            .text_size(px(text::SMALL))
+            .shadow(th.lifted())
+            .child(
+                div()
+                    .px(px(space::S2))
+                    .opacity(0.7)
+                    .whitespace_nowrap()
+                    .child(t("objcard-many", &[("count", &count.to_string())])),
+            )
+            .child(sep());
+        for (id, glyph, how) in [
+            ("object-align-left", "oal", Align::Left),
+            ("object-align-centre", "oac", Align::Centre),
+            ("object-align-right", "oar", Align::Right),
+            ("object-align-top", "oat", Align::Top),
+            ("object-align-middle", "oam", Align::Middle),
+            ("object-align-bottom", "oab", Align::Bottom),
+        ] {
+            bar = bar.child(
+                tool(id, glyph, t(&format!("{id}-together"), &[]))
+                    .on_click(cx.listener(move |this, _, _, cx| this.align_picked(how, cx))),
+            );
+        }
+        let opacity = self.picked_object.as_ref().map_or(1.0, |p| p.opacity);
+        let percent = (opacity * 100.0).round() as u32;
+        let next = less(opacity);
+        bar =
+            bar.child(sep())
+                .child(
+                    tool("object-front", "front", t("object-front", &[])).on_click(
+                        cx.listener(|this, _, _, cx| this.change_picked(ObjectChange::Front, cx)),
+                    ),
+                )
+                .child(tool("object-back", "back", t("object-back", &[])).on_click(
+                    cx.listener(|this, _, _, cx| this.change_picked(ObjectChange::Back, cx)),
+                ))
+                .child(
+                    tool(
+                        "object-opacity",
+                        "opacity",
+                        t("object-opacity", &[("percent", &percent.to_string())]),
+                    )
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.change_picked(ObjectChange::Opacity(next), cx)
+                    })),
+                )
+                .child(sep())
+                .child(
+                    tool("object-copy", "copy", t("object-copy", &[])).on_click(cx.listener(
+                        |this, _, _, cx| {
+                            this.copy_picked_objects(cx);
+                        },
+                    )),
+                )
+                .child(
+                    tool("object-cut", "scissors", t("object-cut", &[])).on_click(cx.listener(
+                        |this, _, _, cx| {
+                            this.cut_picked_objects(cx);
+                        },
+                    )),
+                )
+                .child(
+                    div()
+                        .id("object-paste-pages")
+                        .h(px(28.0))
+                        .px(px(space::S2))
+                        .flex()
+                        .items_center()
+                        .rounded(px(6.0))
+                        .whitespace_nowrap()
+                        .cursor_pointer()
+                        .hover(|s| s.bg(gpui::rgba(0xffff_ff1f)))
+                        .ftip(t("object-paste-pages-tip", &[]), &th)
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.copy_picked_then(
+                                |this, window, cx| {
+                                    if this.pasting_many.is_none() {
+                                        this.toggle_paste_many(window, cx);
+                                    }
+                                },
+                                window,
+                                cx,
+                            )
+                        }))
+                        .child(t("object-paste-pages", &[])),
+                )
+                .child(sep())
+                .child(
+                    tool("object-delete", "trash", t("object-delete", &[])).on_click(cx.listener(
+                        |this, _, _, cx| {
+                            this.delete_picked_object(cx);
+                        },
+                    )),
+                );
+        div()
+            .absolute()
+            .left(desktop_px(at[0]))
+            .top(desktop_px(at[1] + 12.0))
+            .flex()
+            .flex_col()
+            .items_start()
+            .gap(px(space::S2))
+            .occlude()
+            .font_family(gpui::SharedString::from(".SystemUIFont"))
+            .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .child(bar)
+            .child(
+                div()
+                    .px(px(space::S2))
+                    .py(px(space::S1))
+                    .rounded(px(6.0))
+                    .bg(th.card)
+                    .border_1()
+                    .border_color(th.line)
+                    .text_size(px(text::CAPTION))
+                    .text_color(th.text2)
+                    .whitespace_nowrap()
+                    .child(t("object-many-hint", &[])),
+            )
+            .into_any_element()
     }
 
     /// The inspector, in the row of tools while objects are picked: what
@@ -1852,79 +2040,185 @@ impl Viewer {
     pub(super) fn inspector(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let picked = self.picked_object.as_ref()?;
         let (page, indices) = self.picked_indices()?;
-        let one = match indices[..] {
-            [index] => self.object_shown(page, index).map(|(o, _)| o),
-            _ => None,
+        // Many at once have their bar under them on the page (E06).
+        let [index] = indices[..] else {
+            return None;
         };
-        let many = indices.len() > 1;
+        let (one, _) = self.object_shown(page, index)?;
         let th = self.theme;
-        let style = one.as_ref().and_then(|o| o.style.clone());
-        let title = match one.as_ref().map(|o| o.kind) {
-            _ if many => t("objcard-many", &[("count", &indices.len().to_string())]),
-            Some(ObjectKind::Picture) => t("objcard-picture", &[]),
-            Some(ObjectKind::Form) => t("objcard-drawing", &[]),
-            Some(ObjectKind::Text) => t("objcard-text", &[]),
-            _ => t("objcard-shape", &[]),
+        let style = one.style.clone();
+        let title = match one.kind {
+            ObjectKind::Picture => t("objcard-picture", &[]),
+            ObjectKind::Form => t("objcard-drawing", &[]),
+            ObjectKind::Text => t("objcard-text", &[]),
+            ObjectKind::Path => match one.shape_kind() {
+                Some(katna_pdf_cos::ShapeKind::Rectangle) => t("objcard-rectangle", &[]),
+                Some(katna_pdf_cos::ShapeKind::Ellipse) => t("objcard-ellipse", &[]),
+                Some(katna_pdf_cos::ShapeKind::Line) => t("objcard-line-shape", &[]),
+                None => t("objcard-shape", &[]),
+            },
         };
-        let unit = cx.global::<crate::prefs::Prefs>().units.suffix();
-        let input = |field: &gpui::Entity<katna_ui::text_input::TextInput>, label: &'static str| {
+        let units = cx.global::<crate::prefs::Prefs>().units;
+        // A field: its letter before what is typed, a unit after.
+        let input = |field: &gpui::Entity<katna_ui::text_input::TextInput>,
+                     label: Option<&'static str>,
+                     unit: Option<&'static str>| {
             div()
                 .flex_1()
                 .min_w_0()
-                .h(px(30.0))
-                .pl(px(space::S2))
+                .h(px(32.0))
+                .px(px(space::S2))
                 .flex()
                 .items_center()
-                .gap(px(space::S1))
-                .rounded(px(6.0))
+                .gap(px(space::S2))
+                .rounded(px(7.0))
                 .border_1()
                 .border_color(th.line)
                 .bg(th.card)
                 .text_size(px(text::SMALL))
-                .child(div().flex_none().text_color(th.dim).child(label))
+                .children(label.map(|l| div().flex_none().text_color(th.dim).child(l)))
                 .child(div().flex_1().min_w_0().child(field.clone()))
-                .when(matches!(label, "X" | "Y" | "W" | "H"), |d| {
-                    d.child(
-                        div()
-                            .flex_none()
-                            .pr(px(space::S2))
-                            .text_color(th.dim)
-                            .child(unit),
-                    )
-                })
+                .children(unit.map(|u| div().flex_none().text_color(th.dim).child(u)))
         };
         let f = &picked.fields;
-        let mut card = div()
-            .flex()
-            .flex_col()
-            .gap(px(space::S1))
-            .child(
-                div()
-                    .pb(px(space::S1))
-                    .text_size(px(text::SMALL))
-                    .font_weight(gpui::FontWeight::BOLD)
-                    .text_color(th.text)
-                    .child(title),
-            )
-            .child(
-                div()
-                    .flex()
-                    .gap(px(space::S1))
-                    .child(input(&f[0], "X"))
-                    .child(input(&f[1], "Y")),
-            )
-            .child(
-                div()
-                    .flex()
-                    .gap(px(space::S1))
-                    .child(input(&f[2], "W"))
-                    .child(input(&f[3], "H"))
-                    .child(input(&f[4], "∠")),
-            );
         let tool = |id: &'static str, glyph: &'static str, tip: String| {
             float::ib(id, glyph, tip, false, &th)
         };
+        // Where it is and how big, in the units picked here or in
+        // Settings > Editing, and how far it is turned.
+        let unit_seg = float::seg(&th).children(
+            [
+                (crate::prefs::Units::Millimetres, "mm"),
+                (crate::prefs::Units::Inches, "in"),
+                (crate::prefs::Units::Points, "pt"),
+            ]
+            .into_iter()
+            .enumerate()
+            .map(|(i, (u, words))| {
+                float::seg_item(
+                    ("object-units", i),
+                    None,
+                    Some(words.into()),
+                    units == u,
+                    &th,
+                )
+                .flex_none()
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    crate::prefs::Prefs::set(cx, |p| p.units = u);
+                    this.refresh_inspector(cx);
+                    cx.notify();
+                }))
+            }),
+        );
+        let place = div()
+            .flex()
+            .flex_col()
+            .gap(px(space::S2))
+            .child(
+                div()
+                    .flex()
+                    .gap(px(space::S2))
+                    .child(input(&f[0], Some("X"), None))
+                    .child(input(&f[1], Some("Y"), None)),
+            )
+            .child(
+                div()
+                    .flex()
+                    .gap(px(space::S2))
+                    .child(input(&f[2], Some("W"), None))
+                    .child(input(&f[3], Some("H"), None)),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(space::S2))
+                    .child(unit_seg)
+                    .child(div().flex_1())
+                    .child(
+                        div()
+                            .flex_none()
+                            .text_size(px(text::SMALL))
+                            .text_color(th.dim)
+                            .child(t("objcard-turn", &[])),
+                    )
+                    .child(div().w(px(64.0)).child(input(&f[4], None, Some("°")))),
+            );
+        // A row of what is done to it at once; the stack opens lining it
+        // up and putting it in front or behind.
+        let icons = div()
+            .flex()
+            .items_center()
+            .gap(px(2.0))
+            .child(
+                tool("object-rotate-left", "rotl", t("object-rotate-left", &[]))
+                    .on_click(cx.listener(|this, _, _, cx| this.rotate_picked(90.0, cx))),
+            )
+            .child(
+                tool("object-rotate", "rot", t("object-rotate", &[]))
+                    .on_click(cx.listener(|this, _, _, cx| this.rotate_picked(-90.0, cx))),
+            )
+            .child(
+                tool("object-flip-h", "flip", t("object-flip-h", &[]))
+                    .on_click(cx.listener(|this, _, _, cx| this.flip_picked(true, cx))),
+            )
+            .child(
+                tool("object-flip-v", "flipv", t("object-flip-v", &[]))
+                    .on_click(cx.listener(|this, _, _, cx| this.flip_picked(false, cx))),
+            )
+            .child(
+                tool("object-duplicate", "copy", t("object-duplicate", &[])).on_click(cx.listener(
+                    |this, _, window, cx| {
+                        this.copy_picked_then(
+                            |this, _, cx| {
+                                this.paste_copied_objects(false, cx);
+                            },
+                            window,
+                            cx,
+                        )
+                    },
+                )),
+            )
+            .child(
+                float::ib(
+                    "object-arrange",
+                    "layers",
+                    t("object-arrange", &[]),
+                    picked.arrange,
+                    &th,
+                )
+                .on_click(cx.listener(|this, _, _, cx| {
+                    if let Some(p) = this.picked_object.as_mut() {
+                        p.arrange = !p.arrange;
+                    }
+                    cx.notify();
+                })),
+            )
+            .child(div().flex_1())
+            .child(
+                float::ib(
+                    "object-delete",
+                    "trash",
+                    t("object-delete", &[]),
+                    false,
+                    &th,
+                )
+                .text_color(th.error)
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.delete_picked_object(cx);
+                })),
+            );
+        let arrange = picked.arrange.then(|| self.arrange_rows(cx));
+        let mut card = div().flex().flex_col().gap(px(space::S2)).child(
+            div()
+                .text_size(px(text::SMALL))
+                .font_weight(gpui::FontWeight::BOLD)
+                .text_color(th.text)
+                .child(title),
+        );
         if let Some(style) = style {
+            // A shape (E07): how it is painted first, where it is with
+            // the rest.
             let style_change = |cap: Option<u8>, join: Option<u8>| ObjectChange::Style {
                 fill: None,
                 stroke: None,
@@ -1933,9 +2227,7 @@ impl Viewer {
                 cap,
                 join,
             };
-            let fill_percent = one
-                .as_ref()
-                .map_or(100, |o| (o.opacity * 100.0).round() as u32);
+            let fill_percent = (one.opacity * 100.0).round() as u32;
             let line_percent = (style.stroke_opacity * 100.0).round() as u32;
             let dot = |c: Option<[f32; 3]>| {
                 let [r, g, b] = c.unwrap_or([1.0, 1.0, 1.0]);
@@ -1954,12 +2246,11 @@ impl Viewer {
             };
             let percent = |p: u32| {
                 div()
-                    .flex_1()
                     .text_size(px(text::CAPTION))
                     .text_color(th.dim)
                     .child(format!("{p}%"))
             };
-            let fill_next = less(one.as_ref().map_or(1.0, |o| o.opacity));
+            let fill_next = less(one.opacity);
             let line_next = less(style.stroke_opacity);
             card = card
                 .child(
@@ -2028,15 +2319,16 @@ impl Viewer {
                 )
                 .child(
                     float::field_row(t("objcard-width", &[]), &th)
-                        .child(div().w(px(96.0)).child(input(&f[5], "pt"))),
+                        .child(div().w(px(76.0)).child(input(&f[5], None, Some("pt")))),
                 );
-            let dashed = !style.dash.is_empty();
+            let dashes = Dashes::of(&style);
             let seg_of = |id: &'static str, words: [&'static str; 3], now: u8, cap: bool| {
                 float::seg(&th)
                     .flex_1()
                     .children(words.into_iter().enumerate().map(|(i, w)| {
                         let n = i as u8;
                         float::seg_item((id, i), None, Some(t(w, &[]).into()), now == n, &th)
+                            .flex_1()
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.style_picked(
                                     if cap {
@@ -2052,33 +2344,28 @@ impl Viewer {
             card = card
                 .child(
                     float::field_row(t("objcard-dashes", &[]), &th).child(
-                        float::seg(&th)
-                            .flex_1()
-                            .child(
+                        float::seg(&th).children(
+                            [
+                                (Dashes::Solid, "objcard-solid"),
+                                (Dashes::Dashed, "objcard-dashed"),
+                                (Dashes::Dotted, "objcard-dotted"),
+                            ]
+                            .into_iter()
+                            .enumerate()
+                            .map(|(i, (d, tip))| {
                                 float::seg_item(
-                                    "object-solid",
+                                    ("object-dashes", i),
                                     None,
-                                    Some(t("objcard-solid", &[]).into()),
-                                    !dashed,
+                                    Some(d.mark().into()),
+                                    dashes == d,
                                     &th,
                                 )
-                                .when(dashed, |d| {
-                                    d.on_click(cx.listener(|this, _, _, cx| this.toggle_dash(cx)))
-                                }),
-                            )
-                            .child(
-                                float::seg_item(
-                                    "object-dash",
-                                    None,
-                                    Some(t("objcard-dashed", &[]).into()),
-                                    dashed,
-                                    &th,
-                                )
-                                .ftip(t("object-dash", &[]), &th)
-                                .when(!dashed, |d| {
-                                    d.on_click(cx.listener(|this, _, _, cx| this.toggle_dash(cx)))
-                                }),
-                            ),
+                                .flex_none()
+                                .w(px(40.0))
+                                .ftip(t(tip, &[]), &th)
+                                .on_click(cx.listener(move |this, _, _, cx| this.set_dashes(d, cx)))
+                            }),
+                        ),
                     ),
                 )
                 .child(float::field_row(t("objcard-ends", &[]), &th).child(seg_of(
@@ -2095,127 +2382,98 @@ impl Viewer {
                         false,
                     )),
                 );
-            if one.as_ref().is_some_and(|o| !o.points.is_empty()) {
+            if !one.points.is_empty() {
                 card = card.child(
-                    float::menu_item(
-                        "object-points",
-                        Some("points"),
-                        t("objcard-points", &[]),
-                        None,
-                        &th,
-                    )
-                    .when(picked.points, |d| {
-                        d.bg(th.accent_soft).text_color(th.accent_text)
-                    })
-                    .ftip(t("object-points", &[]), &th)
-                    .on_click(cx.listener(|this, _, _, cx| this.toggle_points(cx))),
+                    div()
+                        .id("object-points")
+                        .h(px(32.0))
+                        .px(px(space::S3))
+                        .flex()
+                        .items_center()
+                        .rounded(px(7.0))
+                        .text_size(px(text::SMALL))
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .cursor_pointer()
+                        .map(|d| {
+                            if picked.points {
+                                d.bg(th.accent_soft).text_color(th.accent_text)
+                            } else {
+                                d.text_color(th.text).hover(|s| s.bg(th.hover))
+                            }
+                        })
+                        .ftip(t("object-points", &[]), &th)
+                        .on_click(cx.listener(|this, _, _, cx| this.toggle_points(cx)))
+                        .child(t("objcard-points", &[])),
                 );
             }
+            card = card.child(float::menu_sep(&th)).child(icons);
+            if let Some(arrange) = arrange {
+                card = card.child(place).child(arrange);
+            }
         } else {
-            // A picture, or many at once, faded as a whole.
-            let opacity = one.as_ref().map_or(picked.opacity, |o| o.opacity);
-            let percent = (opacity * 100.0).round() as u32;
-            let next = less(opacity);
-            card = card.child(
-                float::field_row(t("objcard-see", &[]), &th).child(
-                    float::chip("object-opacity", format!("{percent}%"), false, &th)
-                        .ftip(
-                            t("object-opacity", &[("percent", &percent.to_string())]),
+            // A picture or a drawing (E05): where it is first.
+            let percent = (one.opacity * 100.0).round() as u32;
+            let next = less(one.opacity);
+            card = card.child(place).child(icons).children(arrange).child(
+                div()
+                    .id("object-opacity")
+                    .h(px(28.0))
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .text_size(px(text::SMALL))
+                    .cursor_pointer()
+                    .ftip(
+                        t("object-opacity", &[("percent", &percent.to_string())]),
+                        &th,
+                    )
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.change_picked(ObjectChange::Opacity(next), cx)
+                    }))
+                    .child(div().text_color(th.text2).child(t("objcard-opacity", &[])))
+                    .child(div().text_color(th.text).child(format!("{percent}%"))),
+            );
+            let wide = |b: gpui::Stateful<gpui::Div>| b.w_full();
+            if one.kind == ObjectKind::Picture {
+                card = card
+                    .child(
+                        wide(float::button(
+                            "object-replace",
+                            t("objcard-replace", &[]),
+                            false,
                             &th,
-                        )
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.change_picked(ObjectChange::Opacity(next), cx)
-                        })),
-                ),
-            );
-        }
-        card = card
-            .child(float::menu_sep(&th))
-            .child(float::heading(t("objcard-arrange", &[]), &th));
-        let suffix = if many { "-together" } else { "-page" };
-        let mut align = div().flex().flex_wrap().gap(px(2.0));
-        for (id, glyph, how) in [
-            ("object-align-left", "oal", Align::Left),
-            ("object-align-centre", "oac", Align::Centre),
-            ("object-align-right", "oar", Align::Right),
-            ("object-align-top", "oat", Align::Top),
-            ("object-align-middle", "oam", Align::Middle),
-            ("object-align-bottom", "oab", Align::Bottom),
-        ] {
-            align = align.child(
-                tool(id, glyph, t(&format!("{id}{suffix}"), &[]))
-                    .on_click(cx.listener(move |this, _, _, cx| this.align_picked(how, cx))),
-            );
-        }
-        card = card.child(align).child(
-            div()
-                .flex()
-                .flex_wrap()
-                .gap(px(2.0))
-                .child(
-                    tool("object-rotate", "rot", t("object-rotate", &[]))
-                        .on_click(cx.listener(|this, _, _, cx| this.rotate_picked(-90.0, cx))),
-                )
-                .child(
-                    tool("object-flip-h", "flip", t("object-flip-h", &[]))
-                        .on_click(cx.listener(|this, _, _, cx| this.flip_picked(true, cx))),
-                )
-                .child(
-                    tool("object-flip-v", "flipv", t("object-flip-v", &[]))
-                        .on_click(cx.listener(|this, _, _, cx| this.flip_picked(false, cx))),
-                )
-                .child(
-                    tool("object-fit", "expand", t("object-fit", &[]))
-                        .on_click(cx.listener(|this, _, _, cx| this.fit_picked(cx))),
-                )
-                .child(div().w_full())
-                .child(
-                    tool("object-forward", "fwd", t("object-forward", &[])).on_click(
-                        cx.listener(|this, _, _, cx| this.change_picked(ObjectChange::Forward, cx)),
-                    ),
-                )
-                .child(
-                    tool("object-backward", "bwd", t("object-backward", &[])).on_click(
-                        cx.listener(|this, _, _, cx| {
-                            this.change_picked(ObjectChange::Backward, cx)
-                        }),
-                    ),
-                )
-                .child(
-                    tool("object-front", "front", t("object-front", &[])).on_click(
-                        cx.listener(|this, _, _, cx| this.change_picked(ObjectChange::Front, cx)),
-                    ),
-                )
-                .child(tool("object-back", "back", t("object-back", &[])).on_click(
-                    cx.listener(|this, _, _, cx| this.change_picked(ObjectChange::Back, cx)),
-                )),
-        );
-        card = card.child(float::menu_sep(&th));
-        if one.as_ref().is_some_and(|o| o.kind == ObjectKind::Picture) {
-            card = card
-                .child(
-                    float::menu_item(
-                        "object-replace",
-                        Some("replace"),
-                        t("objcard-replace", &[]),
-                        None,
-                        &th,
+                        ))
+                        .ftip(t("object-replace", &[]), &th)
+                        .on_click(cx.listener(|this, _, _, cx| this.replace_picked(cx))),
                     )
-                    .ftip(t("object-replace", &[]), &th)
-                    .on_click(cx.listener(|this, _, _, cx| this.replace_picked(cx))),
-                )
-                .child(
-                    float::menu_item(
-                        "object-save-picture",
-                        Some("download"),
-                        t("object-save-picture", &[]),
-                        None,
-                        &th,
-                    )
-                    .on_click(cx.listener(|this, _, _, cx| this.save_picked_picture(cx))),
-                );
+                    .child(
+                        wide(float::button(
+                            "object-save-picture",
+                            t("objcard-save-picture", &[]),
+                            false,
+                            &th,
+                        ))
+                        .ftip(t("object-save-picture", &[]), &th)
+                        .on_click(cx.listener(|this, _, _, cx| this.save_picked_picture(cx))),
+                    );
+                if let Some([w, h]) = one.pixels {
+                    // Pixels to an inch of the page as it is placed.
+                    let across = (one.rect[2] - one.rect[0]).abs().max(0.01) / 72.0;
+                    let dpi = (w as f32 / across).round() as u32;
+                    card = card.child(div().text_size(px(text::CAPTION)).text_color(th.dim).child(
+                        t(
+                            "objcard-pixels",
+                            &[
+                                ("width", &w.to_string()),
+                                ("height", &h.to_string()),
+                                ("dpi", &dpi.to_string()),
+                            ],
+                        ),
+                    ));
+                }
+            }
         }
-        if one.as_ref().is_some_and(|o| o.clipped) {
+        if one.clipped {
             card = card.child(
                 float::menu_item(
                     "object-unclip",
@@ -2228,6 +2486,56 @@ impl Viewer {
                 .on_click(cx.listener(|this, _, _, cx| this.unclip_picked(cx))),
             );
         }
+        Some(card.into_any_element())
+    }
+
+    /// Lining the object picked up with the page, and putting them in front or behind; their layer.
+    fn arrange_rows(&self, cx: &mut Context<Self>) -> gpui::Div {
+        let th = self.theme;
+        let tool = |id: &'static str, glyph: &'static str, tip: String| {
+            float::ib(id, glyph, tip, false, &th)
+        };
+        let mut align = div().flex().flex_wrap().gap(px(2.0));
+        for (id, glyph, how) in [
+            ("object-align-left", "oal", Align::Left),
+            ("object-align-centre", "oac", Align::Centre),
+            ("object-align-right", "oar", Align::Right),
+            ("object-align-top", "oat", Align::Top),
+            ("object-align-middle", "oam", Align::Middle),
+            ("object-align-bottom", "oab", Align::Bottom),
+        ] {
+            align = align.child(
+                tool(id, glyph, t(&format!("{id}-page"), &[]))
+                    .on_click(cx.listener(move |this, _, _, cx| this.align_picked(how, cx))),
+            );
+        }
+        let order = div()
+            .flex()
+            .gap(px(2.0))
+            .child(
+                tool("object-forward", "fwd", t("object-forward", &[])).on_click(
+                    cx.listener(|this, _, _, cx| this.change_picked(ObjectChange::Forward, cx)),
+                ),
+            )
+            .child(
+                tool("object-backward", "bwd", t("object-backward", &[])).on_click(
+                    cx.listener(|this, _, _, cx| this.change_picked(ObjectChange::Backward, cx)),
+                ),
+            )
+            .child(
+                tool("object-front", "front", t("object-front", &[])).on_click(
+                    cx.listener(|this, _, _, cx| this.change_picked(ObjectChange::Front, cx)),
+                ),
+            )
+            .child(
+                tool("object-back", "back", t("object-back", &[])).on_click(
+                    cx.listener(|this, _, _, cx| this.change_picked(ObjectChange::Back, cx)),
+                ),
+            )
+            .child(
+                tool("object-fit", "expand", t("object-fit", &[]))
+                    .on_click(cx.listener(|this, _, _, cx| this.fit_picked(cx))),
+            );
         let layer = self.picked_layer();
         let layer_name = layer
             .and_then(|id| self.extras.layers.iter().find(|l| l.id == id))
@@ -2236,32 +2544,62 @@ impl Viewer {
             Some(name) => t("object-layer", &[("name", name)]),
             None => t("object-layer-none", &[]),
         };
-        card = card
-            .child(
-                float::menu_item(
-                    "object-layer",
-                    Some("layers"),
-                    layer_name.unwrap_or_else(|| t("objcard-no-layer", &[])),
-                    None,
-                    &th,
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(space::S1))
+            .child(align)
+            .child(order)
+            .when(!self.extras.layers.is_empty(), |d| {
+                d.child(
+                    float::menu_item(
+                        "object-layer",
+                        Some("layers"),
+                        layer_name.unwrap_or_else(|| t("objcard-no-layer", &[])),
+                        None,
+                        &th,
+                    )
+                    .ftip(layer_tip, &th)
+                    .on_click(cx.listener(|this, _, _, cx| this.cycle_picked_layer(cx))),
                 )
-                .ftip(layer_tip, &th)
-                .on_click(cx.listener(|this, _, _, cx| this.cycle_picked_layer(cx))),
-            )
-            .child(
-                float::menu_item(
-                    "object-delete",
-                    Some("trash"),
-                    t("objcard-delete", &[]),
-                    Some("Del".into()),
-                    &th,
-                )
-                .text_color(th.error)
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.delete_picked_object(cx);
-                })),
-            );
-        Some(card.into_any_element())
+            })
+    }
+}
+
+/// A line drawn whole, in dashes or in dots.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Dashes {
+    Solid,
+    Dashed,
+    Dotted,
+}
+
+impl Dashes {
+    fn of(style: &ShapeStyle) -> Self {
+        match style.dash.first() {
+            None => Dashes::Solid,
+            Some(&on) if on <= style.width.max(1.0) * 1.5 => Dashes::Dotted,
+            Some(_) => Dashes::Dashed,
+        }
+    }
+
+    /// The pattern for a line `width` wide.
+    fn pattern(self, width: f32) -> Vec<f32> {
+        let w = width.max(1.0);
+        match self {
+            Dashes::Solid => Vec::new(),
+            Dashes::Dashed => vec![w * 3.0, w * 2.0],
+            Dashes::Dotted => vec![w, w * 2.0],
+        }
+    }
+
+    /// How it is shown on its button.
+    fn mark(self) -> &'static str {
+        match self {
+            Dashes::Solid => "—",
+            Dashes::Dashed => "- -",
+            Dashes::Dotted => "···",
+        }
     }
 }
 
