@@ -12,11 +12,11 @@ use std::collections::BTreeSet;
 use gpui::{AnyElement, Context, Entity, Subscription, div, prelude::*};
 use katna_ui::px;
 use katna_ui::text_input::{InputEvent, TextInput};
-use katna_ui::tokens::{radius, space, text};
-use katna_ui::widgets::{self, Tip};
+use katna_ui::tokens::{space, text};
 
 use super::objects::length;
 use super::{Content, Pages, PagesFrom, Viewer, file_name, organize};
+use crate::float;
 use crate::text::t;
 
 /// The page sizes offered: name, width and height in points, upright.
@@ -31,6 +31,8 @@ const PRESETS: [(&str, f32, f32); 6] = [
 
 /// The Pages card.
 pub(super) struct PageSetup {
+    /// The tab shown: 0 add, 1 replace, 2 page size, 3 margins, 4 split.
+    tab: usize,
     /// Which of [`PRESETS`], or `PRESETS.len()` for the page shown's own
     /// size.
     preset: usize,
@@ -88,6 +90,7 @@ impl Viewer {
         // files add pages in.
         let (w, h) = self.page_size_unrotated(self.current_page());
         self.setup = Some(PageSetup {
+            tab: 0,
             preset: PRESETS.len(),
             landscape: w > h,
             count,
@@ -403,10 +406,9 @@ impl Viewer {
         };
         let heading = |id: &str| {
             div()
-                .pt(px(space::S2))
-                .text_size(px(text::SMALL))
+                .text_size(px(text::CAPTION))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
-                .text_color(th.text)
+                .text_color(th.text2)
                 .child(t(id, &[]))
         };
         let field = |input: &Entity<TextInput>, width: f32| {
@@ -417,56 +419,28 @@ impl Viewer {
                 .flex()
                 .items_center()
                 .px(px(space::S2))
-                .rounded(px(radius::SM))
-                .bg(th.field)
+                .rounded(px(6.0))
+                .border_1()
+                .border_color(th.line)
+                .bg(th.card)
                 .text_size(px(text::SMALL))
                 .text_color(th.text)
                 .child(input.clone())
         };
-        let chip = |id: gpui::ElementId, name: String, on: bool| {
-            div()
-                .id(id)
-                .h(px(28.0))
-                .px(px(space::S3))
-                .flex_none()
-                .flex()
-                .items_center()
-                .rounded(px(radius::FULL))
-                .border_1()
-                .border_color(if on {
-                    gpui::rgba(th.katna.accent).into()
-                } else {
-                    th.line
-                })
-                .when(on, |d| d.bg(th.field))
-                .text_size(px(text::SMALL))
-                .text_color(th.text)
-                .hover(move |s| s.bg(th.hover))
-                .cursor_pointer()
-                .child(name)
+        let set = |change: fn(&mut PageSetup)| {
+            cx.listener(move |this, _, _, cx| {
+                if let Some(s) = this.setup.as_mut() {
+                    change(s);
+                }
+                cx.notify();
+            })
         };
-        // Sizes: the presets and the page shown's own.
-        let mut sizes = div().flex().flex_wrap().gap(px(space::S1));
+        // Sizes: the page shown's own, then the presets.
         let own = self.page_size_unrotated(self.current_page());
-        for (i, (name, _, _)) in PRESETS.iter().enumerate() {
-            sizes = sizes.child(
-                chip(
-                    ("pages-card-size", i).into(),
-                    (*name).to_owned(),
-                    setup.preset == i,
-                )
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    if let Some(s) = this.setup.as_mut() {
-                        s.preset = i;
-                    }
-                    cx.notify();
-                })),
-            );
-        }
         let mm = |v: f32| format!("{:.0}", v * 25.4 / 72.0);
-        sizes = sizes.child(
-            chip(
-                "pages-card-size-own".into(),
+        let mut sizes = div().flex().flex_wrap().gap(px(space::S1)).child(
+            float::chip(
+                "pages-card-size-own",
                 t(
                     "pages-card-size-own",
                     &[
@@ -475,6 +449,7 @@ impl Viewer {
                     ],
                 ),
                 setup.preset >= PRESETS.len(),
+                &th,
             )
             .on_click(cx.listener(|this, _, _, cx| {
                 if let Some(s) = this.setup.as_mut() {
@@ -483,60 +458,218 @@ impl Viewer {
                 cx.notify();
             })),
         );
+        for (i, (name, _, _)) in PRESETS.iter().enumerate() {
+            sizes = sizes.child(
+                float::chip(("pages-card-size", i), *name, setup.preset == i, &th).on_click(
+                    cx.listener(move |this, _, _, cx| {
+                        if let Some(s) = this.setup.as_mut() {
+                            s.preset = i;
+                        }
+                        cx.notify();
+                    }),
+                ),
+            );
+        }
+        let (w, h) = self.setup_size();
         let lying = div()
             .flex()
-            .gap(px(space::S1))
+            .items_center()
+            .gap(px(space::S3))
             .child(
-                chip(
-                    "pages-card-portrait".into(),
-                    t("pages-card-portrait", &[]),
-                    !setup.landscape,
-                )
-                .on_click(cx.listener(|this, _, _, cx| {
-                    if let Some(s) = this.setup.as_mut() {
-                        s.landscape = false;
-                    }
-                    cx.notify();
-                })),
+                float::seg(&th)
+                    .w(px(220.0))
+                    .child(
+                        float::seg_item(
+                            "pages-card-portrait",
+                            None,
+                            Some(t("pages-card-portrait", &[]).into()),
+                            !setup.landscape,
+                            &th,
+                        )
+                        .on_click(set(|s| s.landscape = false)),
+                    )
+                    .child(
+                        float::seg_item(
+                            "pages-card-landscape",
+                            None,
+                            Some(t("pages-card-landscape", &[]).into()),
+                            setup.landscape,
+                            &th,
+                        )
+                        .on_click(set(|s| s.landscape = true)),
+                    ),
             )
-            .child(
-                chip(
-                    "pages-card-landscape".into(),
-                    t("pages-card-landscape", &[]),
-                    setup.landscape,
-                )
-                .on_click(cx.listener(|this, _, _, cx| {
-                    if let Some(s) = this.setup.as_mut() {
-                        s.landscape = true;
-                    }
-                    cx.notify();
-                })),
-            );
-        let (w, h) = self.setup_size();
-        let chosen = t(
-            "pages-card-chosen",
-            &[("width", &mm(w)), ("height", &mm(h))],
-        );
-        let act = |id: &'static str, label: String, enabled: bool| {
-            widgets::outlined_button(id, label, &th.katna).when(!enabled, |b| b.opacity(0.4))
+            .child(div().text_size(px(text::SMALL)).text_color(th.dim).child(t(
+                "pages-card-chosen",
+                &[("width", &mm(w)), ("height", &mm(h))],
+            )));
+        let size_section = div()
+            .flex()
+            .flex_col()
+            .gap(px(space::S2))
+            .child(heading("pages-card-size-heading"))
+            .child(sizes)
+            .child(lying);
+        let act = |id: &'static str, words: String, primary: bool, enabled: bool| {
+            float::button(id, words, primary, &th).when(!enabled, |b| b.opacity(0.4))
         };
         let pages_word = if some {
             "pages-card-picked"
         } else {
             "pages-card-all"
         };
+        let tab = setup.tab;
+        let tabs = [
+            "pages-card-tab-add",
+            "pages-card-tab-replace",
+            "pages-card-tab-size",
+            "pages-card-tab-margins",
+            "pages-card-tab-split",
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(i, words)| {
+            float::chip(("pages-card-tab", i), t(words, &[]), tab == i, &th).on_click(cx.listener(
+                move |this, _, _, cx| {
+                    if let Some(s) = this.setup.as_mut() {
+                        s.tab = i;
+                    }
+                    cx.notify();
+                },
+            ))
+        });
+        let row = || div().flex().flex_wrap().items_center().gap(px(space::S2));
+        let (body, actions): (gpui::Div, gpui::Div) = match tab {
+            0 => (
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(space::S3))
+                    .child(
+                        row()
+                            .child(label("pages-card-how-many"))
+                            .child(field(&setup.count, 64.0)),
+                    )
+                    .child(size_section)
+                    .child(
+                        row()
+                            .pt(px(space::S2))
+                            .child(label("pages-card-or"))
+                            .child(
+                                act(
+                                    "pages-card-add-pictures",
+                                    t("pages-card-add-pictures", &[]),
+                                    false,
+                                    !busy,
+                                )
+                                .on_click(cx.listener(|this, _, _, cx| this.choose_pictures(cx))),
+                            )
+                            .child(
+                                act(
+                                    "pages-card-add-file",
+                                    t("pages-card-add-file", &[]),
+                                    false,
+                                    !busy,
+                                )
+                                .on_click(cx.listener(|this, _, _, cx| this.choose_insert(cx))),
+                            ),
+                    ),
+                row().child(
+                    act(
+                        "pages-card-add-blank",
+                        t("pages-card-add-blank", &[]),
+                        true,
+                        !busy,
+                    )
+                    .on_click(cx.listener(|this, _, _, cx| this.add_blank_pages(cx))),
+                ),
+            ),
+            1 => (
+                div().child(label("pages-card-replace-detail")),
+                row().child(
+                    act(
+                        "pages-card-replace",
+                        t("pages-card-replace", &[]),
+                        true,
+                        !busy && some,
+                    )
+                    .on_click(cx.listener(|this, _, _, cx| this.choose_replacement(cx))),
+                ),
+            ),
+            2 => (
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(space::S3))
+                    .child(size_section)
+                    .child(
+                        row()
+                            .child(
+                                float::switch("pages-card-scale", setup.scale, &th)
+                                    .on_click(set(|s| s.scale = !s.scale)),
+                            )
+                            .child(label("pages-card-scale")),
+                    ),
+                row().child(
+                    act(
+                        "pages-card-resize",
+                        t("pages-card-resize", &[("pages", &t(pages_word, &[]))]),
+                        true,
+                        !busy,
+                    )
+                    .on_click(cx.listener(|this, _, _, cx| this.resize_pages(cx))),
+                ),
+            ),
+            3 => (
+                row().children(
+                    [
+                        "pages-card-top",
+                        "pages-card-right",
+                        "pages-card-bottom",
+                        "pages-card-left",
+                    ]
+                    .into_iter()
+                    .zip(&setup.margins)
+                    .map(|(id, input)| {
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(space::S1))
+                            .child(label(id))
+                            .child(field(input, 80.0))
+                    }),
+                ),
+                row().child(
+                    act(
+                        "pages-card-crop",
+                        t("pages-card-crop", &[("pages", &t(pages_word, &[]))]),
+                        true,
+                        !busy,
+                    )
+                    .on_click(cx.listener(|this, _, _, cx| this.crop_by_margins(cx))),
+                ),
+            ),
+            _ => (
+                row()
+                    .child(label("pages-card-every"))
+                    .child(field(&setup.every, 64.0))
+                    .child(label("pages-card-pages-each")),
+                row().child(
+                    act("pages-card-split", t("pages-card-split", &[]), true, !busy)
+                        .on_click(cx.listener(|this, _, _, cx| this.choose_split(cx))),
+                ),
+            ),
+        };
         Some(
             div()
                 .id("pages-card-card")
-                .absolute()
-                .top(px(space::S3))
-                .right(px(space::S5))
-                .w(px(440.0))
-                .max_h(px(720.0))
-                .p(px(space::S4))
+                .occlude()
+                .w(px(520.0))
+                // One height for every tab, so the tabs stay put.
+                .h(px(420.0))
+                .max_h_full()
                 .flex()
                 .flex_col()
-                .gap(px(space::S2))
                 .rounded(px(10.0))
                 .bg(th.card)
                 .shadow(th.lifted())
@@ -545,161 +678,45 @@ impl Viewer {
                 .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .child(
                     div()
+                        .flex_1()
+                        .p(px(space::S4))
                         .flex()
-                        .items_center()
+                        .flex_col()
+                        .gap(px(space::S3))
                         .child(
                             div()
-                                .flex_1()
                                 .text_size(px(text::BODY))
-                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                .font_weight(gpui::FontWeight::BOLD)
                                 .text_color(th.text)
                                 .child(t("pages-card-title", &[])),
                         )
-                        .child(
-                            widgets::icon_button("pages-card-close", "close", 18.0, &th.katna)
-                                .tip(t("pages-card-close", &[]), &th.katna)
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.setup = None;
-                                    cx.notify();
-                                })),
-                        ),
-                )
-                .child(label("pages-card-hint"))
-                .child(heading("pages-card-size-heading"))
-                .child(sizes)
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(px(space::S2))
-                        .child(lying)
-                        .child(
-                            div()
-                                .text_size(px(text::SMALL))
-                                .text_color(th.dim)
-                                .child(chosen),
-                        ),
-                )
-                .child(heading("pages-card-add-heading"))
-                .child(
-                    div()
-                        .flex()
-                        .flex_wrap()
-                        .items_center()
-                        .gap(px(space::S2))
-                        .child(field(&setup.count, 48.0))
-                        .child(
-                            act(
-                                "pages-card-add-blank",
-                                t("pages-card-add-blank", &[]),
-                                !busy,
-                            )
-                            .on_click(cx.listener(|this, _, _, cx| this.add_blank_pages(cx))),
-                        )
-                        .child(
-                            act(
-                                "pages-card-add-pictures",
-                                t("pages-card-add-pictures", &[]),
-                                !busy,
-                            )
-                            .on_click(cx.listener(|this, _, _, cx| this.choose_pictures(cx))),
-                        ),
+                        .child(div().flex().flex_wrap().gap(px(space::S1)).children(tabs))
+                        .child(label("pages-card-hint"))
+                        .child(body),
                 )
                 .child(
                     div()
+                        .px(px(space::S4))
+                        .py(px(space::S3))
                         .flex()
-                        .flex_wrap()
                         .items_center()
                         .gap(px(space::S2))
+                        .border_t_1()
+                        .border_color(th.line_soft)
                         .child(
-                            act("pages-card-add-file", t("pages-card-add-file", &[]), !busy)
-                                .on_click(cx.listener(|this, _, _, cx| this.choose_insert(cx))),
-                        )
-                        .child(
-                            act(
-                                "pages-card-replace",
-                                t("pages-card-replace", &[]),
-                                !busy && some,
-                            )
-                            .on_click(cx.listener(|this, _, _, cx| this.choose_replacement(cx))),
-                        ),
-                )
-                .child(heading("pages-card-resize-heading"))
-                .child(
-                    div()
-                        .flex()
-                        .flex_wrap()
-                        .items_center()
-                        .gap(px(space::S2))
-                        .child(
-                            chip(
-                                "pages-card-scale".into(),
-                                t("pages-card-scale", &[]),
-                                setup.scale,
+                            float::button(
+                                "pages-card-close",
+                                t("pages-card-close", &[]),
+                                false,
+                                &th,
                             )
                             .on_click(cx.listener(|this, _, _, cx| {
-                                if let Some(s) = this.setup.as_mut() {
-                                    s.scale = !s.scale;
-                                }
+                                this.setup = None;
                                 cx.notify();
                             })),
                         )
-                        .child(
-                            act(
-                                "pages-card-resize",
-                                t("pages-card-resize", &[("pages", &t(pages_word, &[]))]),
-                                !busy,
-                            )
-                            .on_click(cx.listener(|this, _, _, cx| this.resize_pages(cx))),
-                        ),
-                )
-                .child(heading("pages-card-margins-heading"))
-                .child(
-                    div()
-                        .flex()
-                        .flex_wrap()
-                        .items_end()
-                        .gap(px(space::S2))
-                        .children(
-                            [
-                                "pages-card-top",
-                                "pages-card-right",
-                                "pages-card-bottom",
-                                "pages-card-left",
-                            ]
-                            .into_iter()
-                            .zip(&setup.margins)
-                            .map(|(id, input)| {
-                                div()
-                                    .flex()
-                                    .flex_col()
-                                    .gap(px(space::S1))
-                                    .child(label(id))
-                                    .child(field(input, 64.0))
-                            }),
-                        )
-                        .child(
-                            act(
-                                "pages-card-crop",
-                                t("pages-card-crop", &[("pages", &t(pages_word, &[]))]),
-                                !busy,
-                            )
-                            .on_click(cx.listener(|this, _, _, cx| this.crop_by_margins(cx))),
-                        ),
-                )
-                .child(heading("pages-card-split-heading"))
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(px(space::S2))
-                        .child(label("pages-card-every"))
-                        .child(field(&setup.every, 48.0))
-                        .child(label("pages-card-pages-each"))
-                        .child(
-                            act("pages-card-split", t("pages-card-split", &[]), !busy)
-                                .on_click(cx.listener(|this, _, _, cx| this.choose_split(cx))),
-                        ),
+                        .child(div().flex_1())
+                        .child(actions),
                 )
                 .into_any_element(),
         )

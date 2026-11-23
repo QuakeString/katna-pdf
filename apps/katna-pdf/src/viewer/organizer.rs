@@ -13,7 +13,9 @@ use katna_ui::tokens::{radius, space, text};
 use katna_ui::{px, unpx};
 
 use super::{Content, Pages, Viewer};
-use crate::organize;
+use crate::float;
+use crate::organize::{self, PageOp};
+use crate::text::t;
 use crate::theme::Theme;
 use crate::thumbnails;
 
@@ -202,7 +204,6 @@ impl Viewer {
             .flex()
             .flex_col()
             .bg(th.backdrop)
-            .child(self.page_actions(cx))
             .child(div().flex_1().min_h_0().child(self.grid_bar.clone().wrap(
                 "organizer-scroll",
                 &self.grid,
@@ -212,6 +213,97 @@ impl Viewer {
                 cx,
             )))
             .into_any_element()
+    }
+
+    /// The Pages mode's tray (P01): add pages, turn, move and delete the
+    /// pages picked, save them as a file, crop; a hint over it while
+    /// none are picked.
+    pub(super) fn pages_tray(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if !self.organizer || !matches!(self.content, Content::Ready(_)) {
+            return None;
+        }
+        let th = self.theme;
+        let some = !self.picked.is_empty() && !self.changing_pages;
+        let button = |id: &'static str, glyph: &'static str, tip: &'static str, on: bool| {
+            float::dk(
+                id,
+                glyph,
+                None,
+                t(tip, &[]),
+                if on {
+                    float::Pressed::Tool
+                } else {
+                    float::Pressed::No
+                },
+                &th,
+            )
+        };
+        let op = |id: &'static str, glyph: &'static str, tip: &'static str, op: PageOp| {
+            button(id, glyph, tip, false)
+                .when(!some, |b| b.opacity(0.4))
+                .on_click(cx.listener(move |this, _, _, cx| this.page_op(op, cx)))
+        };
+        let tray = float::tray("pages-tray", &th)
+            .child(
+                button("pages-insert", "plus", "pages-insert", self.setup.is_some())
+                    .when(self.changing_pages, |b| b.opacity(0.4))
+                    .on_click(cx.listener(|this, _, _, cx| this.toggle_setup(cx))),
+            )
+            .child(op(
+                "pages-left",
+                "rotl",
+                "pages-turn-left",
+                PageOp::Turn(-1),
+            ))
+            .child(op(
+                "pages-right",
+                "rot",
+                "pages-turn-right",
+                PageOp::Turn(1),
+            ))
+            .child(op("pages-earlier", "up", "pages-earlier", PageOp::Earlier))
+            .child(op("pages-later", "down", "pages-later", PageOp::Later))
+            .child(op("pages-delete", "trash", "pages-delete", PageOp::Delete))
+            .child(float::vsep(&th))
+            .child(
+                button("pages-extract", "download", "pages-extract", false)
+                    .when(!some, |b| b.opacity(0.4))
+                    .on_click(cx.listener(|this, _, _, cx| this.choose_extract(cx))),
+            )
+            .child(
+                button("pages-crop", "crop", "pages-crop", self.cropping)
+                    .when(self.changing_pages, |b| b.opacity(0.4))
+                    .on_click(cx.listener(|this, _, _, cx| this.toggle_crop(cx))),
+            )
+            .child(
+                button(
+                    "pages-numbering",
+                    "list",
+                    "numbering-tip",
+                    self.numbering.is_some(),
+                )
+                .on_click(cx.listener(|this, _, _, cx| this.toggle_numbering(cx))),
+            );
+        let hint = (self.picked.len() <= 1).then(|| {
+            div()
+                .px(px(space::S3))
+                .py(px(6.0))
+                .rounded(px(8.0))
+                .bg(th.inverse)
+                .text_color(th.on_inverse)
+                .text_size(px(text::CAPTION))
+                .child(t("pages-tray-hint", &[]))
+        });
+        Some(
+            div()
+                .flex()
+                .flex_col()
+                .items_center()
+                .gap(px(space::S3))
+                .children(hint)
+                .child(tray)
+                .into_any_element(),
+        )
     }
 
     /// Page `page` in the organizer: click to pick (Ctrl, Shift as in the
