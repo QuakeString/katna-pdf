@@ -729,15 +729,23 @@ fn info(args: &[String], json: bool) -> Done {
     let outline = count_outline(&doc.outline());
     let fields = doc.form().len();
     let annots: usize = doc.annotations().iter().map(Vec::len).sum();
+    let lock = doc.lock_kind().map(|kind| match kind {
+        katna_pdf_cos::LockKind::Password => "password".to_owned(),
+        katna_pdf_cos::LockKind::NewerPassword => "password, of a kind this can't open".to_owned(),
+        katna_pdf_cos::LockKind::Certificates => "to certificates (digital IDs)".to_owned(),
+        katna_pdf_cos::LockKind::RightsManagement(service) => format!("by {service}"),
+        katna_pdf_cos::LockKind::Other(handler) => format!("by an unknown handler, {handler}"),
+    });
     let mut out = String::new();
     if json {
         let _ = write!(
             out,
-            "{{\"file\":{},\"version\":{},\"pages\":{count},\"encrypted\":{},\"repaired\":{},\
+            "{{\"file\":{},\"version\":{},\"pages\":{count},\"encrypted\":{},\"lock\":{},\"repaired\":{},\
              \"outline_items\":{outline},\"form_fields\":{fields},\"annotations\":{annots},\"info\":{{",
             string(file),
             string(&version),
             doc.is_encrypted(),
+            lock.as_deref().map_or_else(|| "null".to_owned(), string),
             doc.was_repaired()
         );
         let meta: Vec<String> = meta
@@ -778,7 +786,14 @@ fn info(args: &[String], json: bool) -> Done {
                 }
             );
         }
-        let _ = writeln!(out, "Encrypted:    {}", yes(doc.is_encrypted()));
+        match &lock {
+            Some(lock) => {
+                let _ = writeln!(out, "Encrypted:    yes, {lock}");
+            }
+            None => {
+                let _ = writeln!(out, "Encrypted:    no");
+            }
+        }
         if doc.was_repaired() {
             let _ = writeln!(
                 out,
@@ -5302,10 +5317,6 @@ fn library(args: &[String], json: bool) -> Done {
         }
         _ => Err(Failure::Usage(format!("unknown library command {sub}"))),
     }
-}
-
-fn yes(b: bool) -> &'static str {
-    if b { "yes" } else { "no" }
 }
 
 fn num(v: f32) -> String {

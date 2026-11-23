@@ -52,6 +52,55 @@ impl std::fmt::Display for UnlockError {
 
 impl std::error::Error for UnlockError {}
 
+/// How a file is locked, said for someone who can't open it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LockKind {
+    /// With a password (the standard handler), in a way this opens.
+    Password,
+    /// With a password, but a newer or odd form of it this doesn't know.
+    NewerPassword,
+    /// To certificates: only holders of the right digital IDs open it
+    /// (`/Adobe.PubSec`).
+    Certificates,
+    /// By a rights-management service, named, that must be asked online.
+    RightsManagement(&'static str),
+    /// By a handler of this name this knows nothing of.
+    Other(String),
+}
+
+impl LockKind {
+    /// How a file whose `/Encrypt` is `encrypt` is locked.
+    pub fn of(encrypt: &Dict) -> LockKind {
+        let filter = encrypt
+            .name("Filter")
+            .map(|n| String::from_utf8_lossy(n).into_owned())
+            .unwrap_or_default();
+        match filter.as_str() {
+            "Standard" => {
+                let v = encrypt.int("V").unwrap_or(0);
+                let r = encrypt.int("R").unwrap_or(0);
+                if matches!(v, 1 | 2 | 4 | 5) && (2..=6).contains(&r) {
+                    LockKind::Password
+                } else {
+                    LockKind::NewerPassword
+                }
+            }
+            "Adobe.PubSec" | "Adobe.PPKLite" => LockKind::Certificates,
+            "Adobe.APS" => LockKind::RightsManagement("Adobe LiveCycle Rights Management"),
+            "EBX_HANDLER" => LockKind::RightsManagement("Adobe Digital Editions"),
+            "MicrosoftIRMServices" | "Microsoft.IRM" => {
+                LockKind::RightsManagement("Microsoft Information Rights Management")
+            }
+            f if f.starts_with("FOPN") => LockKind::RightsManagement("FileOpen"),
+            f if f.starts_with("LLZ") || f.starts_with("Locklizard") => {
+                LockKind::RightsManagement("Locklizard")
+            }
+            f if f.starts_with("Vitrium") => LockKind::RightsManagement("Vitrium"),
+            _ => LockKind::Other(filter),
+        }
+    }
+}
+
 /// What someone who opens a locked file without its owner password may do.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Permissions {
@@ -704,6 +753,40 @@ pub(crate) fn new_lock(user: &str, owner: &str, permissions: Permissions) -> (Di
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn kinds_of_lock() {
+        let lock = |pairs: &[(&str, Object)]| {
+            let mut d = Dict::new();
+            for (k, v) in pairs {
+                d.set(k, v.clone());
+            }
+            LockKind::of(&d)
+        };
+        let std = |v: i64, r: i64| {
+            lock(&[
+                ("Filter", Object::name("Standard")),
+                ("V", Object::Int(v)),
+                ("R", Object::Int(r)),
+            ])
+        };
+        assert_eq!(std(5, 6), LockKind::Password);
+        assert_eq!(std(2, 3), LockKind::Password);
+        assert_eq!(std(5, 9), LockKind::NewerPassword);
+        assert_eq!(std(3, 3), LockKind::NewerPassword);
+        assert_eq!(
+            lock(&[("Filter", Object::name("Adobe.PubSec"))]),
+            LockKind::Certificates
+        );
+        assert_eq!(
+            lock(&[("Filter", Object::name("FOPN_foweb"))]),
+            LockKind::RightsManagement("FileOpen")
+        );
+        assert_eq!(
+            lock(&[("Filter", Object::name("AcmeSecure"))]),
+            LockKind::Other("AcmeSecure".into())
+        );
+    }
 
     #[test]
     fn rc4_matches_the_known_answer() {
