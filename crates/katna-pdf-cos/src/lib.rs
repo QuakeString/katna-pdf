@@ -60,7 +60,9 @@ pub use annots::{
     NOTE_SIZE, REVIEW_STATES, STAMPS, annotation_status, comments_text, custom_stamp, pdf_date,
     stamp_is_dynamic, stamp_is_mark, stamp_label,
 };
-pub use attachments::Attachment;
+pub use attachments::{
+    Attachment, ColumnKind, ItemValue, Portfolio, PortfolioColumn, PortfolioView,
+};
 pub use calc::{
     CalcOp, Calculation, Format, Range, Scripts, calculate, expression_fields, fit_mask, format,
     number, parse_date, range, script_text, show, write_date,
