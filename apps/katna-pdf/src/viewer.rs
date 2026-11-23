@@ -3701,7 +3701,8 @@ impl Render for Viewer {
         let signatures_line = self.signatures_line(cx);
         let signing_card = self.signing_card(cx);
         let marks_card = self.marks_card(window, cx);
-        let redact_card = self.redact_card(cx);
+        let redact_card = self.redact_card(window, cx);
+        let redact_confirm = self.redact_confirm_card(window, cx);
         let export_card = self.export_card(window, cx);
         let print_card = self.print_card(window, cx);
         let link_card = self.link_card(window, cx);
@@ -4084,6 +4085,16 @@ impl Render for Viewer {
                 )
             }))
             .children(redact_card.map(|c| float::appear_over("redact_card", c, -6.0)))
+            .children(redact_confirm.map(|card| {
+                dialog(
+                    th,
+                    card,
+                    cx.listener(|this, _, _, cx| {
+                        this.close_redact_confirm();
+                        cx.notify();
+                    }),
+                )
+            }))
             .children(export_card.map(|card| {
                 dialog(
                     th,

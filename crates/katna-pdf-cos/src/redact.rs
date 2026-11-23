@@ -167,6 +167,19 @@ impl Document {
     /// [`Document::redact`]. Invisible text, such as a scan's recognised
     /// words, is searched too.
     pub fn find_redactions(&self, page: usize, patterns: &[Pattern]) -> Vec<[f32; 4]> {
+        self.find_redactions_said(page, patterns)
+            .into_iter()
+            .map(|(rect, _)| rect)
+            .collect()
+    }
+
+    /// As [`Document::find_redactions`], with the words each match reads,
+    /// to list what is marked.
+    pub fn find_redactions_said(
+        &self,
+        page: usize,
+        patterns: &[Pattern],
+    ) -> Vec<([f32; 4], String)> {
         let finders: Vec<(&Pattern, Regex)> = patterns
             .iter()
             .filter_map(|p| p.regex().map(|r| (p, r)))
@@ -194,7 +207,7 @@ impl Document {
                         ];
                     }
                     if r[0] <= r[2] {
-                        out.push(r.map(|v| v as f32));
+                        out.push((r.map(|v| v as f32), m.as_str().trim().to_owned()));
                     }
                 }
             }
