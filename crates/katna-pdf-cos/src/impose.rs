@@ -36,6 +36,8 @@ pub enum SheetScale {
     Actual,
     /// At its own size, made smaller only when it would not fit.
     Shrink,
+    /// At this many hundredths of its own size, whether it fits or not.
+    Percent(u16),
 }
 
 /// A sheet's size in points, and the space left around each page.
@@ -236,6 +238,7 @@ pub fn impose(
                         SheetScale::Fit => fits,
                         SheetScale::Actual => 1.0,
                         SheetScale::Shrink => fits.min(1.0),
+                        SheetScale::Percent(p) => f32::from(p.max(1)) / 100.0,
                     };
                     (s, left + (cw - w * s) / 2.0, bottom + (ch - h * s) / 2.0)
                 }
@@ -414,5 +417,19 @@ mod tests {
         assert_eq!((s.width, s.height), (595.0, 842.0));
         assert_eq!(real(0.5), "0.5");
         assert_eq!(real(2.0), "2");
+    }
+
+    #[test]
+    fn pages_at_a_size_of_their_own() {
+        let doc = Document::load(crate::blank_pdf(&[(200.0, 100.0)])).unwrap();
+        let sheet = Sheet {
+            scale: SheetScale::Percent(50),
+            gap: 36.0,
+            ..Sheet::of((400.0, 400.0), false)
+        };
+        let out = impose(&doc, &[0], SheetLayout::NUp { across: 1, down: 1 }, sheet).unwrap();
+        let text = String::from_utf8_lossy(&out);
+        // Half size (100 × 50), in the middle of the sheet.
+        assert!(text.contains("0.5 0 0 0.5 150 175 cm"), "{text}");
     }
 }

@@ -753,7 +753,7 @@ print.print-with-comment-summary	print	Print with a comments summary	standard	n	
 print.print-preview	print	Print preview	reader	n	partial	P1	#111 card shows the layout		acrobat
 print.grayscale	print	Print in grayscale	reader	y	shipped	P1	#163		acrobat
 print.print-as-image	print	Print as image	reader	y	shipped	P1	#111 print-pictures		acrobat
-print.page-setup	print	Page setup	reader	y	partial	P1	#111 paper		acrobat
+print.page-setup	print	Page setup	reader	y	shipped	P1	#180		acrobat
 print.print-ready-pdf	print	Produce a print-ready imposed PDF	pro	n	skip	-	-		acrobat
 print.print-pages-from-thumbnails	print	Print selected pages from thumbnails	reader	n	shipped	P1	#164		acrobat
 print.postscript-output	print	PostScript Level 3 output	reader	n	skip	-	-		acrobat
