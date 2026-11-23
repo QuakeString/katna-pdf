@@ -249,6 +249,7 @@ pub fn row(
     editor: Option<gpui::AnyElement>,
     on_fold: impl Fn(&mut gpui::Window, &mut gpui::App) + 'static,
     on_go: impl Fn(usize, &mut gpui::Window, &mut gpui::App) + 'static,
+    on_menu: impl Fn(gpui::Point<gpui::Pixels>, &mut gpui::Window, &mut gpui::App) + 'static,
 ) -> impl IntoElement {
     let key = row
         .path
@@ -306,6 +307,10 @@ pub fn row(
         .hover(move |s| s.bg(th.hover))
         .cursor_pointer()
         .on_click(move |e, window, cx| on_go(e.click_count(), window, cx))
+        .on_mouse_down(gpui::MouseButton::Right, move |e, window, cx| {
+            cx.stop_propagation();
+            on_menu(e.position, window, cx);
+        })
         // Items without children line up with their siblings' titles.
         .child(fold.map_or_else(
             || div().w(px(20.0)).flex_shrink_0().into_any_element(),
