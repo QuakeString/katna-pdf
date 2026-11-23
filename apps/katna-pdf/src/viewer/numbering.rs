@@ -61,6 +61,9 @@ impl Viewer {
             cx.notify();
             return;
         }
+        if !self.allows(super::Allow::Assemble, cx) {
+            return;
+        }
         if !matches!(self.content, Content::Ready(_)) {
             return;
         }

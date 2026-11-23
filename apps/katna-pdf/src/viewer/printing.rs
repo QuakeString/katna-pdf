@@ -114,7 +114,7 @@ impl Viewer {
             cx.notify();
             return;
         }
-        if !matches!(self.content, Content::Ready(_)) {
+        if !matches!(self.content, Content::Ready(_)) || !self.allows(super::Allow::Print, cx) {
             return;
         }
         self.properties = None;
