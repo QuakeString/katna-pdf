@@ -70,6 +70,7 @@ mod speak;
 mod stamps;
 mod start;
 mod textedit;
+mod watch;
 
 use crate::annotate::Tool;
 use crate::contents::{self, Contents};
@@ -115,6 +116,7 @@ actions!(
         GoToPage,
         AutoScroll,
         CursorCoordinates,
+        ReadMode,
         RotateViewLeft,
         ZoomToArea,
         Loupe,
@@ -294,6 +296,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl-r", RotateViewRight, None),
         KeyBinding::new("ctrl-g", GoToPage, None),
         KeyBinding::new("ctrl-shift-h", AutoScroll, None),
+        KeyBinding::new("ctrl-h", ReadMode, Some(READING)),
         KeyBinding::new("ctrl-shift-r", RotateViewLeft, None),
         KeyBinding::new("ctrl-3", NextSpread, None),
         KeyBinding::new("ctrl-0", ActualSize, None),
@@ -616,6 +619,10 @@ pub struct Viewer {
     /// Whether the cursor coordinates show, and where the pointer is:
     /// its page and points from that page's top left.
     coords_shown: bool,
+    /// Read mode (Ctrl+H): only the pages, no side pane, dock or tools.
+    read_mode: bool,
+    /// The open file, watched for changes on disk.
+    watch: Option<watch::Watch>,
     cursor_at: Option<(usize, [f32; 2])>,
     setup: Option<setup::PageSetup>,
     /// The form, once read, if the file has fields to fill in.
@@ -916,6 +923,8 @@ impl Viewer {
             pasting_many: None,
             going_to: None,
             coords_shown: false,
+            read_mode: false,
+            watch: None,
             cursor_at: None,
             auto_scroll: None,
             setup: None,
@@ -1234,6 +1243,7 @@ impl Viewer {
                         this.released.extend(old);
                         this.visible = 0..1;
                         this.content = Content::Ready(opened);
+                        this.watch_file(cx);
                         this.apply_recovered(cx);
                         this.password = None;
                         if let Some(older) = this.compare_after.take() {
@@ -1842,9 +1852,31 @@ impl Viewer {
         gpui::rgb(u32::from_be_bytes([0, r, g, b])).into()
     }
 
+    /// Read mode on or off: only the pages, the tools put away.
+    fn toggle_read_mode(&mut self, cx: &mut Context<Self>) {
+        if !self.read_mode && !matches!(self.content, Content::Ready(_)) {
+            return;
+        }
+        self.read_mode = !self.read_mode;
+        if self.read_mode {
+            self.cancel_tool(cx);
+            if self.text_editing {
+                self.toggle_text_edit(cx);
+            }
+            if self.organizer {
+                self.toggle_organizer(cx);
+            }
+            self.notice = Some(said("read-mode-on", &[]));
+        } else {
+            self.notice = None;
+        }
+        cx.notify();
+    }
+
     /// Whether the side pane is shown now.
     fn pane_shown(&self) -> bool {
         matches!(self.content, Content::Ready(_))
+            && !self.read_mode
             && if self.organizer {
                 self.pane_pages
             } else {
@@ -3562,6 +3594,8 @@ impl Viewer {
         self.doing = "undo-what-revert";
         self.record_change();
         self.redo.clear();
+        // What is on disk now is what is shown.
+        self.file_written();
         self.restore(None, cx);
         self.notice = Some(said("reverted", &[]));
         cx.notify();
@@ -3605,6 +3639,7 @@ impl Viewer {
                         if this.revision == revision {
                             this.edited = None;
                         }
+                        this.file_written();
                         if !this.dirty() {
                             this.forget_kept(cx);
                         }
@@ -4422,13 +4457,15 @@ impl Render for Viewer {
         } else {
             0.0
         };
-        let dock = self.dock(cx);
+        let reading_only = self.read_mode;
+        let dock = self.dock(cx).filter(|_| !reading_only);
         let tools = self
             .tools_row(cx)
             .or_else(|| self.edit_row(cx))
             .or_else(|| self.pages_tray(cx))
             .or_else(|| self.forms_tray(cx))
-            .or_else(|| self.sign_tray(cx));
+            .or_else(|| self.sign_tray(cx))
+            .filter(|_| !reading_only);
         let object_row = self.crop_bar(cx).or_else(|| self.object_row());
         let measure_bar = self.measure_bar(cx);
         let stamp_bar = self.stamp_bar(cx);
@@ -4745,8 +4782,11 @@ impl Render for Viewer {
                     this.paste_picture(cx);
                 }
             }))
+            .on_action(cx.listener(|this, _: &ReadMode, _, cx| this.toggle_read_mode(cx)))
             .on_action(cx.listener(|this, _: &PutToolDown, _, cx| {
-                if this.auto_scroll.is_some() {
+                if this.read_mode {
+                    this.toggle_read_mode(cx);
+                } else if this.auto_scroll.is_some() {
                     this.toggle_auto_scroll(cx);
                 } else if this.area.is_some() {
                     this.area = None;
