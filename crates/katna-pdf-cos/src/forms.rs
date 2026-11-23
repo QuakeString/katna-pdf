@@ -66,6 +66,31 @@ pub enum FieldKind {
     Signature,
 }
 
+/// What a form's own scripts did besides setting values, for
+/// [`Document::fill_with`].
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct FillExtras {
+    /// Values are final: totals are not worked out again here.
+    pub calculated: bool,
+    /// The text shown for a field's value, as its format script wrote it.
+    pub shown: HashMap<Ref, String>,
+    /// Fields shown, hidden, not printed or printed only.
+    pub display: Vec<(Ref, Display)>,
+    /// Fields locked against typing, or unlocked.
+    pub read_only: Vec<(Ref, bool)>,
+}
+
+/// How a field shows, as Acrobat's `display` has it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Display {
+    Visible,
+    Hidden,
+    /// Shown, not printed.
+    NoPrint,
+    /// Printed, not shown.
+    NoView,
+}
+
 /// One place a field is shown on a page.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Widget {
@@ -273,11 +298,26 @@ impl Document {
     /// The file with `changes` made to its form, as an incremental
     /// update.
     pub fn fill(&self, changes: &[(Ref, FieldValue)]) -> Result<Vec<u8>, UpdateError> {
+        self.fill_with(changes, &FillExtras::default())
+    }
+
+    /// [`Document::fill`] for a form whose own scripts ran elsewhere
+    /// (`katna-pdf-js`): `extras` says what the scripts showed, hid and
+    /// locked, and whether totals are already worked out.
+    pub fn fill_with(
+        &self,
+        changes: &[(Ref, FieldValue)],
+        extras: &FillExtras,
+    ) -> Result<Vec<u8>, UpdateError> {
         let mut update = self.update()?;
         let fields = self.form();
         let form = self.acro_form().unwrap_or_default();
         let scripts = self.form_scripts(&fields);
-        let changes = self.recalculate(&fields, &scripts, changes);
+        let changes = if extras.calculated {
+            changes.to_vec()
+        } else {
+            self.recalculate(&fields, &scripts, changes)
+        };
         for (id, value) in &changes {
             let Some(field) = fields.iter().find(|f| f.id == *id) else {
                 continue;
@@ -293,6 +333,7 @@ impl Document {
                         (FieldKind::Text { password: true, .. }, _) => {
                             "*".repeat(text.chars().count())
                         }
+                        _ if extras.shown.contains_key(id) => extras.shown[id].clone(),
                         (_, Some(format)) => crate::calc::show(format, text),
                         _ => text.clone(),
                     };
@@ -368,7 +409,55 @@ impl Document {
             }
             update.replace(field.id, Object::Dict(dict));
         }
+        self.mark_fields(&mut update, &fields, extras);
         Ok(update.finish())
+    }
+
+    /// Writes the hidden and read-only marks scripts gave fields.
+    fn mark_fields(
+        &self,
+        update: &mut crate::write::Update,
+        fields: &[Field],
+        extras: &FillExtras,
+    ) {
+        // A field's own dictionary may already be replaced with its new
+        // value; work on that copy so neither change is lost.
+        let current = |update: &crate::write::Update, id: Ref| match update.get(id) {
+            Some(Object::Dict(d)) => Some(d),
+            _ => None,
+        };
+        for &(id, locked) in &extras.read_only {
+            let Some(mut dict) = current(update, id) else {
+                continue;
+            };
+            let flags = self.resolve_key(&dict, "Ff").as_int().unwrap_or(0);
+            dict.set(
+                "Ff",
+                Object::Int(if locked { flags | 1 } else { flags & !1 }),
+            );
+            update.replace(id, Object::Dict(dict));
+        }
+        for &(id, display) in &extras.display {
+            let Some(field) = fields.iter().find(|f| f.id == id) else {
+                continue;
+            };
+            for w in &field.widgets {
+                let Some(mut dict) = current(update, w.id) else {
+                    continue;
+                };
+                // Bits: 2 hidden, 3 print, 6 no view.
+                let flags = self.resolve_key(&dict, "F").as_int().unwrap_or(0) & !(2 | 4 | 32);
+                let flags = flags
+                    | match display {
+                        Display::Visible => 4,
+                        Display::Hidden => 2,
+                        Display::NoPrint => 0,
+                        Display::NoView => 4 | 32,
+                    };
+                dict.set("F", Object::Int(flags));
+                update.replace(w.id, Object::Dict(dict));
+            }
+        }
     }
 
     /// Every field's value as the form started: its default (`/DV`), or

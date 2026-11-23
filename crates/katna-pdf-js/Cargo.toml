@@ -1,0 +1,17 @@
+[package]
+name = "katna-pdf-js"
+description = "Katna PDF's form scripts: a PDF form's own JavaScript run in a sandbox with Acrobat's form objects."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+katna-pdf-cos.workspace = true
+boa_engine.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

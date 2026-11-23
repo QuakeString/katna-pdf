@@ -18,6 +18,7 @@ katna-pdf-render = { path = "crates/katna-pdf-render" }
 katna-pdf-cos = { path = "crates/katna-pdf-cos" }
 katna-pdf-sign = { path = "crates/katna-pdf-sign" }
 katna-pdf-library = { path = "crates/katna-pdf-library" }
+katna-pdf-js = { path = "crates/katna-pdf-js" }
 
 # Katna's shared UI crates, at a pinned commit of the Katna repository
 # (docs/PLAN.md §2.2). Move the pin deliberately, together with the
@@ -35,6 +36,10 @@ gpui = { package = "gpui-pre", version = "=0.3.6" }
 gpui-platform = { package = "gpui-pre-platform", version = "=0.3.6", features = ["wayland", "x11"] }
 
 # Third-party crates. Pin minor versions; upgrade deliberately.
+# Forms' own JavaScript (katna-pdf-js), pure Rust; no Intl or Temporal.
+# annex-b for the older syntax Acrobat-era scripts use.
+boa_engine = { version = "0.22.0", default-features = false, features = ["annex-b"] }
+serde_json = "1"
 # Pure-Rust PDF rasterizer (docs/PLAN.md §3.1; the Phase 0 bake-off may
 # add PDFium or MuPDF behind the same trait).
 hayro = "0.8.0"

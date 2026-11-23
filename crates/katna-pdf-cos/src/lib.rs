@@ -62,7 +62,7 @@ pub use annots::{
 };
 pub use attachments::Attachment;
 pub use calc::{
-    CalcOp, Calculation, Format, Scripts, calculate, number, parse_date, show, write_date,
+    CalcOp, Calculation, Format, Scripts, calculate, format, number, parse_date, show, write_date,
 };
 pub use content::{Op, ops};
 pub use crypt::{Permissions, UnlockError};
@@ -77,7 +77,7 @@ pub use formdata::{
     FormDataError, data_from_csv, data_from_fdf, data_from_json, data_from_xfdf, data_to_csv,
     data_to_json, data_to_xfdf, read_data,
 };
-pub use forms::{Border, Field, FieldKind, FieldValue, Look, Widget};
+pub use forms::{Border, Display, Field, FieldKind, FieldValue, FillExtras, Look, Widget};
 pub use impose::{Sheet, SheetLayout, impose};
 pub use insert::{Image, Insert, ShapeKind};
 pub use labels::{LabelRange, LabelStyle, labels_of};

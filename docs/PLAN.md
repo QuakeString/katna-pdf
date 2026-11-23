@@ -281,7 +281,7 @@ Priority tags: **P0** = MVP, **P1** = v1.0, **P2** = after v1.0.
 - **P1:** Document properties: fonts, security, PDF/A and PDF/UA flags, producer and similar. Embedded files and portfolios (collections).
 - **P1:** Compare two documents, side by side and as a diff overlay.
 - **P1:** Accessibility: keyboard-only use, high-contrast themes, a tagged-PDF reading order view. Screen-reader support depends on GPUI's AccessKit work (see Risks).
-- **P2:** A limited JavaScript subset (form calculations, formatting and validation) via `boa`. Multimedia and rich media. 3D (U3D/PRC) is **out of scope**, and so is dynamic XFA. Static XFA is rendered through its AcroForm fallback.
+- **Shipped early (2026-11-23):** forms' own JavaScript (keystroke, format, validate, calculate, buttons) via `boa` in `katna-pdf-js`, sandboxed, with a switch in Settings. **P2:** Multimedia and rich media. 3D (U3D/PRC) is **out of scope**, and so is dynamic XFA. Static XFA is rendered through its AcroForm fallback.
 
 ### 4.2 Annotation and review
 
