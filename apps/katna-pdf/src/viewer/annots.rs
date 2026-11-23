@@ -51,7 +51,7 @@ impl Viewer {
         cx.notify();
     }
 
-    fn pick_tool(&mut self, tool: Tool, cx: &mut Context<Self>) {
+    pub(super) fn pick_tool(&mut self, tool: Tool, cx: &mut Context<Self>) {
         self.tool = (self.tool != Some(tool)).then_some(tool);
         self.cropping = false;
         self.draft = None;

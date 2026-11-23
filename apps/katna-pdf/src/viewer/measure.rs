@@ -7,21 +7,24 @@
 //! annotations that show their value (`katna_pdf_cos::Scale`). The scale
 //! is the file's own when its drawing says (a page's viewport), paper
 //! millimetres otherwise, or set by hand from a line of known length.
+//! The measure card (C06) floats at the top right while measuring: the
+//! scale as paper to real length, where it comes from, what to snap to,
+//! and the three tools.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use gpui::{AnyElement, Context, Entity, Focusable, Subscription, div, prelude::*};
 use katna_pdf_cos::{AnnotChanges, AnnotKind, Annotation, Scale};
-use katna_pdf_render::measure::{self, SnapKind, Snaps};
+use katna_pdf_render::measure::{self, SnapKind, SnapTo, Snaps};
 use katna_ui::px;
 use katna_ui::scale::desktop_px;
 use katna_ui::text_input::{InputEvent, TextInput};
 use katna_ui::tokens::{radius, space, text};
-use katna_ui::widgets;
 
 use super::{Content, Viewer};
 use crate::annotate::{COLOURS, Tool};
+use crate::float;
 use crate::text::t;
 
 /// How near, in pixels on screen, the pointer snaps to a line.
@@ -57,6 +60,48 @@ pub(super) struct Measures {
     last: Option<f64>,
     /// The field the real length of the last distance is typed in.
     calibrating: Option<(Entity<TextInput>, Subscription)>,
+    /// What the pointer snaps to.
+    snap_to: SnapTo,
+    /// The measure card's scale: millimetres on paper, and the real
+    /// length they are.
+    fields: Option<ScaleFields>,
+}
+
+pub(super) struct ScaleFields {
+    paper: Entity<TextInput>,
+    real: Entity<TextInput>,
+    /// Set while the fields are filled in from the scale, so filling
+    /// isn't taken as typing.
+    filling: bool,
+    _subs: [Subscription; 2],
+}
+
+/// Millimetres in one of a length unit people measure drawings in.
+fn millimetres_in(unit: &str) -> Option<f64> {
+    Some(match unit {
+        "mm" => 1.0,
+        "cm" => 10.0,
+        "m" => 1000.0,
+        "km" => 1_000_000.0,
+        "in" => 25.4,
+        "ft" => 304.8,
+        "yd" => 914.4,
+        _ => return None,
+    })
+}
+
+/// The scale as a drawing's ratio, `1:100`, when its unit is a length.
+fn ratio(scale: &Scale) -> Option<String> {
+    let real = scale.factor * millimetres_in(&scale.unit)?;
+    let n = real / (25.4 / 72.0);
+    if !n.is_finite() || n <= 0.0 {
+        return None;
+    }
+    Some(if n >= 1.0 {
+        format!("1:{}", (n * 100.0).round() / 100.0)
+    } else {
+        format!("{}:1", (100.0 / n).round() / 100.0)
+    })
 }
 
 impl Viewer {
@@ -73,6 +118,71 @@ impl Viewer {
             self.want_snaps(page, cx);
         }
         self.read_scales(cx);
+        if self.measures.fields.is_none() {
+            let accent = gpui::rgba(self.theme.katna.accent).into();
+            let field = |cx: &mut Context<Self>| {
+                cx.new(|cx| {
+                    let mut input = TextInput::new("", cx);
+                    input.set_accent(accent);
+                    input
+                })
+            };
+            let paper = field(cx);
+            let real = field(cx);
+            let typed = |this: &mut Self, _, event: &InputEvent, cx: &mut Context<Self>| {
+                if matches!(event, InputEvent::Changed | InputEvent::Submit) {
+                    this.scale_typed(cx);
+                }
+            };
+            let subs = [cx.subscribe(&paper, typed), cx.subscribe(&real, typed)];
+            self.measures.fields = Some(ScaleFields {
+                paper,
+                real,
+                filling: false,
+                _subs: subs,
+            });
+        }
+        self.fill_scale(cx);
+    }
+
+    /// Fills the card's scale in from the scale pages are measured in.
+    fn fill_scale(&mut self, cx: &mut Context<Self>) {
+        let (scale, _) = self.scale(self.current_page());
+        let Some(fields) = self.measures.fields.as_mut() else {
+            return;
+        };
+        fields.filling = true;
+        let (paper, real) = (fields.paper.clone(), fields.real.clone());
+        paper.update(cx, |input, cx| input.set_text("1", cx));
+        real.update(cx, |input, cx| {
+            input.set_text(scale.length(72.0 / 25.4), cx)
+        });
+        if let Some(fields) = self.measures.fields.as_mut() {
+            fields.filling = false;
+        }
+    }
+
+    /// The scale typed in the card, once both fields make sense.
+    fn scale_typed(&mut self, cx: &mut Context<Self>) {
+        let Some(fields) = &self.measures.fields else {
+            return;
+        };
+        if fields.filling {
+            return;
+        }
+        let paper = fields.paper.read(cx).text().trim().replace(',', ".");
+        let real = fields.real.read(cx).text().to_string();
+        let (now, _) = self.scale(self.current_page());
+        let Ok(paper) = paper.parse::<f64>() else {
+            return;
+        };
+        if let Some(scale) = parse_length(&real, &now.unit)
+            .and_then(|(v, unit)| Scale::calibrated(paper * 72.0 / 25.4, v, &unit))
+            && scale != now
+        {
+            self.measures.set = Some(scale);
+            cx.notify();
+        }
     }
 
     /// Reads each page's scale from the file, once.
@@ -102,6 +212,9 @@ impl Viewer {
             this.update(cx, |this, cx| {
                 if this.generation == generation {
                     this.measures.scales = Some(scales.unwrap_or_default());
+                    if this.measures.set.is_none() {
+                        this.fill_scale(cx);
+                    }
                     cx.notify();
                 }
             })
@@ -161,11 +274,12 @@ impl Viewer {
         let (page, point) = self.page_point(position)?;
         self.want_snaps(page, cx);
         let radius = SNAP / self.shown.max(0.01);
+        let to = self.measures.snap_to;
         let snapped = self
             .measures
             .snaps
             .get(&page)
-            .and_then(|s| s.as_ref()?.snap(point, radius));
+            .and_then(|s| s.as_ref()?.snap_to(point, radius, to));
         Some(match snapped {
             Some((p, kind)) => (page, p, Some(kind)),
             None => (page, point, None),
@@ -464,6 +578,7 @@ impl Viewer {
                 self.measures.set = Some(scale);
                 self.measures.calibrating = None;
                 self.notice = None;
+                self.fill_scale(cx);
             }
             None => self.notice = Some(t("measure-real-length-bad", &[("text", &typed)])),
         }
@@ -479,10 +594,36 @@ impl Viewer {
         }
     }
 
-    /// The bar under the tools while measuring: the scale, where the
-    /// pointer is, and setting the scale.
-    pub(super) fn measure_bar(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let tool = self.measure_tool()?;
+    /// The bar under the tools while drawing a polygon or cloud: how.
+    pub(super) fn measure_bar(&self, _cx: &mut Context<Self>) -> Option<AnyElement> {
+        let tool = self.measure_tool().filter(|t| !t.measures())?;
+        let th = self.theme;
+        Some(
+            div()
+                .h(px(40.0))
+                .flex()
+                .items_center()
+                .px(px(space::S4))
+                .text_size(px(text::SMALL))
+                .text_color(th.dim)
+                .whitespace_nowrap()
+                .child(t(
+                    match tool {
+                        Tool::Distance => "measure-how-distance",
+                        Tool::Perimeter => "measure-how-perimeter",
+                        Tool::Polygon | Tool::Cloud => "measure-how-shape",
+                        _ => "measure-how-area",
+                    },
+                    &[],
+                ))
+                .into_any_element(),
+        )
+    }
+
+    /// The measure card (C06) at the top right while measuring.
+    pub(super) fn measure_card(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let tool = self.measure_tool().filter(|t| t.measures())?;
+        let fields = self.measures.fields.as_ref()?;
         let th = self.theme;
         let page = self
             .measures
@@ -493,83 +634,181 @@ impl Viewer {
         let dim = |s: String| {
             div()
                 .flex_none()
-                .text_size(px(text::SMALL))
+                .text_size(px(text::CAPTION))
                 .text_color(th.dim)
                 .whitespace_nowrap()
                 .child(s)
         };
-        let mut bar = div()
-            .h(px(40.0))
-            .flex_shrink_0()
-            .flex()
-            .items_center()
-            .gap(px(space::S4))
-            .px(px(space::S4))
-            .child(dim(t(
-                match tool {
-                    Tool::Distance => "measure-how-distance",
-                    Tool::Perimeter => "measure-how-perimeter",
-                    Tool::Polygon | Tool::Cloud => "measure-how-shape",
-                    _ => "measure-how-area",
+        let field = |input: &Entity<TextInput>, width: f32| {
+            div()
+                .w(px(width))
+                .h(px(30.0))
+                .flex_none()
+                .flex()
+                .items_center()
+                .px(px(space::S2))
+                .rounded(px(radius::SM))
+                .bg(th.field)
+                .border_1()
+                .border_color(th.line)
+                .text_size(px(text::SMALL))
+                .text_color(th.text)
+                .child(input.clone())
+        };
+        let ratio = ratio(&scale).unwrap_or_default();
+        let from = div()
+            .text_size(px(text::CAPTION))
+            .text_color(if source == "measure-scale-file" {
+                gpui::rgba(th.valid).into()
+            } else {
+                th.dim
+            })
+            .child(t(
+                match source {
+                    "measure-scale-file" => "measure-from-file",
+                    "measure-scale-set" => "measure-from-you",
+                    _ => "measure-from-paper",
                 },
-                &[],
-            )));
-        // A polygon or cloud is a shape: the scale is not its business.
-        if !tool.measures() {
-            return Some(bar.into_any_element());
-        }
-        bar = bar.child(dim(t(
-            source,
-            &[("scale", &scale.length(1.0).replace(' ', "\u{a0}"))],
-        )));
-        if let Some((_, at, _)) = self.measures.pointer {
-            let x = scale.length(f64::from(at[0]));
-            let y = scale.length(f64::from(at[1]));
-            bar = bar.child(dim(t("measure-at", &[("x", &x), ("y", &y)])));
-        }
-        bar = bar.child(div().flex_1());
+                &[("ratio", &ratio)],
+            ));
+        let mut by_hand = div().flex().flex_wrap().items_center().gap(px(space::S2));
         match &self.measures.calibrating {
             Some((input, _)) => {
-                bar = bar.child(dim(t("measure-last-is", &[]))).child(
-                    div()
-                        .w(px(120.0))
-                        .h(px(30.0))
-                        .flex()
-                        .items_center()
-                        .px(px(space::S3))
-                        .rounded(px(radius::SM))
-                        .bg(th.field)
-                        .text_size(px(text::SMALL))
-                        .text_color(th.text)
-                        .child(input.clone()),
-                )
+                by_hand = by_hand
+                    .child(dim(t("measure-last-is", &[])))
+                    .child(field(input, 110.0));
             }
             None if self.measures.last.is_some() => {
-                bar = bar.child(
-                    widgets::outlined_button(
-                        "measure-set-scale",
-                        t("measure-set-scale", &[]),
-                        &th.katna,
-                    )
-                    .on_click(cx.listener(|this, _, _, cx| this.start_calibrating(cx))),
+                by_hand = by_hand.child(
+                    float::chip("measure-set-scale", t("measure-set-scale", &[]), false, &th)
+                        .on_click(cx.listener(|this, _, _, cx| this.start_calibrating(cx))),
                 );
             }
             None => {}
         }
         if self.measures.set.is_some() {
-            bar = bar.child(
-                widgets::outlined_button(
+            by_hand = by_hand.child(
+                float::chip(
                     "measure-unset-scale",
                     t("measure-unset-scale", &[]),
-                    &th.katna,
+                    false,
+                    &th,
                 )
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.measures.set = None;
+                    this.fill_scale(cx);
                     cx.notify();
                 })),
             );
         }
-        Some(bar.into_any_element())
+        let to = self.measures.snap_to;
+        let snap_chip = |id: &'static str, on: bool, change: fn(&mut SnapTo)| {
+            float::chip(id, t(id, &[]), on, &th).on_click(cx.listener(move |this, _, _, cx| {
+                change(&mut this.measures.snap_to);
+                cx.notify();
+            }))
+        };
+        let snaps = div()
+            .flex()
+            .flex_wrap()
+            .gap(px(space::S2))
+            .child(snap_chip("measure-snap-ends", to.ends, |s| {
+                s.ends = !s.ends
+            }))
+            .child(snap_chip("measure-snap-middles", to.middles, |s| {
+                s.middles = !s.middles
+            }))
+            .child(snap_chip("measure-snap-crossings", to.crossings, |s| {
+                s.crossings = !s.crossings
+            }))
+            .child(snap_chip("measure-snap-off", to == SnapTo::OFF, |s| {
+                *s = if *s == SnapTo::OFF {
+                    SnapTo::default()
+                } else {
+                    SnapTo::OFF
+                }
+            }));
+        let tools = [Tool::Distance, Tool::Perimeter, Tool::Area].map(|each| {
+            float::seg_item(
+                ("measure-tool", each as usize),
+                None,
+                Some(t(each.name(), &[]).into()),
+                each == tool,
+                &th,
+            )
+            .on_click(cx.listener(move |this, _, _, cx| {
+                if this.tool != Some(each) {
+                    this.pick_tool(each, cx);
+                }
+            }))
+        });
+        let mut foot = vec![t(
+            match tool {
+                Tool::Distance => "measure-how-distance",
+                Tool::Perimeter => "measure-how-perimeter",
+                _ => "measure-how-area",
+            },
+            &[],
+        )];
+        if let Some((_, at, _)) = self.measures.pointer {
+            let x = scale.length(f64::from(at[0]));
+            let y = scale.length(f64::from(at[1]));
+            foot.push(t("measure-at", &[("x", &x), ("y", &y)]));
+        }
+        Some(
+            div()
+                .id("measure-card")
+                .occlude()
+                .absolute()
+                .top(px(space::S2))
+                .right(px(float::GAP))
+                .w(px(300.0))
+                .p(px(space::S3))
+                .flex()
+                .flex_col()
+                .gap(px(space::S2))
+                .rounded(px(10.0))
+                .bg(th.card)
+                .shadow(th.lifted())
+                .when(th.dark, |d| d.border_1().border_color(th.line))
+                .child(
+                    div()
+                        .text_size(px(text::BODY))
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .child(t("measure-scale", &[])),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(space::S2))
+                        .child(field(&fields.paper, 52.0))
+                        .child(dim(t("measure-paper-is", &[])))
+                        .child(field(&fields.real, 96.0)),
+                )
+                .child(from)
+                .child(by_hand)
+                .child(
+                    div()
+                        .mt(px(space::S1))
+                        .text_size(px(text::BODY))
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .child(t("measure-snap", &[])),
+                )
+                .child(snaps)
+                .child(
+                    div()
+                        .mt(px(space::S1))
+                        .child(float::seg(&th).children(tools)),
+                )
+                .children(foot.into_iter().map(|line| {
+                    div()
+                        .text_size(px(text::CAPTION))
+                        .text_color(th.dim)
+                        .child(line)
+                }))
+                .into_any_element(),
+        )
     }
 }
 
@@ -592,7 +831,7 @@ fn parse_length(s: &str, unit: &str) -> Option<(f64, String)> {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_length;
+    use super::{Scale, parse_length, ratio};
 
     #[test]
     fn lengths_are_read_as_typed() {
@@ -600,5 +839,16 @@ mod tests {
         assert_eq!(parse_length("12,5ft", "mm"), Some((12.5, "ft".into())));
         assert_eq!(parse_length("300", "ft"), Some((300.0, "ft".into())));
         assert_eq!(parse_length("m", "mm"), None);
+    }
+
+    #[test]
+    fn scales_read_as_a_drawings_ratio() {
+        assert_eq!(ratio(&Scale::default()).as_deref(), Some("1:1"));
+        let hundred = Scale::calibrated(72.0 / 25.4, 0.1, "m").unwrap();
+        assert_eq!(ratio(&hundred).as_deref(), Some("1:100"));
+        let twice = Scale::calibrated(72.0 / 25.4, 0.5, "mm").unwrap();
+        assert_eq!(ratio(&twice).as_deref(), Some("2:1"));
+        let odd = Scale::calibrated(1.0, 3.0, "px").unwrap();
+        assert_eq!(ratio(&odd), None);
     }
 }
