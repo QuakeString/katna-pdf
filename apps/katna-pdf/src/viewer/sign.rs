@@ -20,6 +20,7 @@ use katna_ui::widgets::{self, Tip};
 
 use super::annots::Draft;
 use super::{Content, PaneTab, Viewer, file_name, icon_button};
+use crate::float::{self, FloatTip};
 use crate::text::t;
 
 /// A drag shorter than this, in points, places nothing.
@@ -1045,7 +1046,11 @@ impl Viewer {
 
     /// What to do while placing the signature, over the pages' top
     /// right corner, so the pages do not move as it comes and goes.
-    fn placing_card(&self, cx: &mut Context<Self>) -> AnyElement {
+    /// The Sign mode's tray (G01): signing, signing without a box where
+    /// the file allows, and the signatures already there; while the
+    /// signature has no place yet, a hint over it says how to give one.
+    pub(super) fn sign_tray(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let signing = self.signing.as_ref()?;
         let th = self.theme;
         let fields = !self.signable.fields.is_empty();
         let (say, free) = match self.signable.certified {
@@ -1055,62 +1060,108 @@ impl Viewer {
             None if fields => ("sign-place-or-field", true),
             None => ("sign-place", true),
         };
-        div()
-            .id("signing-place")
-            .absolute()
-            .top(px(space::S3))
-            .right(px(space::S5))
-            .max_w(px(420.0))
-            .p(px(space::S3))
-            .flex()
-            .items_center()
-            .gap(px(space::S2))
-            .rounded(px(10.0))
-            .bg(th.card)
-            .shadow(th.lifted())
-            .when(th.dark, |d| d.border_1().border_color(th.line))
-            .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .child(widgets::icon("signature", th.katna.accent, 18.0))
+        let placing = signing.placed.is_none();
+        let tray = float::tray("sign-tray", &th)
             .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .text_size(px(text::SMALL))
-                    .text_color(th.text)
-                    .child(t(say, &[])),
+                float::dk(
+                    "sign-place",
+                    "sign",
+                    Some(t("mode-sign", &[]).into()),
+                    t(say, &[]),
+                    float::Pressed::Tool,
+                    &th,
+                )
+                .on_click(cx.listener(|this, _, _, cx| {
+                    // Back to choosing where it goes.
+                    if let Some(s) = this.signing.as_mut() {
+                        s.placed = None;
+                    }
+                    cx.notify();
+                })),
             )
-            .when(free, |d| {
+            .when(free && placing, |d| {
                 d.child(
-                    widgets::outlined_button("sign-hidden", t("sign-hidden", &[]), &th.katna)
-                        .on_click(cx.listener(|this, _, _, cx| this.place(Placed::Hidden, cx))),
+                    float::dk(
+                        "sign-hidden",
+                        "eyeoff",
+                        None,
+                        t("sign-hidden", &[]),
+                        float::Pressed::No,
+                        &th,
+                    )
+                    .on_click(cx.listener(|this, _, _, cx| this.place(Placed::Hidden, cx))),
                 )
             })
-            .child(icon_button(
-                "sign-cancel",
-                "close",
-                t("sign-cancel", &[]),
-                th,
-                cx.listener(|this, _, _, cx| this.toggle_signing(cx)),
-            ))
-            .into_any_element()
+            .child(float::vsep(&th))
+            .child(
+                float::dk(
+                    "signatures-show",
+                    "shield",
+                    None,
+                    t("signatures-show", &[]),
+                    if self.pane && self.tab == PaneTab::Signatures {
+                        float::Pressed::Tool
+                    } else {
+                        float::Pressed::No
+                    },
+                    &th,
+                )
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.pane = true;
+                    this.tab = PaneTab::Signatures;
+                    cx.notify();
+                })),
+            )
+            .child(
+                float::dk(
+                    "sign-cancel",
+                    "x",
+                    None,
+                    t("sign-cancel", &[]),
+                    float::Pressed::No,
+                    &th,
+                )
+                .on_click(cx.listener(|this, _, _, cx| this.toggle_signing(cx))),
+            );
+        let hint = placing.then(|| {
+            div()
+                .max_w(px(560.0))
+                .px(px(space::S3))
+                .py(px(6.0))
+                .rounded(px(8.0))
+                .bg(th.inverse)
+                .text_color(th.on_inverse)
+                .text_size(px(text::CAPTION))
+                .child(t(say, &[]))
+        });
+        Some(
+            div()
+                .flex()
+                .flex_col()
+                .items_center()
+                .gap(px(space::S3))
+                .children(hint)
+                .child(tray)
+                .into_any_element(),
+        )
     }
 
     /// The card over the pages while signing: where to put the
     /// signature, then the certificate and its password.
     pub(super) fn signing_card(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let signing = self.signing.as_ref()?;
-        if signing.placed.is_none() {
-            return Some(self.placing_card(cx));
-        }
+        signing.placed.as_ref()?;
         let th = self.theme;
         let field = |input: &Entity<TextInput>| {
             div()
-                .h(px(36.0))
+                .h(px(34.0))
                 .flex()
                 .items_center()
                 .px(px(space::S3))
-                .rounded(px(radius::SM))
-                .bg(th.field)
+                .rounded(px(6.0))
+                .border_1()
+                .border_color(th.line)
+                .bg(th.card)
                 .text_size(px(text::BODY))
                 .text_color(th.text)
                 .child(input.clone())
@@ -1129,9 +1180,10 @@ impl Viewer {
         Some(
             div()
                 .id("signing-card")
+                .occlude()
                 .absolute()
-                .top(px(space::S3))
-                .right(px(space::S5))
+                .top(px(space::S2))
+                .right(px(float::GAP))
                 .w(px(320.0))
                 .p(px(space::S4))
                 .flex()
@@ -1145,7 +1197,7 @@ impl Viewer {
                 .child(
                     div()
                         .text_size(px(text::BODY))
-                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .font_weight(gpui::FontWeight::BOLD)
                         .text_color(th.text)
                         .child(t("sign-title", &[])),
                 )
@@ -1172,15 +1224,11 @@ impl Viewer {
                                     .child(certificate),
                             )
                             .child(
-                                widgets::outlined_button(
-                                    "sign-choose",
-                                    t("sign-choose", &[]),
-                                    &th.katna,
-                                )
-                                .tip(t("sign-choose-tip", &[]), &th.katna)
-                                .on_click(
-                                    cx.listener(|this, _, _, cx| this.choose_certificate(cx)),
-                                ),
+                                float::button("sign-choose", t("sign-choose", &[]), false, &th)
+                                    .ftip(t("sign-choose-tip", &[]), &th)
+                                    .on_click(
+                                        cx.listener(|this, _, _, cx| this.choose_certificate(cx)),
+                                    ),
                             ),
                     )
                 })
@@ -1237,7 +1285,7 @@ impl Viewer {
                                 .text_color(th.text)
                                 .child(t("sign-long-term", &[])),
                         )
-                        .tip(t("sign-long-term-tip", &[]), &th.katna),
+                        .ftip(t("sign-long-term-tip", &[]), &th),
                 )
                 .when(self.signable.has_form, |d| {
                     d.child(
@@ -1261,7 +1309,7 @@ impl Viewer {
                                     .text_color(th.text)
                                     .child(t("sign-lock", &[])),
                             )
-                            .tip(t("sign-lock-tip", &[]), &th.katna),
+                            .ftip(t("sign-lock-tip", &[]), &th),
                     )
                 })
                 .when(!self.signable.signed, |d| d.child(self.certify_choice(cx)))
@@ -1291,10 +1339,11 @@ impl Viewer {
                         )
                         .when(!signing.others.is_empty(), |d| {
                             d.child(
-                                widgets::outlined_button(
+                                float::button(
                                     "sign-others-clear",
                                     t("sign-others-clear", &[]),
-                                    &th.katna,
+                                    false,
+                                    &th,
                                 )
                                 .on_click(cx.listener(
                                     |this, _, _, cx| {
@@ -1307,12 +1356,13 @@ impl Viewer {
                             )
                         })
                         .child(
-                            widgets::outlined_button(
+                            float::button(
                                 "sign-others-choose",
                                 t("sign-others-choose", &[]),
-                                &th.katna,
+                                false,
+                                &th,
                             )
-                            .tip(t("sign-others-tip", &[]), &th.katna)
+                            .ftip(t("sign-others-tip", &[]), &th)
                             .on_click(cx.listener(|this, _, _, cx| this.choose_others(cx))),
                         ),
                 )
@@ -1329,11 +1379,11 @@ impl Viewer {
                         .justify_end()
                         .gap(px(space::S2))
                         .child(
-                            widgets::outlined_button("sign-back", t("sign-cancel", &[]), &th.katna)
+                            float::button("sign-back", t("sign-cancel", &[]), false, &th)
                                 .on_click(cx.listener(|this, _, _, cx| this.toggle_signing(cx))),
                         )
                         .child(
-                            widgets::filled_button(
+                            float::button(
                                 "sign-go",
                                 t(
                                     match (busy, signing.others.len()) {
@@ -1343,7 +1393,8 @@ impl Viewer {
                                     },
                                     &[("count", &(signing.others.len() + 1).to_string())],
                                 ),
-                                &th.katna,
+                                true,
+                                &th,
                             )
                             .when(busy, |b| b.opacity(0.6))
                             .on_click(cx.listener(|this, _, _, cx| this.sign_now(cx))),
@@ -1377,10 +1428,11 @@ impl Viewer {
             )
             .when(picture.is_some(), |d| {
                 d.child(
-                    widgets::outlined_button(
+                    float::button(
                         "sign-picture-clear",
                         t("sign-picture-clear", &[]),
-                        &th.katna,
+                        false,
+                        &th,
                     )
                     .on_click(cx.listener(|this, _, _, cx| {
                         if let Some(signing) = this.signing.as_mut() {
@@ -1392,7 +1444,7 @@ impl Viewer {
                 )
             })
             .child(
-                widgets::outlined_button("sign-picture-choose", t("sign-choose", &[]), &th.katna)
+                float::button("sign-picture-choose", t("sign-choose", &[]), false, &th)
                     .tip(t("sign-picture-tip", &[]), &th.katna)
                     .on_click(cx.listener(|this, _, _, cx| this.choose_picture(cx))),
             )
@@ -1415,9 +1467,9 @@ impl Viewer {
             let on = certify == Some(allowed);
             let id = allowed_id(allowed);
             let button = if on {
-                widgets::filled_button(id, t(id, &[]), &th.katna)
+                float::button(id, t(id, &[]), true, &th)
             } else {
-                widgets::outlined_button(id, t(id, &[]), &th.katna)
+                float::button(id, t(id, &[]), false, &th)
             };
             button
                 .tip(t(&format!("{id}-tip"), &[]), &th.katna)
@@ -1467,40 +1519,19 @@ impl Viewer {
         let th = self.theme;
         let on = self.signing.as_ref().map(|s| s.source);
         let button = |id: &'static str, source: Source, label: String| {
-            let chosen = on == Some(source);
-            div()
-                .id(id)
-                .flex_1()
-                .h(px(32.0))
-                .flex()
-                .items_center()
-                .justify_center()
-                .rounded(px(radius::FULL))
-                .text_size(px(text::SMALL))
-                .font_weight(if chosen {
-                    gpui::FontWeight::SEMIBOLD
-                } else {
-                    gpui::FontWeight::NORMAL
-                })
-                .text_color(if chosen { th.text } else { th.dim })
-                .when(chosen, |d| d.bg(th.field))
-                .hover(move |s| s.bg(th.hover))
-                .cursor_pointer()
+            float::seg_item(id, None, Some(label.into()), on == Some(source), &th)
                 .on_click(cx.listener(move |this, _, _, cx| this.set_source(source, cx)))
-                .child(label)
         };
-        div()
-            .flex()
-            .gap(px(space::S1))
-            .child(button(
-                "sign-from-file",
-                Source::File,
-                t("sign-from-file", &[]),
-            ))
+        float::seg(&th)
             .child(button(
                 "sign-from-token",
                 Source::Token,
                 t("sign-from-token", &[]),
+            ))
+            .child(button(
+                "sign-from-file",
+                Source::File,
+                t("sign-from-file", &[]),
             ))
             .into_any_element()
     }
@@ -1668,7 +1699,7 @@ impl Viewer {
             return div()
                 .flex()
                 .child(
-                    widgets::outlined_button("sign-diagnose", t("sign-diagnose", &[]), &th.katna)
+                    float::button("sign-diagnose", t("sign-diagnose", &[]), false, &th)
                         .on_click(cx.listener(|this, _, _, cx| this.diagnose(cx))),
                 )
                 .into_any_element();
@@ -1822,16 +1853,12 @@ impl Viewer {
                         .child(message),
                 )
                 .child(
-                    widgets::outlined_button(
-                        "signatures-show",
-                        t("signatures-show", &[]),
-                        &th.katna,
-                    )
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.pane = true;
-                        this.tab = PaneTab::Signatures;
-                        cx.notify();
-                    })),
+                    float::button("signatures-show", t("signatures-show", &[]), false, &th)
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.pane = true;
+                            this.tab = PaneTab::Signatures;
+                            cx.notify();
+                        })),
                 )
                 .into_any_element(),
         )
@@ -1960,13 +1987,9 @@ impl Viewer {
         if !rows.is_empty() {
             list = list.child(
                 div().px(px(space::S4)).pt(px(space::S2)).flex().child(
-                    widgets::outlined_button(
-                        "signatures-report",
-                        t("signatures-report", &[]),
-                        &th.katna,
-                    )
-                    .tip(t("signatures-report-tip", &[]), &th.katna)
-                    .on_click(cx.listener(|this, _, _, cx| this.save_report(cx))),
+                    float::button("signatures-report", t("signatures-report", &[]), false, &th)
+                        .tip(t("signatures-report-tip", &[]), &th.katna)
+                        .on_click(cx.listener(|this, _, _, cx| this.save_report(cx))),
                 ),
             );
         }
