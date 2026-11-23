@@ -5,6 +5,12 @@ use crate::object::dict::keys::{BITS_PER_COMPONENT, COLORS, COLUMNS, EARLY_CHANG
 use alloc::vec;
 use alloc::vec::Vec;
 
+/// The most a Flate or LZW stream may decode to (Katna PDF): 1 GiB, enough
+/// for an A0 sheet scanned at 400 dpi in colour, while a few megabytes
+/// that unpack to gigabytes (a "zip bomb") are refused instead of taking
+/// all the memory there is.
+pub(crate) const MAX_DECODED: usize = 1 << 30;
+
 pub(crate) mod flate {
     use super::*;
     use crate::filter::lzw_flate::{PredictorParams, apply_predictor};
@@ -15,25 +21,30 @@ pub(crate) mod flate {
         use flate2::read::{DeflateDecoder, ZlibDecoder};
         use std::io::Read;
 
-        fn zlib_stream(data: &[u8]) -> Option<Vec<u8>> {
-            let mut decoder = ZlibDecoder::new(data);
+        let limit = MAX_DECODED;
+        // Read one byte past the limit, to tell a stream of just the
+        // limit from one too big.
+        let bounded = |reader: &mut dyn Read| -> Result<Vec<u8>, bool> {
             let mut result = Vec::new();
-            decoder.read_to_end(&mut result).ok().map(|_| result)
-        }
-
-        fn deflate_stream(data: &[u8]) -> Option<Vec<u8>> {
-            let mut decoder = DeflateDecoder::new(data);
-            let mut result = Vec::new();
-            decoder.read_to_end(&mut result).ok().map(|_| result)
-        }
-
-        let decoded = zlib_stream(data)
-            .or_else(|| deflate_stream(data))
-            .or_else(|| {
-                warn!("flate stream is broken, decoding with fallback");
-
-                fallback::decode(data)
-            })?;
+            let read = reader.take(limit as u64 + 1).read_to_end(&mut result);
+            match read {
+                _ if result.len() > limit => Err(true),
+                Ok(_) => Ok(result),
+                Err(_) => Err(false),
+            }
+        };
+        let decoded = match bounded(&mut ZlibDecoder::new(data)) {
+            Ok(d) => d,
+            Err(true) => return None,
+            Err(false) => match bounded(&mut DeflateDecoder::new(data)) {
+                Ok(d) => d,
+                Err(true) => return None,
+                Err(false) => {
+                    warn!("flate stream is broken, decoding with fallback");
+                    fallback::decode(data)?
+                }
+            },
+        };
         let params = PredictorParams::from_params(params);
         apply_predictor(decoded, &params)
     }
@@ -97,6 +108,9 @@ pub(crate) mod flate {
             fn decode(&mut self) -> Option<Vec<u8>> {
                 while !self.eof && self.pos < self.data.len() {
                     self.read_block();
+                    if self.output.len() > super::super::MAX_DECODED {
+                        return None;
+                    }
                 }
 
                 Some(core::mem::take(&mut self.output))
@@ -573,7 +587,7 @@ pub(crate) mod lzw {
     pub(crate) fn decode(data: &[u8], params: &Dict<'_>) -> Option<Vec<u8>> {
         let params = PredictorParams::from_params(params);
 
-        let decoded = decode_impl(data, params.early_change)?;
+        let decoded = decode_impl(data, params.early_change, super::MAX_DECODED)?;
 
         apply_predictor(decoded, &params)
     }
@@ -583,7 +597,7 @@ pub(crate) mod lzw {
     const MAX_ENTRIES: usize = 4096;
     const INITIAL_SIZE: u16 = 258;
 
-    fn decode_impl(data: &[u8], early_change: bool) -> Option<Vec<u8>> {
+    pub(super) fn decode_impl(data: &[u8], early_change: bool, limit: usize) -> Option<Vec<u8>> {
         let mut table = Table::new(early_change);
         let mut bit_size = table.code_length();
         let mut reader = BitReader::new(data);
@@ -632,6 +646,10 @@ pub(crate) mod lzw {
                         return None;
                     }
 
+                    if decoded.len() > limit {
+                        warn!("LZW stream decodes to more than {limit} bytes");
+                        return None;
+                    }
                     bit_size = table.code_length();
                     prev = Some(new);
                 }
@@ -1036,6 +1054,13 @@ mod tests {
         let decoded = lzw::decode(&input, &Dict::default()).unwrap();
 
         assert_eq!(decoded, vec![45, 45, 45, 45, 45, 65, 45, 45, 45, 66]);
+    }
+
+    #[test]
+    fn lzw_stops_at_its_limit() {
+        let input = [0x80, 0x0B, 0x60, 0x50, 0x22, 0x0C, 0x0C, 0x85, 0x01];
+        assert!(lzw::decode_impl(&input, true, 4).is_none());
+        assert_eq!(lzw::decode_impl(&input, true, 64).unwrap().len(), 10);
     }
 
     #[test]

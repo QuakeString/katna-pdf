@@ -43,3 +43,16 @@ be read. It now takes well under a millisecond, with the same text.
 The first two pages of all 994 files in the pdf.js test corpus are drawn
 at half size and their text read, before and after: every result is the
 same, except that `bug1978317.pdf` now finishes.
+
+## Flate and LZW streams bounded (src/filter/lzw_flate.rs)
+
+Flate and LZW streams decoded without limit, so a file of a few megabytes
+whose picture unpacks to many gigabytes (a "zip bomb") took all the memory
+there was. They now stop at `MAX_DECODED` (1 GiB) and the stream is treated
+as broken. The fallback decoder checks after each block. A 3 MB file whose
+picture unpacks to 3 GiB peaked at 3.1 GB of memory to draw; it now peaks
+at about 1 GB and the page draws without the picture.
+
+Upstream issue text: "Flate (flate2 and the pdf.js fallback) and LZW decode
+to an unbounded Vec, so a small PDF with a highly compressed stream can
+exhaust memory. A cap on the decoded length (we use 1 GiB) refuses it."
