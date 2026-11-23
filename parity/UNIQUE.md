@@ -40,12 +40,17 @@ only in a much weaker form. Each has a row in [features.tsv](features.tsv); the
   app down (`view.worker-isolation`, #38).
 - Read aloud on Linux through Speech Dispatcher or espeak-ng (#85); KDE global
   menu (#43).
+- Find with close spellings, so typing mistakes still find the word
+  (`view.find-fuzzy`), and words hyphenated over two lines found whole
+  (`view.find-hyphenated`).
 
 **Safer by design**
 - Form totals and number, date and percent formats done in Rust from Acrobat's
   own calls, with no script engine (`form.calc-without-js`, #67).
-- Every script and action a file carries is listed and none is ever run
-  (`protect.scripts-never-run`, #109).
+- Every script and action a file carries is listed (#109); a form's own
+  scripts run in a sandbox with step limits that reaches no file or network,
+  and open, close, save, print and page scripts never run
+  (`protect.scripts-never-run`).
 - PAN, Aadhaar and Indian phone numbers found for redaction
   (`protect.redact-india-ids`, #64).
 - Smaller files are checked to draw the same before they are kept

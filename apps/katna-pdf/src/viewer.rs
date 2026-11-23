@@ -44,6 +44,7 @@ mod design;
 mod dock;
 mod export;
 mod files;
+mod find;
 mod fonts;
 mod initials;
 mod insert;
@@ -462,6 +463,10 @@ pub struct Viewer {
     texts: Option<Texts>,
     /// The find bar, while open.
     search: Option<SearchBar>,
+    /// How the find bar matches, kept while the window is open.
+    find_options: katna_pdf_render::text::FindOptions,
+    /// Whether the find bar lists every match.
+    find_list: bool,
     /// The password field, while a file asks for one, and whether to put
     /// the keys in it on the next frame.
     password: Option<(Entity<TextInput>, Subscription)>,
@@ -537,6 +542,8 @@ pub struct Viewer {
     exporting: Option<export::Exporting>,
     /// The print card, while open.
     printing: Option<printing::Printing>,
+    /// Run forms' own scripts (Settings > Editing).
+    form_scripts: bool,
     /// The link tool, while in hand.
     linking: Option<linking::Linking>,
     /// The form tool, while in hand.
@@ -646,6 +653,7 @@ impl Viewer {
         let prefs_changed = cx.observe_global::<Prefs>(|this, cx| {
             let was = this.page_colors();
             this.night_pages = cx.global::<Prefs>().night_pages;
+            this.form_scripts = cx.global::<Prefs>().form_scripts;
             if this.page_colors() != was {
                 this.redraw_thumbs();
             }
@@ -705,6 +713,8 @@ impl Viewer {
             links: None,
             texts: None,
             search: None,
+            find_options: Default::default(),
+            find_list: false,
             password: None,
             focus_password: false,
             key: None,
@@ -741,6 +751,7 @@ impl Viewer {
             redacting: None,
             exporting: None,
             printing: None,
+            form_scripts: prefs.form_scripts,
             linking: None,
             designing: None,
             properties: None,
@@ -1069,7 +1080,7 @@ impl Viewer {
                     return;
                 }
                 if let Some((source, fields)) = form {
-                    this.form = Form::new(source, fields);
+                    this.form = this.new_form(source, fields);
                     cx.notify();
                 }
                 this.annots = Some(Arc::new(annots));
@@ -1189,13 +1200,14 @@ impl Viewer {
             return;
         }
         let (doc, generation) = (opened.doc.clone(), bar.generation.clone());
+        let options = self.find_options;
         let (sender, receiver) = async_channel::unbounded();
         cx.background_executor()
             .spawn(async move {
                 search::run(
                     doc.as_ref(),
                     &texts,
-                    &query,
+                    (&query, options),
                     from,
                     &generation,
                     mine,
@@ -1254,83 +1266,6 @@ impl Viewer {
             offset_in_item: gap + below,
         });
         cx.notify();
-    }
-
-    /// The find bar under the toolbar.
-    fn find_bar(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let bar = self.search.as_ref()?;
-        let th = self.theme;
-        let found = &bar.found;
-        let status = if found.hits.is_empty() {
-            if bar.input.read(cx).text().trim().is_empty() {
-                String::new()
-            } else if found.done() {
-                t("search-none", &[])
-            } else {
-                t("search-searching", &[])
-            }
-        } else {
-            let current = found.current.map_or(0, |c| c + 1).to_string();
-            let total = found.hits.len().to_string();
-            let count = t("search-count", &[("current", &current), ("total", &total)]);
-            if found.done() {
-                count
-            } else {
-                format!("{count}…")
-            }
-        };
-        Some(
-            div()
-                .flex()
-                .items_center()
-                .gap(px(space::S2))
-                .p(px(space::S3))
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .h(px(32.0))
-                        .flex()
-                        .items_center()
-                        .gap(px(space::S3))
-                        .px(px(10.0))
-                        .rounded(px(7.0))
-                        .border_1()
-                        .border_color(th.accent)
-                        .bg(th.card)
-                        .text_size(px(text::SMALL))
-                        .text_color(th.text)
-                        .child(float::icon("search", 15.0, th.dim))
-                        .child(div().flex_1().min_w_0().child(bar.input.clone()))
-                        .child(
-                            div()
-                                .flex_none()
-                                .text_size(px(text::MICRO))
-                                .text_color(th.dim)
-                                .whitespace_nowrap()
-                                .child(status),
-                        ),
-                )
-                .child(
-                    float::ib(
-                        "find-previous",
-                        "chevu",
-                        t("search-previous", &[]),
-                        false,
-                        &th,
-                    )
-                    .on_click(cx.listener(|this, _, _, cx| this.step_search(false, cx))),
-                )
-                .child(
-                    float::ib("find-next", "chev", t("search-next", &[]), false, &th)
-                        .on_click(cx.listener(|this, _, _, cx| this.step_search(true, cx))),
-                )
-                .child(
-                    float::ib("find-close", "x", t("search-close", &[]), false, &th)
-                        .on_click(cx.listener(|this, _, window, cx| this.close_search(window, cx))),
-                )
-                .into_any_element(),
-        )
     }
 
     /// The page and character under `position` in the window, if a page
@@ -2191,14 +2126,23 @@ impl Viewer {
         let Some(form) = self.form.as_mut() else {
             return;
         };
-        if let Some(action) = form.action(field).cloned() {
-            self.act(action, cx);
+        if let Some(value) = form.clicked(field, widget) {
+            let done = form.set(field, value);
+            let scripted = form.clicks(field);
+            self.form_done(field, done, cx);
+            if scripted && let Some(form) = self.form.as_mut() {
+                let done = form.click(field);
+                self.form_done(field, done, cx);
+            }
             return;
         }
-        if let Some(value) = form.clicked(field, widget) {
-            if form.set(field, value) {
-                self.refill(field, cx);
-            }
+        if form.clicks(field) {
+            let done = form.click(field);
+            self.form_done(field, done, cx);
+            return;
+        }
+        if let Some(action) = form.action(field).cloned() {
+            self.act(action, cx);
             return;
         }
         if form
@@ -2286,7 +2230,12 @@ impl Viewer {
                 self.show_page(to, cx);
             }
             FieldAction::JavaScript(_) => {
-                self.notice = Some(t("form-action-unsupported", &[("what", "JavaScript")]));
+                let what = if self.form_scripts {
+                    "JavaScript"
+                } else {
+                    "JavaScript (Settings > Editing)"
+                };
+                self.notice = Some(t("form-action-unsupported", &[("what", what)]));
                 cx.notify();
             }
         }
@@ -2365,19 +2314,56 @@ impl Viewer {
         {
             text = text.chars().take(max).collect();
         }
-        if form.set(editing.field, katna_pdf_cos::FieldValue::Text(text)) {
-            self.refill(editing.field, cx);
+        let done = form.set(editing.field, katna_pdf_cos::FieldValue::Text(text));
+        self.form_done(editing.field, done, cx);
+    }
+
+    /// The form of `source`, its scripts run if Settings allow.
+    pub(super) fn new_form(
+        &self,
+        source: Arc<katna_pdf_cos::Document>,
+        fields: Vec<katna_pdf_cos::Field>,
+    ) -> Option<Form> {
+        let file = self.path.as_deref().map(file_name).unwrap_or_default();
+        Form::new(source, fields, self.form_scripts, &file)
+    }
+
+    /// Shows what a change to the form did: fills the file again, says
+    /// what the form's scripts said, and does what they asked that is
+    /// safe (a page, an address in the browser, the print card).
+    fn form_done(&mut self, field: usize, done: crate::form::Done, cx: &mut Context<Self>) {
+        use katna_pdf_js::Request;
+        if done.changed {
+            self.refill(field, cx);
+        }
+        if !done.alerts.is_empty() {
+            self.notice = Some(t("form-says", &[("message", &done.alerts.join(" "))]));
+            cx.notify();
+        }
+        for request in done.requests {
+            match request {
+                Request::Url(url) => self.follow(&katna_pdf_cos::LinkTarget::Uri(url), cx),
+                Request::Page(page) => self.show_page(page, cx),
+                Request::Print => self.toggle_printing(cx),
+                Request::Submit(url) => self.submit_form(url, katna_pdf_cos::SubmitFormat::Fdf, cx),
+                Request::Menu(name) => {
+                    let named = katna_pdf_cos::FieldAction::Named(name);
+                    self.act(named, cx);
+                }
+                Request::Dest(_) | Request::Focus(_) | Request::Mail => {}
+            }
         }
     }
 
     /// Writes the form's changes into the file and draws the pages of
     /// field `field` again from it.
     fn refill(&mut self, field: usize, cx: &mut Context<Self>) {
-        let Some(form) = self.form.as_ref() else {
+        let Some(form) = self.form.as_mut() else {
             return;
         };
         let source = form.source.clone();
         let changes = form.changes.clone();
+        let extras = form.extras();
         let mine = form.generation;
         let pages = form.pages_of(field);
         let generation = self.generation;
@@ -2386,7 +2372,11 @@ impl Viewer {
             let filled = cx
                 .background_executor()
                 .spawn(async move {
-                    let bytes = Arc::new(source.fill(&changes).map_err(|e| e.to_string())?);
+                    let bytes = Arc::new(
+                        source
+                            .fill_with(&changes, &extras)
+                            .map_err(|e| e.to_string())?,
+                    );
                     let doc = crate::engine::engine()
                         .open(bytes.clone(), key.as_deref().unwrap_or(""))
                         .map_err(|e| e.to_string())?;
@@ -2826,7 +2816,7 @@ impl Viewer {
         self.chosen = None;
         self.comment = None;
         // A form's changes are in the file now.
-        self.form = Form::new(Arc::new(cos), fields);
+        self.form = self.new_form(Arc::new(cos), fields);
         self.content = Content::Ready(Opened {
             name,
             doc,

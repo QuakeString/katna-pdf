@@ -95,6 +95,14 @@ impl Document {
         }
     }
 
+    /// The fields the form's `/CO` says to work out, in its order.
+    pub fn calculation_list(&self) -> Vec<Ref> {
+        match self.acro_form().map(|f| self.resolve_key(&f, "CO")) {
+            Some(Object::Array(co)) => co.iter().filter_map(Object::as_ref).collect(),
+            _ => Vec::new(),
+        }
+    }
+
     /// The order fields are worked out in: the form's `/CO`, then any
     /// others with a calculation.
     pub(crate) fn calculation_order(&self, scripts: &HashMap<Ref, Scripts>) -> Vec<Ref> {

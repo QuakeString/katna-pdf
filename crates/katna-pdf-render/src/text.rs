@@ -37,26 +37,114 @@ pub struct PageText {
 }
 
 impl PageText {
-    /// Where `query` occurs, ignoring case, with any run of spaces in it
-    /// matching any run of spaces or line breaks: for each match, the
-    /// indices of its characters' boxes.
+    /// Where `query` occurs, ignoring case and accents, with any run of
+    /// spaces in it matching any run of spaces or line breaks: for each
+    /// match, the indices of its characters' boxes.
     pub fn find(&self, query: &str) -> Vec<std::ops::Range<usize>> {
-        let query: Vec<char> = fold(query.trim());
-        if query.is_empty() {
+        self.find_with(query, FindOptions::default())
+    }
+
+    /// [`PageText::find`] with `options`. A query in double quotes is an
+    /// exact phrase: whole words, no close spellings. A word broken over
+    /// two lines with a hyphen is found whole.
+    pub fn find_with(&self, query: &str, options: FindOptions) -> Vec<std::ops::Range<usize>> {
+        let mut options = options;
+        let mut query = query.trim();
+        if let Some(inner) = query
+            .strip_prefix('"')
+            .and_then(|q| q.strip_suffix('"'))
+            .filter(|q| !q.trim().is_empty())
+        {
+            query = inner.trim();
+            options.whole_words = true;
+            options.fuzzy = false;
+        }
+        let query = Folded::new(query, options).chars;
+        if query.is_empty() || query.iter().all(|c| *c == ' ') {
             return Vec::new();
         }
-        let text = fold(&self.text);
+        let text = Folded::new(&self.text, options);
+        let chars = &text.chars;
+        let errors = if options.fuzzy {
+            allowed_errors(&query)
+        } else {
+            0
+        };
         let mut found = Vec::new();
         let mut start = 0;
-        while start < text.len() {
-            if let Some(end) = match_at(&text, start, &query) {
-                found.push(start..end);
-                start = end;
-            } else {
-                start += 1;
+        while start < chars.len() {
+            let at_word = start == 0 || !is_word(chars[start - 1]);
+            let end = match_at(chars, start, &query)
+                .or_else(|| {
+                    // Close spellings start where a word does.
+                    (errors > 0 && at_word && is_word(chars[start]))
+                        .then(|| close_at(chars, start, &query, errors))
+                        .flatten()
+                })
+                .filter(|&end| {
+                    !options.whole_words
+                        || (at_word && (end >= chars.len() || !is_word(chars[end])))
+                });
+            match end {
+                Some(end) if end > start => {
+                    found.push(text.origin[start]..text.origin[end - 1] + 1);
+                    start = end;
+                }
+                _ => start += 1,
             }
         }
         found
+    }
+
+    /// The words around characters `range` on one line, for a list of
+    /// matches: what comes before, the match, and what comes after.
+    pub fn context(&self, range: std::ops::Range<usize>) -> (String, String, String) {
+        const AROUND: usize = 40;
+        let chars: Vec<char> = self.text.chars().collect();
+        let end = range.end.min(chars.len());
+        let start = range.start.min(end);
+        // One space for every run of white space.
+        let line = |cs: &[char]| -> String {
+            let mut out = String::new();
+            for c in cs {
+                if c.is_whitespace() {
+                    if !out.ends_with(' ') {
+                        out.push(' ');
+                    }
+                } else {
+                    out.push(*c);
+                }
+            }
+            out
+        };
+        let mut from = start.saturating_sub(AROUND);
+        // Start at a word, unless the line starts nearer.
+        if from > 0 {
+            while from < start && !chars[from - 1].is_whitespace() {
+                from += 1;
+            }
+        }
+        let mut to = (end + AROUND).min(chars.len());
+        if to < chars.len() {
+            while to > end && !chars[to].is_whitespace() {
+                to -= 1;
+            }
+        }
+        let before = line(&chars[from..start]).trim_start().to_owned();
+        let after = line(&chars[end..to]).trim_end().to_owned();
+        (
+            if from > 0 {
+                format!("…{before}")
+            } else {
+                before
+            },
+            line(&chars[start..end]),
+            if to < chars.len() {
+                format!("{after}…")
+            } else {
+                after
+            },
+        )
     }
 
     /// The boxes of characters `range`, joined into one box per line.
@@ -87,18 +175,123 @@ impl PageText {
     }
 }
 
-/// Text lowered for matching, one `char` for each of the text's, every
-/// kind of white space made a plain space.
-fn fold(text: &str) -> Vec<char> {
-    text.chars()
-        .map(|c| {
-            if c.is_whitespace() {
-                ' '
-            } else {
-                c.to_lowercase().next().unwrap_or(c)
+/// How a search matches.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct FindOptions {
+    /// Capitals only match capitals.
+    pub match_case: bool,
+    /// Only whole words match.
+    pub whole_words: bool,
+    /// Letters with accents only match the same accents.
+    pub match_accents: bool,
+    /// Close spellings match too: a letter or two wrong, missing, extra
+    /// or swapped, for words of four letters or more.
+    pub fuzzy: bool,
+}
+
+/// Text made ready for matching: every kind of white space a plain space,
+/// lowered and without accents as the options say, soft hyphens and
+/// hyphens that break a word over two lines left out. `origin` gives each
+/// character's index in the text it came from.
+struct Folded {
+    chars: Vec<char>,
+    origin: Vec<usize>,
+}
+
+impl Folded {
+    fn new(text: &str, options: FindOptions) -> Self {
+        use unicode_normalization::UnicodeNormalization;
+        use unicode_normalization::char::is_combining_mark;
+        let source: Vec<char> = text.chars().collect();
+        let mut chars = Vec::with_capacity(source.len());
+        let mut origin = Vec::with_capacity(source.len());
+        let mut i = 0;
+        while i < source.len() {
+            let c = source[i];
+            if c == '\u{ad}' {
+                i += 1;
+                continue;
             }
-        })
-        .collect()
+            // "pay-\nment" reads as "payment".
+            if c == '-'
+                && source.get(i + 1) == Some(&'\n')
+                && i > 0
+                && source[i - 1].is_alphabetic()
+                && source.get(i + 2).is_some_and(|c| c.is_lowercase())
+            {
+                i += 2;
+                continue;
+            }
+            if !options.match_accents && is_combining_mark(c) {
+                i += 1;
+                continue;
+            }
+            let mut c = if c.is_whitespace() { ' ' } else { c };
+            if !options.match_accents {
+                c = c.nfd().next().unwrap_or(c);
+            }
+            if !options.match_case {
+                c = c.to_lowercase().next().unwrap_or(c);
+            }
+            chars.push(c);
+            origin.push(i);
+            i += 1;
+        }
+        Folded { chars, origin }
+    }
+}
+
+fn is_word(c: char) -> bool {
+    c.is_alphanumeric() || c == '_'
+}
+
+/// How many letters a close spelling may get wrong: none for short
+/// words, then one for every four letters, at most two.
+fn allowed_errors(query: &[char]) -> usize {
+    let letters = query.iter().filter(|c| is_word(**c)).count();
+    match letters {
+        0..4 => 0,
+        4..8 => 1,
+        _ => 2,
+    }
+}
+
+/// Where a close spelling of `query` starting at `start` ends: the end
+/// with the fewest changes (a letter wrong, missing, extra, or two
+/// swapped), at most `errors`, ending at a word's end where it can.
+fn close_at(text: &[char], start: usize, query: &[char], errors: usize) -> Option<usize> {
+    let longest = (query.len() + errors).min(text.len() - start);
+    let piece = &text[start..start + longest];
+    let (n, m) = (query.len(), piece.len());
+    // d[i][j]: changes to make query[..i] into piece[..j].
+    let mut d = vec![vec![0usize; m + 1]; n + 1];
+    for (i, row) in d.iter_mut().enumerate() {
+        row[0] = i;
+    }
+    for (j, cell) in d[0].iter_mut().enumerate() {
+        *cell = j;
+    }
+    for i in 1..=n {
+        for j in 1..=m {
+            let cost = usize::from(query[i - 1] != piece[j - 1]);
+            let mut best = (d[i - 1][j] + 1)
+                .min(d[i][j - 1] + 1)
+                .min(d[i - 1][j - 1] + cost);
+            if i > 1 && j > 1 && query[i - 1] == piece[j - 2] && query[i - 2] == piece[j - 1] {
+                best = best.min(d[i - 2][j - 2] + 1);
+            }
+            d[i][j] = best;
+        }
+    }
+    let ends_word = |j: usize| start + j >= text.len() || !is_word(text[start + j]);
+    (1..=m)
+        // Ends on a letter if the query does, so a comma after a word stays
+        // out.
+        .filter(|&j| d[n][j] <= errors && j + errors >= n)
+        .filter(|&j| is_word(piece[j - 1]) || !is_word(query[n - 1]))
+        .min_by_key(|&j| (d[n][j], !ends_word(j), j.abs_diff(n)))
+        .filter(|&j| ends_word(j))
+        .map(|j| start + j)
 }
 
 /// Where a match of `query` that starts at `start` in `text` ends.
@@ -270,6 +463,70 @@ mod tests {
         assert_eq!(text.find("hello").len(), 3);
         assert_eq!(text.find("  "), []);
         assert_eq!(text.find("planet"), []);
+    }
+
+    #[test]
+    fn options_change_what_matches() {
+        let text = page("Café cafe CAFE cafeteria");
+        let all = FindOptions::default();
+        assert_eq!(text.find_with("cafe", all).len(), 4);
+        let case = FindOptions {
+            match_case: true,
+            ..all
+        };
+        assert_eq!(text.find_with("cafe", case), [5..9, 15..19]);
+        let words = FindOptions {
+            whole_words: true,
+            ..all
+        };
+        assert_eq!(text.find_with("cafe", words), [0..4, 5..9, 10..14]);
+        let accents = FindOptions {
+            match_accents: true,
+            ..all
+        };
+        assert_eq!(text.find_with("café", accents), vec![0..4]);
+        // Quotes ask for the phrase as written, in whole words.
+        assert_eq!(text.find_with("\"cafe\"", all).len(), 3);
+    }
+
+    #[test]
+    fn close_spellings_are_found_when_asked() {
+        let text = page("Payment summary: the paymnet was recieved. Pay me.");
+        let fuzzy = FindOptions {
+            fuzzy: true,
+            ..FindOptions::default()
+        };
+        let words = |q: &str, o| -> Vec<String> {
+            text.find_with(q, o)
+                .into_iter()
+                .map(|r| text.text.chars().skip(r.start).take(r.len()).collect())
+                .collect()
+        };
+        assert_eq!(words("payment", fuzzy), ["Payment", "paymnet"]);
+        assert_eq!(words("received", fuzzy), ["recieved"]);
+        assert_eq!(words("payment", FindOptions::default()), ["Payment"]);
+        // Short words only match as typed.
+        assert_eq!(words("pay", fuzzy), ["Pay", "pay", "Pay"]);
+        assert_eq!(words("summery", fuzzy), ["summary"]);
+        let text = page("le salaire, net");
+        let found: Vec<String> = text
+            .find_with("salaries", fuzzy)
+            .into_iter()
+            .map(|r| text.text.chars().skip(r.start).take(r.len()).collect())
+            .collect();
+        assert_eq!(found, ["salaire"]);
+    }
+
+    #[test]
+    fn a_word_hyphenated_over_two_lines_is_found() {
+        let text = page("the pay-\nment is due; well-known");
+        assert_eq!(text.find("payment"), vec![4..13]);
+        assert_eq!(text.find("well-known"), vec![22..32]);
+        let (before, hit, after) = text.context(4..13);
+        assert_eq!(
+            (before.as_str(), hit.as_str(), after.as_str()),
+            ("the ", "pay- ment", " is due; well-known")
+        );
     }
 
     #[test]

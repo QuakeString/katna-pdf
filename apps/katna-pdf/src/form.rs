@@ -5,14 +5,21 @@
 //! written into the file as an incremental update right away and the
 //! pages are drawn again from it, so what shows is what other readers
 //! will show; Save writes that file over the one opened.
+//!
+//! A form that carries its own JavaScript has it run (`katna-pdf-js`):
+//! checks on what is typed, totals, formats, fields shown and hidden,
+//! and buttons' scripts. Otherwise the totals and formats Acrobat's tools
+//! write are done in Rust (cos `calc.rs`).
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use gpui::{Entity, Subscription};
 use katna_pdf_cos::{
-    Calculation, Document, Field, FieldAction, FieldKind, FieldValue, Format, Ref, Widget,
+    Calculation, Display, Document, Field, FieldAction, FieldKind, FieldValue, FillExtras, Format,
+    Ref, Widget,
 };
+use katna_pdf_js::{Outcome, Request};
 use katna_ui::text_input::TextInput;
 
 pub struct Form {
@@ -37,6 +44,25 @@ pub struct Form {
     /// Bumped for each change, so an older fill that ends later is
     /// dropped.
     pub generation: u64,
+    /// The form's own scripts, when it has any and they may run.
+    scripts: Option<katna_pdf_js::Form>,
+    /// What the scripts did since the file was opened or saved, for the
+    /// fields they showed, hid or locked.
+    outcomes: Vec<Outcome>,
+    /// The fields the last change touched, whose pages are drawn again.
+    touched: Vec<usize>,
+}
+
+/// What setting a value or clicking did, for the viewer to show and act
+/// on.
+#[derive(Debug, Default)]
+pub struct Done {
+    /// The form changed and its pages need filling again.
+    pub changed: bool,
+    /// What the form's scripts said (`app.alert`).
+    pub alerts: Vec<String>,
+    /// What they asked for: an address opened, the form sent, a page.
+    pub requests: Vec<Request>,
 }
 
 pub struct Editing {
@@ -50,39 +76,41 @@ pub struct Editing {
 
 impl Form {
     /// The form of `source`, if it has any field that can be filled.
-    pub fn new(source: Arc<Document>, fields: Vec<Field>) -> Option<Self> {
-        let mut on_page: HashMap<usize, Vec<(usize, usize)>> = HashMap::new();
+    /// With `scripts`, its own JavaScript runs.
+    pub fn new(
+        source: Arc<Document>,
+        fields: Vec<Field>,
+        scripts: bool,
+        file: &str,
+    ) -> Option<Self> {
+        let js = scripts
+            .then(|| katna_pdf_js::Form::new(&source, &fields, file))
+            .flatten();
         let actions: HashMap<usize, FieldAction> = fields
             .iter()
             .enumerate()
             .filter(|(_, f)| !f.read_only)
             .filter_map(|(i, f)| Some((i, source.field_action(f)?)))
             .collect();
-        for (f, field) in fields.iter().enumerate() {
-            if !fillable(field) && !actions.contains_key(&f) {
-                continue;
-            }
-            for (w, widget) in field.widgets.iter().enumerate() {
-                if !widget.hidden {
-                    on_page.entry(widget.page).or_default().push((f, w));
-                }
-            }
-        }
-        let scripts = source.form_scripts(&fields);
-        let calculated = fields
-            .iter()
-            .enumerate()
-            .filter_map(|(f, field)| Some((f, scripts.get(&field.id)?.calculate.clone()?)))
-            .collect();
+        let on_page = widgets_on_pages(&fields, &actions, js.as_ref());
+        let found = source.form_scripts(&fields);
+        // Scripts that run work totals out themselves.
+        let calculated = if js.is_some() {
+            Vec::new()
+        } else {
+            fields
+                .iter()
+                .enumerate()
+                .filter_map(|(f, field)| Some((f, found.get(&field.id)?.calculate.clone()?)))
+                .collect()
+        };
         let dates = fields
             .iter()
             .enumerate()
-            .filter_map(
-                |(f, field)| match scripts.get(&field.id)?.format.as_ref()? {
-                    Format::Date(pattern) => Some((f, pattern.clone())),
-                    _ => None,
-                },
-            )
+            .filter_map(|(f, field)| match found.get(&field.id)?.format.as_ref()? {
+                Format::Date(pattern) => Some((f, pattern.clone())),
+                _ => None,
+            })
             .collect();
         (!on_page.is_empty()).then_some(Self {
             source,
@@ -95,6 +123,9 @@ impl Form {
             filled: None,
             editing: None,
             generation: 0,
+            scripts: js,
+            outcomes: Vec::new(),
+            touched: Vec::new(),
         })
     }
 
@@ -112,6 +143,23 @@ impl Form {
         self.actions.get(&field)
     }
 
+    /// Whether clicking field `field` runs a script of the form's.
+    pub fn clicks(&self, field: usize) -> bool {
+        self.scripts
+            .as_ref()
+            .is_some_and(|js| js.clicks(&self.fields[field].name))
+    }
+
+    /// Field `field` was clicked: its scripts run.
+    pub fn click(&mut self, field: usize) -> Done {
+        let name = self.fields[field].name.clone();
+        let Some(js) = self.scripts.as_mut() else {
+            return Done::default();
+        };
+        let outcome = js.click(&name);
+        self.apply(outcome, Some(field))
+    }
+
     /// How field `field` writes its date, if it holds one.
     pub fn date_pattern(&self, field: usize) -> Option<&str> {
         self.dates.get(&field).map(String::as_str)
@@ -122,23 +170,126 @@ impl Form {
         !self.changes.is_empty()
     }
 
-    /// Sets field `field` to `value`. Returns whether that changed it.
-    pub fn set(&mut self, field: usize, value: FieldValue) -> bool {
-        let f = &mut self.fields[field];
+    /// Sets field `field` to `value`: the form's scripts may turn it
+    /// down, and work out what follows from it.
+    pub fn set(&mut self, field: usize, value: FieldValue) -> Done {
+        let f = &self.fields[field];
         let new = match &value {
             FieldValue::Text(text) => Some(text.clone()).filter(|t| !t.is_empty()),
             FieldValue::State(state) => state.clone(),
         };
         if f.value == new {
-            return false;
+            return Done::default();
         }
+        if let Some(js) = self.scripts.as_mut() {
+            let text = match &value {
+                FieldValue::Text(t) => t.clone(),
+                FieldValue::State(s) => s.clone().unwrap_or_else(|| "Off".into()),
+            };
+            let name = f.name.clone();
+            let outcome = js.commit(&name, &text);
+            if !outcome.accepted {
+                return Done {
+                    changed: false,
+                    alerts: outcome.alerts,
+                    requests: outcome.requests,
+                };
+            }
+            return self.apply(outcome, Some(field));
+        }
+        let f = &mut self.fields[field];
         f.value = new;
         let id = f.id;
         self.changes.retain(|(r, _)| *r != id);
         self.changes.push((id, value));
         self.generation += 1;
+        self.touched = vec![field];
         self.recalculate();
-        true
+        Done {
+            changed: true,
+            ..Done::default()
+        }
+    }
+
+    /// Takes what the form's scripts did into the fields here.
+    fn apply(&mut self, outcome: Outcome, field: Option<usize>) -> Done {
+        let index = |fields: &[Field], name: &str| fields.iter().position(|f| f.name == name);
+        let mut touched: Vec<usize> = field.into_iter().collect();
+        for e in &outcome.errors {
+            eprintln!("katna-pdf: form script: {e}");
+        }
+        for (name, value) in &outcome.values {
+            let Some(i) = index(&self.fields, name) else {
+                continue;
+            };
+            let f = &mut self.fields[i];
+            let value = katna_pdf_js::field_value(&f.kind, value);
+            f.value = match &value {
+                FieldValue::Text(t) => Some(t.clone()).filter(|t| !t.is_empty()),
+                FieldValue::State(s) => s.clone(),
+            };
+            let id = f.id;
+            self.changes.retain(|(r, _)| *r != id);
+            self.changes.push((id, value));
+            touched.push(i);
+        }
+        let mut shown = false;
+        for (name, display) in &outcome.display {
+            if let Some(i) = index(&self.fields, name) {
+                let hidden = matches!(display, Display::Hidden | Display::NoView);
+                for w in &mut self.fields[i].widgets {
+                    w.hidden = hidden;
+                }
+                touched.push(i);
+                shown = true;
+            }
+        }
+        for (name, locked) in &outcome.read_only {
+            if let Some(i) = index(&self.fields, name) {
+                self.fields[i].read_only = *locked;
+                touched.push(i);
+                shown = true;
+            }
+        }
+        if shown {
+            self.on_page = widgets_on_pages(&self.fields, &self.actions, self.scripts.as_ref());
+        }
+        let changed = !outcome.values.is_empty() || shown;
+        let done = Done {
+            changed,
+            alerts: outcome.alerts.clone(),
+            requests: outcome.requests.clone(),
+        };
+        if changed {
+            if shown && self.changes.is_empty() {
+                // Shown or hidden only: still a change to the file.
+                if let Some(f) = field {
+                    let f = &self.fields[f];
+                    let value = match f.kind {
+                        FieldKind::CheckBox | FieldKind::Radio => {
+                            FieldValue::State(f.value.clone())
+                        }
+                        _ => FieldValue::Text(f.value.clone().unwrap_or_default()),
+                    };
+                    self.changes.push((f.id, value));
+                }
+            }
+            self.outcomes.push(outcome);
+            self.generation += 1;
+            touched.sort_unstable();
+            touched.dedup();
+            self.touched = touched;
+        }
+        done
+    }
+
+    /// What the form's scripts showed, hid and locked, for filling the
+    /// file.
+    pub fn extras(&mut self) -> FillExtras {
+        match self.scripts.as_mut() {
+            Some(js) => js.extras(&self.outcomes),
+            None => FillExtras::default(),
+        }
     }
 
     /// Works totals out again from the values now, as filling the file
@@ -172,11 +323,13 @@ impl Form {
         }
     }
 
-    /// The pages the changes since the last fill show on.
-    /// Totals change with the fields they add up, so their pages too.
+    /// The pages the last change shows on: the field's, and those of
+    /// the fields worked out from it.
     pub fn pages_of(&self, field: usize) -> Vec<usize> {
         let mut pages: Vec<usize> = std::iter::once(field)
+            .chain(self.touched.iter().copied())
             .chain(self.calculated.iter().map(|(f, _)| *f))
+            .filter(|&f| f < self.fields.len())
             .flat_map(|f| self.fields[f].widgets.iter().map(|w| w.page))
             .collect();
         pages.sort_unstable();
@@ -188,8 +341,30 @@ impl Form {
     pub fn saved(&mut self, source: Arc<Document>) {
         self.source = source;
         self.changes.clear();
+        self.outcomes.clear();
         self.filled = None;
     }
+}
+
+/// For each page, the widgets that can be filled or clicked there.
+fn widgets_on_pages(
+    fields: &[Field],
+    actions: &HashMap<usize, FieldAction>,
+    js: Option<&katna_pdf_js::Form>,
+) -> HashMap<usize, Vec<(usize, usize)>> {
+    let mut on_page: HashMap<usize, Vec<(usize, usize)>> = HashMap::new();
+    for (f, field) in fields.iter().enumerate() {
+        let clicks = js.is_some_and(|js| js.clicks(&field.name));
+        if !fillable(field) && !actions.contains_key(&f) && !clicks {
+            continue;
+        }
+        for (w, widget) in field.widgets.iter().enumerate() {
+            if !widget.hidden {
+                on_page.entry(widget.page).or_default().push((f, w));
+            }
+        }
+    }
+    on_page
 }
 
 /// Whether a field can be filled in here.
@@ -235,19 +410,19 @@ mod tests {
             field(1, FieldKind::CheckBox, Some("Yes"), &["Yes"]),
             field(2, FieldKind::Radio, None, &["A", "B"]),
         ];
-        let mut form = Form::new(source, fields).unwrap();
+        let mut form = Form::new(source, fields, true, "t.pdf").unwrap();
         assert_eq!(form.on_page(0).count(), 3);
         let off = form.clicked(0, 0).unwrap();
         assert_eq!(off, FieldValue::State(None));
-        assert!(form.set(0, off));
+        assert!(form.set(0, off).changed);
         assert_eq!(
             form.clicked(0, 0),
             Some(FieldValue::State(Some("Yes".into())))
         );
         let b = form.clicked(1, 1).unwrap();
-        assert!(form.set(1, b.clone()));
+        assert!(form.set(1, b.clone()).changed);
         // The same again changes nothing.
-        assert!(!form.set(1, b));
+        assert!(!form.set(1, b).changed);
         assert_eq!(form.changes.len(), 2);
         assert!(form.dirty());
     }

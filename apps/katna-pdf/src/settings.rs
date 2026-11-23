@@ -1066,6 +1066,12 @@ impl Settings {
             cx,
         );
         let grid = self.toggle("settings-grid", prefs.grid, |p, v| p.grid = v, cx);
+        let scripts = self.toggle(
+            "settings-form-scripts",
+            prefs.form_scripts,
+            |p, v| p.form_scripts = v,
+            cx,
+        );
         let folder = katna_core::Paths::from_env()
             .ok()
             .map(|p| p.state_dir().join("pdf"))
@@ -1084,6 +1090,12 @@ impl Settings {
                 None,
                 Some(t("settings-grid-detail", &[])),
                 Some(grid),
+            ))
+            .child(self.row(
+                t("settings-form-scripts", &[]),
+                None,
+                Some(t("settings-form-scripts-detail", &[])),
+                Some(scripts),
             ))
             .child(self.row(t("settings-own-files", &[]), None, None, folder))
             .into_any_element()

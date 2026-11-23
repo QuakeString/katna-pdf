@@ -478,6 +478,7 @@ form-text = Text
 form-text-auto = Fits
 form-highlight = Tint the fields so they stand out
 form-action-unsupported = This button asks for { $what }, which Katna PDF does not do.
+form-says = The form says: { $message }
 form-sending = Sending the form…
 form-sent = The form was sent.
 form-send-failed = The form could not be sent: { $error }
@@ -630,13 +631,24 @@ pdfa-saved-left = Wrote { $name }, but it is still not PDF/A: { $left }
 pdfa-failed = The PDF/A copy could not be made: { $error }
 
 ## Find in the document
-search-placeholder = Find in the document
+search-placeholder = Find; "in quotes" for exact words
 search-count = { $current } of { $total }
 search-searching = Searching…
 search-none = No matches
 search-previous = Previous match (Shift+F3)
 search-next = Next match (F3)
 search-close = Close (Esc)
+search-match-case = Match case
+search-match-case-tip = Capitals only match capitals
+search-whole-words = Whole words
+search-whole-words-tip = Only whole words match, not parts of longer ones
+search-accents = Accents
+search-accents-tip = Letters with accents only match the same accents; otherwise é finds e
+search-fuzzy = Close spellings
+search-fuzzy-tip = Also find words a letter or two off, such as typing mistakes
+search-list = All results
+search-page = p. { $page }
+search-more = { $count } more; add words to narrow the search
 
 ## The side pane beside the pages
 pane-pages = Pages
@@ -1315,6 +1327,8 @@ settings-units-pt = pt
 settings-units-detail = For an object's place and size; type another unit after a number to use it once
 settings-grid = Snap to the grid
 settings-grid-detail = From the start in Edit; the grid button there turns it off and on
+settings-form-scripts = Run forms' own scripts
+settings-form-scripts-detail = Checks on what you type, totals and buttons, as the form was made. They can't reach your files or the internet; from the next file opened
 settings-own-files = My stamps, initials and mark templates
 settings-drivers = Token drivers
 settings-drivers-none = None found on this computer

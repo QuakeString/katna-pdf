@@ -186,11 +186,14 @@ usage: katna-pdf-cli COMMAND [--json] ...
                                   object (or CSV: names, then values); with -o saved
                                   as JSON, CSV, XFDF or FDF by OUT's extension
   fill FILE -o OUT ([--data DATA.json|.csv|.xfdf|.fdf] [--set NAME=VALUE]... | --reset)
+                                  [--no-scripts]
                                   the form filled in from form data (JSON, CSV, or
                                   Acrobat's XFDF or FDF),
                                   or values given one by one (a check box: yes or
                                   no; a radio group: the button's choice); --reset
-                                  puts every field back to what it started as
+                                  puts every field back to what it started as. The
+                                  form's own scripts check each value and work out
+                                  totals, unless --no-scripts
   flatten FILE -o OUT [--forms] [--comments]
                                   the form's fields and the comments drawn into the
                                   pages as they are and taken out, so they can no
@@ -216,6 +219,11 @@ usage: katna-pdf-cli COMMAND [--json] ...
                                   the text each page draws, in runs (a line's worth
                                   in one font), numbered PAGE:RUN, with font and place;
                                   with --blocks, in paragraphs, numbered PAGE:BLOCK
+  find FILE QUERY [--pages PAGES] [--case] [--words] [--accents] [--fuzzy]
+                                  where QUERY is on the pages, with the words around
+                                  it; ignores case and accents unless asked, --words
+                                  for whole words, --fuzzy for close spellings too;
+                                  \"QUERY\" in quotes is an exact phrase
   edit-text FILE -o OUT (--run PAGE:RUN | --block PAGE:BLOCK | --replace OLD) --to NEW
             [--pages PAGES]       change a run's text, a paragraph's (its words wrapped
                                   to its width, a line break in NEW starting a line),
@@ -341,6 +349,7 @@ fn main() -> ExitCode {
         "tokens" => tokens(rest, json),
         "token-check" => token_check(rest, json),
         "text" => text(rest, json),
+        "find" => find(rest, json),
         "edit-text" => edit_text(rest, json),
         "annots" => annots(rest, json),
         "attachments" => attachments(rest, json),
@@ -545,6 +554,11 @@ impl<'a> Args<'a> {
                 "--reset",
                 "--forms",
                 "--comments",
+                "--no-scripts",
+                "--case",
+                "--words",
+                "--accents",
+                "--fuzzy",
             ]
             .contains(&a.as_str())
             {
@@ -3227,11 +3241,76 @@ fn fill(args: &[String], json: bool) -> Done {
                 "give values with --data or --set, or --reset".into(),
             ));
         }
-        doc.fill_data(&data)
-            .map_err(|e| failed(format!("{file}: {e}")))?
+        let fields = doc.form();
+        match (!args.flag("--no-scripts"))
+            .then(|| katna_pdf_js::Form::new(&doc, &fields, &file_label(file)))
+            .flatten()
+        {
+            Some(form) => fill_scripted(&doc, &fields, form, &data, file)?,
+            None => doc
+                .fill_data(&data)
+                .map_err(|e| failed(format!("{file}: {e}")))?,
+        }
     };
     write(&out, &bytes)?;
     Ok(wrote(&[(out, doc.pages().len())], json))
+}
+
+/// The name a file goes by, as a form's scripts see it.
+fn file_label(path: &str) -> String {
+    std::path::Path::new(path)
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default()
+}
+
+/// Fills a form whose own scripts run: each value goes through the
+/// field's checks, and totals and formats come from the scripts.
+fn fill_scripted(
+    doc: &katna_pdf_cos::Document,
+    fields: &[katna_pdf_cos::Field],
+    mut form: katna_pdf_js::Form,
+    data: &[(String, String)],
+    file: &str,
+) -> Result<Vec<u8>, Failure> {
+    let mut outcomes = Vec::new();
+    for (name, value) in data {
+        let Some(field) = fields.iter().find(|f| &f.name == name) else {
+            return Err(failed(format!("{file}: no field {name}")));
+        };
+        let value = match field.kind {
+            katna_pdf_cos::FieldKind::CheckBox => {
+                let on = field.widgets.iter().find_map(|w| w.on.clone());
+                match value.to_ascii_lowercase().as_str() {
+                    "yes" | "true" | "on" | "1" => on.unwrap_or_else(|| "Yes".into()),
+                    "no" | "false" | "off" | "0" | "" => "Off".into(),
+                    _ => value.clone(),
+                }
+            }
+            _ => value.clone(),
+        };
+        let value = &value;
+        let outcome = form.commit(name, value);
+        for alert in &outcome.alerts {
+            eprintln!("{name}: the form says: {alert}");
+        }
+        if !outcome.accepted {
+            return Err(failed(format!(
+                "{file}: the form turned down {name} = {value}"
+            )));
+        }
+        outcomes.push(outcome);
+    }
+    let mut changes: Vec<(katna_pdf_cos::Ref, katna_pdf_cos::FieldValue)> = Vec::new();
+    for outcome in &outcomes {
+        for (id, value) in form.changes(outcome, fields) {
+            changes.retain(|(r, _)| *r != id);
+            changes.push((id, value));
+        }
+    }
+    let extras = form.extras(&outcomes);
+    doc.fill_with(&changes, &extras)
+        .map_err(|e| failed(format!("{file}: {e}")))
 }
 
 /// Draws the form's fields and the comments into the pages for good.
@@ -4301,6 +4380,54 @@ fn annots(args: &[String], json: bool) -> Done {
     }
     if json {
         out = format!("{{\"annotations\":[{}]}}\n", items.join(","));
+    }
+    Ok(out)
+}
+
+fn find(args: &[String], json: bool) -> Done {
+    use katna_pdf_render::Engine as _;
+    use katna_pdf_render::text::FindOptions;
+    let args = Args::parse(args)?;
+    let [file, query] = args.words()?;
+    let doc = open(file)?;
+    let count = doc.pages().len();
+    let pages = match args.option("--pages") {
+        Some(spec) => ranges::parse(spec, count).map_err(failed)?,
+        None => (0..count).collect(),
+    };
+    let password = std::env::var("KATNA_PDF_OPEN_PASSWORD").unwrap_or_default();
+    let drawn = katna_pdf_render::Hayro
+        .open(std::sync::Arc::new(doc.bytes().to_vec()), &password)
+        .map_err(|e| failed(format!("{file}: {e}")))?;
+    let options = FindOptions {
+        match_case: args.flag("--case"),
+        whole_words: args.flag("--words"),
+        match_accents: args.flag("--accents"),
+        fuzzy: args.flag("--fuzzy"),
+    };
+    let (mut out, mut items) = (String::new(), Vec::new());
+    for page in pages {
+        let text = drawn.text(page);
+        for range in text.find_with(query, options) {
+            let (before, found, after) = text.context(range);
+            if json {
+                items.push(format!(
+                    "{{\"page\":{},\"found\":{},\"before\":{},\"after\":{}}}",
+                    page + 1,
+                    string(&found),
+                    string(&before),
+                    string(&after)
+                ));
+            } else {
+                let _ = writeln!(out, "{:<5} {before}[{found}]{after}", page + 1);
+            }
+        }
+    }
+    if json {
+        return Ok(format!("{{\"matches\":[{}]}}\n", items.join(",")));
+    }
+    if out.is_empty() {
+        out.push_str("no matches\n");
     }
     Ok(out)
 }

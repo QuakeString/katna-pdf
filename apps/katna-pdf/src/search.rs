@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 
 use katna_pdf_render::Document;
-use katna_pdf_render::text::PageText;
+use katna_pdf_render::text::{FindOptions, PageText};
 
 /// One match: its page and its boxes there (one per line it spans), in
 /// points from the page's top left.
@@ -18,6 +18,9 @@ use katna_pdf_render::text::PageText;
 pub struct Hit {
     pub page: usize,
     pub boxes: Vec<[f32; 4]>,
+    /// The words before the match on its line, the match as the page has
+    /// it, and the words after, for the list of matches.
+    pub context: (String, String, String),
 }
 
 /// Each page's text, read on first need.
@@ -84,12 +87,12 @@ impl Found {
     }
 }
 
-/// Searches for `query` from page `from` on, calling `found` with each
+/// Searches for `query`, matched as `options` say, from page `from` on, calling `found` with each
 /// page's matches, until done or `generation` moves on from `mine`.
 pub fn run(
     doc: &dyn Document,
     texts: &Texts,
-    query: &str,
+    (query, options): (&str, FindOptions),
     from: usize,
     generation: &AtomicU64,
     mine: u64,
@@ -103,11 +106,12 @@ pub fn run(
         let page = (from + k) % n;
         let text = texts[page].get_or_init(|| doc.text(page));
         let hits = text
-            .find(query)
+            .find_with(query, options)
             .into_iter()
             .map(|range| Hit {
                 page,
-                boxes: text.line_boxes(range),
+                boxes: text.line_boxes(range.clone()),
+                context: text.context(range),
             })
             .filter(|hit| !hit.boxes.is_empty())
             .collect();
@@ -125,6 +129,7 @@ mod tests {
         Hit {
             page,
             boxes: vec![[0.0, 0.0, 1.0, 1.0]],
+            context: Default::default(),
         }
     }
 

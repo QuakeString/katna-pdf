@@ -118,9 +118,11 @@ view.model-tree	view	3D model tree panel	reader	n	skip	-	-		acrobat
 view.page-labels-display	view	Show page labels (i, ii, 1, 2...)	reader	n	shipped	P0	#73		acrobat
 view.find	view	Find text across the document	reader	y	shipped	P0	Ctrl+F		acrobat
 view.find-next-previous	view	Find next / previous match	reader	y	shipped	P0	F3 / Shift+F3		acrobat
-view.find-options	view	Find options: whole words, case-sensitive	reader	y	todo	P0	-	ignores case and spacing; no whole-word or match-case switch	acrobat
+view.find-options	view	Find options: whole words, case-sensitive	reader	y	shipped	P0	text.rs find_with; CLI find	match case, whole words, accents; "quotes" for an exact phrase	acrobat
 view.find-in-comments-bookmarks	view	Find in comments and bookmarks	reader	y	todo	P2	-		acrobat
-view.find-results-panel	view	Find results list	reader	y	partial	P0	search.rs	count and next/previous; no list	acrobat
+view.find-results-panel	view	Find results list	reader	y	shipped	P0	viewer/find.rs	every match with the words around it, a click goes to it	acrobat
+view.find-fuzzy	view	Find close spellings: typing mistakes and a letter or two off	-	n	shipped	P1	text.rs find_with; CLI find --fuzzy	one change per four letters, at most two; swapped letters count once	katna
+view.find-hyphenated	view	Find words hyphenated over two lines, and soft hyphens, whole	-	n	shipped	P1	text.rs Folded		katna
 view.advanced-search	view	Advanced search window	reader	p	shipped	P1	#78 library search		acrobat
 view.search-folder	view	Search all PDFs in a folder	reader	n	shipped	P1	#78 library watched folders		acrobat
 view.search-boolean	view	Boolean, proximity and stemming search	reader	n	partial	P2	#76 SQLite FTS5 syntax		acrobat
@@ -205,7 +207,7 @@ edit.action-launch	edit	Open-a-file action	standard	y	partial	P2	cos scripts.rs	
 edit.action-named	edit	Execute-a-menu-item action (safe list)	standard	n	todo	P2	-		acrobat
 edit.action-set-ocg-state	edit	Set-layer-visibility action	standard	n	todo	P2	-		acrobat
 edit.action-show-hide-field	edit	Show/hide-a-field action	standard	y	shipped	P2	#106 hide_fields		acrobat
-edit.action-javascript	edit	Run-a-JavaScript action	standard	y	deferred	P2	#109	scripts listed, never run; JS engine deferred	acrobat
+edit.action-javascript	edit	Run-a-JavaScript action	standard	y	partial	P2	katna-pdf-js	form buttons' scripts run in the sandbox; link and page scripts listed, not run	acrobat
 edit.action-thread	edit	Read-an-article action	standard	n	skip	-	-		acrobat
 edit.action-goto-embedded	edit	Go to a target in an embedded file (GoToE)	standard	n	skip	-	-		acrobat
 edit.action-media	edit	Play sound / media / rich-media actions	pro	n	todo	P2	-		acrobat
@@ -426,7 +428,7 @@ form.af-special	form	Special formats (zip, phone, SSN, arbitrary mask)	reader	y	
 form.af-range-validate	form	Range validation	reader	y	partial	P1	#67		acrobat
 form.af-simple-calculate	form	Sum, product, average, min, max calculations	reader	y	shipped	P1	#67		acrobat
 form.simplified-notation	form	Simplified field notation calculations	reader	n	partial	P1	#67		acrobat
-form.custom-scripts	form	Custom format, keystroke, validate and calculate scripts	reader	y	deferred	P2	-	JS engine deferred (P2, boa)	acrobat
+form.custom-scripts	form	Custom format, keystroke, validate and calculate scripts	reader	y	shipped	P2	katna-pdf-js	boa sandbox; off in Settings > Editing	acrobat
 form.calculation-order	form	Calculation order	reader	y	shipped	P1	#67		acrobat
 form.event-order	form	Keystroke, validate, calculate, format event order	reader	y	partial	P2	#67		acrobat
 form.date-picker	form	Date picker for date fields	reader	n	shipped	P1	#68 datepick.rs		acrobat
@@ -470,13 +472,13 @@ form.show-tab-numbers	form	Show tab numbers	standard	n	todo	P2	-		acrobat
 form.preview-form	form	Preview mode for testing a form	standard	n	partial	P1	designer card off = filling		acrobat
 form.auto-detect-fields	form	Automatic form field detection	pro	n	shipped	P1	#69 detect.rs		acrobat
 form.auto-name-fields	form	Name new fields from nearby labels	standard	n	partial	P2	#69		acrobat
-form.document-javascripts	form	Document-level JavaScripts	reader	y	partial	P2	#109 listed, never run		acrobat
+form.document-javascripts	form	Document-level JavaScripts	reader	y	shipped	P2	katna-pdf-js	run once when the form opens, for its fields' scripts	acrobat
 form.document-actions	form	Document actions (will close, will save, did save, will print, did print)	reader	y	partial	P2	#109 listed		acrobat
-form.js-host	form	JavaScript engine with the Acrobat object model subset	reader	y	deferred	P2	-	deferred (boa, after v1.0)	acrobat
+form.js-host	form	JavaScript engine with the Acrobat object model subset	reader	y	partial	P2	katna-pdf-js	Field, Doc, app, util, event, AF*; look changes (colours, borders) kept but not drawn	acrobat
 form.js-console	form	JavaScript console	pro	y	deferred	P2	-		acrobat
 form.js-debugger	form	JavaScript debugger	pro	n	skip	-	-		acrobat
 form.edit-all-javascripts	form	Edit all JavaScripts in one editor	pro	y	partial	P2	#109 view only		acrobat
-form.js-security	form	JavaScript enable switch and sandboxing	reader	y	shipped	P2	scripts never run		acrobat
+form.js-security	form	JavaScript enable switch and sandboxing	reader	y	shipped	P2	katna-pdf-js	switch in Settings > Editing; step and depth limits; no file, network or print reach, requests go through the app	acrobat
 form.folder-level-js	form	Folder-level JavaScript	pro	n	skip	-	-		acrobat
 form.xfa-static	form	View and fill static XFA forms	reader	y	deferred	P2	-	XFA later (owner, 2026-11-23)	acrobat
 form.xfa-dynamic	form	View and fill dynamic XFA forms	reader	y	skip	-	-		acrobat
@@ -543,7 +545,7 @@ protect.protected-view	protect	Open untrusted files in a restricted view	reader	
 protect.security-envelope	protect	Security envelopes	standard	n	skip	-	-		acrobat
 protect.redaction-overlay-repeat	protect	Overlay text auto-sized and repeated across the mark	pro	y	partial	P2	#109	one line	mpe
 protect.redact-india-ids	protect	Find and redact PAN, Aadhaar, Indian phone numbers	-	n	shipped	P1	#64 redact.rs		katna
-protect.scripts-never-run	protect	Every script and action listed, none ever run	-	n	shipped	P1	#109 scripts.rs		katna
+protect.scripts-never-run	protect	Every script and action listed; none run outside the form sandbox	-	n	shipped	P1	#109 scripts.rs	form scripts run in a sandbox that reaches no file or network; open, close, save, print and page scripts never run	katna
 sign.pkcs12	sign	Sign with a PKCS#12 (.p12/.pfx) digital ID	reader	y	shipped	P0	#39 p12.rs		acrobat
 sign.macos-keychain	sign	Sign with macOS Keychain identities	reader	y	todo	P2	-		acrobat
 sign.windows-cert-store	sign	Sign with the Windows certificate store	reader	y	todo	P1	-		acrobat
@@ -907,7 +909,7 @@ misc.prefs-language	misc	Preferences: language	reader	y	partial	P1	follows the s
 misc.prefs-reading	misc	Preferences: reading	reader	n	partial	P1	read-aloud voice		acrobat
 misc.prefs-accessibility	misc	Preferences: accessibility	reader	n	todo	P1	-		acrobat
 misc.prefs-color-management	misc	Preferences: colour management	reader	n	skip	-	-		acrobat
-misc.prefs-javascript	misc	Preferences: JavaScript	reader	y	skip	-	-	scripts never run	acrobat
+misc.prefs-javascript	misc	Preferences: JavaScript	reader	y	shipped	-	settings.rs	one switch: Run forms' own scripts	acrobat
 misc.prefs-measuring	misc	Preferences: measuring	reader	n	partial	P1	#84		acrobat
 misc.prefs-units-guides	misc	Preferences: units and guides	reader	n	partial	P2	#97 units		acrobat
 misc.prefs-content-editing	misc	Preferences: content editing	reader	y	todo	P2	-		acrobat
