@@ -2662,7 +2662,7 @@ dependencies = [
 [[package]]
 name = "gpui-pre"
 version = "0.3.6"
-source = "git+https://github.com/QuakeString/katna?rev=097ee0fa49ee03ae9f80dc7630716821321e24c4#097ee0fa49ee03ae9f80dc7630716821321e24c4"
+source = "git+https://github.com/QuakeString/katna?rev=c71e2dc6a3105e67b2614daf8ebe67ab709b2aef#c71e2dc6a3105e67b2614daf8ebe67ab709b2aef"
 dependencies = [
  "accesskit",
  "anyhow",
@@ -2799,7 +2799,7 @@ dependencies = [
 [[package]]
 name = "gpui-pre-linux"
 version = "0.3.6"
-source = "git+https://github.com/QuakeString/katna?rev=097ee0fa49ee03ae9f80dc7630716821321e24c4#097ee0fa49ee03ae9f80dc7630716821321e24c4"
+source = "git+https://github.com/QuakeString/katna?rev=c71e2dc6a3105e67b2614daf8ebe67ab709b2aef#c71e2dc6a3105e67b2614daf8ebe67ab709b2aef"
 dependencies = [
  "accesskit",
  "accesskit_unix",
@@ -3031,7 +3031,7 @@ dependencies = [
 [[package]]
 name = "gpui-pre-wgpu"
 version = "0.3.6"
-source = "git+https://github.com/QuakeString/katna?rev=097ee0fa49ee03ae9f80dc7630716821321e24c4#097ee0fa49ee03ae9f80dc7630716821321e24c4"
+source = "git+https://github.com/QuakeString/katna?rev=c71e2dc6a3105e67b2614daf8ebe67ab709b2aef#c71e2dc6a3105e67b2614daf8ebe67ab709b2aef"
 dependencies = [
  "anyhow",
  "bytemuck",
@@ -3057,7 +3057,7 @@ dependencies = [
 [[package]]
 name = "gpui-pre-windows"
 version = "0.3.6"
-source = "git+https://github.com/QuakeString/katna?rev=097ee0fa49ee03ae9f80dc7630716821321e24c4#097ee0fa49ee03ae9f80dc7630716821321e24c4"
+source = "git+https://github.com/QuakeString/katna?rev=c71e2dc6a3105e67b2614daf8ebe67ab709b2aef#c71e2dc6a3105e67b2614daf8ebe67ab709b2aef"
 dependencies = [
  "accesskit",
  "accesskit_windows",
@@ -3898,7 +3898,7 @@ dependencies = [
 [[package]]
 name = "katna-core"
 version = "0.0.0"
-source = "git+https://github.com/QuakeString/katna?rev=097ee0fa49ee03ae9f80dc7630716821321e24c4#097ee0fa49ee03ae9f80dc7630716821321e24c4"
+source = "git+https://github.com/QuakeString/katna?rev=c71e2dc6a3105e67b2614daf8ebe67ab709b2aef#c71e2dc6a3105e67b2614daf8ebe67ab709b2aef"
 dependencies = [
  "backtrace",
  "base64 0.22.1",
@@ -3916,7 +3916,7 @@ dependencies = [
 [[package]]
 name = "katna-dbus"
 version = "0.0.0"
-source = "git+https://github.com/QuakeString/katna?rev=097ee0fa49ee03ae9f80dc7630716821321e24c4#097ee0fa49ee03ae9f80dc7630716821321e24c4"
+source = "git+https://github.com/QuakeString/katna?rev=c71e2dc6a3105e67b2614daf8ebe67ab709b2aef#c71e2dc6a3105e67b2614daf8ebe67ab709b2aef"
 dependencies = [
  "katna-core",
  "serde",
@@ -3927,7 +3927,7 @@ dependencies = [
 [[package]]
 name = "katna-i18n"
 version = "0.0.0"
-source = "git+https://github.com/QuakeString/katna?rev=097ee0fa49ee03ae9f80dc7630716821321e24c4#097ee0fa49ee03ae9f80dc7630716821321e24c4"
+source = "git+https://github.com/QuakeString/katna?rev=c71e2dc6a3105e67b2614daf8ebe67ab709b2aef#c71e2dc6a3105e67b2614daf8ebe67ab709b2aef"
 dependencies = [
  "fluent-bundle",
  "icu_locale_core",
@@ -4098,7 +4098,7 @@ dependencies = [
 [[package]]
 name = "katna-platform"
 version = "0.0.0"
-source = "git+https://github.com/QuakeString/katna?rev=097ee0fa49ee03ae9f80dc7630716821321e24c4#097ee0fa49ee03ae9f80dc7630716821321e24c4"
+source = "git+https://github.com/QuakeString/katna?rev=c71e2dc6a3105e67b2614daf8ebe67ab709b2aef#c71e2dc6a3105e67b2614daf8ebe67ab709b2aef"
 dependencies = [
  "async-channel",
  "futures-lite",
@@ -4118,7 +4118,7 @@ dependencies = [
 [[package]]
 name = "katna-store"
 version = "0.0.0"
-source = "git+https://github.com/QuakeString/katna?rev=097ee0fa49ee03ae9f80dc7630716821321e24c4#097ee0fa49ee03ae9f80dc7630716821321e24c4"
+source = "git+https://github.com/QuakeString/katna?rev=c71e2dc6a3105e67b2614daf8ebe67ab709b2aef#c71e2dc6a3105e67b2614daf8ebe67ab709b2aef"
 dependencies = [
  "blake3",
  "fs4",
@@ -4135,7 +4135,7 @@ dependencies = [
 [[package]]
 name = "katna-ui"
 version = "0.0.0"
-source = "git+https://github.com/QuakeString/katna?rev=097ee0fa49ee03ae9f80dc7630716821321e24c4#097ee0fa49ee03ae9f80dc7630716821321e24c4"
+source = "git+https://github.com/QuakeString/katna?rev=c71e2dc6a3105e67b2614daf8ebe67ab709b2aef#c71e2dc6a3105e67b2614daf8ebe67ab709b2aef"
 dependencies = [
  "gpui-pre",
  "gpui-pre-linux",
@@ -4309,9 +4309,9 @@ dependencies = [
 
 [[package]]
 name = "libsqlite3-sys"
-version = "0.38.2"
+version = "0.39.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f1d20bef17f513b9b3004532233187769cd072d790971f4e4da0e346eb6401e8"
+checksum = "14a5f01b87b92705d07b433c06f96cbc764637d81a0bffb5734ce17cf0f9a2b3"
 dependencies = [
  "cc",
  "pkg-config",
@@ -6511,9 +6511,9 @@ dependencies = [
 
 [[package]]
 name = "rusqlite"
-version = "0.40.2"
+version = "0.41.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "23f2a97da3e3873c73cb2a2e71b35c40ff95e0b1eefa8d72d8499a6928c3b5b3"
+checksum = "da9bba6f3506135e120a6586df05be18b48d18896600646a4bec8f993d91a594"
 dependencies = [
  "bitflags 2.13.2",
  "fallible-iterator",
