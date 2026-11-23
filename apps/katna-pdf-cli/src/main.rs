@@ -186,11 +186,14 @@ usage: katna-pdf-cli COMMAND [--json] ...
                                   object (or CSV: names, then values); with -o saved
                                   as JSON, CSV, XFDF or FDF by OUT's extension
   fill FILE -o OUT ([--data DATA.json|.csv|.xfdf|.fdf] [--set NAME=VALUE]... | --reset)
+                                  [--no-scripts]
                                   the form filled in from form data (JSON, CSV, or
                                   Acrobat's XFDF or FDF),
                                   or values given one by one (a check box: yes or
                                   no; a radio group: the button's choice); --reset
-                                  puts every field back to what it started as
+                                  puts every field back to what it started as. The
+                                  form's own scripts check each value and work out
+                                  totals, unless --no-scripts
   flatten FILE -o OUT [--forms] [--comments]
                                   the form's fields and the comments drawn into the
                                   pages as they are and taken out, so they can no
@@ -545,6 +548,7 @@ impl<'a> Args<'a> {
                 "--reset",
                 "--forms",
                 "--comments",
+                "--no-scripts",
             ]
             .contains(&a.as_str())
             {
@@ -3227,11 +3231,76 @@ fn fill(args: &[String], json: bool) -> Done {
                 "give values with --data or --set, or --reset".into(),
             ));
         }
-        doc.fill_data(&data)
-            .map_err(|e| failed(format!("{file}: {e}")))?
+        let fields = doc.form();
+        match (!args.flag("--no-scripts"))
+            .then(|| katna_pdf_js::Form::new(&doc, &fields, &file_label(file)))
+            .flatten()
+        {
+            Some(form) => fill_scripted(&doc, &fields, form, &data, file)?,
+            None => doc
+                .fill_data(&data)
+                .map_err(|e| failed(format!("{file}: {e}")))?,
+        }
     };
     write(&out, &bytes)?;
     Ok(wrote(&[(out, doc.pages().len())], json))
+}
+
+/// The name a file goes by, as a form's scripts see it.
+fn file_label(path: &str) -> String {
+    std::path::Path::new(path)
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default()
+}
+
+/// Fills a form whose own scripts run: each value goes through the
+/// field's checks, and totals and formats come from the scripts.
+fn fill_scripted(
+    doc: &katna_pdf_cos::Document,
+    fields: &[katna_pdf_cos::Field],
+    mut form: katna_pdf_js::Form,
+    data: &[(String, String)],
+    file: &str,
+) -> Result<Vec<u8>, Failure> {
+    let mut outcomes = Vec::new();
+    for (name, value) in data {
+        let Some(field) = fields.iter().find(|f| &f.name == name) else {
+            return Err(failed(format!("{file}: no field {name}")));
+        };
+        let value = match field.kind {
+            katna_pdf_cos::FieldKind::CheckBox => {
+                let on = field.widgets.iter().find_map(|w| w.on.clone());
+                match value.to_ascii_lowercase().as_str() {
+                    "yes" | "true" | "on" | "1" => on.unwrap_or_else(|| "Yes".into()),
+                    "no" | "false" | "off" | "0" | "" => "Off".into(),
+                    _ => value.clone(),
+                }
+            }
+            _ => value.clone(),
+        };
+        let value = &value;
+        let outcome = form.commit(name, value);
+        for alert in &outcome.alerts {
+            eprintln!("{name}: the form says: {alert}");
+        }
+        if !outcome.accepted {
+            return Err(failed(format!(
+                "{file}: the form turned down {name} = {value}"
+            )));
+        }
+        outcomes.push(outcome);
+    }
+    let mut changes: Vec<(katna_pdf_cos::Ref, katna_pdf_cos::FieldValue)> = Vec::new();
+    for outcome in &outcomes {
+        for (id, value) in form.changes(outcome, fields) {
+            changes.retain(|(r, _)| *r != id);
+            changes.push((id, value));
+        }
+    }
+    let extras = form.extras(&outcomes);
+    doc.fill_with(&changes, &extras)
+        .map_err(|e| failed(format!("{file}: {e}")))
 }
 
 /// Draws the form's fields and the comments into the pages for good.

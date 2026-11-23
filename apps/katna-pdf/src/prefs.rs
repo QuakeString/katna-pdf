@@ -71,6 +71,8 @@ pub struct Prefs {
     pub size: f32,
     /// Show the name of the mode chosen in the dock.
     pub dock_labels: bool,
+    /// Run forms' own scripts (checks, totals, buttons).
+    pub form_scripts: bool,
 }
 
 /// The sizes offered.
@@ -100,6 +102,7 @@ impl Default for Prefs {
             night_pages: PageColors::Night,
             size: 1.0,
             dock_labels: true,
+            form_scripts: true,
         }
     }
 }
@@ -174,6 +177,7 @@ impl Prefs {
                     }
                 }
                 "dock-labels" => prefs.dock_labels = value != "off",
+                "form-scripts" => prefs.form_scripts = value != "off",
                 _ => {}
             }
         }
@@ -197,7 +201,7 @@ impl Prefs {
             .find(|(c, _)| *c == self.night_pages)
             .map_or("night", |(_, w)| w);
         format!(
-            "open-at={}\nzoom={zoom}\nlayout={layout}\nreopen-session={}\nworkers={}\nunits={}\ngrid={}\nread-speed={}\nnight-pages={night}\nsize={}\ndock-labels={}\n",
+            "open-at={}\nzoom={zoom}\nlayout={layout}\nreopen-session={}\nworkers={}\nunits={}\ngrid={}\nread-speed={}\nnight-pages={night}\nsize={}\ndock-labels={}\nform-scripts={}\n",
             if self.open_at_last { "last" } else { "first" },
             on(self.reopen_session),
             on(self.workers),
@@ -206,6 +210,7 @@ impl Prefs {
             self.speed,
             self.size,
             on(self.dock_labels),
+            on(self.form_scripts),
         )
     }
 
@@ -252,6 +257,7 @@ mod tests {
             night_pages: PageColors::Sepia,
             size: 1.1,
             dock_labels: false,
+            form_scripts: false,
         };
         assert_eq!(Prefs::parse(&prefs.text()), prefs);
         assert_eq!(Prefs::parse("nonsense\nzoom=huge"), Prefs::default());

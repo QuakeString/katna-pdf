@@ -550,7 +550,7 @@ impl Viewer {
         self.extras.set(cos.attachments(), cos.layers());
         // The form's changes are in the file now.
         let fields = cos.form();
-        self.form = crate::form::Form::new(Arc::new(cos), fields);
+        self.form = self.new_form(Arc::new(cos), fields);
         self.record_change();
         self.edited = Some(bytes);
         self.swap_doc(doc, pages);
