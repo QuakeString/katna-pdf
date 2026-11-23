@@ -28,7 +28,7 @@ the feature.
 | Editing content (`edit`) | 83 | 52 | 12 | 16 | 0 | 3 |
 | Pages and document (`organize`) | 83 | 31 | 19 | 27 | 1 | 5 |
 | Comments and review (`comment`) | 77 | 45 | 9 | 15 | 0 | 8 |
-| Forms (`form`) | 89 | 51 | 15 | 11 | 2 | 10 |
+| Forms (`form`) | 89 | 52 | 14 | 11 | 2 | 10 |
 | Security and redaction (`protect`) | 46 | 20 | 9 | 10 | 2 | 5 |
 | Digital signatures (`sign`) | 59 | 40 | 2 | 14 | 0 | 3 |
 | Scanning and OCR (`ocr`) | 31 | 0 | 0 | 3 | 25 | 3 |
@@ -39,21 +39,21 @@ the feature.
 | Compare, automation, settings, cloud (`misc`) | 101 | 15 | 20 | 34 | 2 | 30 |
 | Library (`library`, ours) | 9 | 9 | 0 | 0 | 0 | 0 |
 | Ideas (`idea`, ours, proposed) | 11 | 0 | 0 | 10 | 1 | 0 |
-| **All** | **961** | **404** | **125** | **269** | **36** | **127** |
+| **All** | **961** | **405** | **124** | **269** | **36** | **127** |
 
 Against each product, counting only what is in scope (not `skip`):
 
 | Against | In scope | Shipped | Partial | To do | Deferred |
 |---|---:|---:|---:|---:|---:|
-| Acrobat Reader (free) | 333 | 210 (63 %) | 53 | 68 | 2 |
-| Acrobat Standard (Reader + Standard) | 553 | 318 (57 %) | 90 | 139 | 6 |
-| Acrobat Pro (everything below Studio) | 737 | 356 (48 %) | 116 | 232 | 33 |
+| Acrobat Reader (free) | 333 | 211 (63 %) | 52 | 68 | 2 |
+| Acrobat Standard (Reader + Standard) | 553 | 319 (57 %) | 89 | 139 | 6 |
+| Acrobat Pro (everything below Studio) | 737 | 357 (48 %) | 115 | 232 | 33 |
 | Master PDF Editor | 437 | 293 (67 %) | 60 | 65 | 19 |
 | Only in Katna PDF | 61 | 32 | 5 | 22 | 2 |
 
 Many of Acrobat Pro's open rows are accessibility tagging (49 rows, nothing built
 yet) and OCR (25 rows, deferred by the owner on 2026-10-17). Without those two
-areas, Pro parity is 354 of 656 shipped (53 %), 71 % with partial rows counted.
+areas, Pro parity is 355 of 656 shipped (54 %), 71 % with partial rows counted.
 
 Out of scope (`skip`): Adobe's cloud services and accounts, shared reviews, Acrobat
 Sign requests, PDF Spaces and the generative AI features, prepress (separations,

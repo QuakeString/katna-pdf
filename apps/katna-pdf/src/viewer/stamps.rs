@@ -19,6 +19,15 @@ use crate::annotate::Tool;
 use crate::float::{self, FloatTip};
 use crate::text::t;
 
+/// The quick mark that types today's date, as Fill & Sign does; not a
+/// stamp in the file, but text.
+pub(super) const TODAY: &str = "#MToday";
+
+/// Today's date as the date mark types it.
+pub(super) fn today() -> String {
+    jiff::Zoned::now().strftime("%-d %b %Y").to_string()
+}
+
 /// Where the person's own stamps are kept, a line each.
 fn custom_file() -> Option<PathBuf> {
     katna_core::paths::Paths::from_env()
@@ -219,6 +228,31 @@ impl Viewer {
                             })),
                     );
                 }
+                // Today's date, typed where the page is clicked.
+                let on = self.stamp == TODAY;
+                grid = grid.child(
+                    div()
+                        .id("mark-today")
+                        .h(px(40.0))
+                        .px(px(space::S3))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded(px(4.0))
+                        .border_1()
+                        .border_color(if on { th.accent } else { th.line })
+                        .text_color(th.text)
+                        .text_size(px(text::SMALL))
+                        .cursor_pointer()
+                        .when(on, |d| d.bg(th.accent.opacity(0.14)))
+                        .hover(|s| s.bg(th.accent.opacity(0.08)))
+                        .ftip(t("stamp-mark-today", &[]), &th)
+                        .child(today())
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.stamp = TODAY.into();
+                            cx.notify();
+                        })),
+                );
             }
             _ => {
                 for (i, name) in self.custom_stamps.clone().into_iter().enumerate() {

@@ -1118,6 +1118,7 @@ stamp-mark-cross = Cross
 stamp-mark-dot = Dot
 stamp-mark-line = Line
 stamp-mark-circle = Ring
+stamp-mark-today = Today's date, typed where you click
 stamp-dated-under = date · your name
 stamp-card-hint = Click the page to put the stamp there. Your own stamps are kept for every file.
 error-invalid = { $name } is damaged or is not a PDF.

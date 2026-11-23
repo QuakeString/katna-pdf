@@ -299,6 +299,42 @@ impl Viewer {
         true
     }
 
+    /// Types today's date where the page was clicked, as text with no
+    /// box, black unless another colour was picked.
+    fn type_today(&mut self, draft: Draft, cx: &mut Context<Self>) {
+        let (Some(inv), Some(&at)) = (self.inverse(draft.page), draft.path.first()) else {
+            return;
+        };
+        let words = super::stamps::today();
+        let size = annotate::TEXT_SIZE;
+        // About as wide as the words in Helvetica, the line's height tall,
+        // its middle where the click was.
+        let width = words.chars().count() as f32 * size * 0.56 + 6.0;
+        let height = size * 1.5;
+        let mut a = Annotation::new(draft.page, AnnotKind::FreeText { size });
+        a.rect = inv.rect([
+            at[0],
+            at[1] - height / 2.0,
+            at[0] + width,
+            at[1] + height / 2.0,
+        ]);
+        a.width = 0.0;
+        a.contents = words;
+        a.colour = if self.colour == 0 {
+            [0.0, 0.0, 0.0]
+        } else {
+            COLOURS[self.colour]
+        };
+        a.author = author();
+        self.change_annotations(
+            AnnotChanges {
+                put: vec![a],
+                remove: Vec::new(),
+            },
+            cx,
+        );
+    }
+
     /// Rubs out the parts of the pen strokes on the draft's page that the
     /// eraser passed over; locked ones are left.
     fn erase_ink(&mut self, draft: Draft, cx: &mut Context<Self>) {
@@ -342,6 +378,14 @@ impl Viewer {
             && let Some(draft) = self.draft.take()
         {
             self.erase_ink(draft, cx);
+            cx.notify();
+            return true;
+        }
+        if self.tool == Some(Tool::Stamp)
+            && self.stamp == super::stamps::TODAY
+            && let Some(draft) = self.draft.take()
+        {
+            self.type_today(draft, cx);
             cx.notify();
             return true;
         }
