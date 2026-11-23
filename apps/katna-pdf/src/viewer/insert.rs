@@ -125,8 +125,6 @@ impl Viewer {
             .items_center()
             .gap(px(space::S1))
             .px(px(space::S3))
-            .border_b_1()
-            .border_color(th.line)
             .overflow_x_scroll();
         let button = |id: usize, icon: &'static str, tip: &'static str, on: bool| {
             let tint = if on {
@@ -271,8 +269,6 @@ impl Viewer {
                 .items_center()
                 .gap(px(space::S1))
                 .px(px(space::S3))
-                .border_b_1()
-                .border_color(th.line)
                 .child(inspector)
                 .into_any_element(),
         )

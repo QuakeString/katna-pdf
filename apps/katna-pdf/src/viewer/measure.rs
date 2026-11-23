@@ -505,8 +505,6 @@ impl Viewer {
             .items_center()
             .gap(px(space::S4))
             .px(px(space::S4))
-            .border_b_1()
-            .border_color(th.line)
             .child(dim(t(
                 match tool {
                     Tool::Distance => "measure-how-distance",

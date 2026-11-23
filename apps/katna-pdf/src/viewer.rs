@@ -21,8 +21,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use gpui::{
     AnyElement, App, ClickEvent, Context, Entity, EventEmitter, ExternalPaths, FocusHandle,
-    Focusable, FontWeight, ImageSource, KeyBinding, ListAlignment, ListOffset, ListState,
-    RenderImage, Subscription, Window, actions, div, img, list, prelude::*, svg,
+    Focusable, ImageSource, KeyBinding, ListAlignment, ListOffset, ListState, RenderImage,
+    Subscription, Window, actions, div, img, list, prelude::*, svg,
 };
 use image::{Frame, RgbaImage};
 use katna_pdf_render::recolor::PageColors;
@@ -40,6 +40,7 @@ mod compare;
 mod crop;
 mod datepick;
 mod design;
+mod dock;
 mod export;
 mod files;
 mod fonts;
@@ -64,6 +65,7 @@ mod textedit;
 
 use crate::annotate::Tool;
 use crate::contents::{self, Contents};
+use crate::float::{self, FloatTip};
 use crate::form::{Editing, Form};
 use crate::history::History;
 use crate::organize::{self, PageOp};
@@ -594,20 +596,32 @@ pub struct Viewer {
     /// The spacing fields open under the text inspector.
     spacing_menu: Option<textedit::SpacingMenu>,
     colors_menu_closed: Option<std::time::Instant>,
+    /// The dock's zoom card is open, and when it last closed.
+    zoom_card: bool,
+    zoom_card_closed: Option<std::time::Instant>,
     _appearance: Subscription,
+    _look: Subscription,
 }
 
 impl Viewer {
+    /// Takes the colours of the look and the desktop as they are now.
+    fn restyle(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.theme = Theme::current(window, cx.global());
+        let was = self.page_colors();
+        self.dark = cx.global::<crate::look::Look>().dark(window.appearance());
+        if self.page_colors() != was {
+            self.redraw_thumbs();
+        }
+        cx.notify();
+    }
+
     pub fn new(file: Option<PathBuf>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let focus = cx.focus_handle();
         let appearance = cx.observe_window_appearance(window, |this, window, cx| {
-            this.theme = Theme::for_appearance(window.appearance());
-            let was = this.page_colors();
-            this.dark = is_dark(window.appearance());
-            if this.page_colors() != was {
-                this.redraw_thumbs();
-            }
-            cx.notify();
+            this.restyle(window, cx);
+        });
+        let look = cx.observe_global_in::<crate::look::Look>(window, |this, window, cx| {
+            this.restyle(window, cx);
         });
         let list = ListState::new(0, ListAlignment::Top, desktop_px(600.0));
         let weak = cx.entity().downgrade();
@@ -726,15 +740,18 @@ impl Viewer {
             signing: None,
             grid: gpui::ScrollHandle::new(),
             grid_bar: ScrollBar::default(),
-            theme: Theme::for_appearance(window.appearance()),
-            dark: is_dark(window.appearance()),
+            theme: Theme::current(window, cx.global()),
+            dark: cx.global::<crate::look::Look>().dark(window.appearance()),
             colors: None,
             last_colors: PageColors::Night,
             colors_menu: false,
             font_menu: None,
             spacing_menu: None,
             colors_menu_closed: None,
+            zoom_card: false,
+            zoom_card_closed: None,
             _appearance: appearance,
+            _look: look,
         };
         if let Some(file) = file {
             this.open(file, cx);
@@ -745,6 +762,19 @@ impl Viewer {
     /// The file shown or being opened.
     pub fn path(&self) -> Option<&Path> {
         self.path.as_deref()
+    }
+
+    /// What the title bar shows of this tab (`chrome.rs`).
+    pub fn chrome(&self) -> Chrome {
+        Chrome {
+            ready: matches!(self.content, Content::Ready(_)),
+            pane: self.pane_shown(),
+            dirty: self.dirty(),
+            undo: !self.undo.is_empty(),
+            redo: !self.redo.is_empty(),
+            finding: self.search.is_some(),
+            colors: colors_text(self.page_colors()),
+        }
     }
 
     /// The tab's and the window's title: the file's name.
@@ -1210,8 +1240,6 @@ impl Viewer {
                 .items_center()
                 .gap(px(space::S2))
                 .px(px(space::S3))
-                .border_b_1()
-                .border_color(th.line)
                 .child(
                     div()
                         .flex_1()
@@ -1548,37 +1576,14 @@ impl Viewer {
                     )
                 })
         });
-        let menu = div()
-            .id("colors-menu")
-            .occlude()
-            .w(px(240.0))
-            .mt(px(space::S1))
-            .p(px(space::S1))
-            .flex()
-            .flex_col()
-            .rounded(px(radius::MD))
-            .bg(th.card)
-            .border_1()
-            .border_color(th.line)
-            .shadow_lg()
+        let menu = float::menu("colors-menu", 240.0, &th)
             .on_mouse_down_out(cx.listener(|this, _, _, cx| {
                 this.colors_menu = false;
                 this.colors_menu_closed = Some(std::time::Instant::now());
                 cx.notify();
             }))
             .children(rows);
-        Some(
-            div()
-                .absolute()
-                .top_full()
-                .right_0()
-                .child(gpui::deferred(
-                    katna_ui::anchored()
-                        .anchor(gpui::Anchor::TopRight)
-                        .child(menu),
-                ))
-                .into_any_element(),
-        )
+        Some(float::popover(menu, true, true))
     }
 
     /// Thumbnails are drawn again in the new colours. Pages redraw by
@@ -1858,75 +1863,75 @@ impl Viewer {
                     .into_any_element()
             }
         };
-        // Four tabs only fit closer together.
-        let tabs = 3
-            + usize::from(self.contents.is_some())
-            + usize::from(!self.extras.layers.is_empty())
-            + usize::from(self.signatures.as_ref().is_some_and(|s| !s.is_empty()))
-            + usize::from(self.comparing.is_some());
-        let pad = if tabs > 3 { space::S2 } else { space::S4 };
-        let tab_button = |id: &'static str, which: PaneTab, label: String| {
+        let tab_button = |id: &'static str, which: PaneTab, glyph: &'static str, label: String| {
             let selected = tab == which;
+            let hover = th.hover;
             div()
                 .id(id)
-                .h(px(32.0))
-                .flex_none()
-                .px(px(pad))
+                .size(px(28.0))
                 .flex()
+                .flex_none()
                 .items_center()
-                .rounded(px(radius::FULL))
-                .text_size(px(text::SMALL))
-                .font_weight(if selected {
-                    FontWeight::SEMIBOLD
-                } else {
-                    FontWeight::NORMAL
-                })
-                .text_color(if selected { th.text } else { th.dim })
-                .when(selected, |d| d.bg(th.field))
-                .hover(move |s| s.bg(th.hover))
+                .justify_center()
+                .rounded(px(6.0))
                 .cursor_pointer()
+                .map(|d| {
+                    if selected {
+                        d.bg(th.accent_soft)
+                    } else {
+                        d.hover(move |s| s.bg(hover))
+                    }
+                })
+                .ftip(label, &th)
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.tab = which;
                     cx.notify();
                 }))
-                .child(label)
+                .child(float::icon(
+                    glyph,
+                    15.0,
+                    if selected { th.accent_text } else { th.dim },
+                ))
         };
         let mut header = div()
-            .h(px(48.0))
             .flex_shrink_0()
-            .overflow_hidden()
             .flex()
             .items_center()
             .gap(px(space::S1))
-            .px(px(space::S3))
+            .p(px(space::S3))
             .border_b_1()
-            .border_color(th.line)
+            .border_color(th.line_soft)
             .child(tab_button(
                 "tab-pages",
                 PaneTab::Pages,
+                "grid",
                 t("pane-pages", &[]),
             ));
         if self.contents.is_some() {
             header = header.child(tab_button(
                 "tab-contents",
                 PaneTab::Contents,
+                "list",
                 t("pane-contents", &[]),
             ));
         }
         header = header.child(tab_button(
             "tab-comments",
             PaneTab::Comments,
+            "comment",
             t("pane-comments", &[]),
         ));
         header = header.child(tab_button(
             "tab-files",
             PaneTab::Files,
+            "clip",
             t("pane-files", &[]),
         ));
         if !self.extras.layers.is_empty() {
             header = header.child(tab_button(
                 "tab-layers",
                 PaneTab::Layers,
+                "layers",
                 t("pane-layers", &[]),
             ));
         }
@@ -1934,6 +1939,7 @@ impl Viewer {
             header = header.child(tab_button(
                 "tab-signatures",
                 PaneTab::Signatures,
+                "shield",
                 t("pane-signatures", &[]),
             ));
         }
@@ -1941,6 +1947,7 @@ impl Viewer {
             header = header.child(tab_button(
                 "tab-changes",
                 PaneTab::Changes,
+                "diff",
                 t("pane-changes", &[]),
             ));
         }
@@ -1955,12 +1962,20 @@ impl Viewer {
         };
         Some(
             div()
+                .id("side-card")
+                .occlude()
+                .absolute()
+                .left(px(float::GAP))
+                .top(px(space::S2))
+                .bottom(px(float::GAP))
                 .w(px(contents::WIDTH))
-                .flex_shrink_0()
                 .flex()
                 .flex_col()
-                .border_r_1()
-                .border_color(th.line)
+                .overflow_hidden()
+                .bg(th.card)
+                .rounded(px(radius::SM))
+                .shadow(th.shadow())
+                .when(th.dark, |d| d.border_1().border_color(th.line))
                 .child(header)
                 .children(actions)
                 .child(div().flex_1().min_h_0().child(body))
@@ -2399,8 +2414,8 @@ impl Viewer {
         let some = !self.picked.is_empty() && !self.changing_pages;
         let button = |id: &'static str, icon: &'static str, tip: &str, enabled: bool| {
             // Smaller than the toolbar's, so eight fit across the pane.
-            widgets::icon_button(id, icon, 18.0, &th.katna)
-                .size(px(32.0))
+            widgets::icon_button(id, icon, 16.0, &th.katna)
+                .size(px(28.0))
                 .tip(t(tip, &[]), &th.katna)
                 .when(!enabled, |b| b.opacity(0.4))
         };
@@ -2413,7 +2428,7 @@ impl Viewer {
             .justify_between()
             .px(px(space::S2))
             .border_b_1()
-            .border_color(th.line)
+            .border_color(th.line_soft)
             .child(
                 button("pages-left", "rotate-ccw", "pages-turn-left", some)
                     .on_click(op(PageOp::Turn(-1))),
@@ -3382,339 +3397,6 @@ impl Viewer {
     /// The bar of tools, `width` points wide: when that is too little for
     /// every button, the ones with keys of their own (fit to width and
     /// page, facing pages, print) are left out rather than cut off.
-    fn toolbar(&self, width: f32, cx: &mut Context<Self>) -> impl IntoElement {
-        let th = self.theme;
-        let crowded = width < 1080.0;
-        let mut bar = div()
-            .h(px(48.0))
-            .flex_shrink_0()
-            .flex()
-            .items_center()
-            .gap(px(space::S2))
-            .px(px(space::S3))
-            .border_b_1()
-            .border_color(th.line);
-        let title = match &self.content {
-            Content::Ready(opened) => opened.name.clone(),
-            Content::Opening(name) => name.clone(),
-            _ => t("app-name", &[]),
-        };
-        if matches!(self.content, Content::Ready(_)) {
-            bar = bar.child(icon_button(
-                "side-pane",
-                "folders-pane",
-                t("side-pane-toggle", &[]),
-                th,
-                cx.listener(|this, _, _, cx| this.toggle_pane(cx)),
-            ));
-            bar = bar.child(icon_button(
-                "search",
-                "search",
-                t("search-open", &[]),
-                th,
-                cx.listener(|this, _, window, cx| this.open_search(window, cx)),
-            ));
-            for (hand, id, icon, tip) in [
-                (false, "pointer-select", "pointer", "pointer-select"),
-                (true, "pointer-hand", "hand", "pointer-hand"),
-            ] {
-                let on = self.hand == hand;
-                bar = bar.child(
-                    widgets::icon_button_colored(
-                        id,
-                        icon,
-                        18.0,
-                        if on {
-                            th.katna.accent
-                        } else {
-                            th.katna.text_dim
-                        },
-                        &th.katna,
-                    )
-                    .when(on, |b| b.bg(th.field))
-                    .tip(t(tip, &[]), &th.katna)
-                    .on_click(cx.listener(move |this, _, _, cx| this.set_hand(hand, cx))),
-                );
-            }
-            bar = bar.child(
-                widgets::icon_button_colored(
-                    "organize",
-                    "view-grid",
-                    18.0,
-                    if self.organizer {
-                        th.katna.accent
-                    } else {
-                        th.katna.text_dim
-                    },
-                    &th.katna,
-                )
-                .when(self.organizer, |b| b.bg(th.field))
-                .tip(t("organize", &[]), &th.katna)
-                .on_click(cx.listener(|this, _, _, cx| this.toggle_organizer(cx))),
-            );
-            bar = bar.child(
-                widgets::icon_button_colored(
-                    "annotate",
-                    "pen",
-                    18.0,
-                    if self.tools {
-                        th.katna.accent
-                    } else {
-                        th.katna.text_dim
-                    },
-                    &th.katna,
-                )
-                .when(self.tools, |b| b.bg(th.field))
-                .tip(t("annotate", &[]), &th.katna)
-                .on_click(cx.listener(|this, _, _, cx| this.toggle_tools(cx))),
-            );
-            bar = bar.child(
-                widgets::icon_button_colored(
-                    "edit-text",
-                    "text-edit",
-                    18.0,
-                    if self.text_editing {
-                        th.katna.accent
-                    } else {
-                        th.katna.text_dim
-                    },
-                    &th.katna,
-                )
-                .when(self.text_editing, |b| b.bg(th.field))
-                .tip(t("edit-text", &[]), &th.katna)
-                .on_click(cx.listener(|this, _, _, cx| this.toggle_text_edit(cx))),
-            );
-            bar = bar.child(
-                widgets::icon_button_colored(
-                    "sign",
-                    "signature",
-                    18.0,
-                    if self.signing.is_some() {
-                        th.katna.accent
-                    } else {
-                        th.katna.text_dim
-                    },
-                    &th.katna,
-                )
-                .when(self.signing.is_some(), |b| b.bg(th.field))
-                .tip(t("sign", &[]), &th.katna)
-                .on_click(cx.listener(|this, _, _, cx| this.toggle_signing(cx))),
-            );
-        }
-        bar = bar
-            .child(icon_button(
-                "library",
-                "library",
-                t("library-tip", &[]),
-                th,
-                cx.listener(|_, _, _, cx| cx.emit(ViewerEvent::ShowLibrary)),
-            ))
-            .child(icon_button(
-                "open",
-                "folder",
-                t("open-file", &[]),
-                th,
-                cx.listener(|_, _, _, cx| cx.emit(ViewerEvent::ChooseFiles)),
-            ))
-            // Save, undo and redo keep their places whether or not there
-            // is anything to do, so the bar does not shift about: dim
-            // when there is not.
-            .when(matches!(self.content, Content::Ready(_)), |bar| {
-                let step = |id: &'static str,
-                            icon: &'static str,
-                            tip: &'static str,
-                            idle: &'static str,
-                            on: bool| {
-                    let tint = if on { th.katna.text } else { th.katna.text_dim };
-                    widgets::icon_button_colored(id, icon, 18.0, tint, &th.katna)
-                        .tip(t(if on { tip } else { idle }, &[]), &th.katna)
-                };
-                let dirty = self.dirty();
-                let tint = if dirty {
-                    th.katna.accent >> 8
-                } else {
-                    th.katna.text_dim
-                };
-                bar.child(
-                    widgets::icon_button_colored("save", "save", 18.0, tint, &th.katna)
-                        .tip(
-                            t(if dirty { "save-tip" } else { "save-clean-tip" }, &[]),
-                            &th.katna,
-                        )
-                        .on_click(cx.listener(|this, _, _, cx| this.save(cx))),
-                )
-                .child(
-                    step(
-                        "undo",
-                        "undo",
-                        "undo-tip",
-                        "undo-none-tip",
-                        !self.undo.is_empty(),
-                    )
-                    .on_click(cx.listener(|this, _, _, cx| this.undo(cx))),
-                )
-                .child(
-                    step(
-                        "redo",
-                        "redo",
-                        "redo-tip",
-                        "redo-none-tip",
-                        !self.redo.is_empty(),
-                    )
-                    .on_click(cx.listener(|this, _, _, cx| this.redo(cx))),
-                )
-                .child(separator(th))
-            })
-            .child(
-                // A few letters at least when the bar is crowded.
-                div().flex_1().min_w(px(72.0)).flex().child(
-                    div()
-                        .id("file-name")
-                        .min_w(px(72.0))
-                        .px(px(space::S2))
-                        .py(px(space::S1))
-                        .rounded(px(radius::SM))
-                        .overflow_hidden()
-                        .text_ellipsis()
-                        .whitespace_nowrap()
-                        .text_size(px(text::BODY))
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(th.text)
-                        .when(matches!(self.content, Content::Ready(_)), |d| {
-                            d.cursor_pointer()
-                                .hover(move |s| s.bg(th.hover))
-                                .tip(t("properties-tip", &[]), &th.katna)
-                                .on_click(cx.listener(|this, _, _, cx| this.toggle_properties(cx)))
-                        })
-                        .child(title),
-                ),
-            );
-        if self.page_count() > 0 {
-            let current = self.current_page();
-            let page = (current + 1).to_string();
-            let count = self.page_count().to_string();
-            let shown = if self.label_ranges.is_empty() {
-                t("page-of", &[("page", &page), ("count", &count)])
-            } else {
-                t(
-                    "page-of-labelled",
-                    &[
-                        ("label", &self.page_label(current)),
-                        ("page", &page),
-                        ("count", &count),
-                    ],
-                )
-            };
-            bar = bar
-                .child(
-                    div()
-                        .id("page-numbers")
-                        .text_size(px(text::SMALL))
-                        .text_color(th.dim)
-                        .px(px(space::S3))
-                        .py(px(space::S2))
-                        .rounded(px(radius::XS))
-                        .bg(th.field)
-                        .cursor_pointer()
-                        .hover(move |s| s.bg(th.hover))
-                        .tip(t("numbering-tip", &[]), &th.katna)
-                        .on_click(cx.listener(|this, _, _, cx| this.toggle_numbering(cx)))
-                        .child(shown),
-                )
-                .child(separator(th))
-                .child(icon_button(
-                    "zoom-out",
-                    "zoom-out",
-                    t("zoom-out", &[]),
-                    th,
-                    cx.listener(|this, _, _, cx| this.step_zoom(false, cx)),
-                ))
-                .child(
-                    div()
-                        .id("zoom-level")
-                        .min_w(px(52.0))
-                        .h(px(32.0))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .rounded(px(radius::FULL))
-                        .text_size(px(text::SMALL))
-                        .text_color(th.dim)
-                        .hover(move |s| s.bg(th.hover))
-                        .cursor_pointer()
-                        .on_click(cx.listener(|this, _, _, cx| this.set_zoom(Zoom::Fixed(1.0), cx)))
-                        .child(format!("{}%", (self.shown / POINT * 100.0).round())),
-                )
-                .child(icon_button(
-                    "zoom-in",
-                    "zoom-in",
-                    t("zoom-in", &[]),
-                    th,
-                    cx.listener(|this, _, _, cx| this.step_zoom(true, cx)),
-                ))
-                .when(!crowded, |bar| {
-                    bar.child(icon_button(
-                        "fit-width",
-                        "fit-width",
-                        t("zoom-fit-width", &[]),
-                        th,
-                        cx.listener(|this, _, _, cx| this.set_zoom(Zoom::FitWidth, cx)),
-                    ))
-                    .child(icon_button(
-                        "fit-page",
-                        "fit-page",
-                        t("zoom-fit-page", &[]),
-                        th,
-                        cx.listener(|this, _, _, cx| this.set_zoom(Zoom::FitPage, cx)),
-                    ))
-                    .child(icon_button(
-                        "spread",
-                        "spread",
-                        t(
-                            match self.spread {
-                                Spread::Single => "spread-single",
-                                Spread::Facing => "spread-facing",
-                                Spread::Book => "spread-book",
-                            },
-                            &[],
-                        ),
-                        th,
-                        cx.listener(|this, _, _, cx| this.next_spread(cx)),
-                    ))
-                    .child(separator(th))
-                    .child(icon_button(
-                        "print",
-                        "print",
-                        t("print", &[]),
-                        th,
-                        cx.listener(|this, _, _, cx| this.toggle_printing(cx)),
-                    ))
-                })
-                .child(
-                    div()
-                        .relative()
-                        .child({
-                            let button = widgets::icon_button("night", "contrast", 18.0, &th.katna);
-                            // No tip over the open menu.
-                            let button = if self.colors_menu {
-                                button
-                            } else {
-                                button.tip(t("page-colors", &[]), &th.katna)
-                            };
-                            button.on_click(cx.listener(|this, _, _, cx| {
-                                let just_closed = this
-                                    .colors_menu_closed
-                                    .is_some_and(|t| t.elapsed().as_millis() < 300);
-                                this.colors_menu = !this.colors_menu && !just_closed;
-                                cx.notify();
-                            }))
-                        })
-                        .children(self.colors_menu(cx)),
-                );
-        }
-        bar
-    }
-
     fn message(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let th = self.theme;
         let body = div()
@@ -3923,6 +3605,28 @@ impl Viewer {
 
 impl EventEmitter<ViewerEvent> for Viewer {}
 
+/// Who comments and stamps are signed as.
+pub fn comment_author() -> String {
+    annots::author()
+}
+
+/// A tab's state as the title bar shows it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Chrome {
+    /// A document is open.
+    pub ready: bool,
+    /// The side card shows.
+    pub pane: bool,
+    /// Changes not saved yet.
+    pub dirty: bool,
+    pub undo: bool,
+    pub redo: bool,
+    /// The find card is open.
+    pub finding: bool,
+    /// The id of the words for the pages' colours.
+    pub colors: &'static str,
+}
+
 impl Focusable for Viewer {
     fn focus_handle(&self, _: &App) -> FocusHandle {
         self.focus.clone()
@@ -3951,7 +3655,7 @@ impl Render for Viewer {
         let th = self.theme;
         // The pages' width: the window less its padding and the pane.
         let pane_width = if self.pane_shown() {
-            contents::WIDTH
+            contents::WIDTH + float::GAP
         } else {
             0.0
         };
@@ -3982,6 +3686,12 @@ impl Render for Viewer {
         self.focus_signing(window, cx);
         self.focus_calibrating(window, cx);
         let pane = self.pane(window, cx);
+        let pane_room = if pane.is_some() {
+            contents::WIDTH + float::GAP
+        } else {
+            0.0
+        };
+        let dock = self.dock(cx);
         let tools = self.tools_row(cx).or_else(|| self.edit_row(cx));
         let object_row = self.object_row(cx);
         let measure_bar = self.measure_bar(cx);
@@ -4007,16 +3717,21 @@ impl Render for Viewer {
         let find_bar = self.find_bar(cx);
         let notice = self.notice.clone().map(|notice| {
             div()
-                .flex_shrink_0()
+                .id("notice")
+                .occlude()
+                .max_w(px(720.0))
                 .flex()
                 .items_center()
-                .gap(px(space::S2))
-                .px(px(space::S3))
-                .py(px(space::S2))
-                .border_b_1()
-                .border_color(th.line)
-                .text_size(px(text::SMALL))
+                .gap(px(space::S3))
+                .pl(px(space::S4))
+                .pr(px(space::S2))
+                .py(px(space::S1))
+                .rounded(px(radius::SM))
+                .bg(th.error_soft)
+                .shadow(th.shadow())
+                .text_size(px(12.5))
                 .text_color(th.error)
+                .child(float::icon("alert", 15.0, th.error))
                 .child(div().flex_1().min_w_0().child(notice))
                 .child(icon_button(
                     "notice-close",
@@ -4281,48 +3996,94 @@ impl Render for Viewer {
             .flex_1()
             .min_h_0()
             .min_w_0()
+            .relative()
             .flex()
+            .flex_col()
             .overflow_hidden()
-            .bg(th.card)
-            .children(pane)
+            .bg(th.page)
             .child(
+                // The pages, clear of the side card.
                 div()
                     .flex_1()
-                    .min_w_0()
                     .min_h_0()
                     .flex()
                     .flex_col()
-                    .child(self.toolbar(card_width / katna_ui::scale::scale(), cx))
-                    .children(tools)
-                    .children(object_row)
-                    .children(measure_bar)
-                    .children(stamp_bar)
-                    .children(initials_bar)
-                    .children(reading_bar)
-                    .children(find_bar)
-                    .children(signatures_line)
-                    .children(notice)
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_h_0()
-                            .relative()
-                            .flex()
-                            .flex_col()
-                            .child(pages)
-                            .children(signing_card)
-                            .children(marks_card)
-                            .children(redact_card)
-                            .children(export_card)
-                            .children(print_card)
-                            .children(link_card)
-                            .children(numbering_card)
-                            .children(paste_many_card)
-                            .children(setup_card)
-                            .children(design_card)
-                            .children(properties_card),
-                    ),
+                    .pl(px(pane_room))
+                    .child(pages),
             )
+            .children(pane)
+            .child(
+                // Along the top: notices and the bars a tool opens.
+                div()
+                    .absolute()
+                    .top(px(space::S2))
+                    .left(px(pane_room + float::GAP))
+                    .right(px(float::GAP))
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .gap(px(space::S3))
+                    .children(signatures_line.map(floating(th)))
+                    .children(notice),
+            )
+            .children(find_bar.map(|bar| {
+                div()
+                    .absolute()
+                    .top(px(space::S2))
+                    .right(px(float::GAP))
+                    .w(px(460.0))
+                    .child(floating(th)(bar))
+                    .into_any_element()
+            }))
+            .child(
+                // Along the bottom: the tool's own bars, the tray and the
+                // dock.
+                div()
+                    .absolute()
+                    .bottom(px(float::DOCK_BOTTOM))
+                    .left(px(pane_room + float::GAP))
+                    .right(px(float::GAP))
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .gap(px(space::S3))
+                    .children(object_row.map(floating(th)))
+                    .children(measure_bar.map(floating(th)))
+                    .children(stamp_bar.map(floating(th)))
+                    .children(initials_bar.map(floating(th)))
+                    .children(reading_bar.map(floating(th)))
+                    .children(tools.map(floating(th)))
+                    .children(dock),
+            )
+            .children(signing_card)
+            .children(marks_card)
+            .children(redact_card)
+            .children(export_card)
+            .children(print_card)
+            .children(link_card)
+            .children(numbering_card)
+            .children(paste_many_card)
+            .children(setup_card)
+            .children(design_card)
+            .children(properties_card)
+            .into_any_element()
+    }
+}
+
+/// A bar that floats over the pages: the card's colour, rounded, with
+/// a shadow, never wider than the room it has.
+fn floating(th: Theme) -> impl Fn(AnyElement) -> AnyElement {
+    move |bar| {
+        div()
+            .max_w_full()
+            .flex_none()
+            .overflow_hidden()
+            .bg(th.card)
+            .border_1()
+            .border_color(th.line)
+            .rounded(px(10.0))
+            .shadow(th.lifted())
+            .child(bar)
             .into_any_element()
     }
 }
@@ -4465,14 +4226,6 @@ fn colors_text(colors: PageColors) -> &'static str {
         PageColors::Sepia => "colors-sepia",
         PageColors::BlackWhite => "colors-black-white",
     }
-}
-
-/// Whether `appearance` is a dark one.
-fn is_dark(appearance: gpui::WindowAppearance) -> bool {
-    matches!(
-        appearance,
-        gpui::WindowAppearance::Dark | gpui::WindowAppearance::VibrantDark
-    )
 }
 
 /// A drawn page as GPUI draws images: BGRA.

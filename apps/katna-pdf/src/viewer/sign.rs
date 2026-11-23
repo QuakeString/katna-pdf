@@ -1814,8 +1814,6 @@ impl Viewer {
                 .gap(px(space::S2))
                 .px(px(space::S3))
                 .py(px(space::S1))
-                .border_b_1()
-                .border_color(th.line)
                 .child(widgets::icon(icon, colour, 18.0))
                 .child(
                     div()

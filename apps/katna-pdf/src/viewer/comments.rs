@@ -316,8 +316,8 @@ impl Viewer {
         let th = self.theme;
         let page = self.current_page();
         let button = |id: &'static str, icon: &'static str, tip: &str| {
-            widgets::icon_button(id, icon, 18.0, &th.katna)
-                .size(px(32.0))
+            widgets::icon_button(id, icon, 16.0, &th.katna)
+                .size(px(28.0))
                 .tip(t(tip, &[]), &th.katna)
         };
         let filtering = self.comment_filter.shown;
@@ -329,7 +329,7 @@ impl Viewer {
             .justify_between()
             .px(px(space::S2))
             .border_b_1()
-            .border_color(th.line)
+            .border_color(th.line_soft)
             .child(
                 widgets::icon_button_colored(
                     "comments-filter",

@@ -246,9 +246,7 @@ impl Viewer {
             .items_center()
             .gap(px(space::S1))
             .px(px(space::S3))
-            .py(px(space::S1))
-            .border_b_1()
-            .border_color(th.line);
+            .py(px(space::S1));
         if initials.kept.is_empty() {
             row = row.child(
                 div()

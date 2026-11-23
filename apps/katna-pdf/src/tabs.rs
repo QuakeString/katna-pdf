@@ -9,11 +9,11 @@
 use std::path::{Path, PathBuf};
 
 use gpui::{
-    App, Context, Entity, FocusHandle, Focusable, MouseButton, PathPromptOptions, SharedString,
-    Subscription, Window, div, prelude::*, svg,
+    App, Context, Entity, FocusHandle, Focusable, PathPromptOptions, Subscription, Window, div,
+    prelude::*,
 };
 use katna_ui::px;
-use katna_ui::tokens::{radius, space, text};
+use katna_ui::tokens::{space, text};
 
 use crate::history::History;
 use crate::library::{LibraryEvent, LibraryView};
@@ -24,32 +24,45 @@ use crate::viewer::{
     CloseTab, NextTab, Open, PreviousTab, ReopenSession, ShowLibrary, Viewer, ViewerEvent,
 };
 
-/// A tab is never wider than this, so many still fit on one line.
-const TAB_WIDTH: f32 = 220.0;
-
-struct Tab {
-    viewer: Entity<Viewer>,
+pub(crate) struct Tab {
+    pub(crate) viewer: Entity<Viewer>,
     _subscriptions: [Subscription; 2],
 }
 
+/// The title bar's menus (`chrome.rs`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TopMenu {
+    Share,
+    App,
+    Profile,
+}
+
 pub struct Tabs {
-    tabs: Vec<Tab>,
-    active: usize,
+    pub(crate) tabs: Vec<Tab>,
+    pub(crate) active: usize,
+    /// The title bar's menu open, and the one closed last with when.
+    pub(crate) menu: Option<TopMenu>,
+    pub(crate) menu_closed: Option<(TopMenu, std::time::Instant)>,
+    /// The app menu's submenu shown.
+    pub(crate) app_open: usize,
+    /// The person's name, for their picture.
+    pub(crate) person: String,
     /// The window title last set, so it is set only when it changes.
     title: String,
-    theme: Theme,
+    pub(crate) theme: Theme,
     /// The library, made the first time it is shown.
     library: Option<(Entity<LibraryView>, Subscription)>,
     /// The library is shown instead of the documents.
-    in_library: bool,
+    pub(crate) in_library: bool,
     /// A newer Katna PDF, and how far installing it got (`update.rs`).
-    update: Option<(Offer, UpdateStep)>,
+    pub(crate) update: Option<(Offer, UpdateStep)>,
     _appearance: Subscription,
+    _look: Subscription,
 }
 
 /// Where an update offered stands.
 #[derive(Debug, Clone, PartialEq)]
-enum UpdateStep {
+pub(crate) enum UpdateStep {
     Offered,
     Downloading(f32),
     Installing,
@@ -60,28 +73,39 @@ enum UpdateStep {
 
 impl Tabs {
     pub fn new(files: Vec<PathBuf>, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let appearance = cx.observe_window_appearance(window, |this, window, cx| {
-            this.theme = Theme::for_appearance(window.appearance());
-            if let Some((library, _)) = &this.library {
-                let theme = this.theme;
-                library.update(cx, |library, _| library.set_theme(theme));
-            }
-            cx.notify();
+        let appearance =
+            cx.observe_window_appearance(window, |this, window, cx| this.restyle(window, cx));
+        let look = cx.observe_global_in::<crate::look::Look>(window, |this, window, cx| {
+            this.restyle(window, cx)
         });
         let mut this = Self {
             tabs: Vec::new(),
             active: 0,
+            menu: None,
+            menu_closed: None,
+            app_open: 0,
+            person: crate::chrome::person(),
             title: String::new(),
-            theme: Theme::for_appearance(window.appearance()),
+            theme: Theme::current(window, cx.global()),
             library: None,
             in_library: false,
             update: None,
             _appearance: appearance,
+            _look: look,
         };
         this.push(None, window, cx);
         this.open_files(files, window, cx);
         this.watch_updates(cx);
         this
+    }
+
+    fn restyle(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.theme = Theme::current(window, cx.global());
+        if let Some((library, _)) = &self.library {
+            let theme = self.theme;
+            library.update(cx, |library, _| library.set_theme(theme));
+        }
+        cx.notify();
     }
 
     /// Looks for a newer Katna PDF a little after starting, then every so
@@ -142,7 +166,7 @@ impl Tabs {
 
     /// Downloads, checks and installs the update offered, then starts
     /// the new Katna PDF with the files open now.
-    fn install_update(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn install_update(&mut self, cx: &mut Context<Self>) {
         let Some((offer, step)) = &mut self.update else {
             return;
         };
@@ -398,15 +422,15 @@ impl Tabs {
         cx.notify();
     }
 
-    fn viewer_entity(&self) -> &Entity<Viewer> {
+    pub(crate) fn viewer_entity(&self) -> &Entity<Viewer> {
         &self.tabs[self.active].viewer
     }
 
-    fn viewer<'a>(&'a self, cx: &'a App) -> &'a Viewer {
+    pub(crate) fn viewer<'a>(&'a self, cx: &'a App) -> &'a Viewer {
         self.viewer_entity().read(cx)
     }
 
-    fn focus_active(&self, window: &mut Window, cx: &mut App) {
+    pub(crate) fn focus_active(&self, window: &mut Window, cx: &mut App) {
         let focus = self.viewer(cx).focus_handle(cx);
         window.focus(&focus, cx);
     }
@@ -427,7 +451,7 @@ impl Tabs {
         .detach();
     }
 
-    fn activate(&mut self, i: usize, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn activate(&mut self, i: usize, window: &mut Window, cx: &mut Context<Self>) {
         if i < self.tabs.len() {
             self.active = i;
             self.focus_active(window, cx);
@@ -444,7 +468,7 @@ impl Tabs {
 
     /// Closes tab `i`. The last tab is emptied rather than closed, so the
     /// window always has somewhere to open a file.
-    fn close(&mut self, i: usize, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn close(&mut self, i: usize, window: &mut Window, cx: &mut Context<Self>) {
         if i >= self.tabs.len() {
             return;
         }
@@ -474,83 +498,6 @@ impl Tabs {
         self.note_session(cx);
         self.focus_active(window, cx);
         cx.notify();
-    }
-
-    fn tab_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let th = self.theme;
-        div()
-            .id("tab-bar")
-            .flex()
-            .flex_shrink_0()
-            .gap(px(space::S1))
-            .p(px(space::S1))
-            .border_b_1()
-            .border_color(th.line)
-            .overflow_x_scroll()
-            .children(self.tabs.iter().enumerate().map(|(i, tab)| {
-                let active = i == self.active;
-                let title = tab
-                    .viewer
-                    .read(cx)
-                    .title()
-                    .unwrap_or_else(|| t("tab-empty", &[]));
-                div()
-                    .id(("tab", i))
-                    .h(px(32.0))
-                    .min_w(px(96.0))
-                    .max_w(px(TAB_WIDTH))
-                    .flex()
-                    .flex_shrink_0()
-                    .items_center()
-                    .gap(px(space::S1))
-                    .pl(px(space::S3))
-                    .pr(px(space::S1))
-                    .rounded(px(radius::SM))
-                    .text_size(px(text::SMALL))
-                    .cursor_pointer()
-                    .when(active, |d| {
-                        d.bg(th.card)
-                            .border_1()
-                            .border_color(th.line)
-                            .text_color(th.text)
-                    })
-                    .when(!active, |d| d.text_color(th.dim).hover(|s| s.bg(th.hover)))
-                    .on_click(cx.listener(move |this, _, window, cx| this.activate(i, window, cx)))
-                    .on_mouse_down(
-                        MouseButton::Middle,
-                        cx.listener(move |this, _, window, cx| this.close(i, window, cx)),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .overflow_hidden()
-                            .text_ellipsis()
-                            .whitespace_nowrap()
-                            .child(title),
-                    )
-                    .child(
-                        div()
-                            .id(("tab-close", i))
-                            .size(px(24.0))
-                            .flex()
-                            .flex_shrink_0()
-                            .items_center()
-                            .justify_center()
-                            .rounded(px(radius::FULL))
-                            .hover(move |s| s.bg(th.hover))
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                cx.stop_propagation();
-                                this.close(i, window, cx);
-                            }))
-                            .child(
-                                svg()
-                                    .path(SharedString::from("icons/close.svg"))
-                                    .size(px(14.0))
-                                    .text_color(th.dim),
-                            ),
-                    )
-            }))
     }
 }
 
@@ -599,13 +546,13 @@ impl Render for Tabs {
             .flex()
             .flex_col()
             .bg(th.page)
+            .text_color(th.text)
             .font_family(".SystemUIFont")
+            .child(self.title_bar(window, cx))
             .children(self.update_bar(cx))
             .map(|d| match &self.library {
                 Some((library, _)) if self.in_library => d.child(library.clone()),
-                _ => d
-                    .when(self.tabs.len() > 1, |d| d.child(self.tab_bar(cx)))
-                    .child(self.viewer_entity().clone()),
+                _ => d.child(self.viewer_entity().clone()),
             })
     }
 }

@@ -97,8 +97,6 @@ impl Viewer {
             .items_center()
             .gap(px(space::S1))
             .px(px(space::S3))
-            .border_b_1()
-            .border_color(th.line)
             .overflow_x_scroll();
         for (i, tool) in Tool::ALL.into_iter().enumerate() {
             let on = self.tool == Some(tool);

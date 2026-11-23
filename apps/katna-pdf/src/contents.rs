@@ -12,7 +12,7 @@ use katna_ui::{ScrollBar, px};
 use crate::theme::Theme;
 
 /// The pane's width.
-pub const WIDTH: f32 = 280.0;
+pub const WIDTH: f32 = 248.0;
 /// Each level of the outline is indented this much more.
 const INDENT: f32 = 16.0;
 const ROW: f32 = 32.0;

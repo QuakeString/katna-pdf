@@ -102,9 +102,7 @@ impl Viewer {
             .items_center()
             .gap(px(space::S1))
             .px(px(space::S3))
-            .py(px(space::S1))
-            .border_b_1()
-            .border_color(th.line);
+            .py(px(space::S1));
         for (i, name) in STAMPS.into_iter().enumerate() {
             let on = self.stamp == name;
             row = row.child(chip(("stamp", i).into(), stamp_label(name), on).on_click(

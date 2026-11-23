@@ -29,6 +29,8 @@ async-channel.workspace = true
 # Updates (`update.rs`).
 ureq.workspace = true
 sha2.workspace = true
+# The desktop's colours (`look.rs`) and KDE's global menu (`menu.rs`).
+katna-platform.workspace = true
 
 # The desktop's print dialog: Linux only.
 [target.'cfg(not(windows))'.dependencies]
@@ -36,7 +38,6 @@ ashpd.workspace = true
 
 # KDE's global menu (`menu.rs`).
 [target.'cfg(target_os = "linux")'.dependencies]
-katna-platform.workspace = true
 zbus.workspace = true
 
 # The icon and description on Windows (`build.rs`).
