@@ -428,7 +428,9 @@ mod tests {
             ..Sheet::of((400.0, 400.0), false)
         };
         let out = impose(&doc, &[0], SheetLayout::NUp { across: 1, down: 1 }, sheet).unwrap();
-        let text = String::from_utf8_lossy(&out);
+        let out = Document::load(out).unwrap();
+        let content = out.page_content_bytes(0).unwrap();
+        let text = String::from_utf8_lossy(&content);
         // Half size (100 × 50), in the middle of the sheet.
         assert!(text.contains("0.5 0 0 0.5 150 175 cm"), "{text}");
     }
