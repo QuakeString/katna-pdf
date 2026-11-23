@@ -8,7 +8,7 @@
 use katna_pdf_cos::{AnnotKind, Annotation, MarkupStyle, NOTE_SIZE};
 
 /// A tool for annotating.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Tool {
     Highlight,
     Underline,

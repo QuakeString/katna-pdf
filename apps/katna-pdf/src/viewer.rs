@@ -55,6 +55,7 @@ mod goto;
 mod initials;
 mod insert;
 mod linking;
+mod looks;
 mod marks;
 mod measure;
 mod numbering;
@@ -763,6 +764,11 @@ pub struct Viewer {
     text_moving: Option<textedit::TextMoving>,
     tool: Option<Tool>,
     colour: usize,
+    /// A colour has been picked since the tool was, so the look kept
+    /// for the tool gives way to it (`looks.rs`).
+    colour_chosen: bool,
+    /// The comment looks kept for new comments, by tool.
+    looks: looks::Looks,
     /// Each page's annotations, once read.
     annots: Option<Arc<Vec<Vec<katna_pdf_cos::Annotation>>>>,
     /// An annotation being drawn with the pointer.
@@ -996,6 +1002,8 @@ impl Viewer {
             text_moving: None,
             tool: None,
             colour: 0,
+            colour_chosen: false,
+            looks: looks::Looks::load(),
             annots: None,
             draft: None,
             chosen: None,

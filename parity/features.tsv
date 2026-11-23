@@ -363,7 +363,7 @@ comment.line-endings	comment	All ten line-ending styles and dashed/cloudy border
 comment.properties-dialog	comment	Comment properties (appearance, author, subject)	reader	y	shipped	P0	#104 comments.rs		acrobat
 comment.properties-bar	comment	Comment properties bar	reader	y	partial	P1	colour dots		acrobat
 comment.lock-comment	comment	Lock comments	reader	y	shipped	P2	#104		acrobat
-comment.default-properties	comment	Make current properties the tool default	reader	y	todo	P1	-		acrobat
+comment.default-properties	comment	Make current properties the tool default	reader	y	shipped	P1	#164		acrobat
 comment.author-identity	comment	Author name from identity preferences	reader	y	partial	P1	#104	author from the account name	acrobat
 comment.reply	comment	Reply to comments	reader	y	shipped	P1	#104		acrobat
 comment.set-status	comment	Set review status (accepted, rejected, cancelled, completed)	reader	y	shipped	P1	#104		acrobat
@@ -755,7 +755,7 @@ print.grayscale	print	Print in grayscale	reader	y	shipped	P1	#163		acrobat
 print.print-as-image	print	Print as image	reader	y	shipped	P1	#111 print-pictures		acrobat
 print.page-setup	print	Page setup	reader	y	partial	P1	#111 paper		acrobat
 print.print-ready-pdf	print	Produce a print-ready imposed PDF	pro	n	skip	-	-		acrobat
-print.print-pages-from-thumbnails	print	Print selected pages from thumbnails	reader	n	todo	P1	-		acrobat
+print.print-pages-from-thumbnails	print	Print selected pages from thumbnails	reader	n	shipped	P1	#164		acrobat
 print.postscript-output	print	PostScript Level 3 output	reader	n	skip	-	-		acrobat
 print.output-preview	print	Output preview	pro	n	skip	-	-		acrobat
 print.separations	print	Separations preview with area coverage	reader	n	skip	-	-		acrobat
