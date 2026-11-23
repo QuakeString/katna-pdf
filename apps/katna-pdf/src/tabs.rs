@@ -72,12 +72,22 @@ pub struct Tabs {
     pub(crate) in_library: bool,
     /// A newer Katna PDF, and how far installing it got (`update.rs`).
     pub(crate) update: Option<(Offer, UpdateStep)>,
+    /// A look for a newer build asked for by hand, and what it found.
+    pub(crate) update_check: Option<UpdateCheck>,
     _appearance: Subscription,
     _look: Subscription,
     _profile: Subscription,
     _active: Subscription,
     /// The signing token, for the profile menu.
     pub(crate) token: TokenStatus,
+}
+
+/// A look for updates asked for from the profile menu.
+#[derive(Clone, PartialEq)]
+pub(crate) enum UpdateCheck {
+    Looking,
+    Newest,
+    Failed(String),
 }
 
 /// Where an update offered stands.
@@ -121,6 +131,7 @@ impl Tabs {
             library: None,
             in_library: false,
             update: None,
+            update_check: None,
             _appearance: appearance,
             _look: look,
             _profile: profile,
@@ -211,6 +222,36 @@ impl Tabs {
                     break;
                 }
             }
+        })
+        .detach();
+    }
+
+    /// Looks for a newer build now, whenever the last look was.
+    pub(crate) fn check_updates_now(&mut self, cx: &mut Context<Self>) {
+        if !update::enabled() || self.update_check == Some(UpdateCheck::Looking) {
+            return;
+        }
+        self.update_check = Some(UpdateCheck::Looking);
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let found = cx.background_spawn(async { update::check() }).await;
+            let mut seen = Seen::load();
+            seen.mark_checked();
+            seen.save();
+            this.update(cx, |this, cx| {
+                this.update_check = Some(match found {
+                    Ok(Some(offer)) => {
+                        if this.update.is_none() {
+                            this.update = Some((offer, UpdateStep::Offered));
+                        }
+                        UpdateCheck::Newest
+                    }
+                    Ok(None) => UpdateCheck::Newest,
+                    Err(err) => UpdateCheck::Failed(err),
+                });
+                cx.notify();
+            })
+            .ok();
         })
         .detach();
     }
