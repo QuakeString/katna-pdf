@@ -15,7 +15,7 @@ use crate::util::{OptionLog, RectExt};
 use crate::x_object::{FormXObject, ImageXObject, XObject};
 use hayro_syntax::content::TypedIter;
 use hayro_syntax::content::ops::TypedInstruction;
-use hayro_syntax::object::dict::keys::{ANNOTS, AP, AS, F, MCID, N, OC, RECT};
+use hayro_syntax::object::dict::keys::{ANNOTS, AP, AS, F, MCID, N, OC, RECT, SUBTYPE};
 use hayro_syntax::object::{Array, Dict, Name, Object, Rect, Stream, dict_or_stream};
 use hayro_syntax::page::{Page, Resources};
 use kurbo::{Affine, Point, Shape};
@@ -100,6 +100,9 @@ pub struct InterpreterSettings {
     /// Note that this feature is currently not fully implemented yet, so some
     /// annotations might be missing.
     pub render_annotations: bool,
+    /// Katna PDF: when false, of the annotations only form fields
+    /// (`/Widget`) are drawn, so a reader can hide the comments.
+    pub render_comments: bool,
 }
 
 impl Default for InterpreterSettings {
@@ -118,6 +121,7 @@ impl Default for InterpreterSettings {
             cmap_resolver: Arc::new(|_| None),
             warning_sink: Arc::new(|_| {}),
             render_annotations: true,
+            render_comments: true,
         }
     }
 }
@@ -154,6 +158,14 @@ pub fn interpret_page<'a>(
 
             // Annotation should be hidden.
             if flags & 2 != 0 {
+                continue;
+            }
+
+            if !context.settings.render_comments
+                && annot
+                    .get::<Name<'_>>(SUBTYPE)
+                    .is_none_or(|s| s.as_ref() != b"Widget")
+            {
                 continue;
             }
 

@@ -69,3 +69,9 @@ box in device space; in cell space it misses the cell, and `sh` fills only
 that box. Typst exports every gradient this way (a 1×1 BBox pattern whose
 cell does `/x0 Do` → `/s0 sh`). Using `initial_transform * self.bbox`
 instead fixes it."
+
+## Comments hidden (src/interpret/mod.rs)
+
+`InterpreterSettings::render_comments`, true by default: when false, the
+page's annotations are drawn only if they are form fields (`/Widget`), so
+the app's "Hide comments" shows the pages and forms without the comments.

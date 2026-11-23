@@ -23,6 +23,19 @@ use std::sync::Arc;
 pub use hayro_engine::{Hayro, HayroPlain};
 pub use worker::Workers;
 
+static COMMENTS_SHOWN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+/// Whether pages are drawn with their comments (every annotation but
+/// form fields), for every document of this process and its workers.
+pub fn show_comments(on: bool) {
+    COMMENTS_SHOWN.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Whether pages are drawn with their comments.
+pub fn comments_shown() -> bool {
+    COMMENTS_SHOWN.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// A page is never drawn larger than this many pixels on a side...
 pub const MAX_SIDE: u32 = 8192;
 /// ...or than this many pixels in all (about 128 MB of RGBA). Deeper zoom
