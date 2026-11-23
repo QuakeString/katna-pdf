@@ -3692,7 +3692,7 @@ impl Render for Viewer {
         let export_card = self.export_card(window, cx);
         let print_card = self.print_card(window, cx);
         let link_card = self.link_card(window, cx);
-        let numbering_card = self.numbering_card(cx);
+        let numbering_card = self.numbering_card(window, cx);
         let paste_many_card = self.paste_many_card(cx);
         let setup_card = self.setup_card(cx);
         // The properties card scrolls when the window is shorter than it.
@@ -4073,7 +4073,16 @@ impl Render for Viewer {
                 )
             }))
             .children(link_card.map(|c| float::appear_over("link_card", c, -6.0)))
-            .children(numbering_card.map(|c| float::appear_over("numbering_card", c, -6.0)))
+            .children(numbering_card.map(|card| {
+                dialog(
+                    th,
+                    card,
+                    cx.listener(|this, _, _, cx| {
+                        this.numbering = None;
+                        cx.notify();
+                    }),
+                )
+            }))
             .children(paste_many_card.map(|c| float::appear_over("paste_many_card", c, -6.0)))
             .children(setup_card.map(|card| {
                 dialog(

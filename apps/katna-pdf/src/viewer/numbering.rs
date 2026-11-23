@@ -11,9 +11,10 @@ use katna_pdf_cos::{LabelRange, LabelStyle};
 use katna_ui::px;
 use katna_ui::text_input::{InputEvent, TextInput};
 use katna_ui::tokens::{radius, space, text};
-use katna_ui::widgets::{self, Tip};
+use katna_ui::widgets::Tip;
 
 use super::{Content, Viewer};
+use crate::float;
 use crate::text::t;
 
 /// The styles, in the order a click on the style goes through them, with
@@ -38,6 +39,8 @@ struct Row {
 /// The page numbers card.
 pub(super) struct Numbering {
     rows: Vec<Row>,
+    /// The row being changed.
+    editing: usize,
     _inputs: Vec<Subscription>,
 }
 
@@ -71,6 +74,7 @@ impl Viewer {
         self.properties = None;
         let mut numbering = Numbering {
             rows: Vec::new(),
+            editing: 0,
             _inputs: Vec::new(),
         };
         let ranges = if self.label_ranges.is_empty() {
@@ -186,203 +190,273 @@ impl Viewer {
         cx.notify();
     }
 
-    /// The page numbers card, while open.
-    pub(super) fn numbering_card(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+    /// The page numbers dialog (R17): the ranges as a list, each
+    /// with its pages, style and a way to take it out; the one picked
+    /// is changed under the list; then Add a range, and Use these.
+    pub(super) fn numbering_card(
+        &self,
+        window: &gpui::Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
         let numbering = self.numbering.as_ref()?;
         let th = self.theme;
+        let count = self.page_count();
         let label = |id: &str| {
             div()
                 .text_size(px(text::SMALL))
+                .font_weight(gpui::FontWeight::MEDIUM)
                 .text_color(th.dim)
                 .child(t(id, &[]))
         };
-        let field = |input: &Entity<TextInput>, width: Option<f32>| {
-            div()
-                .h(px(32.0))
-                .flex()
-                .items_center()
-                .px(px(space::S2))
-                .rounded(px(radius::SM))
-                .bg(th.field)
-                .text_size(px(text::SMALL))
-                .text_color(th.text)
-                .map(|d| match width {
-                    Some(w) => d.w(px(w)).flex_none(),
-                    None => d.flex_1().min_w_0(),
-                })
-                .child(input.clone())
-        };
-        let mut list = div().flex().flex_col().gap(px(space::S2)).child(
-            div()
-                .flex()
-                .gap(px(space::S2))
-                .child(div().w(px(48.0)).child(label("numbering-from-label")))
-                .child(div().w(px(84.0)).child(label("numbering-style")))
-                .child(div().flex_1().child(label("numbering-prefix-label")))
-                .child(div().w(px(48.0)).child(label("numbering-first-label")))
-                .child(div().w(px(28.0))),
-        );
+        // Where each row's pages end: before the next row's start.
+        let starts: Vec<Option<usize>> = numbering
+            .rows
+            .iter()
+            .map(|r| {
+                r.from
+                    .read(cx)
+                    .text()
+                    .trim()
+                    .parse::<usize>()
+                    .ok()
+                    .filter(|p| (1..=count).contains(p))
+            })
+            .collect();
+        let mut list = div()
+            .flex()
+            .flex_col()
+            .rounded(px(radius::SM))
+            .border_1()
+            .border_color(th.line)
+            .overflow_hidden();
         for (i, row) in numbering.rows.iter().enumerate() {
+            let from = starts[i].unwrap_or(1);
+            let to = starts
+                .iter()
+                .filter_map(|s| *s)
+                .filter(|s| *s > from)
+                .min()
+                .map_or(count, |next| next - 1);
+            let pages = if from == to {
+                t("numbering-page-one", &[("page", &from.to_string())])
+            } else {
+                t(
+                    "numbering-pages",
+                    &[("from", &from.to_string()), ("to", &to.to_string())],
+                )
+            };
             let style = STYLES
                 .iter()
                 .find(|(s, _)| *s == row.style)
                 .map_or("numbering-none", |(_, id)| id);
+            let range = LabelRange {
+                start: 0,
+                style: row.style,
+                prefix: row.prefix.read(cx).text().to_owned(),
+                first: row.first.read(cx).text().trim().parse().unwrap_or(1),
+            };
+            let shown = if row.style == LabelStyle::None && range.prefix.is_empty() {
+                t("numbering-none", &[])
+            } else {
+                format!(
+                    "{}–{}",
+                    range.label(0),
+                    range.label(to.saturating_sub(from))
+                )
+            };
+            let picked = numbering.editing == i;
             list = list.child(
                 div()
+                    .id(("numbering-row", i))
                     .flex()
                     .items_center()
-                    .gap(px(space::S2))
-                    .child(field(&row.from, Some(48.0)))
+                    .gap(px(space::S3))
+                    .px(px(space::S3))
+                    .py(px(space::S2))
+                    .when(i > 0, |d| d.border_t_1().border_color(th.line))
+                    .cursor_pointer()
+                    .map(|d| {
+                        if picked {
+                            d.bg(th.accent_soft)
+                        } else {
+                            d.hover(move |s| s.bg(th.hover))
+                        }
+                    })
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if let Some(n) = this.numbering.as_mut() {
+                            n.editing = i;
+                        }
+                        cx.notify();
+                    }))
                     .child(
                         div()
-                            .id(("numbering-style", i))
-                            .w(px(84.0))
-                            .h(px(32.0))
+                            .w(px(96.0))
                             .flex_none()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .rounded(px(radius::FULL))
-                            .border_1()
-                            .border_color(th.line)
                             .text_size(px(text::SMALL))
                             .text_color(th.text)
-                            .hover(move |s| s.bg(th.hover))
-                            .cursor_pointer()
-                            .tip(t("numbering-style-tip", &[]), &th.katna)
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                if let Some(row) =
-                                    this.numbering.as_mut().and_then(|n| n.rows.get_mut(i))
-                                {
-                                    let at = STYLES
-                                        .iter()
-                                        .position(|(s, _)| *s == row.style)
-                                        .unwrap_or(0);
-                                    row.style = STYLES[(at + 1) % STYLES.len()].0;
-                                }
-                                cx.notify();
-                            }))
-                            .child(t(style, &[])),
+                            .child(pages),
                     )
-                    .child(field(&row.prefix, None))
-                    .child(field(&row.first, Some(48.0)))
+                    .child(float::chip(("numbering-chip", i), t(style, &[]), true, &th))
                     .child(
-                        widgets::icon_button(("numbering-remove", i), "close", 16.0, &th.katna)
-                            .size(px(28.0))
-                            .tip(t("numbering-remove", &[]), &th.katna)
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                if let Some(n) = this.numbering.as_mut()
-                                    && i < n.rows.len()
-                                {
-                                    n.rows.remove(i);
-                                }
-                                cx.notify();
-                            })),
-                    ),
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .text_size(px(text::CAPTION))
+                            .text_color(th.dim)
+                            .child(shown),
+                    )
+                    .when(numbering.rows.len() > 1, |d| {
+                        d.child(
+                            float::sized_ib(
+                                ("numbering-remove", i),
+                                "trash",
+                                26.0,
+                                14.0,
+                                t("numbering-remove", &[]),
+                                false,
+                                &th,
+                            )
+                            .on_click(cx.listener(
+                                move |this, _, _, cx| {
+                                    cx.stop_propagation();
+                                    if let Some(n) = this.numbering.as_mut()
+                                        && i < n.rows.len()
+                                    {
+                                        n.rows.remove(i);
+                                        n.editing = n.editing.min(n.rows.len() - 1);
+                                    }
+                                    cx.notify();
+                                },
+                            )),
+                        )
+                    }),
             );
         }
-        // What the first pages will be called, as typed now.
-        let preview = self.numbering_ranges(cx).ok().map(|ranges| {
-            let count = self.page_count();
-            let shown: Vec<String> = katna_pdf_cos::labels_of(&ranges, count)
-                .into_iter()
-                .take(8)
-                .collect();
-            let more = if count > 8 { ", …" } else { "" };
-            t(
-                "numbering-preview",
-                &[("labels", &format!("{}{more}", shown.join(", ")))],
-            )
-        });
-        Some(
+        // The row picked, to change.
+        let editor = numbering.rows.get(numbering.editing).map(|row| {
+            let i = numbering.editing;
+            let mut styles = float::seg(&th);
+            for (j, (style, id)) in STYLES.into_iter().enumerate() {
+                styles = styles.child(
+                    float::seg_item(
+                        ("numbering-style", j),
+                        None,
+                        Some(t(&format!("{id}-short"), &[]).into()),
+                        row.style == style,
+                        &th,
+                    )
+                    .tip(t(id, &[]), &th.katna)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if let Some(row) = this.numbering.as_mut().and_then(|n| n.rows.get_mut(i)) {
+                            row.style = style;
+                        }
+                        cx.notify();
+                    })),
+                );
+            }
+            let column = |id: &str, el: AnyElement, width: Option<f32>| {
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(space::S1))
+                    .map(|d| match width {
+                        Some(w) => d.w(px(w)).flex_none(),
+                        None => d.flex_1().min_w_0(),
+                    })
+                    .child(label(id))
+                    .child(el)
+            };
             div()
-                .id("numbering-card")
-                .absolute()
-                .top(px(space::S3))
-                .right(px(space::S5))
-                .w(px(400.0))
-                .p(px(space::S4))
                 .flex()
-                .flex_col()
-                .gap(px(space::S2))
-                .rounded(px(10.0))
-                .bg(th.card)
-                .shadow(th.lifted())
-                .when(th.dark, |d| d.border_1().border_color(th.line))
-                .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                .child(
-                    div()
-                        .text_size(px(text::BODY))
-                        .font_weight(gpui::FontWeight::SEMIBOLD)
-                        .text_color(th.text)
-                        .child(t("numbering-title", &[])),
-                )
-                .child(label("numbering-hint"))
-                .child(list)
-                .children(preview.map(|p| {
-                    div()
-                        .text_size(px(text::SMALL))
-                        .text_color(th.text)
-                        .child(p)
-                }))
-                .child(
-                    div()
-                        .pt(px(space::S2))
-                        .flex()
-                        .items_center()
-                        .gap(px(space::S2))
-                        .child(
-                            widgets::outlined_button(
-                                "numbering-add",
-                                t("numbering-add", &[]),
-                                &th.katna,
-                            )
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                // At the page shown, or after the last range.
-                                let last = this
-                                    .numbering_ranges(cx)
-                                    .ok()
-                                    .and_then(|r| r.last().map(|r| r.start + 1))
-                                    .unwrap_or(0);
-                                let start = this
-                                    .current_page()
-                                    .max(last)
-                                    .min(this.page_count().saturating_sub(1));
-                                if let Some(mut numbering) = this.numbering.take() {
-                                    let range = LabelRange {
-                                        start,
-                                        style: LabelStyle::Decimal,
-                                        prefix: String::new(),
-                                        first: 1,
-                                    };
-                                    this.add_row(&mut numbering, range, cx);
-                                    this.numbering = Some(numbering);
-                                }
-                                cx.notify();
-                            })),
-                        )
-                        .child(div().flex_1())
-                        .child(
-                            widgets::outlined_button(
-                                "numbering-cancel",
-                                t("numbering-cancel", &[]),
-                                &th.katna,
-                            )
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.numbering = None;
-                                cx.notify();
-                            })),
-                        )
-                        .child(
-                            widgets::filled_button(
-                                "numbering-apply",
-                                t("numbering-apply", &[]),
-                                &th.katna,
-                            )
-                            .on_click(cx.listener(|this, _, _, cx| this.apply_numbering(cx))),
-                        ),
-                )
-                .into_any_element(),
+                .items_end()
+                .gap(px(space::S3))
+                .child(column(
+                    "numbering-from-label",
+                    float::input_box(&row.from, window, cx, &th).into_any_element(),
+                    Some(72.0),
+                ))
+                .child(column("numbering-style", styles.into_any_element(), None))
+                .child(column(
+                    "numbering-prefix-label",
+                    float::input_box(&row.prefix, window, cx, &th).into_any_element(),
+                    Some(80.0),
+                ))
+                .child(column(
+                    "numbering-first-label",
+                    float::input_box(&row.first, window, cx, &th).into_any_element(),
+                    Some(56.0),
+                ))
+        });
+        let body = div()
+            .flex()
+            .flex_col()
+            .gap(px(space::S3))
+            .child(
+                div()
+                    .text_size(px(text::SMALL))
+                    .text_color(th.dim)
+                    .child(t("numbering-hint", &[])),
+            )
+            .child(list)
+            .children(editor)
+            .child(
+                div().flex().child(
+                    float::button("numbering-add", t("numbering-add", &[]), false, &th)
+                        .child(float::icon("plus", 14.0, th.text))
+                        .flex_row_reverse()
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            // At the page shown, or after the last range.
+                            let last = this
+                                .numbering_ranges(cx)
+                                .ok()
+                                .and_then(|r| r.last().map(|r| r.start + 1))
+                                .unwrap_or(0);
+                            let start = this
+                                .current_page()
+                                .max(last)
+                                .min(this.page_count().saturating_sub(1));
+                            if let Some(mut numbering) = this.numbering.take() {
+                                let range = LabelRange {
+                                    start,
+                                    style: LabelStyle::Decimal,
+                                    prefix: String::new(),
+                                    first: 1,
+                                };
+                                this.add_row(&mut numbering, range, cx);
+                                numbering.editing = numbering.rows.len() - 1;
+                                this.numbering = Some(numbering);
+                            }
+                            cx.notify();
+                        })),
+                ),
+            );
+        let foot = div()
+            .flex()
+            .gap(px(space::S2))
+            .child(
+                float::button("numbering-cancel", t("numbering-cancel", &[]), false, &th).on_click(
+                    cx.listener(|this, _, _, cx| {
+                        this.numbering = None;
+                        cx.notify();
+                    }),
+                ),
+            )
+            .child(
+                float::button("numbering-apply", t("numbering-apply", &[]), true, &th)
+                    .on_click(cx.listener(|this, _, _, cx| this.apply_numbering(cx))),
+            );
+        Some(
+            float::dialog_card(
+                "numbering-card",
+                t("numbering-title", &[]),
+                None,
+                520.0,
+                body,
+                foot,
+                &th,
+            )
+            .into_any_element(),
         )
     }
 }
