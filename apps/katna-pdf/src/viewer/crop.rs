@@ -66,6 +66,9 @@ const WHICH: [(Which, &str); 4] = [
 impl Viewer {
     /// Turns cropping on or off; other tools are put down.
     pub(super) fn toggle_crop(&mut self, cx: &mut Context<Self>) {
+        if !self.cropping && !self.allows(super::Allow::Assemble, cx) {
+            return;
+        }
         self.cropping = !self.cropping;
         if self.cropping {
             self.finish_text_edit(true, cx);

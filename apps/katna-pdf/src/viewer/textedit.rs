@@ -219,6 +219,9 @@ impl Typing {
 impl Viewer {
     /// Turns Edit text on or off; other tools are put down.
     pub(super) fn toggle_text_edit(&mut self, cx: &mut Context<Self>) {
+        if !self.text_editing && !self.allows(super::Allow::Change, cx) {
+            return;
+        }
         self.finish_text_edit(true, cx);
         self.runs.next = None;
         self.text_moving = None;

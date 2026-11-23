@@ -15,7 +15,7 @@ core.open-aes	core	Open AES-128 and AES-256 encrypted documents (R4-R6)	reader	y
 core.password-prompt	core	Ask for the user or owner password, with retry	reader	y	shipped	P0	app locked-* #63		acrobat
 core.unicode-passwords	core	Unicode passwords normalised with SASLprep	reader	n	shipped	P0	cos crypt.rs sasl_prep		acrobat
 core.owner-password-unlock	core	Owner password lifts document restrictions	reader	y	shipped	P0	#109	Properties card unlocks with the owner's password	acrobat
-core.permissions-enforced	core	Honour document permissions (print, modify, assemble, copy)	reader	y	partial	P0	#109	read and shown; page ops refuse locked files	acrobat
+core.permissions-enforced	core	Honour document permissions (print, modify, assemble, copy)	reader	y	shipped	P0	#145	print, copy, changes, comments, form filling and page assembly refused with a notice; owner password lifts it	acrobat
 core.crypt-filters	core	Crypt filters (Identity, /StmF, /StrF)	reader	n	shipped	P0	cos crypt.rs		acrobat
 core.attachment-only-encryption	core	Attachment-only encryption (/EFF) opens without a password	reader	n	todo	P2	-		acrobat
 core.unencrypted-metadata	core	Leave XMP metadata readable when /EncryptMetadata is false	reader	n	partial	P1	cos crypt.rs		acrobat
@@ -152,7 +152,7 @@ view.about-dialog	view	About dialog	reader	y	todo	P2	-		acrobat
 view.check-for-updates	view	Help ▸ Check for updates	reader	y	shipped	P1	#92 update.rs		acrobat
 view.single-key-accelerators	view	Single-key tool accelerators	-	n	partial	P1	present mode only		acrobat
 view.customize-quick-tools	view	Customise the quick-action toolbar and pinned tools	reader	y	todo	P2	-		acrobat
-view.restriction-notice	view	Message bar for restricted documents	reader	y	partial	P0	#109	permission boxes in Properties; no bar	acrobat
+view.restriction-notice	view	Message bar for restricted documents	reader	y	shipped	P0	#145	notice bar lists what the owner bars	acrobat
 view.pdfa-view-mode	view	Read-only view for PDF/A files with an Enable editing bar	reader	n	todo	P2	-		acrobat
 view.show-page-boxes	view	Show art, trim and bleed boxes	pro	n	todo	P1	-		acrobat
 view.web-app	view	Run in the browser (WebAssembly)	-	n	skip	-	-		acrobat
