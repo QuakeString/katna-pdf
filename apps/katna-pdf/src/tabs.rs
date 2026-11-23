@@ -463,6 +463,9 @@ impl Tabs {
                                     .update(cx, |viewer, cx| viewer.show_page(page, cx));
                             }
                         }
+                        LibraryEvent::OpenWindow(path) => {
+                            crate::open_window(vec![path.clone()], cx);
+                        }
                         LibraryEvent::Sign(paths) => {
                             let Some((first, others)) = paths.split_first() else {
                                 return;

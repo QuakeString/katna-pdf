@@ -14,7 +14,8 @@ use katna_ui::px;
 use katna_ui::tokens::{radius, space, text};
 use katna_ui::widgets;
 
-use super::{CELL_HEIGHT, CELL_WIDTH, COVER_BOX, LibraryEvent, LibraryView, Place, size_text};
+use super::context::{Clicked, Then};
+use super::{CELL_HEIGHT, CELL_WIDTH, COVER_BOX, LibraryView, Place, size_text};
 use crate::drives::{self, Drive, cloud_place, cloud_state};
 use crate::text::t;
 
@@ -227,7 +228,7 @@ impl LibraryView {
         self.list_drive(false, cx);
     }
 
-    fn enter_folder(&mut self, entry: &CloudEntry, cx: &mut Context<Self>) {
+    pub(super) fn enter_folder(&mut self, entry: &CloudEntry, cx: &mut Context<Self>) {
         let Some(view) = self.drive.as_mut() else {
             return;
         };
@@ -252,6 +253,11 @@ impl LibraryView {
 
     /// Downloads `entry` through Katna, then opens it.
     fn open_entry(&mut self, entry: CloudEntry, cx: &mut Context<Self>) {
+        self.fetch_entry(entry, Then::Open, cx);
+    }
+
+    /// Fetches `entry` from the drive, then does `then` with it.
+    pub(super) fn fetch_entry(&mut self, entry: CloudEntry, then: Then, cx: &mut Context<Self>) {
         let Some(view) = self.drive.as_mut() else {
             return;
         };
@@ -271,7 +277,7 @@ impl LibraryView {
                     view.opening = None;
                 }
                 match fetched {
-                    Ok(path) => cx.emit(LibraryEvent::Open(path, None)),
+                    Ok(path) => this.then_with(path, then, cx),
                     Err(e) => this.notice = Some(t("library-drive-open-failed", &[("error", &e)])),
                 }
                 cx.notify();
@@ -482,8 +488,15 @@ impl LibraryView {
             "icons/document.svg"
         };
         let clicked = entry.clone();
+        let right = entry.clone();
         div()
             .id(("drive-entry", i))
+            .on_mouse_down(
+                gpui::MouseButton::Right,
+                cx.listener(move |this, e: &gpui::MouseDownEvent, _, cx| {
+                    this.show_context(Clicked::Drive(right.clone()), e.position, cx)
+                }),
+            )
             .w(px(CELL_WIDTH))
             .h(px(CELL_HEIGHT))
             .flex_none()
