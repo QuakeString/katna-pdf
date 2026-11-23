@@ -61,14 +61,26 @@ enum Next {
 /// The spacing fields open under the text inspector: between letters,
 /// between words, line to line.
 pub(super) struct SpacingMenu {
-    fields: [Entity<TextInput>; 3],
-    _fields: Vec<Subscription>,
+    /// Between letters and more between words, in points, and line to
+    /// line as so many times the text's size.
+    values: [f32; 3],
+    /// The same as the paragraph had when the card opened.
+    was: [f32; 3],
+    /// The slider being dragged.
+    dragging: Option<usize>,
+    /// Where each slider's track is on screen, once drawn.
+    tracks: std::rc::Rc<std::cell::Cell<[gpui::Bounds<gpui::Pixels>; 3]>>,
 }
+
+/// Each spacing slider's least and most.
+const SPACING_RANGE: [(f32, f32); 3] = [(-2.0, 2.0), (-3.0, 3.0), (0.8, 2.0)];
+/// And the steps it moves in.
+const SPACING_STEP: [f32; 3] = [0.1, 0.1, 0.05];
 
 /// A face chosen for a paragraph: a family installed here (or a
 /// standard one) and its weight and slant.
 #[derive(Clone, Debug, PartialEq)]
-pub(super) struct FontChoice {
+pub(crate) struct FontChoice {
     pub family: String,
     pub bold: bool,
     pub italic: bool,
@@ -217,6 +229,15 @@ impl Typing {
 }
 
 impl Viewer {
+    /// What a notice's button does.
+    pub(super) fn notice_action(&mut self, action: super::NoticeAction, cx: &mut Context<Self>) {
+        match action {
+            super::NoticeAction::Refont { page, block, font } => {
+                self.font_text(page, block, font, cx);
+            }
+        }
+    }
+
     /// Turns Edit text on or off; other tools are put down.
     pub(super) fn toggle_text_edit(&mut self, cx: &mut Context<Self>) {
         if !self.text_editing && !self.allows(super::Allow::Change, cx) {
@@ -423,6 +444,7 @@ impl Viewer {
             }
             Target::Block(block) => block,
         };
+        let index = block;
         let Some(block) = self
             .runs
             .pages
@@ -439,14 +461,32 @@ impl Viewer {
             move |doc| {
                 // Letters the font lacks are said, once the change shows.
                 let told = doc.missing_glyphs(typing.page, &runs, &text).map(|m| {
-                    t(
-                        "text-edit-stood-in",
-                        &[
-                            ("font", &m.font),
-                            ("chars", &m.chars),
-                            ("standin", m.stand_in.as_deref().unwrap_or("")),
-                        ],
-                    )
+                    let words = |id: &str, standin: &str| {
+                        t(
+                            id,
+                            &[("font", &m.font), ("chars", &m.chars), ("standin", standin)],
+                        )
+                    };
+                    match &m.stand_in {
+                        // The whole paragraph can be put in the font that
+                        // stood in (E04).
+                        Some(standin) => {
+                            let font = stand_in_choice(standin);
+                            let shown = font.family.clone();
+                            super::Notice::warning(
+                                words("text-edit-stood-in", &shown),
+                                Some((
+                                    words("text-edit-use-standin", &shown),
+                                    super::NoticeAction::Refont {
+                                        page: typing.page,
+                                        block: index,
+                                        font,
+                                    },
+                                )),
+                            )
+                        }
+                        None => super::Notice::warning(words("text-edit-no-standin", ""), None),
+                    }
                 });
                 let bytes = doc
                     .edit_block(typing.page, &runs, &text)
@@ -462,7 +502,9 @@ impl Viewer {
     pub(super) fn change_page_told(
         &mut self,
         page: usize,
-        change: impl FnOnce(&katna_pdf_cos::Document) -> Result<(Vec<u8>, Option<String>), String>
+        change: impl FnOnce(
+            &katna_pdf_cos::Document,
+        ) -> Result<(Vec<u8>, Option<super::Notice>), String>
         + Send
         + 'static,
         cx: &mut Context<Self>,
@@ -521,7 +563,9 @@ impl Viewer {
         pages: Vec<usize>,
         failed: &'static str,
         after: Option<Arc<str>>,
-        change: impl FnOnce(&katna_pdf_cos::Document) -> Result<(Vec<u8>, Option<String>), String>
+        change: impl FnOnce(
+            &katna_pdf_cos::Document,
+        ) -> Result<(Vec<u8>, Option<super::Notice>), String>
         + Send
         + 'static,
         cx: &mut Context<Self>,
@@ -566,7 +610,7 @@ impl Viewer {
                     Ok((bytes, doc, cos, told)) => {
                         this.key = kept;
                         if let Some(told) = told {
-                            this.notice = Some(super::Notice::error(told));
+                            this.notice = Some(told);
                         }
                         this.forget_runs();
                         let design = this
@@ -605,22 +649,22 @@ impl Viewer {
         cx: &mut Context<Self>,
     ) -> Vec<AnyElement> {
         // The tools' own boxes, shown in any mode.
-        let tools = |this: &Self| {
+        let tools = |this: &Self, cx: &Context<Self>| {
             let mut out = this.redact_overlay(page);
-            out.extend(this.link_overlay(page));
+            out.extend(this.link_overlay(page, cx));
             out.extend(this.design_overlay(page));
             out
         };
         // While cropping, presses on paragraphs make the box.
         if !self.text_editing || self.cropping {
-            return tools(self);
+            return tools(self, cx);
         }
         let Some(transform) = transform else {
-            return tools(self);
+            return tools(self, cx);
         };
         let Some(blocks) = self.runs.pages.get(&page).cloned() else {
             self.read_runs(page, cx);
-            return tools(self);
+            return tools(self, cx);
         };
         if let Some((_, [x, y], next)) = self.runs.next.take_if(|(p, _, _)| *p == page)
             && let Some(i) = blocks.iter().position(|b| {
@@ -737,7 +781,7 @@ impl Viewer {
         }
         out.extend(self.objects_overlay(page, cx));
         out.extend(self.insert_preview(page));
-        out.extend(tools(self));
+        out.extend(tools(self, cx));
         out
     }
 
@@ -784,31 +828,6 @@ impl Viewer {
         let pad = 2.0;
         let [r, g, bl] = self.page_colors().pixel(block.colour);
         let look = &typing.look;
-        let (page, index) = (typing.page, typing.block().unwrap_or(0));
-        // A grip on its left edge, to drag the paragraph elsewhere.
-        let grip = 10.0;
-        let handle = div()
-            .id("text-grip")
-            .absolute()
-            .left(desktop_px(-grip - 1.0))
-            .top(desktop_px(-1.0))
-            .w(desktop_px(grip))
-            .h(desktop_px(lines * lead + 2.0 * pad))
-            .rounded_l(px(radius::XS / 2.0))
-            .bg(gpui::rgb(self.theme.katna.accent >> 8))
-            .cursor(if dragged.is_some() {
-                gpui::CursorStyle::ClosedHand
-            } else {
-                gpui::CursorStyle::OpenHand
-            })
-            .tip(t("text-grip", &[]), &self.theme.katna)
-            .on_mouse_down(
-                gpui::MouseButton::Left,
-                cx.listener(move |this, event: &gpui::MouseDownEvent, _, cx| {
-                    cx.stop_propagation();
-                    this.text_move_press(page, index, event.position, cx);
-                }),
-            );
         // What can be done to the paragraph floats over it (E01).
         let inspector = self
             .text_inspector(cx)
@@ -817,6 +836,11 @@ impl Viewer {
                 float::popover(
                     float::bar_shell(&self.theme, 10.0)
                         .id("text-inspector")
+                        // Not in the paragraph's own face, as the box is.
+                        .font_family(gpui::SharedString::from(".SystemUIFont"))
+                        .font_weight(gpui::FontWeight::NORMAL)
+                        .not_italic()
+                        .line_height(gpui::relative(1.3))
                         .occlude()
                         .cursor(gpui::CursorStyle::Arrow)
                         .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
@@ -845,9 +869,33 @@ impl Viewer {
             .when(look.italic, |d| d.italic())
             .cursor(gpui::CursorStyle::IBeam)
             .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .child(handle)
             .child(typing.input.clone())
             .children(inspector)
+            .when(dragged.is_none(), |d| {
+                // What typing here does, under it (E01).
+                let th = self.theme;
+                d.child(
+                    div()
+                        .absolute()
+                        .top_full()
+                        .left_0()
+                        .mt(px(space::S3))
+                        .child(
+                            div()
+                                .px(px(space::S3))
+                                .py(px(space::S2))
+                                .rounded(px(6.0))
+                                .bg(th.inverse)
+                                .text_size(px(text::SMALL))
+                                .text_color(th.on_inverse)
+                                .font_family(gpui::SharedString::from(".SystemUIFont"))
+                                .font_weight(gpui::FontWeight::NORMAL)
+                                .not_italic()
+                                .whitespace_nowrap()
+                                .child(t("text-typing-hint", &[])),
+                        ),
+                )
+            })
             .into_any_element()
     }
 
@@ -1145,10 +1193,17 @@ impl Viewer {
 
     /// The paragraph being typed in lined up as `align` says.
     pub(super) fn align_typed(&mut self, align: TextAlign, cx: &mut Context<Self>) {
-        if self.typed_block().is_some_and(|(_, _, b)| b.align != align) {
+        let Some((_, _, b)) = self.typed_block() else {
+            return;
+        };
+        if b.align != align {
+            // Justified words are spaced out: lined up otherwise, they
+            // close up again.
+            let word_spacing = (b.align == TextAlign::Justify).then_some(0.0);
             self.restyle_typed(
                 Next::Layout(Layout {
                     align: Some(align),
+                    word_spacing,
                     ..Layout::default()
                 }),
                 cx,
@@ -1156,63 +1211,64 @@ impl Viewer {
         }
     }
 
-    /// Opens or closes the spacing fields under the inspector, filled
-    /// with the paragraph's spacing now.
+    /// Opens or closes the spacing card under the inspector (E03), set
+    /// to the paragraph's spacing now.
     pub(super) fn toggle_spacing_menu(&mut self, cx: &mut Context<Self>) {
         if self.spacing_menu.take().is_none() {
             let Some((_, _, b)) = self.typed_block() else {
                 return;
             };
-            let now = [b.char_spacing, b.word_spacing, b.leading];
-            let accent = gpui::rgba(self.theme.katna.accent).into();
-            let fields = now.map(|v| {
-                cx.new(|cx| {
-                    let mut input = TextInput::new("", cx);
-                    input.set_accent(accent);
-                    input.set_text(format!("{}", (v * 10.0).round() / 10.0), cx);
-                    input
-                })
-            });
-            let subs = fields
-                .iter()
-                .map(|f| {
-                    cx.subscribe(f, |this, _, event, cx| match event {
-                        InputEvent::Submit => this.apply_spacing(cx),
-                        InputEvent::Cancel => {
-                            this.spacing_menu = None;
-                            cx.notify();
-                        }
-                        InputEvent::Changed => {}
-                    })
-                })
-                .collect();
+            let now = [
+                b.char_spacing,
+                b.word_spacing,
+                if b.size > 0.0 {
+                    b.leading / b.size
+                } else {
+                    1.2
+                },
+            ];
             self.spacing_menu = Some(SpacingMenu {
-                fields,
-                _fields: subs,
+                values: now,
+                was: now,
+                dragging: None,
+                tracks: Default::default(),
             });
         }
         cx.notify();
     }
 
-    /// The spacing typed into the fields put on the paragraph being
-    /// typed in, where it differs from what it has.
-    fn apply_spacing(&mut self, cx: &mut Context<Self>) {
-        let Some(menu) = self.spacing_menu.take() else {
+    /// Slider `which` set from the pointer at `x` on screen.
+    fn slide_spacing(&mut self, which: usize, x: gpui::Pixels, cx: &mut Context<Self>) {
+        let Some(menu) = self.spacing_menu.as_mut() else {
             return;
         };
+        let track = menu.tracks.get()[which];
+        let wide = f32::from(track.size.width).max(1.0);
+        let along = (f32::from(x - track.origin.x) / wide).clamp(0.0, 1.0);
+        let (least, most) = SPACING_RANGE[which];
+        let step = SPACING_STEP[which];
+        let value = ((least + along * (most - least)) / step).round() * step;
+        menu.values[which] = value;
+        cx.notify();
+    }
+
+    /// The spacing on the sliders put on the paragraph being typed in,
+    /// where it differs from what it has.
+    fn apply_spacing(&mut self, cx: &mut Context<Self>) {
+        let Some(menu) = self.spacing_menu.as_mut() else {
+            return;
+        };
+        menu.dragging = None;
+        let values = menu.values;
         let Some((_, _, b)) = self.typed_block() else {
             return;
         };
-        let typed = menu
-            .fields
-            .each_ref()
-            .map(|f| super::objects::length(f.read(cx).text()));
-        let differs = |v: Option<f32>, now: f32| v.filter(|v| (v - now).abs() > 0.01);
+        let differs = |v: f32, now: f32| Some(v).filter(|v| (v - now).abs() > 0.01);
         let layout = Layout {
             align: None,
-            char_spacing: differs(typed[0], b.char_spacing),
-            word_spacing: differs(typed[1], b.word_spacing),
-            leading: differs(typed[2], b.leading).map(|l| l.max(1.0)),
+            char_spacing: differs(values[0], b.char_spacing),
+            word_spacing: differs(values[1], b.word_spacing),
+            leading: differs(values[2] * b.size, b.leading).map(|l| l.max(1.0)),
         };
         cx.notify();
         if layout != Layout::default() {
@@ -1220,7 +1276,8 @@ impl Viewer {
         }
     }
 
-    /// The spacing fields, under the inspector's spacing button.
+    /// The spacing card (E03): a slider each for letters, words and
+    /// lines, and a button putting them back as they were.
     fn spacing_menu(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let menu = self.spacing_menu.as_ref()?;
         let th = self.theme;
@@ -1229,47 +1286,100 @@ impl Viewer {
             "text-spacing-words",
             "text-spacing-lines",
         ];
-        let rows = labels.iter().zip(&menu.fields).map(|(label, field)| {
+        let rows = (0..3).map(|i| {
+            let value = menu.values[i];
+            let (least, most) = SPACING_RANGE[i];
+            let along = ((value - least) / (most - least)).clamp(0.0, 1.0);
+            let shown = match i {
+                2 => format!("{:.1}", value),
+                _ if value.abs() < 0.05 => "0".to_owned(),
+                _ => format!("{value:+.1}"),
+            };
+            let tracks = menu.tracks.clone();
             div()
                 .flex()
                 .items_center()
-                .gap(px(space::S2))
+                .gap(px(space::S3))
+                .h(px(26.0))
                 .child(
                     div()
-                        .flex_1()
+                        .w(px(80.0))
                         .text_size(px(text::SMALL))
                         .text_color(th.text)
-                        .child(t(label, &[])),
+                        .child(t(labels[i], &[])),
                 )
                 .child(
                     div()
-                        .w(px(72.0))
-                        .h(px(28.0))
-                        .px(px(space::S2))
+                        .id(("text-spacing-slider", i))
+                        .flex_1()
+                        .h(px(20.0))
+                        .relative()
+                        .cursor_pointer()
+                        .on_mouse_down(
+                            gpui::MouseButton::Left,
+                            cx.listener(move |this, e: &gpui::MouseDownEvent, _, cx| {
+                                cx.stop_propagation();
+                                if let Some(menu) = this.spacing_menu.as_mut() {
+                                    menu.dragging = Some(i);
+                                }
+                                this.slide_spacing(i, e.position.x, cx);
+                            }),
+                        )
+                        .child(
+                            gpui::canvas(
+                                move |bounds, _, _| {
+                                    let mut all = tracks.get();
+                                    all[i] = bounds;
+                                    tracks.set(all);
+                                },
+                                |_, _, _, _| {},
+                            )
+                            .absolute()
+                            .inset_0(),
+                        )
+                        .child(
+                            div()
+                                .absolute()
+                                .left_0()
+                                .right_0()
+                                .top(px(8.0))
+                                .h(px(4.0))
+                                .rounded(px(2.0))
+                                .bg(th.line),
+                        )
+                        .child(
+                            div()
+                                .absolute()
+                                .left(gpui::relative(along))
+                                .ml(px(-8.0))
+                                .top(px(2.0))
+                                .size(px(16.0))
+                                .rounded(px(radius::FULL))
+                                .bg(th.accent)
+                                .border_2()
+                                .border_color(th.card),
+                        ),
+                )
+                .child(
+                    div()
+                        .w(px(36.0))
                         .flex()
-                        .items_center()
-                        .rounded(px(radius::XS))
-                        .bg(th.field)
+                        .justify_end()
                         .text_size(px(text::SMALL))
-                        .child(field.clone()),
-                )
-                .child(
-                    div()
-                        .w(px(20.0))
-                        .text_size(px(text::SMALL))
-                        .text_color(gpui::rgba(th.katna.text_dim))
-                        .child(t("text-spacing-pt", &[])),
+                        .text_color(th.text2)
+                        .child(shown),
                 )
         });
+        let changed = menu.values != menu.was;
         let card = div()
             .id("text-spacing-menu")
             .occlude()
-            .w(px(280.0))
+            .w(px(260.0))
             .mt(px(space::S1))
-            .p(px(space::S3))
+            .p(px(space::S4))
             .flex()
             .flex_col()
-            .gap(px(space::S2))
+            .gap(px(space::S1))
             .rounded(px(radius::MD))
             .bg(th.card)
             .border_1()
@@ -1279,21 +1389,58 @@ impl Viewer {
                 this.spacing_menu = None;
                 cx.notify();
             }))
-            .children(rows)
+            .on_mouse_move(cx.listener(|this, e: &gpui::MouseMoveEvent, _, cx| {
+                if let Some(which) = this.spacing_menu.as_ref().and_then(|m| m.dragging) {
+                    if e.pressed_button == Some(gpui::MouseButton::Left) {
+                        this.slide_spacing(which, e.position.x, cx);
+                    } else {
+                        this.apply_spacing(cx);
+                    }
+                }
+            }))
+            .on_mouse_up(
+                gpui::MouseButton::Left,
+                cx.listener(|this, _, _, cx| {
+                    if this
+                        .spacing_menu
+                        .as_ref()
+                        .is_some_and(|m| m.dragging.is_some())
+                    {
+                        this.apply_spacing(cx);
+                    }
+                }),
+            )
             .child(
                 div()
-                    .text_size(px(text::SMALL))
-                    .text_color(gpui::rgba(th.katna.text_dim))
-                    .child(t("text-spacing-hint", &[])),
+                    .pb(px(space::S2))
+                    .text_size(px(text::MICRO))
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .text_color(th.dim)
+                    .child(t("text-spacing", &[]).to_uppercase()),
+            )
+            .children(rows)
+            .child(
+                div().pt(px(space::S2)).flex().child(
+                    float::button("text-spacing-was", t("text-spacing-was", &[]), false, &th)
+                        .border_color(gpui::transparent_black())
+                        .bg(gpui::transparent_black())
+                        .when(!changed, |b| b.opacity(0.5))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            if let Some(menu) = this.spacing_menu.as_mut() {
+                                menu.values = menu.was;
+                            }
+                            this.apply_spacing(cx);
+                        })),
+                ),
             );
         Some(
             div()
                 .absolute()
                 .top_full()
-                .left_0()
+                .right_0()
                 .child(gpui::deferred(
                     katna_ui::anchored()
-                        .anchor(gpui::Anchor::TopLeft)
+                        .anchor(gpui::Anchor::TopRight)
                         .child(card),
                 ))
                 .into_any_element(),
@@ -1301,7 +1448,7 @@ impl Viewer {
     }
 
     /// Opens or closes the list of fonts under the inspector.
-    pub(super) fn toggle_font_menu(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn toggle_font_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.font_menu.take().is_none() {
             let accent = gpui::rgba(self.theme.katna.accent).into();
             let filter = cx.new(|cx| {
@@ -1316,6 +1463,8 @@ impl Viewer {
                 }
                 _ => cx.notify(),
             });
+            // Typing finds a font, rather than going into the paragraph.
+            window.focus(&filter.focus_handle(cx), cx);
             self.font_menu = Some(FontMenu {
                 filter,
                 _filter: sub,
@@ -1330,45 +1479,131 @@ impl Viewer {
         let th = self.theme;
         let now = self.typed_face(cx)?;
         let wanted = menu.filter.read(cx).text().trim().to_lowercase();
-        let rows = fonts::installed()
-            .families()
+        let offered = fonts::installed().families();
+        let fits = |f: &str| wanted.is_empty() || f.to_lowercase().contains(&wanted);
+        // The fonts this file's paragraphs use, that can be chosen here:
+        // installed, or standard.
+        let names = cx.text_system().all_font_names();
+        let mut in_file: Vec<(String, bool)> = Vec::new();
+        for blocks in self.runs.pages.values() {
+            for b in blocks.iter() {
+                let family = Look::of(&b.font, &names)
+                    .family
+                    .map(|f| f.to_string())
+                    .unwrap_or_default();
+                let Some(family) = offered
+                    .iter()
+                    .find(|o| o.eq_ignore_ascii_case(&family))
+                    .cloned()
+                else {
+                    continue;
+                };
+                if !in_file.iter().any(|(f, _)| *f == family) {
+                    in_file.push((family, b.font.contains('+')));
+                }
+            }
+        }
+        in_file.sort();
+        let standard = ["Helvetica", "Times", "Courier"];
+        let row = |family: &str, note: Option<String>, cx: &mut Context<Self>| {
+            let chosen = family.eq_ignore_ascii_case(&now.family);
+            let name = family.to_owned();
+            let font = if standard.contains(&family) {
+                match family {
+                    "Times" => "Liberation Serif",
+                    "Courier" => "Liberation Mono",
+                    _ => "Liberation Sans",
+                }
+                .to_owned()
+            } else {
+                family.to_owned()
+            };
+            div()
+                .id(gpui::SharedString::from(format!("font-{family}")))
+                .flex_none()
+                .flex()
+                .items_center()
+                .gap(px(space::S2))
+                .h(px(32.0))
+                .px(px(space::S3))
+                .rounded(px(6.0))
+                .cursor_pointer()
+                .when(chosen, |d| d.bg(th.accent_soft))
+                .hover(move |s| s.bg(th.hover))
+                .text_size(px(text::BODY))
+                .text_color(if chosen { th.accent_text } else { th.text })
+                .on_click(cx.listener(move |this, _, _, cx| this.refont_typed(name.clone(), cx)))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .font_family(gpui::SharedString::from(font))
+                        .child(family.to_owned()),
+                )
+                .children(note.map(|note| {
+                    div()
+                        .text_size(px(text::CAPTION))
+                        .text_color(th.dim)
+                        .child(note)
+                }))
+                .into_any_element()
+        };
+        let head = |id: &str| {
+            div()
+                .flex_none()
+                .px(px(space::S3))
+                .pt(px(space::S3))
+                .pb(px(space::S1))
+                .text_size(px(text::MICRO))
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .text_color(th.dim)
+                .child(t(id, &[]).to_uppercase())
+                .into_any_element()
+        };
+        let mut rows: Vec<AnyElement> = Vec::new();
+        let here: Vec<&(String, bool)> = in_file.iter().filter(|(f, _)| fits(f)).collect();
+        if !here.is_empty() {
+            rows.push(head("text-fonts-in-file"));
+            for (family, embedded) in here {
+                let note = embedded.then(|| t("text-fonts-embedded", &[]));
+                rows.push(row(family, note, cx));
+            }
+        }
+        let computer: Vec<&String> = offered
             .iter()
-            .filter(|f| wanted.is_empty() || f.to_lowercase().contains(&wanted))
+            .filter(|f| !standard.contains(&f.as_str()) && fits(f))
             .take(400)
-            .map(|family| {
-                let chosen = family.eq_ignore_ascii_case(&now.family);
-                let name = family.clone();
-                div()
-                    .id(gpui::SharedString::from(family.clone()))
-                    .flex()
-                    .items_center()
-                    .gap(px(space::S2))
-                    .px(px(space::S3))
-                    .py(px(space::S1))
-                    .rounded(px(radius::SM))
-                    .cursor_pointer()
-                    .hover(move |s| s.bg(th.hover))
-                    .text_size(px(text::BODY))
-                    .text_color(th.text)
-                    .font_family(gpui::SharedString::from(family.clone()))
-                    .on_click(
-                        cx.listener(move |this, _, _, cx| this.refont_typed(name.clone(), cx)),
-                    )
-                    .child(div().flex_1().child(family.clone()))
-                    .when(chosen, |row| {
-                        row.child(
-                            gpui::svg()
-                                .path("icons/check.svg")
-                                .size(px(16.0))
-                                .flex_none()
-                                .text_color(gpui::rgb(th.katna.accent >> 8)),
-                        )
-                    })
-            });
+            .collect();
+        if !computer.is_empty() {
+            rows.push(head("text-fonts-computer"));
+            for family in computer {
+                rows.push(row(family, None, cx));
+            }
+        }
+        let always: Vec<&&str> = standard.iter().filter(|f| fits(f)).collect();
+        if !always.is_empty() {
+            rows.push(head("text-fonts-standard"));
+            for family in always {
+                rows.push(row(family, None, cx));
+            }
+        }
+        rows.push(
+            div()
+                .px(px(space::S3))
+                .pt(px(space::S3))
+                .pb(px(space::S2))
+                .text_size(px(text::CAPTION))
+                .text_color(th.dim)
+                .child(t("text-fonts-note", &[]))
+                .into_any_element(),
+        );
         let list = div()
             .id("text-font-menu")
             .occlude()
-            .w(px(280.0))
+            .w(px(300.0))
+            .text_size(px(text::BODY))
+            .whitespace_normal()
             .mt(px(space::S1))
             .p(px(space::S1))
             .flex()
@@ -1384,19 +1619,23 @@ impl Viewer {
             }))
             .child(
                 div()
-                    .h(px(28.0))
+                    .h(px(32.0))
                     .mb(px(space::S1))
-                    .px(px(space::S2))
+                    .px(px(space::S3))
                     .flex()
                     .items_center()
-                    .rounded(px(radius::XS))
+                    .gap(px(space::S2))
+                    .rounded(px(7.0))
+                    .border_1()
+                    .border_color(th.accent)
                     .bg(th.field)
-                    .child(menu.filter.clone()),
+                    .child(float::icon("search", 14.0, th.dim))
+                    .child(div().flex_1().min_w_0().child(menu.filter.clone())),
             )
             .child(
                 div()
                     .id("text-font-list")
-                    .max_h(px(320.0))
+                    .max_h(px(380.0))
                     .overflow_y_scroll()
                     .flex()
                     .flex_col()
@@ -1450,17 +1689,6 @@ impl Viewer {
         let menu = self.font_menu(cx);
         let spacing = self.spacing_menu(cx);
         let align = block.align;
-        let field = |wide: f32| {
-            div()
-                .h(px(28.0))
-                .px(px(space::S2))
-                .flex()
-                .items_center()
-                .rounded(px(radius::XS))
-                .bg(th.field)
-                .text_size(px(text::SMALL))
-                .when(wide > 0.0, |d| d.max_w(px(wide)).overflow_hidden())
-        };
         let step = |id: &'static str, label: &'static str, tip: &'static str, by: f32| {
             div()
                 .id(id)
@@ -1500,86 +1728,248 @@ impl Viewer {
         };
         let bold = face.bold;
         let italic = face.italic;
-        let row = div()
-            .flex()
-            .flex_wrap()
-            .items_center()
-            .gap(px(space::S1))
-            .child(
-                div()
-                    .relative()
-                    .child(
-                        field(180.0)
-                            .id("text-font")
-                            .cursor_pointer()
-                            .hover(move |s| s.bg(th.hover))
-                            .tip(t("text-font-tip", &[]), &th.katna)
-                            .font_family(gpui::SharedString::from(face.family.clone()))
-                            .when(bold, |d| d.font_weight(gpui::FontWeight::BOLD))
-                            .when(italic, |d| d.italic())
-                            .on_click(cx.listener(|this, _, _, cx| this.toggle_font_menu(cx)))
-                            .child(div().overflow_hidden().child(face.family.clone())),
-                    )
-                    .children(menu),
-            )
-            .child(
-                letter("text-bold", "B", "text-bold", bold)
-                    .font_weight(gpui::FontWeight::BOLD)
-                    .on_click(
-                        cx.listener(move |this, _, _, cx| {
-                            this.reweigh_typed(Some(!bold), None, cx)
+        let pop = self.text_pop;
+        let [r, g, b] = block.colour;
+        let ink = gpui::rgb(u32::from_be_bytes([0, r, g, b]));
+        let chev = |colour| float::icon("chev", 12.0, colour);
+        let (page, index) = self
+            .typing
+            .as_ref()
+            .map_or((0, 0), |t| (t.page, t.block().unwrap_or(0)));
+        let size_now = block.size.round();
+        // Sizes to pick from, under the size.
+        let sizes = (pop == Some(TextPop::Size)).then(|| {
+            let hover = th.hover;
+            float::popover(
+                float::menu("text-size-menu", 80.0, &th)
+                    .max_h(px(300.0))
+                    .overflow_y_scroll()
+                    .children(
+                        [
+                            8.0f32, 9.0, 10.0, 11.0, 12.0, 14.0, 16.0, 18.0, 20.0, 24.0, 28.0,
+                            32.0, 36.0, 48.0, 72.0,
+                        ]
+                        .map(|size| {
+                            let on = (size - size_now).abs() < 0.5;
+                            div()
+                                .id(("text-size-pick", size as usize))
+                                .h(px(28.0))
+                                .px(px(space::S3))
+                                .flex()
+                                .items_center()
+                                .rounded(px(5.0))
+                                .cursor_pointer()
+                                .text_size(px(text::SMALL))
+                                .text_color(if on { th.accent_text } else { th.text })
+                                .when(on, |d| d.bg(th.accent_soft))
+                                .hover(move |s| s.bg(hover))
+                                .child(format!("{size}"))
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.text_pop = None;
+                                    this.resize_typed(size - size_now, cx);
+                                }))
                         }),
                     ),
+                false,
+                false,
             )
-            .child(
-                letter("text-italic", "I", "text-italic", italic)
-                    .italic()
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.reweigh_typed(None, Some(!italic), cx)
-                    })),
-            )
-            .child(step("text-smaller", "A−", "text-smaller", -1.0))
-            .child(field(0.0).child(t(
-                "text-size",
-                &[("size", &format!("{}", block.size.round()))],
-            )))
-            .child(step("text-bigger", "A+", "text-bigger", 1.0))
-            .child(float::vsep(&th))
-            .children(
-                [
-                    (TextAlign::Left, "text-align-left", "al"),
-                    (TextAlign::Center, "text-align-centre", "ac"),
-                    (TextAlign::Right, "text-align-right", "ar"),
-                ]
-                .map(|(how, id, glyph)| {
-                    toggle(id, glyph, id, align == how)
-                        .on_click(cx.listener(move |this, _, _, cx| this.align_typed(how, cx)))
-                }),
-            )
-            .child(
-                div()
-                    .relative()
-                    .child(
-                        toggle("text-spacing", "list", "text-spacing", spacing.is_some())
-                            .on_click(cx.listener(|this, _, _, cx| this.toggle_spacing_menu(cx))),
-                    )
-                    .children(spacing),
-            )
-            .child(float::vsep(&th))
-            .child(
-                float::ib("text-copy", "copy", t("text-copy", &[]), false, &th).on_click(
-                    cx.listener(|this, _, _, cx| {
-                        this.copy_typed(cx);
-                    }),
+        });
+        // Colours to show it in, under the dot.
+        let inks = (pop == Some(TextPop::Ink)).then(|| {
+            float::popover(
+                float::menu("text-ink-menu", 0.0, &th).child(
+                    div().flex().gap(px(space::S2)).p(px(space::S1)).children(
+                        TEXT_INKS.into_iter().enumerate().map(|(i, ink)| {
+                            let [r, g, b] = ink.map(|c| (c * 255.0).round() as u8);
+                            float::swatch(
+                                ("text-ink", i),
+                                gpui::rgb(u32::from_be_bytes([0, r, g, b])).into(),
+                                block.colour == [r, g, b],
+                                &th,
+                            )
+                            .on_click(cx.listener(
+                                move |this, _, _, cx| {
+                                    this.text_pop = None;
+                                    this.colour_typed(ink, cx);
+                                },
+                            ))
+                        }),
+                    ),
                 ),
+                false,
+                false,
             )
-            .child(
-                float::ib("text-delete", "trash", t("text-delete", &[]), false, &th).on_click(
-                    cx.listener(|this, _, _, cx| {
-                        this.delete_typed(cx);
+        });
+        let toggle_pop = move |which: TextPop| {
+            move |this: &mut Viewer,
+                  _: &gpui::ClickEvent,
+                  _: &mut Window,
+                  cx: &mut Context<Viewer>| {
+                this.text_pop = if this.text_pop == Some(which) {
+                    None
+                } else {
+                    Some(which)
+                };
+                this.font_menu = None;
+                this.spacing_menu = None;
+                cx.notify();
+            }
+        };
+        let row =
+            div()
+                .flex()
+                .items_center()
+                .gap(px(space::S1))
+                .child(
+                    div()
+                        .relative()
+                        .child(
+                            div()
+                                .id("text-font")
+                                .h(px(32.0))
+                                .w(px(140.0))
+                                .px(px(space::S3))
+                                .flex()
+                                .items_center()
+                                .gap(px(space::S2))
+                                .rounded(px(6.0))
+                                .cursor_pointer()
+                                .hover(move |s| s.bg(th.hover))
+                                .tip(t("text-font-tip", &[]), &th.katna)
+                                .text_size(px(text::SMALL))
+                                .text_color(th.text)
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.text_pop = None;
+                                    this.toggle_font_menu(window, cx);
+                                }))
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .truncate()
+                                        .child(face.family.clone()),
+                                )
+                                .child(chev(th.dim)),
+                        )
+                        .children(menu),
+                )
+                .child(
+                    div()
+                        .relative()
+                        .child(
+                            div()
+                                .id("text-size")
+                                .h(px(32.0))
+                                .px(px(space::S2))
+                                .flex()
+                                .items_center()
+                                .gap(px(space::S1))
+                                .rounded(px(6.0))
+                                .cursor_pointer()
+                                .hover(move |s| s.bg(th.hover))
+                                .tip(t("text-size-tip", &[]), &th.katna)
+                                .text_size(px(text::SMALL))
+                                .text_color(th.text)
+                                .on_click(cx.listener(toggle_pop(TextPop::Size)))
+                                .child(format!("{size_now}"))
+                                .child(chev(th.dim)),
+                        )
+                        .children(sizes),
+                )
+                .child(step("text-smaller", "A−", "text-smaller", -1.0))
+                .child(step("text-bigger", "A+", "text-bigger", 1.0))
+                .child(float::vsep(&th))
+                .child(
+                    letter("text-bold", "B", "text-bold", bold)
+                        .font_weight(gpui::FontWeight::BOLD)
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.reweigh_typed(Some(!bold), None, cx)
+                        })),
+                )
+                .child(
+                    letter("text-italic", "I", "text-italic", italic)
+                        .italic()
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.reweigh_typed(None, Some(!italic), cx)
+                        })),
+                )
+                .child(
+                    div()
+                        .relative()
+                        .child(
+                            div()
+                                .id("text-ink")
+                                .size(px(32.0))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .rounded(px(6.0))
+                                .cursor_pointer()
+                                .hover(move |s| s.bg(th.hover))
+                                .ftip(t("text-ink", &[]), &th)
+                                .on_click(cx.listener(toggle_pop(TextPop::Ink)))
+                                .child(
+                                    div()
+                                        .size(px(16.0))
+                                        .rounded(px(radius::FULL))
+                                        .border_1()
+                                        .border_color(th.line)
+                                        .bg(ink),
+                                ),
+                        )
+                        .children(inks),
+                )
+                .child(float::vsep(&th))
+                .children(
+                    [
+                        (TextAlign::Left, "text-align-left", "al"),
+                        (TextAlign::Center, "text-align-centre", "ac"),
+                        (TextAlign::Right, "text-align-right", "ar"),
+                        (TextAlign::Justify, "text-align-justify", "aj"),
+                    ]
+                    .map(|(how, id, glyph)| {
+                        toggle(id, glyph, id, align == how)
+                            .on_click(cx.listener(move |this, _, _, cx| this.align_typed(how, cx)))
                     }),
-                ),
-            );
+                )
+                .child(float::vsep(&th))
+                .child(
+                    div()
+                        .relative()
+                        .child(
+                            toggle("text-spacing", "list", "text-spacing", spacing.is_some())
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.text_pop = None;
+                                    this.toggle_spacing_menu(cx);
+                                })),
+                        )
+                        .children(spacing),
+                )
+                .child(
+                    float::ib("text-copy", "copy", t("text-copy", &[]), false, &th).on_click(
+                        cx.listener(|this, _, _, cx| {
+                            this.copy_typed(cx);
+                        }),
+                    ),
+                )
+                .child(
+                    float::ib("text-move", "drag", t("text-grip", &[]), false, &th)
+                        .cursor(gpui::CursorStyle::OpenHand)
+                        .on_mouse_down(
+                            gpui::MouseButton::Left,
+                            cx.listener(move |this, event: &gpui::MouseDownEvent, _, cx| {
+                                cx.stop_propagation();
+                                this.text_move_press(page, index, event.position, cx);
+                            }),
+                        ),
+                )
+                .child(
+                    float::ib("text-delete", "trash", t("text-delete", &[]), false, &th).on_click(
+                        cx.listener(|this, _, _, cx| {
+                            this.delete_typed(cx);
+                        }),
+                    ),
+                );
         Some(row.into_any_element())
     }
 
@@ -1594,6 +1984,35 @@ impl Viewer {
         true
     }
 }
+
+/// The face a standard font stands for: `Times-BoldItalic` as Times,
+/// bold and italic.
+fn stand_in_choice(name: &str) -> FontChoice {
+    let lower = name.to_ascii_lowercase();
+    let family = name.split('-').next().unwrap_or(name);
+    FontChoice {
+        family: family.to_owned(),
+        bold: lower.contains("bold"),
+        italic: lower.contains("italic") || lower.contains("oblique"),
+    }
+}
+
+/// What opens under the paragraph's tools.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum TextPop {
+    Size,
+    Ink,
+}
+
+/// Colours a paragraph can be put in: black first, then Float's own.
+const TEXT_INKS: [[f32; 3]; 6] = [
+    [0.067, 0.067, 0.067],
+    [0.42, 0.45, 0.5],
+    [0.86, 0.15, 0.15],
+    [0.15, 0.39, 0.92],
+    [0.09, 0.64, 0.29],
+    [0.92, 0.58, 0.05],
+];
 
 /// The id of the words naming a change, for Undo, from the id of the
 /// words saying it failed.
@@ -1612,7 +2031,6 @@ fn what_failed(failed: &str) -> &'static str {
         "properties-failed" => "undo-what-properties",
         "properties-lock-failed" => "undo-what-password",
         "properties-shrink-failed" => "undo-what-shrink",
-        "repair-failed" => "undo-what-repair",
         "text-font-failed" => "undo-what-font",
         _ => "undo-what-edit",
     }

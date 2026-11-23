@@ -66,10 +66,10 @@ mod present;
 mod printing;
 mod properties;
 mod redact;
-mod repair;
 mod setup;
 mod sharp;
 pub(crate) mod sign;
+mod signatures;
 mod speak;
 mod stamps;
 mod start;
@@ -195,12 +195,42 @@ enum CloseAnswer {
 pub(crate) struct Notice {
     words: String,
     error: bool,
+    /// Something to look at, in the warning's colours.
+    warn: bool,
+    /// What its button does, if it has one, and the button's words.
+    action: Option<(String, NoticeAction)>,
+}
+
+/// What a notice's button does.
+#[derive(Debug, Clone, PartialEq)]
+pub(super) enum NoticeAction {
+    /// Puts paragraph `block` of page `page` in `font` (E04).
+    Refont {
+        page: usize,
+        block: usize,
+        font: textedit::FontChoice,
+    },
 }
 
 impl Notice {
     /// Something that went wrong, in words not from an id.
     pub(crate) fn error(words: String) -> Self {
-        Notice { words, error: true }
+        Notice {
+            words,
+            error: true,
+            warn: false,
+            action: None,
+        }
+    }
+
+    /// Something to look at, with a button that sees to it.
+    pub(super) fn warning(words: String, action: Option<(String, NoticeAction)>) -> Self {
+        Notice {
+            words,
+            error: false,
+            warn: true,
+            action,
+        }
     }
 }
 
@@ -221,6 +251,8 @@ pub(super) fn said(id: &str, args: &[(&str, &str)]) -> Notice {
     Notice {
         words: t(id, args),
         error: WRONG.iter().any(|w| id.contains(w)),
+        warn: false,
+        action: None,
     }
 }
 
@@ -787,9 +819,6 @@ pub struct Viewer {
     colour_chosen: bool,
     /// The comment looks kept for new comments, by tool.
     looks: looks::Looks,
-    /// What was done to open the file shown, when it was damaged
-    /// (`repair.rs`).
-    repairs: Vec<katna_pdf_cos::Repair>,
     /// Each page's annotations, once read.
     annots: Option<Arc<Vec<Vec<katna_pdf_cos::Annotation>>>>,
     /// An annotation being drawn with the pointer.
@@ -845,6 +874,12 @@ pub struct Viewer {
     /// The file's signatures, checked, once read; and signing, while
     /// under way (`sign.rs`).
     signatures: Option<sign::Rows>,
+    /// The signature whose card is open beside the pane.
+    sig_open: Option<usize>,
+    /// Whether that card shows the signer's certificate.
+    sig_certificate: bool,
+    /// A copy of a signed file saved to edit (E16): no warning there.
+    signed_copy: Option<PathBuf>,
     /// What signing needs to know of the file.
     signable: Arc<sign::Signable>,
     signing: Option<sign::Signing>,
@@ -865,6 +900,8 @@ pub struct Viewer {
     colors_menu: bool,
     /// Whether the list of fonts is open under the text inspector.
     font_menu: Option<textedit::FontMenu>,
+    /// The sizes or colours open under the paragraph's tools.
+    text_pop: Option<textedit::TextPop>,
     /// The spacing fields open under the text inspector.
     spacing_menu: Option<textedit::SpacingMenu>,
     colors_menu_closed: Option<std::time::Instant>,
@@ -1049,7 +1086,6 @@ impl Viewer {
             colour: 0,
             colour_chosen: false,
             looks: looks::Looks::load(),
-            repairs: Vec::new(),
             annots: None,
             draft: None,
             chosen: None,
@@ -1080,6 +1116,9 @@ impl Viewer {
             crop_which: crop::Which::default(),
             crop_finding: false,
             signatures: None,
+            sig_open: None,
+            sig_certificate: false,
+            signed_copy: None,
             signable: Arc::default(),
             signing: None,
             grid: gpui::ScrollHandle::new(),
@@ -1091,6 +1130,7 @@ impl Viewer {
             night_pages: prefs.night_pages,
             colors_menu: false,
             font_menu: None,
+            text_pop: None,
             spacing_menu: None,
             colors_menu_closed: None,
             zoom_card: false,
@@ -1112,6 +1152,8 @@ impl Viewer {
         self.notice = Some(Notice {
             words,
             error: false,
+            warn: false,
+            action: None,
         });
         cx.notify();
     }
@@ -1201,7 +1243,6 @@ impl Viewer {
         let generation = self.generation;
         self.content = Content::Opening(name.clone());
         self.contents = None;
-        self.repairs.clear();
         self.renaming = None;
         self.label_ranges.clear();
         self.numbering = None;
@@ -1227,6 +1268,7 @@ impl Viewer {
         self.band = None;
         self.forget_runs();
         self.signatures = None;
+        self.sig_open = None;
         self.extras = files::Extras::default();
         self.signable = Arc::default();
         self.signing = None;
@@ -1304,9 +1346,6 @@ impl Viewer {
                         this.visible = 0..1;
                         this.content = Content::Ready(opened);
                         this.watch_file(cx);
-                        if this.recover_after.is_none() {
-                            this.check_repairs(cx);
-                        }
                         this.apply_recovered(cx);
                         this.password = None;
                         if let Some(older) = this.compare_after.take() {
@@ -3471,6 +3510,38 @@ impl Viewer {
         }
     }
 
+    /// Reads the file as it is now, changes not saved too, in the
+    /// background, and hands what `read` finds in it to `then`.
+    pub(super) fn read_cos<T: Send + 'static>(
+        &self,
+        read: impl FnOnce(&katna_pdf_cos::Document) -> T + Send + 'static,
+        then: impl FnOnce(&mut Self, T, &mut Context<Self>) + 'static,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(path) = self.path.clone() else {
+            return;
+        };
+        let key = self.key.clone();
+        let current = self.unsaved();
+        cx.spawn(async move |this, cx| {
+            let found = cx
+                .background_executor()
+                .spawn(async move {
+                    let bytes = match current {
+                        Some(bytes) => bytes.to_vec(),
+                        None => std::fs::read(&path).ok()?,
+                    };
+                    let doc = cos(bytes, key.as_deref()).ok()?;
+                    Some(read(&doc))
+                })
+                .await;
+            if let Some(found) = found {
+                this.update(cx, |this, cx| then(this, found, cx)).ok();
+            }
+        })
+        .detach();
+    }
+
     /// Whether the tab may close: not at first when there are changes
     /// not saved; the notice says so, and closing again closes.
     pub fn may_close(&mut self, cx: &mut Context<Self>) -> bool {
@@ -4558,6 +4629,8 @@ impl Render for Viewer {
         let initials_bar = self.initials_bar(cx);
         let reading_bar = self.reading_bar(cx);
         let signatures_line = self.signatures_line(cx);
+        let signature_card = self.signature_card(cx);
+        let card_top = space::S2 + if signatures_line.is_some() { 52.0 } else { 0.0 };
         let signing_card = self.signing_card(cx);
         let marks_card = self.marks_card(window, cx);
         let unsaved_card = self.unsaved_card(cx);
@@ -4584,11 +4657,26 @@ impl Render for Viewer {
         let compare_banner = self.compare_banner(cx);
         let command_box = self.command_box(cx);
         let notice = self.notice.clone().map(|notice| {
+            let warning: gpui::Hsla = gpui::rgba(th.katna.warning).into();
             let (bg, fg, glyph, mark) = if notice.error {
                 (th.error_soft, th.error, "alert", th.error)
+            } else if notice.warn {
+                (
+                    over(
+                        gpui::rgba(
+                            th.katna.warning & 0xffff_ff00 | if th.dark { 0x33 } else { 0x24 },
+                        )
+                        .into(),
+                        th.card,
+                    ),
+                    warning,
+                    "alert",
+                    warning,
+                )
             } else {
                 (th.card, th.text, "info", th.accent)
             };
+            let action = notice.action.clone();
             div()
                 .id("notice")
                 .occlude()
@@ -4607,6 +4695,14 @@ impl Render for Viewer {
                 .when(!notice.error, |d| d.border_1().border_color(th.line))
                 .child(float::icon(glyph, 15.0, mark))
                 .child(div().flex_1().min_w_0().child(notice.words))
+                .children(action.map(|(words, action)| {
+                    float::button("notice-action", words, false, &th)
+                        .h(px(28.0))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.notice = None;
+                            this.notice_action(action.clone(), cx);
+                        }))
+                }))
                 .child(icon_button(
                     "notice-close",
                     "close",
@@ -4945,6 +5041,15 @@ impl Render for Viewer {
                     .gap(px(space::S3))
                     .children(signatures_line.map(floating(th))),
             )
+            .children(signature_card.map(|card| {
+                div()
+                    .absolute()
+                    .top(px(card_top))
+                    .left(px(pane_room + float::GAP))
+                    .right(px(float::GAP))
+                    .child(float::appear("signature-card-in", card, -4.0))
+                    .into_any_element()
+            }))
             .children(compare_banner.map(|banner| {
                 div()
                     .absolute()
@@ -5122,6 +5227,19 @@ fn dialog(
 
 /// A bar that floats over the pages: the card's colour, rounded, with
 /// a shadow, never wider than the room it has.
+/// Colour `top`, see-through as it is, laid over `under`: solid.
+fn over(top: gpui::Hsla, under: gpui::Hsla) -> gpui::Hsla {
+    let (t, u) = (gpui::Rgba::from(top), gpui::Rgba::from(under));
+    let mix = |a: f32, b: f32| a * t.a + b * (1.0 - t.a);
+    gpui::Rgba {
+        r: mix(t.r, u.r),
+        g: mix(t.g, u.g),
+        b: mix(t.b, u.b),
+        a: 1.0,
+    }
+    .into()
+}
+
 fn floating(th: Theme) -> impl Fn(AnyElement) -> AnyElement {
     move |bar| {
         div()

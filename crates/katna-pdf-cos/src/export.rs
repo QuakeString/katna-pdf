@@ -66,6 +66,7 @@ fn paragraph(block: &TextBlock) -> String {
         crate::edit::TextAlign::Left => "left",
         crate::edit::TextAlign::Center => "center",
         crate::edit::TextAlign::Right => "right",
+        crate::edit::TextAlign::Justify => "both",
     };
     let mut props = format!(r#"<w:rPr><w:sz w:val="{half_points}"/>"#);
     if bold {

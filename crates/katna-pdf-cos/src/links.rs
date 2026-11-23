@@ -9,6 +9,28 @@ use crate::{Dict, Document, Object, text_string};
 /// Annotations looked at in the whole file before the rest are ignored.
 const MAX_ANNOTATIONS: usize = 500_000;
 
+/// How a link to a page shows it, and how the link looks.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct LinkStyle {
+    pub fit: LinkFit,
+    /// A thin line is drawn round the link.
+    pub boxed: bool,
+    /// The named place it goes to, kept by its name.
+    pub named: Option<String>,
+}
+
+/// How the page a link goes to is shown.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LinkFit {
+    /// The whole page (`/Fit`).
+    #[default]
+    Page,
+    /// Its width (`/FitH`).
+    Width,
+    /// At the zoom the reader has now (`/XYZ` with no zoom).
+    AsNow,
+}
+
 /// One link: its area on the page and where it goes.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Link {
@@ -86,5 +108,78 @@ impl Document {
             _ => LinkTarget::Page(reader.item_destination(annot)?),
         };
         Some(Link { rect, target })
+    }
+
+    /// How each link on page `page`, in the order of `links()`, shows
+    /// the page it goes to and looks.
+    pub fn link_styles(&self, page: usize) -> Vec<LinkStyle> {
+        let Some(&page_ref) = self.pages().get(page) else {
+            return Vec::new();
+        };
+        let Some(Object::Dict(page)) = self.get(page_ref) else {
+            return Vec::new();
+        };
+        let Some(catalog) = self.catalog() else {
+            return Vec::new();
+        };
+        let mut reader = OutlineReader::new(self, catalog);
+        let Object::Array(annots) = self.resolve_key(&page, "Annots") else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        for annot in annots.iter().take(MAX_ANNOTATIONS) {
+            let Object::Dict(a) = self.resolve(annot) else {
+                continue;
+            };
+            if self.link(&a, &mut reader).is_none() {
+                continue;
+            }
+            let width = |o: Object| match o {
+                Object::Array(b) => b.get(2).and_then(|w| self.resolve(w).as_number()),
+                Object::Dict(bs) => self.resolve_key(&bs, "W").as_number(),
+                _ => None,
+            };
+            let boxed = width(self.resolve_key(&a, "Border"))
+                .or_else(|| width(self.resolve_key(&a, "BS")))
+                .is_some_and(|w| w > 0.0);
+            let dest = match a.get("Dest") {
+                Some(d) => self.resolve(d),
+                None => match self.resolve_key(&a, "A") {
+                    Object::Dict(action) if action.name("S") == Some(b"GoTo") => {
+                        self.resolve_key(&action, "D")
+                    }
+                    _ => Object::Null,
+                },
+            };
+            let named = match &dest {
+                Object::Name(n) => Some(text_string(n.as_bytes())),
+                Object::String { bytes, .. } => Some(text_string(bytes)),
+                _ => None,
+            };
+            let array = match &dest {
+                Object::Array(_) => Some(dest.clone()),
+                Object::Name(_) | Object::String { .. } => {
+                    reader.raw_destination(&dest).map(|d| self.resolve(&d))
+                }
+                _ => None,
+            };
+            let fit = match array {
+                Some(Object::Array(parts)) => {
+                    match parts
+                        .get(1)
+                        .map(|p| self.resolve(p))
+                        .as_ref()
+                        .and_then(Object::as_name)
+                    {
+                        Some(b"FitH" | b"FitBH") => LinkFit::Width,
+                        Some(b"XYZ") => LinkFit::AsNow,
+                        _ => LinkFit::Page,
+                    }
+                }
+                _ => LinkFit::Page,
+            };
+            out.push(LinkStyle { fit, boxed, named });
+        }
+        out
     }
 }

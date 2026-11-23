@@ -7,15 +7,15 @@
 //! links are annotations (`katna_pdf_cos::Document::change_links`).
 
 use gpui::{AnyElement, Context, Entity, Focusable, Subscription, Window, div, prelude::*};
-use katna_pdf_cos::{Destination, Link, LinkTarget};
+use katna_pdf_cos::{Destination, Link, LinkFit, LinkStyle, LinkTarget};
 use katna_ui::px;
 use katna_ui::scale::desktop_px;
 use katna_ui::text_input::{InputEvent, TextInput};
-use katna_ui::tokens::{radius, space, text};
-use katna_ui::widgets;
+use katna_ui::tokens::{space, text};
 
 use super::annots::Draft;
 use super::{Content, Viewer};
+use crate::float;
 use crate::text::t;
 
 /// A drag shorter than this, in points, is a click.
@@ -23,8 +23,20 @@ const CLICK: f32 = 3.0;
 
 /// The link tool, while in hand.
 pub(super) struct Linking {
-    /// Where the link goes, typed.
-    target: Entity<TextInput>,
+    /// The page a link goes to, typed.
+    page_no: Entity<TextInput>,
+    /// The web or email address, typed.
+    address: Entity<TextInput>,
+    /// The named place, typed or picked.
+    name: Entity<TextInput>,
+    /// Which of those it goes to.
+    kind: LinkKind,
+    /// How the page is shown.
+    fit: LinkFit,
+    /// Whether a box is drawn round it.
+    boxed: bool,
+    /// The file's named places, read when the tool is taken up.
+    names: Vec<String>,
     /// A box being dragged out on the page shown.
     drawing: Option<Draft>,
     /// A new link's page and box, waiting for where it goes.
@@ -33,7 +45,22 @@ pub(super) struct Linking {
     picked: Option<(usize, usize)>,
     /// Put the keys in the field on the next frame.
     focus: bool,
-    _target: Subscription,
+    _subs: Vec<Subscription>,
+}
+
+impl Linking {
+    /// Whether its card is open, for a new link or one picked.
+    pub(super) fn open(&self) -> bool {
+        self.new.is_some() || self.picked.is_some()
+    }
+}
+
+/// Where a link goes.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum LinkKind {
+    Page,
+    Web,
+    Named,
 }
 
 /// What was typed as a place to go: a page number, or an address. A bare
@@ -70,14 +97,6 @@ pub(super) fn parse_target(typed: &str, pages: usize) -> Option<LinkTarget> {
     Some(LinkTarget::Uri(uri))
 }
 
-/// A link's place to go, as typed into the card.
-fn shown_target(target: &LinkTarget) -> String {
-    match target {
-        LinkTarget::Page(d) => (d.page + 1).to_string(),
-        LinkTarget::Uri(u) => u.strip_prefix("mailto:").unwrap_or(u).to_owned(),
-    }
-}
-
 impl Viewer {
     /// Takes the link tool in hand, or puts it down.
     pub(super) fn toggle_linking(&mut self, cx: &mut Context<Self>) {
@@ -95,24 +114,56 @@ impl Viewer {
         self.designing = None;
         self.numbering = None;
         let accent = gpui::rgba(self.theme.katna.accent).into();
-        let target = cx.new(|cx| {
-            let mut input = TextInput::new(t("link-target", &[]), cx);
-            input.set_accent(accent);
-            input
-        });
-        let sub = cx.subscribe(&target, |this, _, event, cx| {
-            if let InputEvent::Submit = event {
-                this.apply_link(cx);
-            }
-        });
+        let field = |hint: String, cx: &mut Context<Self>| {
+            cx.new(|cx| {
+                let mut input = TextInput::new(hint, cx);
+                input.set_accent(accent);
+                input
+            })
+        };
+        let page_no = field(t("link-page-hint", &[]), cx);
+        let address = field(t("link-address-hint", &[]), cx);
+        let name = field(t("link-name-hint", &[]), cx);
+        let subs = [&page_no, &address, &name]
+            .into_iter()
+            .map(|input| {
+                cx.subscribe(input, |this, _, event, cx| match event {
+                    InputEvent::Submit => this.apply_link(cx),
+                    InputEvent::Changed => cx.notify(),
+                    _ => {}
+                })
+            })
+            .collect();
         self.linking = Some(Linking {
-            target,
+            page_no,
+            address,
+            name,
+            kind: LinkKind::Page,
+            fit: LinkFit::Page,
+            boxed: false,
+            names: Vec::new(),
             drawing: None,
             new: None,
             picked: None,
             focus: false,
-            _target: sub,
+            _subs: subs,
         });
+        // The file's named places, for links to one of them.
+        self.read_cos(
+            |doc| {
+                doc.named_destinations()
+                    .into_iter()
+                    .map(|(name, _)| name)
+                    .collect::<Vec<_>>()
+            },
+            |this, names, cx| {
+                if let Some(linking) = this.linking.as_mut() {
+                    linking.names = names;
+                    cx.notify();
+                }
+            },
+            cx,
+        );
         cx.notify();
     }
 
@@ -138,22 +189,61 @@ impl Viewer {
                 x >= r[0] && x <= r[2] && y >= r[1] && y <= r[3]
             })
         });
-        let shown = hit.and_then(|i| {
+        let found = hit.and_then(|i| {
             let link = self.links.as_ref()?.get(page)?.get(i)?;
-            Some(shown_target(&link.target))
+            Some(link.target.clone())
         });
         let Some(linking) = self.linking.as_mut() else {
             return true;
         };
-        match (hit, shown) {
-            (Some(i), Some(shown)) => {
+        match (hit, found) {
+            (Some(i), Some(target)) => {
                 linking.picked = Some((page, i));
                 linking.new = None;
                 linking.focus = true;
-                linking.target.update(cx, |input, cx| {
-                    input.set_text(shown, cx);
-                    input.select_all_text(cx);
-                });
+                linking.boxed = false;
+                linking.fit = LinkFit::Page;
+                match &target {
+                    LinkTarget::Uri(u) => {
+                        linking.kind = LinkKind::Web;
+                        let shown = u.strip_prefix("mailto:").unwrap_or(u).to_owned();
+                        linking
+                            .address
+                            .update(cx, |input, cx| input.set_text(shown, cx));
+                    }
+                    LinkTarget::Page(d) => {
+                        linking.kind = LinkKind::Page;
+                        let shown = (d.page + 1).to_string();
+                        linking
+                            .page_no
+                            .update(cx, |input, cx| input.set_text(shown, cx));
+                    }
+                }
+                // How it shows the page and looks, read from the file.
+                self.read_cos(
+                    move |doc| doc.link_styles(page).into_iter().nth(i),
+                    move |this, style, cx| {
+                        let Some(style) = style else {
+                            return;
+                        };
+                        let Some(linking) = this.linking.as_mut() else {
+                            return;
+                        };
+                        if linking.picked != Some((page, i)) {
+                            return;
+                        }
+                        linking.fit = style.fit;
+                        linking.boxed = style.boxed;
+                        if let Some(name) = style.named {
+                            linking.kind = LinkKind::Named;
+                            linking
+                                .name
+                                .update(cx, |input, cx| input.set_text(name, cx));
+                        }
+                        cx.notify();
+                    },
+                    cx,
+                );
             }
             _ => {
                 linking.drawing = Some(Draft {
@@ -225,9 +315,10 @@ impl Viewer {
             linking.new = Some((draft.page, rect));
             linking.picked = None;
             linking.focus = true;
-            linking
-                .target
-                .update(cx, |input, cx| input.set_text("", cx));
+            linking.boxed = false;
+            for input in [&linking.page_no, &linking.address, &linking.name] {
+                input.update(cx, |input, cx| input.set_text("", cx));
+            }
         }
         true
     }
@@ -235,13 +326,62 @@ impl Viewer {
     /// The new link made, or the one picked sent where the card says.
     fn apply_link(&mut self, cx: &mut Context<Self>) {
         let count = self.page_count();
-        let Some(linking) = self.linking.as_mut() else {
+        let Some(linking) = self.linking.as_ref() else {
             return;
         };
-        let typed = linking.target.read(cx).text().to_owned();
-        let Some(target) = parse_target(&typed, count) else {
-            self.notice = Some(super::said("link-bad", &[("pages", &count.to_string())]));
-            cx.notify();
+        let style = LinkStyle {
+            fit: linking.fit,
+            boxed: linking.boxed,
+            named: None,
+        };
+        let made = match linking.kind {
+            LinkKind::Page => {
+                let typed = linking.page_no.read(cx).text().trim().to_owned();
+                match typed.parse::<usize>() {
+                    Ok(page) if (1..=count).contains(&page) => Ok((
+                        LinkTarget::Page(Destination {
+                            page: page - 1,
+                            top: None,
+                        }),
+                        style,
+                    )),
+                    _ => Err(t("link-bad-page", &[("pages", &count.to_string())])),
+                }
+            }
+            LinkKind::Web => {
+                let typed = linking.address.read(cx).text().to_owned();
+                match parse_target(&typed, 0) {
+                    Some(target @ LinkTarget::Uri(_)) => Ok((target, style)),
+                    _ => Err(t("link-bad-address", &[])),
+                }
+            }
+            LinkKind::Named => {
+                let typed = linking.name.read(cx).text().trim().to_owned();
+                if linking.names.contains(&typed) {
+                    // The page is looked up again by name when read; any
+                    // page will do here.
+                    let target = LinkTarget::Page(Destination { page: 0, top: None });
+                    Ok((
+                        target,
+                        LinkStyle {
+                            named: Some(typed),
+                            ..style
+                        },
+                    ))
+                } else {
+                    Err(t("link-bad-name", &[]))
+                }
+            }
+        };
+        let (target, style) = match made {
+            Ok(made) => made,
+            Err(words) => {
+                self.notice = Some(super::Notice::warning(words, None));
+                cx.notify();
+                return;
+            }
+        };
+        let Some(linking) = self.linking.as_mut() else {
             return;
         };
         let (page, remove, rect) = match (linking.new.take(), linking.picked.take()) {
@@ -259,11 +399,20 @@ impl Viewer {
             vec![page],
             "link-failed",
             move |doc| {
-                doc.change_links(page, &remove, &[link])
+                doc.change_links_styled(page, &remove, &[(link, style)])
                     .map_err(|e| e.to_string())
             },
             cx,
         );
+        cx.notify();
+    }
+
+    /// The link card closed with nothing changed.
+    fn cancel_link(&mut self, cx: &mut Context<Self>) {
+        if let Some(linking) = self.linking.as_mut() {
+            linking.new = None;
+            linking.picked = None;
+        }
         cx.notify();
     }
 
@@ -282,8 +431,9 @@ impl Viewer {
     }
 
     /// The links on page `page` while the tool is in hand, the one picked
-    /// marked, and the box being dragged out.
-    pub(super) fn link_overlay(&self, page: usize) -> Vec<AnyElement> {
+    /// marked, and the box being dragged out; under the new or picked
+    /// one, its card (E09).
+    pub(super) fn link_overlay(&self, page: usize, cx: &Context<Self>) -> Vec<AnyElement> {
         let Some(linking) = self.linking.as_ref() else {
             return Vec::new();
         };
@@ -296,27 +446,34 @@ impl Viewer {
                 .top(desktop_px(b[1] * shown))
                 .w(desktop_px((b[2] - b[0]) * shown))
                 .h(desktop_px((b[3] - b[1]) * shown))
-                .border_2()
+                .border_1()
                 .border_color(gpui::rgba(accent | if strong { 0xff } else { 0x99 }))
-                .bg(gpui::rgba(accent | if strong { 0x33 } else { 0x14 }))
+                .bg(gpui::rgba(accent | if strong { 0x1a } else { 0x0d }))
         };
         let mut out = Vec::new();
         let transform = match &self.content {
             Content::Ready(opened) => opened.doc.page_transform(page),
             _ => None,
         };
+        let mut card_at = None;
         if let Some(transform) = transform {
             if let Some(links) = self.links.as_ref().and_then(|l| l.get(page)) {
                 for (i, link) in links.iter().enumerate() {
                     let b = katna_pdf_render::map_rect(transform, link.rect);
                     let picked = linking.picked == Some((page, i));
-                    out.push(area(b, picked).into_any_element());
+                    if picked {
+                        card_at = Some(b);
+                        out.push(area(b, true).border_dashed().into_any_element());
+                    } else {
+                        out.push(area(b, false).into_any_element());
+                    }
                 }
             }
             if let Some((p, rect)) = linking.new
                 && p == page
             {
                 let b = katna_pdf_render::map_rect(transform, rect);
+                card_at = Some(b);
                 out.push(area(b, true).border_dashed().into_any_element());
             }
         }
@@ -331,100 +488,278 @@ impl Viewer {
             ];
             out.push(area(b, false).border_dashed().into_any_element());
         }
+        if let Some(b) = card_at {
+            out.push(
+                div()
+                    .absolute()
+                    .left(desktop_px(b[0] * shown))
+                    .top(desktop_px(b[3] * shown + 8.0))
+                    .child(self.link_box(linking, cx))
+                    .into_any_element(),
+            );
+        }
         out
     }
 
-    /// The link card, while the tool is in hand.
+    /// The card under a link: where it goes, how the page is shown, a
+    /// box round it.
+    fn link_box(&self, linking: &Linking, cx: &Context<Self>) -> AnyElement {
+        let th = self.theme;
+        let picked = linking.picked.is_some();
+        let label = |id: &str| {
+            div()
+                .text_size(px(text::SMALL))
+                .text_color(th.text2)
+                .child(t(id, &[]))
+        };
+        let field = |input: &Entity<TextInput>| {
+            div()
+                .h(px(32.0))
+                .px(px(space::S3))
+                .flex()
+                .items_center()
+                .rounded(px(7.0))
+                .border_1()
+                .border_color(th.line)
+                .bg(th.card)
+                .text_size(px(text::BODY))
+                .text_color(th.text)
+                .child(input.clone())
+        };
+        let kinds = float::seg(&th).children(
+            [
+                (LinkKind::Page, "link-kind-page"),
+                (LinkKind::Web, "link-kind-web"),
+                (LinkKind::Named, "link-kind-named"),
+            ]
+            .into_iter()
+            .enumerate()
+            .map(|(i, (kind, words))| {
+                float::seg_item(
+                    ("link-kind", i),
+                    None,
+                    Some(t(words, &[]).into()),
+                    linking.kind == kind,
+                    &th,
+                )
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if let Some(linking) = this.linking.as_mut() {
+                        linking.kind = kind;
+                        linking.focus = true;
+                    }
+                    cx.notify();
+                }))
+            }),
+        );
+        let fits = float::seg(&th).children(
+            [
+                (LinkFit::Page, "link-fit-page"),
+                (LinkFit::Width, "link-fit-width"),
+                (LinkFit::AsNow, "link-fit-now"),
+            ]
+            .into_iter()
+            .enumerate()
+            .map(|(i, (fit, words))| {
+                float::seg_item(
+                    ("link-fit", i),
+                    None,
+                    Some(t(words, &[]).into()),
+                    linking.fit == fit,
+                    &th,
+                )
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if let Some(linking) = this.linking.as_mut() {
+                        linking.fit = fit;
+                    }
+                    cx.notify();
+                }))
+            }),
+        );
+        let place = match linking.kind {
+            LinkKind::Page => div()
+                .flex()
+                .gap(px(space::S3))
+                .child(
+                    div()
+                        .w(px(80.0))
+                        .flex()
+                        .flex_col()
+                        .gap(px(space::S1))
+                        .child(label("link-page"))
+                        .child(field(&linking.page_no)),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(space::S1))
+                        .child(label("link-show"))
+                        .child(fits),
+                ),
+            LinkKind::Web => div()
+                .flex()
+                .flex_col()
+                .gap(px(space::S1))
+                .child(label("link-address"))
+                .child(field(&linking.address)),
+            LinkKind::Named => {
+                let typed = linking.name.read(cx).text().to_lowercase();
+                let matching: Vec<String> = linking
+                    .names
+                    .iter()
+                    .filter(|n| n.to_lowercase().contains(typed.trim()))
+                    .take(6)
+                    .cloned()
+                    .collect();
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(space::S1))
+                    .child(label("link-name"))
+                    .child(field(&linking.name))
+                    .when(linking.names.is_empty(), |d| {
+                        d.child(
+                            div()
+                                .text_size(px(text::CAPTION))
+                                .text_color(th.dim)
+                                .child(t("link-no-names", &[])),
+                        )
+                    })
+                    .child(div().flex().flex_wrap().gap(px(space::S1)).children(
+                        matching.into_iter().enumerate().map(|(i, name)| {
+                            let chosen = name.clone();
+                            float::chip(("link-name-pick", i), name, false, &th).on_click(
+                                cx.listener(move |this, _, _, cx| {
+                                    if let Some(linking) = this.linking.as_mut() {
+                                        let chosen = chosen.clone();
+                                        linking
+                                            .name
+                                            .update(cx, |input, cx| input.set_text(chosen, cx));
+                                    }
+                                    cx.notify();
+                                }),
+                            )
+                        }),
+                    ))
+            }
+        };
+        div()
+            .id("link-card")
+            .occlude()
+            .w(px(320.0))
+            .flex()
+            .flex_col()
+            .rounded(px(10.0))
+            .bg(th.card)
+            .shadow(th.lifted())
+            .border_1()
+            .border_color(th.line)
+            .font_family(gpui::SharedString::from(".SystemUIFont"))
+            .cursor(gpui::CursorStyle::Arrow)
+            .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .child(
+                div()
+                    .p(px(space::S4))
+                    .flex()
+                    .flex_col()
+                    .gap(px(space::S3))
+                    .child(
+                        div()
+                            .text_size(px(text::BODY))
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .text_color(th.text)
+                            .child(t("link-title", &[])),
+                    )
+                    .child(kinds)
+                    .child(place)
+                    .child(
+                        div()
+                            .id("link-boxed")
+                            .flex()
+                            .items_center()
+                            .gap(px(space::S2))
+                            .cursor_pointer()
+                            .text_size(px(text::SMALL))
+                            .text_color(th.text)
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                if let Some(linking) = this.linking.as_mut() {
+                                    linking.boxed = !linking.boxed;
+                                }
+                                cx.notify();
+                            }))
+                            .child(super::sign::check_box(linking.boxed, th))
+                            .child(t("link-boxed", &[])),
+                    ),
+            )
+            .child(
+                div()
+                    .px(px(space::S4))
+                    .py(px(space::S3))
+                    .flex()
+                    .items_center()
+                    .gap(px(space::S2))
+                    .border_t_1()
+                    .border_color(th.line)
+                    .when(picked, |row| {
+                        row.child(
+                            div()
+                                .id("link-delete")
+                                .px(px(space::S2))
+                                .py(px(space::S1))
+                                .rounded(px(6.0))
+                                .cursor_pointer()
+                                .text_size(px(text::SMALL))
+                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                .text_color(th.error)
+                                .hover(|s| s.bg(th.error_soft))
+                                .on_click(cx.listener(|this, _, _, cx| this.delete_link(cx)))
+                                .child(t("link-delete", &[])),
+                        )
+                    })
+                    .child(div().flex_1())
+                    .when(!picked, |row| {
+                        row.child(
+                            float::button("link-cancel", t("link-cancel", &[]), false, &th)
+                                .on_click(cx.listener(|this, _, _, cx| this.cancel_link(cx))),
+                        )
+                    })
+                    .child(
+                        float::button("link-apply", t("link-done", &[]), true, &th)
+                            .on_click(cx.listener(|this, _, _, cx| this.apply_link(cx))),
+                    ),
+            )
+            .into_any_element()
+    }
+
+    /// Puts the keys in the link card's field when it opens, and gives
+    /// them back to the pages when it closes. It draws nothing here: the
+    /// card is under its link on the page.
     pub(super) fn link_card(
         &mut self,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         let linking = self.linking.as_mut()?;
-        let handle = linking.target.focus_handle(cx);
+        let input = match linking.kind {
+            LinkKind::Page => &linking.page_no,
+            LinkKind::Web => &linking.address,
+            LinkKind::Named => &linking.name,
+        };
+        let handle = input.focus_handle(cx);
+        let open = linking.new.is_some() || linking.picked.is_some();
         if std::mem::take(&mut linking.focus) {
             window.focus(&handle, cx);
-        } else if linking.new.is_none() && linking.picked.is_none() && handle.is_focused(window) {
-            // The field went with the link it was for: the keys go back
-            // to the pages, for Ctrl+S and the rest.
-            window.focus(&self.focus, cx);
+        } else if !open {
+            let any = [&linking.page_no, &linking.address, &linking.name]
+                .iter()
+                .any(|i| i.focus_handle(cx).is_focused(window));
+            if any {
+                // The field went with the link it was for: the keys go
+                // back to the pages, for Ctrl+S and the rest.
+                window.focus(&self.focus, cx);
+            }
         }
-        let linking = self.linking.as_ref()?;
-        let th = self.theme;
-        let label = |id: &str| {
-            div()
-                .text_size(px(text::SMALL))
-                .text_color(th.dim)
-                .child(t(id, &[]))
-        };
-        let ready = linking.new.is_some() || linking.picked.is_some();
-        let picked = linking.picked.is_some();
-        Some(
-            div()
-                .id("link-card")
-                .absolute()
-                .top(px(space::S3))
-                .right(px(space::S5))
-                .w(px(340.0))
-                .p(px(space::S4))
-                .flex()
-                .flex_col()
-                .gap(px(space::S2))
-                .rounded(px(10.0))
-                .bg(th.card)
-                .shadow(th.lifted())
-                .when(th.dark, |d| d.border_1().border_color(th.line))
-                .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                .child(
-                    div()
-                        .text_size(px(text::BODY))
-                        .font_weight(gpui::FontWeight::SEMIBOLD)
-                        .text_color(th.text)
-                        .child(t("link-title", &[])),
-                )
-                .child(label(if ready { "link-to" } else { "link-hint" }))
-                .when(ready, |card| {
-                    card.child(
-                        div()
-                            .h(px(36.0))
-                            .flex()
-                            .items_center()
-                            .px(px(space::S3))
-                            .rounded(px(radius::SM))
-                            .bg(th.field)
-                            .text_size(px(text::BODY))
-                            .text_color(th.text)
-                            .child(linking.target.clone()),
-                    )
-                    .child(
-                        div()
-                            .pt(px(space::S2))
-                            .flex()
-                            .items_center()
-                            .justify_end()
-                            .gap(px(space::S2))
-                            .when(picked, |row| {
-                                row.child(
-                                    widgets::outlined_button(
-                                        "link-delete",
-                                        t("link-delete", &[]),
-                                        &th.katna,
-                                    )
-                                    .on_click(cx.listener(|this, _, _, cx| this.delete_link(cx))),
-                                )
-                            })
-                            .child(
-                                widgets::filled_button(
-                                    "link-apply",
-                                    t(if picked { "link-change" } else { "link-make" }, &[]),
-                                    &th.katna,
-                                )
-                                .on_click(cx.listener(|this, _, _, cx| this.apply_link(cx))),
-                            ),
-                    )
-                })
-                .into_any_element(),
-        )
+        None
     }
 }
 

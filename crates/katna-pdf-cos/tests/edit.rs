@@ -653,3 +653,40 @@ fn turned_paragraphs_are_read_and_changed() {
     assert!(turned.rect[3] <= 601.0, "{:?}", turned.rect);
     assert_eq!(turned.text.replace('\n', " "), long);
 }
+
+#[test]
+fn a_paragraph_is_justified_and_set_back() {
+    use katna_pdf_cos::{Layout, TextAlign};
+    let doc = page(PARAGRAPH, "/F1 5 0 R", &[HELVETICA]);
+    let block = doc.text_blocks(0)[0].clone();
+    let runs_of = block.runs.clone();
+    let justify = Layout {
+        align: Some(TextAlign::Justify),
+        ..Layout::default()
+    };
+    let out = Document::load(doc.layout_block(0, &runs_of, &justify).unwrap()).unwrap();
+    let runs = out.text_runs(0);
+    let n = runs_of.len();
+    // Every line but the last starts and ends at the paragraph's edges.
+    for run in &runs[..n - 1] {
+        assert!((run.rect[0] - block.rect[0]).abs() < 0.05, "{runs:?}");
+        assert!((run.rect[2] - block.rect[2]).abs() < 0.3, "{runs:?}");
+    }
+    assert_eq!(
+        out.text_blocks(0)[0].align,
+        TextAlign::Justify,
+        "{}",
+        content(&out)
+    );
+    // Back on the left: the lines end where they did.
+    let left = Layout {
+        align: Some(TextAlign::Left),
+        word_spacing: Some(0.0),
+        ..Layout::default()
+    };
+    let back = Document::load(out.layout_block(0, &runs_of, &left).unwrap()).unwrap();
+    let before = doc.text_runs(0);
+    for (a, b) in back.text_runs(0)[..n].iter().zip(&before[..n]) {
+        assert!((a.rect[2] - b.rect[2]).abs() < 0.3, "{a:?} {b:?}");
+    }
+}

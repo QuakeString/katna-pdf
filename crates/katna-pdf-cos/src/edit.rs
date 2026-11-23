@@ -434,11 +434,11 @@ impl Document {
             let p = &places[k];
             let dx = match layout.align {
                 None => 0.0,
-                Some(TextAlign::Left) => left - p.start,
+                Some(TextAlign::Left | TextAlign::Justify) => left - p.start,
                 Some(TextAlign::Right) => right - p.end,
                 Some(TextAlign::Center) => (left + right - p.start - p.end) / 2.0,
             } + match align {
-                TextAlign::Left => 0.0,
+                TextAlign::Left | TextAlign::Justify => 0.0,
                 TextAlign::Right => -grown(k),
                 TextAlign::Center => -grown(k) / 2.0,
             };
@@ -448,10 +448,25 @@ impl Document {
             }
             Some(mul(&mul(&inv, &translate(dx, dy)), &first.m))
         };
+        // Justified: each line but the last spaced out to the widest
+        // line's end, so much more after each of its spaces (in the
+        // first piece's text space). Set back to left, lines drop it.
+        let spread = |k: usize| -> f64 {
+            if layout.align != Some(TextAlign::Justify) || k + 1 >= places.len() {
+                return 0.0;
+            }
+            let spaces = old[k].text.trim_end().matches(' ').count() as f64;
+            if spaces < 1.0 {
+                return 0.0;
+            }
+            let gap = right - left - (places[k].end - places[k].start) - grown(k);
+            (gap / spaces / first.stretch.abs().max(1e-9)).max(0.0)
+        };
         let content = redraw(&read, &all, lines, |k, piece| {
             let mut before = Vec::new();
             let mut after = Vec::new();
             let unit = f64::from(top.size) / piece.size.abs().max(1e-9);
+            let extra = spread(k);
             if let Some(tc) = layout.char_spacing {
                 write_op(
                     &mut before,
@@ -462,14 +477,18 @@ impl Document {
                 write_op(&mut after, &Op::new("Tc", vec![number(piece.char_spacing)]));
             }
             let mut instead = None;
-            if let Some(tw) = layout.word_spacing {
-                let tw = f64::from(tw) / unit;
+            if layout.word_spacing.is_some() || extra > 0.0 {
+                let tw = layout
+                    .word_spacing
+                    .map_or(piece.word_spacing, |tw| f64::from(tw) / unit)
+                    + extra;
                 write_op(&mut before, &Op::new("Tw", vec![number(tw)]));
                 before.push(b' ');
                 after.push(b' ');
                 write_op(&mut after, &Op::new("Tw", vec![number(piece.word_spacing)]));
                 let font = read.fonts.get(&piece.font);
-                if font.is_some_and(|f| !f.single_byte()) && piece.size.abs() > 1e-9 {
+                let two_bytes = font.is_some_and(|f| !f.single_byte());
+                if (two_bytes || !tw_spaces(piece)) && piece.size.abs() > 1e-9 {
                     // So much more after each space, in `TJ`'s thousandths.
                     let n = -(tw - piece.word_spacing) * 1000.0 / piece.size;
                     instead = Some(spaced_out(piece, n));
@@ -1489,6 +1508,9 @@ pub enum TextAlign {
     Left,
     Center,
     Right,
+    /// Each line but the last spread out to both edges, by spacing its
+    /// words further.
+    Justify,
 }
 
 /// How a paragraph is laid out, each where it is to change.
@@ -1613,7 +1635,7 @@ fn blocks(page: &Page, runs: &[TextRun]) -> Vec<TextBlock> {
                 if let Some(block) = out.last_mut() {
                     let size = size_of(page, runs, block);
                     block.text = joined_text(runs, block, &places, size);
-                    block.align = align_of(&places, size).into();
+                    block.align = shown_align(&places, size);
                     block.width = width_of(page, runs, block, &places);
                 }
                 let p = &page.pieces[run.ops[0]];
@@ -1645,7 +1667,7 @@ fn blocks(page: &Page, runs: &[TextRun]) -> Vec<TextBlock> {
     if let Some(block) = out.last_mut() {
         let size = size_of(page, runs, block);
         block.text = joined_text(runs, block, &places, size);
-        block.align = align_of(&places, size).into();
+        block.align = shown_align(&places, size);
         block.width = width_of(page, runs, block, &places);
     }
     out
@@ -1696,6 +1718,26 @@ fn lined_up(places: &[Place], size: f64) -> bool {
 
 /// How a paragraph's lines line up: on the left unless only their ends
 /// or middles do.
+/// How a paragraph's lines are lined up, as people would say: lined
+/// up on the left and, but for the last, ending together too, it is
+/// justified.
+fn shown_align(places: &[Place], size: f64) -> TextAlign {
+    let align = align_of(places, size);
+    let body = &places[..places.len().saturating_sub(1)];
+    let tight = |a: f64, b: f64| (a - b).abs() < 0.1 * size;
+    if align == Align::Left
+        && body.len() >= 2
+        && body.iter().all(|p| tight(p.end, body[0].end))
+        && places
+            .last()
+            .is_some_and(|last| last.end < body[0].end - size)
+    {
+        TextAlign::Justify
+    } else {
+        align.into()
+    }
+}
+
 fn align_of(places: &[Place], size: f64) -> Align {
     let near = |a: f64, b: f64| (a - b).abs() < 0.5 * size;
     if places.len() < 2
@@ -2074,6 +2116,19 @@ fn redraw(
 
 /// Piece `piece`'s text as a `TJ` with `n` (thousandths) more after each
 /// space, on top of any move already there.
+/// Whether `Tw` spaces `piece`'s words: its spaces are code 32, the
+/// only one `Tw` acts on (a subset font may give the space another).
+fn tw_spaces(piece: &Piece) -> bool {
+    let mut chars = piece.text.chars();
+    piece.atoms.iter().all(|atom| {
+        let text: String = chars.by_ref().take(atom.chars).collect();
+        match &atom.kind {
+            AtomKind::Code(bytes) if text == " " => bytes.as_slice() == b" ",
+            _ => true,
+        }
+    })
+}
+
 fn spaced_out(piece: &Piece, n: f64) -> Op {
     let mut items: Vec<Object> = Vec::new();
     let mut chars = piece.text.chars();

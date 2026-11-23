@@ -4,7 +4,9 @@
 
 use std::io::Write as _;
 
-use katna_pdf_cos::{Destination, Document, Link, LinkTarget, NavError, OutlineItem};
+use katna_pdf_cos::{
+    Destination, Document, Link, LinkFit, LinkStyle, LinkTarget, NavError, OutlineItem,
+};
 
 /// A file of `objs`, object 1 first, with a classic table.
 fn file(objs: &[&str]) -> Vec<u8> {
@@ -128,6 +130,49 @@ fn links_are_taken_out_and_put_in() {
     .unwrap();
     assert_eq!(out.links()[1], vec![web]);
     assert_eq!(doc.change_links(0, &[5], &[]), Err(NavError::NoLink(5)));
+}
+
+#[test]
+fn links_keep_how_they_show_the_page_and_look() {
+    let doc = three_pages();
+    let before = doc.link_styles(0).len();
+    let to_page = |page, top| Link {
+        rect: [20.0, 400.0, 90.0, 420.0],
+        target: LinkTarget::Page(Destination { page, top }),
+    };
+    let wide = LinkStyle {
+        fit: LinkFit::Width,
+        boxed: true,
+        named: None,
+    };
+    let named = LinkStyle {
+        fit: LinkFit::Page,
+        boxed: false,
+        named: Some("old".into()),
+    };
+    let out = Document::load(
+        doc.change_links_styled(
+            0,
+            &[],
+            &[
+                (to_page(2, Some(500.0)), wide.clone()),
+                (to_page(1, None), named.clone()),
+            ],
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let styles = out.link_styles(0);
+    assert_eq!(styles.len(), before + 2);
+    assert_eq!(styles[before], wide);
+    assert_eq!(styles[before + 1], named);
+    // Both still go where they went.
+    let links = out.links();
+    assert_eq!(links[0][before].target, to_page(2, Some(500.0)).target);
+    assert_eq!(
+        links[0][before + 1].target,
+        LinkTarget::Page(to(1, None).unwrap())
+    );
 }
 
 #[test]
