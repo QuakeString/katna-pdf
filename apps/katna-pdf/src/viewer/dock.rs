@@ -368,6 +368,32 @@ impl Viewer {
                     this.zoom_card = false;
                     this.toggle_area_tool(super::area::AreaKind::Zoom, cx)
                 })),
+            )
+            .child(
+                div()
+                    .flex()
+                    .child(
+                        menu_item(
+                            "zoom-turn-left",
+                            Some("rotate-ccw"),
+                            t("zoom-card-rotate-left", &[]),
+                            None,
+                            &th,
+                        )
+                        .flex_1()
+                        .on_click(cx.listener(|this, _, _, cx| this.turn_view(3, cx))),
+                    )
+                    .child(
+                        menu_item(
+                            "zoom-turn-right",
+                            Some("rotate-cw"),
+                            t("zoom-card-rotate-right", &[]),
+                            None,
+                            &th,
+                        )
+                        .flex_1()
+                        .on_click(cx.listener(|this, _, _, cx| this.turn_view(1, cx))),
+                    ),
             );
         popover(body, true, false)
     }

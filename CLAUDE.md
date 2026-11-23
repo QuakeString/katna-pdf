@@ -25,6 +25,7 @@ cargo run --release -p katna-pdf-bench -- file.pdf
   drawings) and draws the red and blue overlay;
   `measure.rs` keeps the lines a page draws for measuring tools to
   snap to (ends, middles, crossings);
+  `turned.rs` shows a document turned (Rotate view) without changing it;
   `export.rs` draws pages out as PNG or JPEG at a resolution, and as a
   scanner would see them;
   `worker.rs` draws in worker processes (the app runs itself with
