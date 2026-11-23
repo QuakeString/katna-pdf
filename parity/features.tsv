@@ -83,9 +83,9 @@ view.zoom-to-percent	view	Zoom to a chosen percentage	reader	y	shipped	P0	#120		
 view.zoom-actual-size	view	Actual size	reader	y	shipped	P0	Ctrl+0		acrobat
 view.zoom-fit-page	view	Fit page	reader	y	shipped	P0	Ctrl+2		acrobat
 view.zoom-fit-width	view	Fit width	reader	y	shipped	P0	Ctrl+1		acrobat
-view.zoom-fit-height	view	Fit height	reader	n	todo	P1	-		acrobat
+view.zoom-fit-height	view	Fit height	reader	n	shipped	P1	Ctrl+4; zoom card		acrobat
 view.zoom-fit-visible	view	Fit visible content	reader	n	todo	P1	-		acrobat
-view.marquee-zoom	view	Marquee zoom tool	reader	n	todo	P0	-		acrobat
+view.marquee-zoom	view	Marquee zoom tool	reader	n	shipped	P0	viewer/area.rs; zoom card	a click zooms in a step there	acrobat
 view.dynamic-zoom	view	Dynamic zoom (drag to zoom)	reader	n	todo	P2	-		acrobat
 view.loupe	view	Loupe magnifier tool	reader	n	todo	P1	-		acrobat
 view.pan-and-zoom	view	Pan and zoom overview window	reader	n	todo	P2	-		acrobat
@@ -133,7 +133,7 @@ view.column-select	view	Column select (Alt/Option-drag a rectangle of text)	read
 view.copy-text	view	Copy selected text	reader	y	shipped	P0	Ctrl+C		acrobat
 view.select-all	view	Select all text on a page	reader	y	partial	P1	Ctrl+A	selects objects in edit mode	acrobat
 view.copy-with-layout	view	Copy text keeping layout	reader	n	todo	P2	-		acrobat
-view.snapshot	view	Snapshot tool (copy a region as an image)	reader	y	todo	P1	-		acrobat
+view.snapshot	view	Snapshot tool (copy a region as an image)	reader	y	shipped	P1	viewer/area.rs; share menu	copied as a PNG at twice the size shown	acrobat
 view.copy-image	view	Select an image on the page and copy it	reader	y	partial	P1	#97	copy a picture object in edit mode	acrobat
 view.rulers	view	Rulers	reader	n	todo	P2	-		acrobat
 view.grid	view	Grid and snap to grid	reader	y	shipped	P1	#97 grid-tool		acrobat
