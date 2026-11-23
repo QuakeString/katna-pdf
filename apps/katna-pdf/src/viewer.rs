@@ -41,6 +41,7 @@ mod bookmarks;
 mod command;
 mod comments;
 mod compare;
+mod coords;
 mod crop;
 mod datepick;
 mod design;
@@ -113,6 +114,7 @@ actions!(
         RotateViewRight,
         GoToPage,
         AutoScroll,
+        CursorCoordinates,
         RotateViewLeft,
         ZoomToArea,
         Loupe,
@@ -611,6 +613,10 @@ pub struct Viewer {
     going_to: Option<goto::GoingTo>,
     /// Scrolling by itself, while it goes.
     auto_scroll: Option<autoscroll::AutoScroll>,
+    /// Whether the cursor coordinates show, and where the pointer is:
+    /// its page and points from that page's top left.
+    coords_shown: bool,
+    cursor_at: Option<(usize, [f32; 2])>,
     setup: Option<setup::PageSetup>,
     /// The form, once read, if the file has fields to fill in.
     form: Option<Form>,
@@ -909,6 +915,8 @@ impl Viewer {
             numbering: None,
             pasting_many: None,
             going_to: None,
+            coords_shown: false,
+            cursor_at: None,
             auto_scroll: None,
             setup: None,
             form: None,
@@ -1603,6 +1611,7 @@ impl Viewer {
     }
 
     fn drag(&mut self, event: &gpui::MouseMoveEvent, cx: &mut Context<Self>) {
+        self.coords_move(event.position, cx);
         if let Some(last) = self.panning {
             if event.pressed_button.is_none() {
                 self.panning = None;
@@ -1686,6 +1695,25 @@ impl Viewer {
             })
             .collect();
         (!parts.is_empty()).then(|| parts.join("\n"))
+    }
+
+    /// Selects all the text on the page shown (Ctrl+A when not editing),
+    /// reading it first if it is not read yet.
+    fn select_page_text(&mut self, cx: &mut Context<Self>) {
+        if !matches!(self.content, Content::Ready(_)) {
+            return;
+        }
+        let page = self.current_page();
+        self.read_text(page, cx);
+        // To the last character, however many there turn out to be.
+        self.selection = Some(Selection {
+            anchor: Spot { page, index: 0 },
+            head: Spot {
+                page,
+                index: usize::MAX - 1,
+            },
+        });
+        cx.notify();
     }
 
     fn copy_text(&mut self, cx: &mut Context<Self>) {
@@ -4405,6 +4433,7 @@ impl Render for Viewer {
         let measure_bar = self.measure_bar(cx);
         let stamp_bar = self.stamp_bar(cx);
         let goto_bar = self.goto_bar();
+        let coords_card = self.coords_card(cx);
         let initials_bar = self.initials_bar(cx);
         let reading_bar = self.reading_bar(cx);
         let signatures_line = self.signatures_line(cx);
@@ -4625,6 +4654,9 @@ impl Render for Viewer {
             .on_action(cx.listener(|this, _: &RotateViewRight, _, cx| this.turn_view(1, cx)))
             .on_action(cx.listener(|this, _: &GoToPage, window, cx| this.toggle_goto(window, cx)))
             .on_action(cx.listener(|this, _: &AutoScroll, _, cx| this.toggle_auto_scroll(cx)))
+            .on_action(
+                cx.listener(|this, _: &CursorCoordinates, _, cx| this.toggle_coordinates(cx)),
+            )
             .on_action(cx.listener(|this, _: &RotateViewLeft, _, cx| this.turn_view(3, cx)))
             .on_action(cx.listener(|this, _: &Print, _, cx| this.toggle_printing(cx)))
             .on_action(cx.listener(|this, _: &Save, _, cx| this.save(cx)))
@@ -4645,7 +4677,9 @@ impl Render for Viewer {
                 this.cut_picked_objects(cx);
             }))
             .on_action(cx.listener(|this, _: &SelectAll, _, cx| {
-                this.pick_all_objects(cx);
+                if !this.pick_all_objects(cx) {
+                    this.select_page_text(cx);
+                }
             }))
             .on_action(cx.listener(|this, _: &PasteInPlace, _, cx| {
                 this.paste_copied_objects(true, cx);
@@ -4800,6 +4834,14 @@ impl Render for Viewer {
                     .right(px(float::GAP))
                     .w(px(460.0))
                     .child(floating(th)(bar))
+                    .into_any_element()
+            }))
+            .children(coords_card.map(|card| {
+                div()
+                    .absolute()
+                    .bottom(px(float::DOCK_BOTTOM))
+                    .left(px(pane_room + float::GAP))
+                    .child(floating(th)(card))
                     .into_any_element()
             }))
             .child(

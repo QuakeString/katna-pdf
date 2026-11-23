@@ -7,12 +7,13 @@
 use gpui::Action;
 
 use crate::viewer::{
-    ActualSize, AddBookmark, Annotate, AutoScroll, CloseAll, CloseTab, Compare, CopyText, Export,
-    Find, FindNext, FindPrevious, FitHeight, FitPage, FitWidth, GoToPage, Loupe, NewWindow,
-    NextPage, NextSpread, NextTab, NextView, Open, OpenSettings, Organize, Present, PreviousPage,
-    PreviousTab, PreviousView, Print, Properties, Quit, ReadAloud, Redo, ReopenSession,
-    ReportProblem, Revert, RotateViewLeft, RotateViewRight, Save, Shortcuts, ShowAbout,
-    ShowLibrary, Sign, Snapshot, ToggleContents, ToggleNight, Undo, ZoomIn, ZoomOut, ZoomToArea,
+    ActualSize, AddBookmark, Annotate, AutoScroll, CloseAll, CloseTab, Compare, CopyText,
+    CursorCoordinates, Export, Find, FindNext, FindPrevious, FitHeight, FitPage, FitWidth,
+    GoToPage, Loupe, NewWindow, NextPage, NextSpread, NextTab, NextView, Open, OpenSettings,
+    Organize, Present, PreviousPage, PreviousTab, PreviousView, Print, Properties, Quit, ReadAloud,
+    Redo, ReopenSession, ReportProblem, Revert, RotateViewLeft, RotateViewRight, Save, SelectAll,
+    Shortcuts, ShowAbout, ShowLibrary, Sign, Snapshot, ToggleContents, ToggleNight, Undo, ZoomIn,
+    ZoomOut, ZoomToArea,
 };
 
 /// An item: its id (and the id of its words), and its keys as
@@ -53,6 +54,7 @@ pub const MENUS: &[(&str, &[Entry])] = &[
             Some(("menu-redo", &["Control", "Shift", "Z"])),
             None,
             Some(("menu-copy", &["Control", "C"])),
+            Some(("menu-select-all", &["Control", "A"])),
             Some(("menu-snapshot", &[])),
             None,
             Some(("menu-find", &["Control", "F"])),
@@ -82,6 +84,7 @@ pub const MENUS: &[(&str, &[Entry])] = &[
             Some(("menu-night", &["Control", "Shift", "N"])),
             Some(("menu-read-aloud", &["Control", "Shift", "Y"])),
             Some(("menu-auto-scroll", &["Control", "Shift", "H"])),
+            Some(("menu-cursor-coordinates", &[])),
             Some(("menu-present", &["F5"])),
         ],
     ),
@@ -114,7 +117,6 @@ pub const MENUS: &[(&str, &[Entry])] = &[
 /// Keys no menu item shows: the words' id and the keys.
 pub const MORE_KEYS: &[(&str, &str)] = &[
     ("shortcut-command", "Ctrl K"),
-    ("shortcut-select-all", "Ctrl A"),
     ("shortcut-cut", "Ctrl X"),
     ("shortcut-paste", "Ctrl V"),
     ("shortcut-paste-in-place", "Ctrl Shift V"),
@@ -146,6 +148,7 @@ pub fn action(id: &str) -> Option<Box<dyn Action>> {
         "menu-undo" => Box::new(Undo),
         "menu-redo" => Box::new(Redo),
         "menu-copy" => Box::new(CopyText),
+        "menu-select-all" => Box::new(SelectAll),
         "menu-find" => Box::new(Find),
         "menu-find-next" => Box::new(FindNext),
         "menu-find-previous" => Box::new(FindPrevious),
@@ -164,6 +167,7 @@ pub fn action(id: &str) -> Option<Box<dyn Action>> {
         "menu-previous-view" => Box::new(PreviousView),
         "menu-go-to-page" => Box::new(GoToPage),
         "menu-auto-scroll" => Box::new(AutoScroll),
+        "menu-cursor-coordinates" => Box::new(CursorCoordinates),
         "menu-next-view" => Box::new(NextView),
         "menu-loupe" => Box::new(Loupe),
         "menu-rotate-right" => Box::new(RotateViewRight),

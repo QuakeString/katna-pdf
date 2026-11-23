@@ -131,7 +131,7 @@ view.embedded-index	view	Embedded search index	pro	n	skip	-	-		acrobat
 view.text-select	view	Select text in reading order	reader	y	shipped	P0	Phase 1		acrobat
 view.column-select	view	Column select (Alt/Option-drag a rectangle of text)	reader	n	todo	P2	-		acrobat
 view.copy-text	view	Copy selected text	reader	y	shipped	P0	Ctrl+C		acrobat
-view.select-all	view	Select all text on a page	reader	y	partial	P1	Ctrl+A	selects objects in edit mode	acrobat
+view.select-all	view	Select all text on a page	reader	y	shipped	P1	#160	Ctrl+A or Edit > Select All: the page's text when reading, objects when editing	acrobat
 view.copy-with-layout	view	Copy text keeping layout	reader	n	todo	P2	-		acrobat
 view.snapshot	view	Snapshot tool (copy a region as an image)	reader	y	shipped	P1	viewer/area.rs; share menu	copied as a PNG at twice the size shown	acrobat
 view.copy-image	view	Select an image on the page and copy it	reader	y	partial	P1	#97	copy a picture object in edit mode	acrobat
@@ -139,7 +139,7 @@ view.rulers	view	Rulers	reader	n	todo	P2	-		acrobat
 view.grid	view	Grid and snap to grid	reader	y	shipped	P1	#97 grid-tool		acrobat
 view.guides	view	Guides	reader	n	partial	P1	#75	snapping to page and object edges; no guides	acrobat
 view.line-weights	view	Show line weights	pro	n	todo	P1	-		acrobat
-view.cursor-coordinates	view	Cursor coordinates	reader	n	partial	P1	#97 inspector	object position, not the cursor	acrobat
+view.cursor-coordinates	view	Cursor coordinates	reader	n	shipped	P1	#160	View > Cursor Coordinates: page, x, y in the units picked	acrobat
 view.theme-light-dark	view	Light and dark themes	reader	y	shipped	P0	Phase 0		acrobat
 view.theme-system	view	Follow the system theme	reader	y	shipped	P0	Phase 0		acrobat
 view.home-view	view	Home view with recommended tools and recent files	reader	y	shipped	P0	start screen	recent files, files from last time	acrobat

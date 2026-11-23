@@ -432,7 +432,7 @@ impl Viewer {
         GRIP / shown.max(0.1)
     }
 
-    fn page_size(&self, page: usize) -> (f32, f32) {
+    pub(super) fn page_size(&self, page: usize) -> (f32, f32) {
         match &self.content {
             super::Content::Ready(opened) => {
                 let (w, h) = opened.doc.page_size(page).unwrap_or((612.0, 792.0));
