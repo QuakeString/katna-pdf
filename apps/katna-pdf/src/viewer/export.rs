@@ -419,7 +419,7 @@ impl Viewer {
                 .file_stem()
                 .map(|s| s.to_string_lossy().into_owned())
                 .unwrap_or_else(|| "page".into()),
-            drawn: opened.doc.clone(),
+            drawn: opened.plain.clone(),
             current: self.unsaved(),
             key: self.key.clone(),
             path: path.clone(),

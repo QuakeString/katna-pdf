@@ -740,15 +740,15 @@ print.print-dialog	print	Print dialog	reader	y	shipped	P0	Phase 1 print.rs, #111
 print.printer-selection	print	Choose printer and properties	reader	y	shipped	P0	desktop print dialog		acrobat
 print.copies-collate	print	Copies and collation	reader	y	shipped	P0	desktop print dialog		acrobat
 print.page-range	print	Print all, current page or a range (labels allowed)	reader	y	shipped	P0	#111		acrobat
-print.odd-even-reverse	print	Odd/even pages and reverse order	reader	y	partial	P0	ranges.rs	odd/even; no reverse	acrobat
-print.scaling	print	Fit, actual size, shrink oversized, custom scale	reader	y	partial	P0	#111		acrobat
+print.odd-even-reverse	print	Odd/even pages and reverse order	reader	y	shipped	P0	#144	print card and CLI impose: odd, even, last page first	acrobat
+print.scaling	print	Fit, actual size, shrink oversized, custom scale	reader	y	shipped	P0	#111, #144	fit, actual size, shrink if too big (one a sheet), or the dialog's own	acrobat
 print.paper-source-by-size	print	Choose paper source by PDF page size	reader	y	todo	P2	-		acrobat
 print.duplex	print	Print on both sides	reader	y	shipped	P0	desktop print dialog		acrobat
 print.n-up	print	Multiple pages per sheet	reader	y	shipped	P1	#111 impose.rs 2/4/6/9		acrobat
 print.booklet	print	Booklet printing	reader	y	shipped	P1	#111		acrobat
 print.poster	print	Poster / tiled printing with overlap and cut marks	reader	y	shipped	P2	#111		acrobat
-print.orientation	print	Auto portrait/landscape	reader	y	partial	P0	#111		acrobat
-print.comments-and-forms	print	Print document, markups, stamps or form fields only	reader	y	partial	P0	#111 as they are / pictures		acrobat
+print.orientation	print	Auto portrait/landscape	reader	y	shipped	P0	#144	one a sheet: each sheet the page's way up	acrobat
+print.comments-and-forms	print	Print document, markups, stamps or form fields only	reader	y	partial	P0	#111, #144	pages and comments, pages only, pages and stamps; no form fields only	acrobat
 print.print-with-comment-summary	print	Print with a comments summary	standard	n	todo	P2	-		acrobat
 print.print-preview	print	Print preview	reader	n	partial	P1	#111 card shows the layout		acrobat
 print.grayscale	print	Print in grayscale	reader	y	todo	P1	-		acrobat
