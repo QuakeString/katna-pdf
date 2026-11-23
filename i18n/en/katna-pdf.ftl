@@ -891,6 +891,7 @@ update-install = Install and restart
 update-retry = Try again
 update-download = Download
 update-later = Not now
+update-progress-detail = Save or close files with changes before it installs.
 save = Save
 save-tip = Save the changes to the file (Ctrl+S)
 save-clean-tip = No changes to save
