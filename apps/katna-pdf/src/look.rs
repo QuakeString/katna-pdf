@@ -91,13 +91,151 @@ pub fn schemes() -> Vec<Scheme> {
     list
 }
 
+/// A scheme the person made or brought in (X10, X11), kept in the
+/// state folder (`pdf/schemes.txt`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Mine {
+    /// `mine-N`, never one of the built-in ids.
+    pub id: String,
+    pub name: String,
+    pub day: Five,
+    pub night: Five,
+}
+
+impl Mine {
+    /// A new id, not used by any of `mine`.
+    pub fn new_id(mine: &[Mine]) -> String {
+        (1..)
+            .map(|n| format!("mine-{n}"))
+            .find(|id| mine.iter().all(|m| &m.id != id))
+            .unwrap_or_default()
+    }
+}
+
+/// A colour written as `rrggbb`, with or without `#`.
+pub fn parse_hex(text: &str) -> Option<u32> {
+    let text = text.trim().trim_start_matches('#');
+    (text.len() == 6 && text.chars().all(|c| c.is_ascii_hexdigit()))
+        .then(|| u32::from_str_radix(text, 16).ok())
+        .flatten()
+}
+
+fn five_text(five: &Five) -> String {
+    [five.page, five.card, five.text, five.faint, five.accent]
+        .map(|c| format!("{c:06x}"))
+        .join(" ")
+}
+
+fn five_parse(text: &str) -> Option<Five> {
+    let c: Vec<u32> = text.split_whitespace().filter_map(parse_hex).collect();
+    match c.as_slice() {
+        &[page, card, text, faint, accent] => Some(Five::new(page, card, text, faint, accent)),
+        _ => None,
+    }
+}
+
+fn mine_file() -> Option<PathBuf> {
+    katna_core::Paths::from_env()
+        .ok()
+        .map(|paths| paths.state_dir().join("pdf").join("schemes.txt"))
+}
+
+fn parse_mine(text: &str) -> Vec<Mine> {
+    let mut list = Vec::new();
+    for block in text.split("\n\n") {
+        let (mut id, mut name, mut day, mut night) = (None, None, None, None);
+        for line in block.lines() {
+            match line.split_once('=') {
+                Some(("id", v)) => id = Some(v.trim().to_owned()),
+                Some(("name", v)) => name = Some(v.trim().to_owned()),
+                Some(("day", v)) => day = five_parse(v),
+                Some(("night", v)) => night = five_parse(v),
+                _ => {}
+            }
+        }
+        if let (Some(id), Some(name), Some(day), Some(night)) = (id, name, day, night)
+            && id.starts_with("mine-")
+        {
+            list.push(Mine {
+                id,
+                name,
+                day,
+                night,
+            });
+        }
+    }
+    list
+}
+
+fn mine_text(mine: &[Mine]) -> String {
+    mine.iter()
+        .map(|m| {
+            format!(
+                "id={}\nname={}\nday={}\nnight={}\n",
+                m.id,
+                m.name.replace('\n', " "),
+                five_text(&m.day),
+                five_text(&m.night)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Why a file can't be brought in as a scheme.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ImportError {
+    /// Not a KDE colour scheme: it has no `[Colors:Window]` group.
+    NotAScheme,
+}
+
+/// A KDE `.colors` file as one of the person's schemes: its own side
+/// as it is, the other side Float's with the file's accent, to change
+/// after. Its name is the file's `Name=`, else `fallback`.
+pub fn import_kde(contents: &str, fallback: &str, mine: &[Mine]) -> Result<Mine, ImportError> {
+    if !contents.contains("[Colors:Window]") {
+        return Err(ImportError::NotAScheme);
+    }
+    let (scheme, _) = colors::parse_kdeglobals(contents);
+    let o = |c: u32| c >> 8;
+    let side = Five::new(
+        o(scheme.window_bg),
+        o(scheme.view_bg),
+        o(scheme.view_fg),
+        o(scheme.inactive_fg),
+        o(scheme.accent),
+    );
+    let dark = scheme.dark();
+    let mut other = float_five(!dark);
+    other.accent = side.accent;
+    let mut general = false;
+    let mut name = None;
+    for line in contents.lines().map(str::trim) {
+        if line.starts_with('[') {
+            general = line == "[General]";
+        } else if general && let Some(n) = line.strip_prefix("Name=") {
+            name = Some(n.trim().to_owned()).filter(|n| !n.is_empty());
+        }
+    }
+    let (day, night) = if dark { (other, side) } else { (side, other) };
+    Ok(Mine {
+        id: Mine::new_id(mine),
+        name: name.unwrap_or_else(|| fallback.to_owned()),
+        day,
+        night,
+    })
+}
+
 /// The look chosen, and the desktop's colours for `System`.
 #[derive(Debug, Clone)]
 pub struct Look {
     pub mode: Mode,
-    /// A scheme's id: [`FLOAT`], one of [`schemes`] or [`SYSTEM`].
+    /// A scheme's id: [`FLOAT`], one of [`schemes`], one of `mine` or
+    /// [`SYSTEM`].
     pub scheme: String,
     pub desktop: SystemColors,
+    /// The person's own schemes.
+    pub mine: Vec<Mine>,
 }
 
 impl Global for Look {}
@@ -114,6 +252,7 @@ impl Default for Look {
             mode: Mode::System,
             scheme: FLOAT.into(),
             desktop: SystemColors::default(),
+            mine: Vec::new(),
         }
     }
 }
@@ -126,6 +265,10 @@ impl Look {
             .map(|text| Self::parse(&text))
             .unwrap_or_default();
         look.desktop = desktop_colors();
+        look.mine = mine_file()
+            .and_then(|f| std::fs::read_to_string(f).ok())
+            .map(|text| parse_mine(&text))
+            .unwrap_or_default();
         look
     }
 
@@ -153,6 +296,12 @@ impl Look {
         if let Err(err) = std::fs::write(&path, self.text()) {
             eprintln!("katna-pdf: saving the look: {err}");
         }
+        if let Some(path) = mine_file()
+            && (path.exists() || !self.mine.is_empty())
+            && let Err(err) = std::fs::write(&path, mine_text(&self.mine))
+        {
+            eprintln!("katna-pdf: saving colour schemes: {err}");
+        }
     }
 
     /// Whether the window is dark: as the mode says, or the desktop.
@@ -169,7 +318,10 @@ impl Look {
 
     /// The id the colours are mixed for, Float's when the scheme is gone.
     pub fn scheme_id(&self) -> &str {
-        if self.scheme == SYSTEM || schemes().iter().any(|s| s.id == self.scheme) {
+        if self.scheme == SYSTEM
+            || schemes().iter().any(|s| s.id == self.scheme)
+            || self.mine.iter().any(|m| m.id == self.scheme)
+        {
             &self.scheme
         } else {
             FLOAT
@@ -198,6 +350,9 @@ impl Look {
                 five.accent = accent >> 8;
             }
             return five;
+        }
+        if let Some(m) = self.mine.iter().find(|m| m.id == scheme) {
+            return if dark { m.night } else { m.day };
         }
         schemes()
             .into_iter()
@@ -250,6 +405,44 @@ mod tests {
         let again = Look::parse(&look.text());
         assert_eq!(again.mode, Mode::Night);
         assert_eq!(again.scheme, "nord");
+    }
+
+    #[test]
+    fn own_schemes_read_back_and_are_used() {
+        let mine = vec![Mine {
+            id: "mine-1".into(),
+            name: "Office green".into(),
+            day: Five::new(0xeceef2, 0xffffff, 0x14213d, 0x5c6b84, 0x0b6e4f),
+            night: float_five(true),
+        }];
+        assert_eq!(parse_mine(&mine_text(&mine)), mine);
+        let look = Look {
+            scheme: "mine-1".into(),
+            mine: mine.clone(),
+            ..Look::default()
+        };
+        assert_eq!(look.scheme_id(), "mine-1");
+        assert_eq!(look.five(false).accent, 0x0b6e4f);
+        assert_eq!(Mine::new_id(&mine), "mine-2");
+        assert_eq!(parse_hex("#0B6E4F"), Some(0x0b6e4f));
+        assert_eq!(parse_hex("0b6e4"), None);
+    }
+
+    #[test]
+    fn kde_colour_files_come_in_with_a_made_day_side() {
+        let dark = "[General]\nName=Materia Dark\n\n[Colors:Window]\nBackgroundNormal=30,30,30\n\
+            [Colors:View]\nBackgroundNormal=40,40,40\nForegroundNormal=220,220,220\n\
+            [Colors:Selection]\nBackgroundNormal=#3daee9\n";
+        let m = import_kde(dark, "MateriaDark", &[]).unwrap();
+        assert_eq!(m.name, "Materia Dark");
+        assert_eq!(m.night.page, 0x1e1e1e);
+        assert_eq!(m.night.accent, 0x3daee9);
+        assert_eq!(m.day.page, float_five(false).page);
+        assert_eq!(m.day.accent, 0x3daee9);
+        assert_eq!(
+            import_kde("just notes", "notes", &[]),
+            Err(ImportError::NotAScheme)
+        );
     }
 
     #[test]

@@ -99,7 +99,14 @@ at Shortcuts; asking again brings the open window forward.
   signature picture and the person's own stamps, each saying where it
   is made.
 - Appearance (X01): Mode as a segmented control, then a tile for each
-  scheme, its day half beside its night half, and the desktop's.
+  scheme, its day half beside its night half, the desktop's, and the
+  person's own beside Make your own and Import…. The scheme editor
+  (X10) floats over the page: a name, Day side and Night side, five
+  colours a side typed as `#rrggbb` with a dot of each, and a preview
+  of the side shown. Import (X11) reads a KDE `.colors` file into the
+  editor, its own side as it is and the other made from Float's with
+  its accent; anything else says why under the tiles. Kept in
+  `pdf/schemes.txt`; the profile menu's dots list them too.
 - Viewing (X02): where files open (last page read or page 1), their
   zoom and layout, the last session's files on start, and drawing in
   worker processes; kept in `pdf/prefs.txt` (`prefs.rs`).
@@ -120,6 +127,6 @@ at Shortcuts; asking again brings the open window forward.
 
 ## Still to come
 
-The scheme editor and import (X10, X11) and the accent row. The
+The accent row. The
 signing card as a step-by-step dialog (G02-G05) and the token status in the
 profile menu (S14).
