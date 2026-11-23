@@ -842,7 +842,11 @@ impl Viewer {
         let title = if count == 0 {
             t("redact-confirm-clean", &[])
         } else {
-            t("redact-confirm-title", &[("count", &count.to_string())])
+            if count == 1 {
+                t("redact-confirm-title-one", &[])
+            } else {
+                t("redact-confirm-title", &[("count", &count.to_string())])
+            }
         };
         Some(
             div()

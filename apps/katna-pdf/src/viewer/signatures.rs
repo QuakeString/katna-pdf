@@ -133,9 +133,105 @@ impl Viewer {
     /// The line over the pages of a signed file (G08–G10): whether its
     /// signatures hold, coloured to match, with a button to see why. It
     /// stays out of the way when they all hold and the pane lists them.
+    /// While editing a signed file (E16): changing its pages breaks the
+    /// signatures, so a copy can be saved to edit instead.
+    fn signed_edit_line(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if !self.text_editing
+            || self.signatures.as_ref().is_none_or(|rows| rows.is_empty())
+            || (self.signed_copy.is_some() && self.signed_copy == self.path)
+        {
+            return None;
+        }
+        let th = self.theme;
+        let (colour, soft, _) = self.mood_colours(Mood::Unsure);
+        Some(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(space::S3))
+                .pl(px(space::S4))
+                .pr(px(space::S2))
+                .py(px(space::S2))
+                .bg(soft)
+                .child(float::icon("alert", 16.0, colour))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .text_size(px(text::SMALL))
+                        .text_color(colour)
+                        .child(t("signed-edit-warning", &[])),
+                )
+                .child(
+                    float::button("signed-edit-copy", t("signed-edit-copy", &[]), false, &th)
+                        .h(px(28.0))
+                        .ftip(t("signed-edit-copy-tip", &[]), &th)
+                        .on_click(cx.listener(|this, _, _, cx| this.save_copy_to_edit(cx))),
+                )
+                .into_any_element(),
+        )
+    }
+
+    /// Asks where to save a copy of the signed file, writes it there and
+    /// opens it in its place, to edit with the original left signed.
+    fn save_copy_to_edit(&mut self, cx: &mut Context<Self>) {
+        let Some(path) = self.path.clone() else {
+            return;
+        };
+        let folder = path
+            .parent()
+            .map(std::path::Path::to_path_buf)
+            .unwrap_or_default();
+        let name = t(
+            "signed-edit-copy-name",
+            &[(
+                "name",
+                &path
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "file".into()),
+            )],
+        );
+        let chosen = cx.prompt_for_new_path(&folder, Some(&name));
+        let current = self.unsaved();
+        cx.spawn(async move |this, cx| {
+            let Ok(Ok(Some(target))) = chosen.await else {
+                return;
+            };
+            let to = target.clone();
+            let written = cx
+                .background_executor()
+                .spawn(async move {
+                    match current {
+                        Some(bytes) => std::fs::write(&to, bytes.as_slice()),
+                        None => std::fs::copy(&path, &to).map(|_| ()),
+                    }
+                })
+                .await;
+            this.update(cx, |this, cx| match written {
+                Ok(()) => {
+                    this.signed_copy = Some(target.clone());
+                    this.open(target, cx);
+                }
+                Err(error) => {
+                    this.notice = Some(super::said(
+                        "signed-edit-copy-failed",
+                        &[("error", &error.to_string())],
+                    ));
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     pub(super) fn signatures_line(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         if self.comparing.is_some() {
             return None;
+        }
+        if let Some(line) = self.signed_edit_line(cx) {
+            return Some(line);
         }
         let (message, mood) = self.signatures_summary()?;
         if mood == Mood::Good && self.pane_shown() && self.tab == PaneTab::Signatures {

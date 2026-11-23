@@ -878,6 +878,8 @@ pub struct Viewer {
     sig_open: Option<usize>,
     /// Whether that card shows the signer's certificate.
     sig_certificate: bool,
+    /// A copy of a signed file saved to edit (E16): no warning there.
+    signed_copy: Option<PathBuf>,
     /// What signing needs to know of the file.
     signable: Arc<sign::Signable>,
     signing: Option<sign::Signing>,
@@ -1116,6 +1118,7 @@ impl Viewer {
             signatures: None,
             sig_open: None,
             sig_certificate: false,
+            signed_copy: None,
             signable: Arc::default(),
             signing: None,
             grid: gpui::ScrollHandle::new(),
