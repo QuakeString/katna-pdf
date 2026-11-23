@@ -197,6 +197,17 @@ impl Document {
         }
     }
 
+    /// The file as it was when its revision ending at byte `end` was
+    /// written, opened with this one's key: a locked file's earlier
+    /// revisions share its lock.
+    pub(crate) fn revision(&self, end: usize) -> Option<Document> {
+        let mut old = Document::load(self.bytes().get(..end)?.to_vec()).ok()?;
+        if old.is_locked() && old.trailer.get("Encrypt") == self.trailer.get("Encrypt") {
+            old.crypt = self.crypt.clone();
+        }
+        Some(old)
+    }
+
     pub(crate) fn crypt(&self) -> Option<&Crypt> {
         self.crypt.as_ref()
     }

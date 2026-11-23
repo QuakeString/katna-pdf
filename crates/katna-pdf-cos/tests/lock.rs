@@ -3,7 +3,7 @@
 //! Putting a password on, opening with it, changing a locked file, and
 //! taking the password off.
 
-use katna_pdf_cos::{Document, Insert, LockError, Permissions, UnlockError, text_pdf};
+use katna_pdf_cos::{Change, Document, Dss, Insert, LockError, Permissions, UnlockError, text_pdf};
 
 fn letter() -> Document {
     Document::load(text_pdf("Letter", &["  Dear Asha, ünïcode".to_string()])).unwrap()
@@ -111,4 +111,24 @@ fn changes_to_a_locked_file_are_locked_too() {
     again.unlock("asha").unwrap();
     assert!(text(&again).contains("Paid in full"), "{}", text(&again));
     assert!(text(&again).contains("Dear Asha"));
+}
+
+#[test]
+fn changes_to_a_locked_file_are_told_apart() {
+    // What was added to a locked file since a revision is read with its
+    // key, not taken for changes everywhere.
+    let locked = letter().lock("asha", "boss", Permissions::ALL).unwrap();
+    let end = locked.len();
+    let mut doc = Document::load(locked).unwrap();
+    doc.unlock("asha").unwrap();
+    let data = Dss {
+        certs: vec![b"not really a certificate".to_vec()],
+        ..Dss::default()
+    };
+    let mut later = Document::load(doc.add_dss(&data).unwrap()).unwrap();
+    later.unlock("asha").unwrap();
+    assert_eq!(
+        later.changes_since(end).into_iter().collect::<Vec<_>>(),
+        [Change::Dss]
+    );
 }

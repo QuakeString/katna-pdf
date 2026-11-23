@@ -181,7 +181,7 @@ impl Document {
     /// added or removed since the revision of the file that ended at
     /// byte `end`, each with whether it is a signature field.
     pub fn fields_changed_since(&self, end: usize) -> Vec<(String, bool)> {
-        let Some(Ok(old)) = self.bytes().get(..end).map(|b| Document::load(b.to_vec())) else {
+        let Some(old) = self.revision(end) else {
             return Vec::new();
         };
         let before: HashMap<String, (Option<String>, bool)> = old
@@ -267,7 +267,7 @@ impl Document {
     /// ended at byte `end`.
     pub fn changes_since(&self, end: usize) -> BTreeSet<Change> {
         let mut out = BTreeSet::new();
-        let Some(Ok(old)) = self.bytes().get(..end).map(|b| Document::load(b.to_vec())) else {
+        let Some(old) = self.revision(end) else {
             out.insert(Change::Other);
             return out;
         };
