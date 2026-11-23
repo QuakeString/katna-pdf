@@ -9,9 +9,9 @@ use gpui::Action;
 use crate::viewer::{
     ActualSize, AddBookmark, Annotate, CloseAll, CloseTab, Compare, CopyText, Export, Find,
     FindNext, FindPrevious, FitHeight, FitPage, FitWidth, Loupe, NextPage, NextSpread, NextTab,
-    Open, Organize, Present, PreviousPage, PreviousTab, Print, Properties, Quit, ReadAloud,
-    ReopenSession, Revert, RotateViewLeft, RotateViewRight, Save, Shortcuts, ShowLibrary, Sign,
-    Snapshot, ToggleContents, ToggleNight, ZoomIn, ZoomOut, ZoomToArea,
+    NextView, Open, Organize, Present, PreviousPage, PreviousTab, PreviousView, Print, Properties,
+    Quit, ReadAloud, ReopenSession, Revert, RotateViewLeft, RotateViewRight, Save, Shortcuts,
+    ShowLibrary, Sign, Snapshot, ToggleContents, ToggleNight, ZoomIn, ZoomOut, ZoomToArea,
 };
 
 /// An item: its id (and the id of its words), and its keys as
@@ -84,6 +84,8 @@ pub const MENUS: &[(&str, &[Entry])] = &[
         &[
             Some(("menu-next-page", &["Page Down"])),
             Some(("menu-previous-page", &["Page Up"])),
+            Some(("menu-previous-view", &["Alt", "Left"])),
+            Some(("menu-next-view", &["Alt", "Right"])),
             Some(("menu-add-bookmark", &["Control", "B"])),
             None,
             Some(("menu-next-tab", &["Control", "Tab"])),
@@ -141,6 +143,8 @@ pub fn action(id: &str) -> Option<Box<dyn Action>> {
         "menu-revert" => Box::new(Revert),
         "menu-close-all" => Box::new(CloseAll),
         "menu-shortcuts" => Box::new(Shortcuts),
+        "menu-previous-view" => Box::new(PreviousView),
+        "menu-next-view" => Box::new(NextView),
         "menu-loupe" => Box::new(Loupe),
         "menu-rotate-right" => Box::new(RotateViewRight),
         "menu-rotate-left" => Box::new(RotateViewLeft),
