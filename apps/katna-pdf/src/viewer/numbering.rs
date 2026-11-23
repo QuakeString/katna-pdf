@@ -257,6 +257,8 @@ impl Viewer {
             };
             let shown = if row.style == LabelStyle::None && range.prefix.is_empty() {
                 t("numbering-none", &[])
+            } else if from == to {
+                range.label(0)
             } else {
                 format!(
                     "{}–{}",
