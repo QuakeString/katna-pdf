@@ -82,6 +82,7 @@ actions!(
     katna_pdf,
     [
         Open,
+        OpenSettings,
         ReopenSession,
         Compare,
         Export,
@@ -183,6 +184,7 @@ const PRESENTING: &str = "Presenting";
 pub fn bind_keys(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("ctrl-o", Open, None),
+        KeyBinding::new("ctrl-,", OpenSettings, None),
         KeyBinding::new("ctrl-p", Print, None),
         KeyBinding::new("ctrl-s", Save, None),
         KeyBinding::new("ctrl-z", Undo, Some(READING)),
