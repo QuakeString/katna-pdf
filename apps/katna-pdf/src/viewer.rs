@@ -36,6 +36,7 @@ use katna_ui::{ScrollBar, px, unpx};
 
 mod annots;
 mod area;
+mod autoscroll;
 mod bookmarks;
 mod comments;
 mod compare;
@@ -110,6 +111,7 @@ actions!(
         FitHeight,
         RotateViewRight,
         GoToPage,
+        AutoScroll,
         RotateViewLeft,
         ZoomToArea,
         Loupe,
@@ -287,6 +289,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl-4", FitHeight, None),
         KeyBinding::new("ctrl-r", RotateViewRight, None),
         KeyBinding::new("ctrl-g", GoToPage, None),
+        KeyBinding::new("ctrl-shift-h", AutoScroll, None),
         KeyBinding::new("ctrl-shift-r", RotateViewLeft, None),
         KeyBinding::new("ctrl-3", NextSpread, None),
         KeyBinding::new("ctrl-0", ActualSize, None),
@@ -570,6 +573,8 @@ pub struct Viewer {
     pasting_many: Option<objects::PastingMany>,
     /// The Go to page bar, while open.
     going_to: Option<goto::GoingTo>,
+    /// Scrolling by itself, while it goes.
+    auto_scroll: Option<autoscroll::AutoScroll>,
     setup: Option<setup::PageSetup>,
     /// The form, once read, if the file has fields to fill in.
     form: Option<Form>,
@@ -863,6 +868,7 @@ impl Viewer {
             numbering: None,
             pasting_many: None,
             going_to: None,
+            auto_scroll: None,
             setup: None,
             form: None,
             links: None,
@@ -4551,6 +4557,7 @@ impl Render for Viewer {
             .on_action(cx.listener(|this, _: &NextSpread, _, cx| this.next_spread(cx)))
             .on_action(cx.listener(|this, _: &RotateViewRight, _, cx| this.turn_view(1, cx)))
             .on_action(cx.listener(|this, _: &GoToPage, window, cx| this.toggle_goto(window, cx)))
+            .on_action(cx.listener(|this, _: &AutoScroll, _, cx| this.toggle_auto_scroll(cx)))
             .on_action(cx.listener(|this, _: &RotateViewLeft, _, cx| this.turn_view(3, cx)))
             .on_action(cx.listener(|this, _: &Print, _, cx| this.toggle_printing(cx)))
             .on_action(cx.listener(|this, _: &Save, _, cx| this.save(cx)))
@@ -4635,7 +4642,9 @@ impl Render for Viewer {
                 }
             }))
             .on_action(cx.listener(|this, _: &PutToolDown, _, cx| {
-                if this.area.is_some() {
+                if this.auto_scroll.is_some() {
+                    this.toggle_auto_scroll(cx);
+                } else if this.area.is_some() {
                     this.area = None;
                     cx.notify();
                 } else if this.signing.is_some() {
@@ -4655,13 +4664,13 @@ impl Render for Viewer {
             .on_action(cx.listener(|this, _: &FindNext, _, cx| this.step_search(true, cx)))
             .on_action(cx.listener(|this, _: &FindPrevious, _, cx| this.step_search(false, cx)))
             .on_action(cx.listener(|this, _: &ScrollDown, _, cx| {
-                if !this.nudge_picked(0.0, 1.0, cx) {
+                if !this.auto_scroll_speed(1, cx) && !this.nudge_picked(0.0, 1.0, cx) {
                     this.list.scroll_by(px(48.0));
                     cx.notify();
                 }
             }))
             .on_action(cx.listener(|this, _: &ScrollUp, _, cx| {
-                if !this.nudge_picked(0.0, -1.0, cx) {
+                if !this.auto_scroll_speed(-1, cx) && !this.nudge_picked(0.0, -1.0, cx) {
                     this.list.scroll_by(px(-48.0));
                     cx.notify();
                 }

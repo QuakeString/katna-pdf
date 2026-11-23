@@ -1293,6 +1293,7 @@ menu-next-page = _Next Page
 menu-previous-page = _Previous Page
 menu-previous-view = Previous _View
 menu-go-to-page = Go to page…
+menu-auto-scroll = Scroll by itself
 menu-next-view = Ne_xt View
 menu-add-bookmark = Add _Bookmark
 menu-next-tab = Next _Tab
@@ -1650,3 +1651,9 @@ goto-placeholder = 1 to { $count }
 goto-of = of { $count }
 goto-or-label = number or label
 goto-no-page = There's no page "{ $typed }": type a number from 1 to { $count }, or a page's label.
+
+## Scrolling by itself (Ctrl+Shift+H)
+autoscroll-on = Scrolling by itself: ↓ faster, ↑ slower, Escape stops.
+autoscroll-speed = Speed { $level } of { $most }.
+autoscroll-stopped = Stopped scrolling by itself.
+autoscroll-end = Reached the end.
