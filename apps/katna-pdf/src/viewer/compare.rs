@@ -20,7 +20,8 @@ use katna_ui::scale::desktop_px;
 use katna_ui::scrollbar::ScrollBar;
 use katna_ui::tokens::{radius, space, text};
 
-use super::{Content, PaneTab, Viewer, file_name, icon_button};
+use super::{Content, PaneTab, Viewer, file_name};
+use crate::float;
 use crate::text::t;
 
 /// Only in the older file.
@@ -406,70 +407,117 @@ impl Viewer {
             .into_any_element()
     }
 
-    /// The buttons over the list of changes.
+    /// The head of the list of changes (R20): how many, and buttons to
+    /// step through them and to stop.
     pub(super) fn compare_actions(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let comparing = self.comparing.as_ref()?;
         let th = self.theme;
-        let choice = |id: &'static str, label: String, on: bool, overlay: bool| {
-            div()
-                .id(id)
-                .h(px(28.0))
-                .px(px(space::S3))
-                .flex()
-                .items_center()
-                .rounded(px(radius::FULL))
-                .text_size(px(text::SMALL))
-                .text_color(if on { th.text } else { th.dim })
-                .when(on, |d| d.bg(th.field))
-                .hover(move |s| s.bg(th.hover))
-                .cursor_pointer()
-                .on_click(cx.listener(move |this, _, _, cx| this.set_overlay(overlay, cx)))
-                .child(label)
+        let count = comparing.result.as_ref().map(|r| r.changes.len());
+        let head = match count {
+            Some(n) => t("compare-head", &[("n", &n.to_string())]),
+            None => t("compare-head-working", &[]),
+        };
+        let ib = |id: &'static str, glyph: &'static str, tip: &'static str| {
+            float::sized_ib(id, glyph, 28.0, 16.0, t(tip, &[]), false, &th)
         };
         Some(
             div()
+                .h(px(40.0))
                 .flex_shrink_0()
                 .flex()
                 .items_center()
-                .gap(px(space::S1))
-                .px(px(space::S3))
-                .py(px(space::S2))
-                .border_b_1()
-                .border_color(th.line)
-                .child(choice(
-                    "compare-side",
-                    t("compare-side", &[]),
-                    !comparing.overlay,
-                    false,
-                ))
-                .child(choice(
-                    "compare-overlay",
-                    t("compare-overlay", &[]),
-                    comparing.overlay,
-                    true,
-                ))
-                .child(div().flex_1())
-                .child(icon_button(
-                    "compare-previous",
-                    "chevron-up",
-                    t("compare-previous", &[]),
-                    th,
-                    cx.listener(|this, _, _, cx| this.step_change(false, cx)),
-                ))
-                .child(icon_button(
-                    "compare-next",
-                    "chevron-down",
-                    t("compare-next", &[]),
-                    th,
-                    cx.listener(|this, _, _, cx| this.step_change(true, cx)),
-                ))
-                .child(icon_button(
-                    "compare-close",
-                    "close",
-                    t("compare-close", &[]),
-                    th,
-                    cx.listener(|this, _, _, cx| this.stop_comparing(cx)),
-                ))
+                .gap(px(2.0))
+                .pl(px(space::S3))
+                .pr(px(space::S2))
+                .child(
+                    div()
+                        .flex_1()
+                        .text_size(px(text::MICRO))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(th.dim)
+                        .child(head.to_uppercase()),
+                )
+                .child(
+                    ib("compare-previous", "chevu", "compare-previous")
+                        .on_click(cx.listener(|this, _, _, cx| this.step_change(false, cx))),
+                )
+                .child(
+                    ib("compare-next", "chev", "compare-next")
+                        .on_click(cx.listener(|this, _, _, cx| this.step_change(true, cx))),
+                )
+                .child(
+                    ib("compare-close", "x", "compare-close")
+                        .on_click(cx.listener(|this, _, _, cx| this.stop_comparing(cx))),
+                )
+                .into_any_element(),
+        )
+    }
+
+    /// The banner over the pages while comparing (R20): which file is
+    /// on which side, how many changes, and Overlay or Side by side.
+    pub(super) fn compare_banner(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let comparing = self.comparing.as_ref()?;
+        let th = self.theme;
+        let newer = self.path.as_deref().map(file_name).unwrap_or_default();
+        let words = match (&comparing.failed, comparing.result.as_ref()) {
+            (Some(error), _) => error.clone(),
+            (None, None) => t("compare-working", &[]),
+            (None, Some(result)) => {
+                let n = result.changes.len();
+                let changes = match n {
+                    0 => t("compare-none-short", &[]),
+                    1 => t("compare-one", &[]),
+                    n => t("compare-many", &[("n", &n.to_string())]),
+                };
+                let key = if comparing.overlay {
+                    "compare-banner-overlay"
+                } else {
+                    "compare-banner"
+                };
+                format!(
+                    "{} · {changes}",
+                    t(key, &[("older", &comparing.name), ("newer", &newer)])
+                )
+            }
+        };
+        let overlay = comparing.overlay;
+        Some(
+            div()
+                .id("compare-banner")
+                .occlude()
+                .max_w(px(720.0))
+                .flex()
+                .items_center()
+                .gap(px(space::S3))
+                .pl(px(space::S3))
+                .pr(px(space::S1))
+                .py(px(space::S1))
+                .rounded(px(radius::MD))
+                .bg(th.accent_soft)
+                .text_size(px(text::SMALL))
+                .text_color(th.accent_text)
+                .child(float::icon("info", 15.0, th.accent_text))
+                .child(div().flex_1().min_w_0().truncate().child(words))
+                .when(comparing.doc.is_some(), |d| {
+                    d.child(
+                        float::button(
+                            "compare-switch",
+                            t(
+                                if overlay {
+                                    "compare-side"
+                                } else {
+                                    "compare-overlay"
+                                },
+                                &[],
+                            ),
+                            false,
+                            &th,
+                        )
+                        .on_click(
+                            cx.listener(move |this, _, _, cx| this.set_overlay(!overlay, cx)),
+                        ),
+                    )
+                })
                 .into_any_element(),
         )
     }
@@ -492,7 +540,7 @@ impl Viewer {
                 .text_color(th.dim)
                 .child(s)
         };
-        let mut head = vec![line(t("compare-with", &[("name", &comparing.name)]))];
+        let mut head = Vec::new();
         let Some(result) = comparing.result.as_ref() else {
             head.push(line(match &comparing.failed {
                 Some(error) => error.clone(),
@@ -506,14 +554,9 @@ impl Viewer {
                 .into_any_element();
         };
         let (done, total) = comparing.looked;
-        head.push(line(if result.changes.is_empty() && done == total {
-            t("compare-none", &[])
-        } else {
-            t(
-                "compare-count",
-                &[("count", &result.changes.len().to_string())],
-            )
-        }));
+        if result.changes.is_empty() && done == total {
+            head.push(line(t("compare-none", &[])));
+        }
         if done < total {
             head.push(line(t(
                 "compare-looking",
@@ -537,6 +580,7 @@ impl Viewer {
                 .map(|(p, _)| t("compare-page", &[("page", &(p + 1).to_string())]))
                 .unwrap_or_default();
             let picked = comparing.current == Some(i);
+            let hover = th.hover;
             div()
                 .id(("change", i))
                 .mx(px(space::S2))
@@ -545,8 +589,8 @@ impl Viewer {
                 .flex()
                 .gap(px(space::S2))
                 .rounded(px(radius::SM))
-                .when(picked, |d| d.bg(th.field))
-                .hover(move |s| s.bg(th.hover))
+                .when(picked, |d| d.bg(th.accent_soft))
+                .when(!picked, |d| d.hover(move |s| s.bg(hover)))
                 .cursor_pointer()
                 .on_click(cx.listener(move |this, _, _, cx| this.pick_change(i, cx)))
                 .child(
@@ -565,13 +609,13 @@ impl Viewer {
                         .flex_col()
                         .child(
                             div()
-                                .text_size(px(text::SMALL))
+                                .text_size(px(text::CAPTION))
                                 .text_color(th.dim)
                                 .child(page),
                         )
                         .child(
                             div()
-                                .text_size(px(text::SMALL))
+                                .text_size(px(text::BODY))
                                 .text_color(th.text)
                                 .when(picked, |d| d.font_weight(FontWeight::MEDIUM))
                                 .child(what),

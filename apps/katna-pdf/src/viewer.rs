@@ -1263,7 +1263,7 @@ impl Viewer {
                     this.links = Some(Arc::new(links));
                     cx.notify();
                 }
-                if show && !outline.is_empty() {
+                if show && !outline.is_empty() && this.comparing.is_none() {
                     this.pane = true;
                     this.tab = PaneTab::Contents;
                 }
@@ -4345,6 +4345,7 @@ impl Render for Viewer {
         let initials_card = self.initials_card(cx);
         let design_card = self.design_card(side_room, cx);
         let find_bar = self.find_bar(cx);
+        let compare_banner = self.compare_banner(cx);
         let notice = self.notice.clone().map(|notice| {
             let (bg, fg, glyph, mark) = if notice.error {
                 (th.error_soft, th.error, "alert", th.error)
@@ -4687,6 +4688,17 @@ impl Render for Viewer {
                     .gap(px(space::S3))
                     .children(signatures_line.map(floating(th))),
             )
+            .children(compare_banner.map(|banner| {
+                div()
+                    .absolute()
+                    .top(px(space::S2))
+                    .left(px(pane_room + float::GAP))
+                    .right(px(float::GAP))
+                    .flex()
+                    .justify_center()
+                    .child(float::appear("compare-banner-in", banner, -4.0))
+                    .into_any_element()
+            }))
             .children(find_bar.map(|bar| {
                 div()
                     .absolute()

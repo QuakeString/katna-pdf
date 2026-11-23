@@ -1144,10 +1144,15 @@ pane-changes = Changes
 
 ## Comparing with another version
 
-compare-with = Compared with { $name }
+compare-head = Changes · { $n }
+compare-head-working = Changes
+compare-banner = Comparing { $older } (left) with { $newer } (right)
+compare-banner-overlay = Comparing { $older } (red) with { $newer } (blue)
+compare-one = 1 change
+compare-many = { $n } changes
+compare-none-short = no changes
 compare-working = Comparing…
 compare-unreadable = { $name } could not be opened.
-compare-count = Changes: { $count }
 compare-none = No changes found.
 compare-looking = Looking at pictures and drawings: { $done } of { $total }
 compare-legend = Red is only in the older file, blue only in this one.
