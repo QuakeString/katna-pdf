@@ -316,7 +316,7 @@ organize.attachments-add	organize	Add file attachments	standard	y	shipped	P2	#10
 organize.attachments-delete	organize	Delete attachments	standard	y	shipped	P2	#108		acrobat
 organize.attachments-description	organize	Edit attachment descriptions	reader	n	partial	P2	#108 rename		acrobat
 organize.associated-files	organize	Associated files with relationships (PDF/A-3, PDF 2.0)	standard	n	todo	P2	-		acrobat
-organize.portfolio-view	organize	View PDF Portfolios as a file list	reader	n	partial	P1	#108	files listed; no portfolio layout	acrobat
+organize.portfolio-view	organize	View PDF Portfolios as a file list	reader	n	shipped	P1	#191		acrobat
 organize.portfolio-extract	organize	Extract files from a portfolio	reader	n	shipped	P1	#108		acrobat
 organize.portfolio-create	organize	Create PDF Portfolios	pro	n	skip	-	-		acrobat
 organize.document-properties	organize	Document properties dialog (description, fonts, advanced)	reader	y	shipped	P1	#62 Ctrl+D		acrobat

@@ -6,7 +6,7 @@
 //! objects on a layer.
 
 use gpui::{AnyElement, Context, Entity, Focusable, Subscription, Window, div, prelude::*};
-use katna_pdf_cos::{Attachment, Layer, Ref};
+use katna_pdf_cos::{Attachment, ColumnKind, ItemValue, Layer, Portfolio, PortfolioView, Ref};
 use katna_ui::px;
 use katna_ui::text_input::{InputEvent, TextInput};
 use katna_ui::tokens::{radius, space, text};
@@ -21,6 +21,12 @@ use crate::text::t;
 pub(super) struct Extras {
     pub(super) attachments: Vec<Attachment>,
     pub(super) layers: Vec<Layer>,
+    /// The columns, order and first file when the document is a
+    /// portfolio.
+    pub(super) portfolio: Option<Portfolio>,
+    /// The column the files were sorted by instead, by key, and whether
+    /// upwards.
+    sort: Option<(String, bool)>,
     chosen_file: Option<usize>,
     chosen_layer: Option<usize>,
     /// A name being typed for a file or a layer.
@@ -44,9 +50,22 @@ enum Named {
 impl Extras {
     /// The file shown changed: both lists anew, choices kept where they
     /// still point at something.
-    pub(super) fn set(&mut self, attachments: Vec<Attachment>, layers: Vec<Layer>) {
+    pub(super) fn set(
+        &mut self,
+        attachments: Vec<Attachment>,
+        layers: Vec<Layer>,
+        portfolio: Option<Portfolio>,
+    ) {
         self.attachments = attachments;
         self.layers = layers;
+        if portfolio.is_none() {
+            self.sort = None;
+        }
+        self.sort = self
+            .sort
+            .take()
+            .filter(|(key, _)| portfolio.as_ref().is_some_and(|p| p.column(key).is_some()));
+        self.portfolio = portfolio;
         self.chosen_file = self.chosen_file.filter(|i| *i < self.attachments.len());
         self.chosen_layer = self.chosen_layer.filter(|i| *i < self.layers.len());
         self.renaming = None;
@@ -54,7 +73,127 @@ impl Extras {
     }
 }
 
+impl Extras {
+    /// Whether the document is a portfolio that asks for its files to be
+    /// shown first (all but those that keep them out of the way).
+    pub(super) fn portfolio_first(&self) -> bool {
+        self.portfolio
+            .as_ref()
+            .is_some_and(|p| p.view != PortfolioView::Hidden)
+    }
+
+    /// The portfolio's first file chosen.
+    pub(super) fn choose_initial(&mut self) {
+        let Some(name) = self.portfolio.as_ref().and_then(|p| p.initial.clone()) else {
+            return;
+        };
+        if let Some(i) = self.attachments.iter().position(|a| a.name == name) {
+            self.chosen_file = Some(i);
+        }
+    }
+
+    /// The files' indices in the order they are listed.
+    fn order(&self) -> Vec<usize> {
+        match &self.portfolio {
+            Some(p) => p.order(
+                &self.attachments,
+                self.sort.as_ref().map(|(k, up)| (k.as_str(), *up)),
+            ),
+            None => (0..self.attachments.len()).collect(),
+        }
+    }
+
+    /// The column the files are sorted by, and whether upwards.
+    fn sorted_by(&self) -> Option<(String, bool)> {
+        self.sort
+            .clone()
+            .or_else(|| self.portfolio.as_ref()?.sort.first().cloned())
+    }
+}
+
+/// A portfolio column's heading; the name column the file left out is
+/// called Name.
+fn column_name(c: &katna_pdf_cos::PortfolioColumn) -> String {
+    if c.name.trim().is_empty() {
+        t("files-name", &[])
+    } else {
+        c.name.clone()
+    }
+}
+
+/// A portfolio's value as people read it.
+fn value_text(value: &ItemValue, kind: ColumnKind) -> String {
+    match (value, kind) {
+        (ItemValue::Number(n), ColumnKind::Size | ColumnKind::Packed) => {
+            crate::library::size_text(*n as u64)
+        }
+        (ItemValue::Date(d), _) => super::properties::shown_date(d)
+            .map(|d| d.split(' ').next().unwrap_or_default().to_owned())
+            .unwrap_or_else(|| d.clone()),
+        (v, _) => v.text(),
+    }
+}
+
 impl Viewer {
+    /// The sort chips over a portfolio's files: one a column; the one
+    /// sorted by shows which way, and pressing it again turns it round.
+    fn portfolio_sorts(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let p = self.extras.portfolio.as_ref()?;
+        let th = self.theme;
+        let by = self.extras.sorted_by();
+        let mut row = div()
+            .flex()
+            .flex_wrap()
+            .items_center()
+            .gap(px(space::S1))
+            .px(px(space::S2))
+            .pb(px(space::S2))
+            .child(
+                div()
+                    .text_size(px(text::CAPTION))
+                    .text_color(th.dim)
+                    .mr(px(space::S1))
+                    .child(t("portfolio-sort", &[])),
+            );
+        for (i, c) in p.columns.iter().enumerate() {
+            let on = by.as_ref().filter(|(k, _)| *k == c.key).map(|(_, up)| *up);
+            let label = column_name(c);
+            let key = c.key.clone();
+            let hover = th.hover;
+            row = row.child(
+                div()
+                    .id(("portfolio-sort", i))
+                    .flex()
+                    .items_center()
+                    .gap(px(2.0))
+                    .px(px(space::S2))
+                    .py(px(2.0))
+                    .rounded(px(radius::SM))
+                    .text_size(px(text::CAPTION))
+                    .cursor_pointer()
+                    .when(on.is_some(), |d| {
+                        d.bg(th.accent_soft).text_color(th.accent_text)
+                    })
+                    .when(on.is_none(), |d| {
+                        d.text_color(th.text2).hover(move |s| s.bg(hover))
+                    })
+                    .child(label)
+                    .children(on.map(|up| {
+                        float::icon(if up { "up" } else { "down" }, 12.0, th.accent_text)
+                    }))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        let up = match this.extras.sorted_by() {
+                            Some((k, up)) if k == key => !up,
+                            _ => true,
+                        };
+                        this.extras.sort = Some((key.clone(), up));
+                        cx.notify();
+                    })),
+            );
+        }
+        Some(row.into_any_element())
+    }
+
     /// The Files pane: the files kept in the document.
     pub(super) fn files_list(&self, cx: &mut Context<Self>) -> AnyElement {
         let th = self.theme;
@@ -75,7 +214,9 @@ impl Viewer {
             .flex()
             .flex_col()
             .gap(px(2.0));
-        for (i, a) in extras.attachments.iter().enumerate() {
+        list = list.children(self.portfolio_sorts(cx));
+        for i in extras.order() {
+            let a = &extras.attachments[i];
             let on = extras.chosen_file == Some(i);
             let name: AnyElement = match &extras.renaming {
                 Some(r) if r.what == Named::File(i) => {
@@ -92,11 +233,27 @@ impl Viewer {
                     .into_any_element(),
             };
             let mut details = Vec::new();
-            if let Some(size) = a.size {
-                details.push(crate::library::size_text(size));
-            }
-            if !a.description.is_empty() {
-                details.push(a.description.clone());
+            match &extras.portfolio {
+                // A portfolio's own columns, as it lists them.
+                Some(p) => {
+                    for c in p
+                        .columns
+                        .iter()
+                        .filter(|c| c.visible && c.kind != ColumnKind::Name)
+                    {
+                        if let Some(v) = a.value(c) {
+                            details.push(format!("{}: {}", column_name(c), value_text(&v, c.kind)));
+                        }
+                    }
+                }
+                None => {
+                    if let Some(size) = a.size {
+                        details.push(crate::library::size_text(size));
+                    }
+                    if !a.description.is_empty() {
+                        details.push(a.description.clone());
+                    }
+                }
             }
             let hover = th.hover;
             let row = div()
@@ -473,14 +630,19 @@ impl Viewer {
                     if let Some(dir) = target.parent() {
                         std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
                     }
+                    let pdf = data.starts_with(b"%PDF");
                     std::fs::write(&target, data).map_err(|e| e.to_string())?;
-                    Ok::<_, String>(target)
+                    Ok::<_, String>((target, pdf))
                 })
                 .await;
             this.update(cx, |this, cx| {
                 match written {
-                    Ok(target) => {
-                        if open {
+                    Ok((target, pdf)) => {
+                        if open && pdf {
+                            // A PDF kept in it opens here, in a tab of
+                            // its own, as Acrobat opens a portfolio's.
+                            cx.emit(super::ViewerEvent::Dropped(vec![target]));
+                        } else if open {
                             cx.open_url(&target.to_string_lossy());
                         } else {
                             this.notice = Some(super::said(

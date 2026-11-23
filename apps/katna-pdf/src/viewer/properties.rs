@@ -1374,7 +1374,7 @@ fn note(words: String, th: crate::theme::Theme) -> gpui::Div {
 
 /// A PDF date (`D:20261019103005+05'30'`) as people read it:
 /// `2026-10-19 10:30`, with its zone when it has one.
-fn shown_date(pdf: &str) -> Option<String> {
+pub(super) fn shown_date(pdf: &str) -> Option<String> {
     let d = pdf.trim().trim_start_matches("D:");
     let part = |from: usize| {
         d.get(from..from + 2)

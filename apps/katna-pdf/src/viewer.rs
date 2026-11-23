@@ -1480,12 +1480,16 @@ impl Viewer {
                                 Vec::new(),
                                 katna_pdf_cos::Permissions::ALL,
                                 Vec::new(),
+                                None,
+                                false,
                             ),
                         );
                     };
-                    let show = doc
+                    let mode = doc
                         .catalog()
-                        .is_some_and(|c| c.name("PageMode") == Some(b"UseOutlines"));
+                        .and_then(|c| c.name("PageMode").map(<[u8]>::to_vec));
+                    let show = mode.as_deref() == Some(b"UseOutlines");
+                    let kept = mode.as_deref() == Some(b"UseAttachments");
                     let (outline, links, fields) = (doc.outline(), doc.links(), doc.form());
                     let annots = doc.annotations();
                     let ranges = doc.page_label_ranges();
@@ -1496,6 +1500,8 @@ impl Viewer {
                         doc.layers(),
                         doc.permissions(),
                         doc.repairs().to_vec(),
+                        doc.portfolio(),
+                        kept,
                     );
                     // The object layer's copy is kept only for a form.
                     let form = (!fields.is_empty()).then(|| (Arc::new(doc), fields));
@@ -1517,7 +1523,8 @@ impl Viewer {
                     this.check_signatures_online(again, generation, cx);
                 }
                 this.signatures = Some(Arc::new(signatures));
-                this.extras.set(extras.0, extras.1);
+                let files = extras.0.len();
+                this.extras.set(extras.0, extras.1, extras.4);
                 this.set_permissions(extras.2);
                 // A damaged file read anyway: say so, and what was wrong.
                 if !extras.3.is_empty() {
@@ -1540,6 +1547,20 @@ impl Viewer {
                 if show && !outline.is_empty() && this.comparing.is_none() {
                     this.pane = true;
                     this.tab = PaneTab::Contents;
+                }
+                // A portfolio, or a file that asks for its attachments
+                // first, opens on its files, as Acrobat does.
+                if files > 0
+                    && this.comparing.is_none()
+                    && (extras.5 || this.extras.portfolio_first())
+                {
+                    this.pane = true;
+                    this.tab = PaneTab::Files;
+                    if this.extras.portfolio.is_some() {
+                        this.extras.choose_initial();
+                        let n = files.to_string();
+                        this.notice = Some(said("portfolio-notice", &[("n", &n)]));
+                    }
                 }
                 this.contents = Some(Contents::new(outline));
                 this.set_label_ranges(ranges);
@@ -3638,7 +3659,8 @@ impl Viewer {
         self.links = links.iter().any(|l| !l.is_empty()).then(|| Arc::new(links));
         self.annots = Some(Arc::new(cos.annotations()));
         self.signatures = Some(Arc::new(sign::check(&cos)));
-        self.extras.set(cos.attachments(), cos.layers());
+        self.extras
+            .set(cos.attachments(), cos.layers(), cos.portfolio());
         self.permissions = cos.permissions();
         self.signable = Arc::new(sign::signable(&cos));
         self.chosen = None;

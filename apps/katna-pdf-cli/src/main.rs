@@ -4051,23 +4051,86 @@ fn attachments(args: &[String], json: bool) -> Done {
         });
     }
     let Some(out) = args.option("-o") else {
+        // A portfolio's files in its order, with its own columns.
+        let portfolio = doc.portfolio();
+        let order = match &portfolio {
+            Some(p) => p.order(&kept, None),
+            None => (0..kept.len()).collect(),
+        };
+        let own: Vec<&katna_pdf_cos::PortfolioColumn> = portfolio
+            .as_ref()
+            .map(|p| {
+                p.columns
+                    .iter()
+                    .filter(|c| {
+                        matches!(
+                            c.kind,
+                            katna_pdf_cos::ColumnKind::Text
+                                | katna_pdf_cos::ColumnKind::Date
+                                | katna_pdf_cos::ColumnKind::Number
+                        )
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
         if json {
-            let items: Vec<String> = kept
+            let items: Vec<String> = order
                 .iter()
-                .map(|a| {
+                .map(|&i| {
+                    let a = &kept[i];
+                    let values: Vec<String> = own
+                        .iter()
+                        .filter_map(|c| {
+                            let v = a.value(c)?;
+                            Some(format!(
+                                "{}:{}",
+                                string(&c.key),
+                                match v {
+                                    katna_pdf_cos::ItemValue::Number(n) => format!("{n}"),
+                                    v => string(&v.text()),
+                                }
+                            ))
+                        })
+                        .collect();
                     format!(
-                        "{{\"name\":{},\"description\":{},\"size\":{},\"modified\":{}}}",
+                        "{{\"name\":{},\"description\":{},\"size\":{},\"modified\":{}{}}}",
                         string(&a.name),
                         string(&a.description),
                         a.size.map_or("null".into(), |n| n.to_string()),
-                        a.modified.as_deref().map_or("null".into(), string)
+                        a.modified.as_deref().map_or("null".into(), string),
+                        if portfolio.is_some() {
+                            format!(",\"values\":{{{}}}", values.join(","))
+                        } else {
+                            String::new()
+                        }
                     )
                 })
                 .collect();
-            return Ok(format!("{{\"attachments\":[{}]}}\n", items.join(",")));
+            let head = match &portfolio {
+                Some(p) => format!(
+                    "\"portfolio\":{{\"columns\":[{}],\"initial\":{}}},",
+                    p.columns
+                        .iter()
+                        .map(|c| format!(
+                            "{{\"key\":{},\"name\":{},\"shown\":{}}}",
+                            string(&c.key),
+                            string(&c.name),
+                            c.visible
+                        ))
+                        .collect::<Vec<_>>()
+                        .join(","),
+                    p.initial.as_deref().map_or("null".into(), string)
+                ),
+                None => String::new(),
+            };
+            return Ok(format!("{{{head}\"attachments\":[{}]}}\n", items.join(",")));
         }
         let mut text = String::new();
-        for a in &kept {
+        if portfolio.is_some() {
+            text.push_str("A portfolio; its files in its order.\n");
+        }
+        for &i in &order {
+            let a = &kept[i];
             let _ = writeln!(
                 text,
                 "{:<30} {:>10} {}",
@@ -4075,6 +4138,11 @@ fn attachments(args: &[String], json: bool) -> Done {
                 a.size.map_or(String::new(), |n| format!("{n} bytes")),
                 a.description
             );
+            for c in &own {
+                if let Some(v) = a.value(c) {
+                    let _ = writeln!(text, "    {}: {}", c.name, v.text());
+                }
+            }
         }
         return Ok(text);
     };

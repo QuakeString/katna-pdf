@@ -25,10 +25,169 @@ pub struct Attachment {
     pub size: Option<u64>,
     /// When it was last changed, as the file says it (a PDF date).
     pub modified: Option<String>,
+    /// When it was made, as the file says it (a PDF date).
+    pub created: Option<String>,
+    /// Its size as kept in the document, packed.
+    pub packed: Option<u64>,
+    /// A portfolio's values for it (`/CI`), by the schema's keys.
+    pub item: Vec<(String, ItemValue)>,
     /// Its key in the tree, as stored.
     key: Vec<u8>,
     /// Its file specification, as stored: a reference or the dictionary.
     spec: Object,
+}
+
+/// A value a portfolio gives a file in one of its columns.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ItemValue {
+    Text(String),
+    Number(f64),
+    /// A PDF date (`D:YYYYMMDD…`).
+    Date(String),
+}
+
+impl ItemValue {
+    /// How two values sort: numbers by size, dates by time, text without
+    /// regard to case.
+    fn compare(&self, other: &ItemValue) -> std::cmp::Ordering {
+        use ItemValue::*;
+        match (self, other) {
+            (Number(a), Number(b)) => a.total_cmp(b),
+            (Date(a), Date(b)) => a.cmp(b),
+            (a, b) => a.text().to_lowercase().cmp(&b.text().to_lowercase()),
+        }
+    }
+
+    /// The value as it is written in the file.
+    pub fn text(&self) -> String {
+        match self {
+            ItemValue::Text(t) | ItemValue::Date(t) => t.clone(),
+            ItemValue::Number(n) if n.fract() == 0.0 && n.abs() < 1e15 => format!("{}", *n as i64),
+            ItemValue::Number(n) => format!("{n}"),
+        }
+    }
+}
+
+/// What a portfolio column shows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ColumnKind {
+    /// A value of the file's own (`/CI`), text, a date or a number.
+    Text,
+    Date,
+    Number,
+    /// The file's name.
+    Name,
+    Description,
+    Modified,
+    Created,
+    Size,
+    /// Its size packed in the document.
+    Packed,
+}
+
+/// A column a portfolio lists its files in.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PortfolioColumn {
+    /// Its key in the schema, which `/CI` and `/Sort` name it by.
+    pub key: String,
+    /// Its heading.
+    pub name: String,
+    pub kind: ColumnKind,
+    /// Whether it is shown at first.
+    pub visible: bool,
+}
+
+/// How a portfolio asks to be shown at first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PortfolioView {
+    /// A list with a row a file.
+    Details,
+    /// Small pictures of the files.
+    Tiles,
+    /// Its own pages first, the files out of the way.
+    Hidden,
+    /// Its own Flash or HTML navigator, which nothing plays now.
+    Custom,
+}
+
+/// A portfolio (a "PDF package"): a document whose point is the files
+/// kept in it, listed in columns of their own.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Portfolio {
+    /// In the order shown.
+    pub columns: Vec<PortfolioColumn>,
+    /// The columns the files are sorted by, by key, and whether upwards.
+    pub sort: Vec<(String, bool)>,
+    /// The name of the file shown first.
+    pub initial: Option<String>,
+    pub view: PortfolioView,
+}
+
+impl Portfolio {
+    /// The column with key `key`.
+    pub fn column(&self, key: &str) -> Option<&PortfolioColumn> {
+        self.columns.iter().find(|c| c.key == key)
+    }
+
+    /// `files`' indices in the order the portfolio sorts them, or by
+    /// `by` (a column's key, and upwards) when given.
+    pub fn order(&self, files: &[Attachment], by: Option<(&str, bool)>) -> Vec<usize> {
+        let keys: Vec<(&PortfolioColumn, bool)> = match by {
+            Some((key, up)) => self.column(key).map(|c| (c, up)).into_iter().collect(),
+            None => self
+                .sort
+                .iter()
+                .filter_map(|(k, up)| self.column(k).map(|c| (c, *up)))
+                .collect(),
+        };
+        let mut order: Vec<usize> = (0..files.len()).collect();
+        order.sort_by(|&a, &b| {
+            for (column, up) in &keys {
+                let (x, y) = (files[a].value(column), files[b].value(column));
+                let o = match (x, y) {
+                    (Some(x), Some(y)) => x.compare(&y),
+                    // Files without a value go last either way.
+                    (Some(_), None) => return std::cmp::Ordering::Less,
+                    (None, Some(_)) => return std::cmp::Ordering::Greater,
+                    (None, None) => std::cmp::Ordering::Equal,
+                };
+                let o = if *up { o } else { o.reverse() };
+                if o.is_ne() {
+                    return o;
+                }
+            }
+            std::cmp::Ordering::Equal
+        });
+        order
+    }
+}
+
+impl Attachment {
+    /// Its value in `column`.
+    pub fn value(&self, column: &PortfolioColumn) -> Option<ItemValue> {
+        let size = |n: Option<u64>| n.map(|n| ItemValue::Number(n as f64));
+        match column.kind {
+            ColumnKind::Name => Some(ItemValue::Text(self.name.clone())),
+            ColumnKind::Description => {
+                (!self.description.is_empty()).then(|| ItemValue::Text(self.description.clone()))
+            }
+            ColumnKind::Modified => self.modified.clone().map(ItemValue::Date),
+            ColumnKind::Created => self.created.clone().map(ItemValue::Date),
+            ColumnKind::Size => size(self.size),
+            ColumnKind::Packed => size(self.packed),
+            ColumnKind::Text | ColumnKind::Date | ColumnKind::Number => self
+                .item
+                .iter()
+                .find(|(k, _)| *k == column.key)
+                .map(|(_, v)| v.clone()),
+        }
+    }
+}
+
+/// Whether `s` reads as a PDF date.
+fn is_pdf_date(s: &str) -> bool {
+    let digits = s.strip_prefix("D:").unwrap_or("");
+    digits.len() >= 4 && digits.as_bytes()[..4].iter().all(u8::is_ascii_digit)
 }
 
 impl Document {
@@ -69,22 +228,172 @@ impl Document {
                                 .map(|d| d.len() as u64)
                         })
                     });
-                let modified = params
-                    .as_ref()
-                    .and_then(|p| match self.resolve_key(p, "ModDate") {
-                        Object::String { bytes, .. } => Some(text_string(&bytes)),
-                        _ => None,
-                    });
+                let date = |key: &str| {
+                    params
+                        .as_ref()
+                        .and_then(|p| match self.resolve_key(p, key) {
+                            Object::String { bytes, .. } => Some(text_string(&bytes)),
+                            _ => None,
+                        })
+                };
+                let packed = stream.as_ref().map(|s| s.data.len() as u64);
+                let item = match self.resolve_key(dict, "CI") {
+                    Object::Dict(ci) => ci
+                        .iter()
+                        .filter_map(|(k, v)| {
+                            let value = self.item_value(&self.resolve(v))?;
+                            Some((String::from_utf8_lossy(k.as_bytes()).into_owned(), value))
+                        })
+                        .collect(),
+                    _ => Vec::new(),
+                };
                 Some(Attachment {
                     name,
                     description: text("Desc").unwrap_or_default(),
                     size,
-                    modified,
+                    modified: date("ModDate"),
+                    created: date("CreationDate"),
+                    packed,
+                    item,
                     key,
                     spec,
                 })
             })
             .collect()
+    }
+
+    /// One value of a collection item: a string, a number or a date,
+    /// or a dictionary of one (`/D`) with a prefix shown before it (`/P`).
+    fn item_value(&self, v: &Object) -> Option<ItemValue> {
+        match v {
+            Object::String { bytes, .. } => {
+                let text = text_string(bytes);
+                Some(if is_pdf_date(&text) {
+                    ItemValue::Date(text)
+                } else {
+                    ItemValue::Text(text)
+                })
+            }
+            Object::Int(_) | Object::Real(_) => v.as_number().map(ItemValue::Number),
+            Object::Dict(d) => {
+                let value = self.item_value(&self.resolve_key(d, "D"))?;
+                match (self.resolve_key(d, "P"), value) {
+                    (Object::String { bytes, .. }, ItemValue::Text(t)) => {
+                        Some(ItemValue::Text(format!("{}{t}", text_string(&bytes))))
+                    }
+                    (_, value) => Some(value),
+                }
+            }
+            Object::Name(n) => Some(ItemValue::Text(
+                String::from_utf8_lossy(n.as_bytes()).into_owned(),
+            )),
+            _ => None,
+        }
+    }
+
+    /// The document as a portfolio (§12.3.5, `/Collection`): the columns
+    /// its files are listed in, how they are sorted, and which comes up
+    /// first. `None` when it is not one.
+    pub fn portfolio(&self) -> Option<Portfolio> {
+        if self.is_locked() {
+            return None;
+        }
+        let catalog = self.catalog()?;
+        let Object::Dict(c) = self.resolve_key(&catalog, "Collection") else {
+            return None;
+        };
+        let mut columns = Vec::new();
+        if let Object::Dict(schema) = self.resolve_key(&c, "Schema") {
+            for (key, field) in schema.iter() {
+                let Object::Dict(f) = self.resolve(field) else {
+                    continue;
+                };
+                let kind = match f.name("Subtype") {
+                    Some(b"S") => ColumnKind::Text,
+                    Some(b"D") => ColumnKind::Date,
+                    Some(b"N") => ColumnKind::Number,
+                    Some(b"F") => ColumnKind::Name,
+                    Some(b"Desc") => ColumnKind::Description,
+                    Some(b"ModDate") => ColumnKind::Modified,
+                    Some(b"CreationDate") => ColumnKind::Created,
+                    Some(b"Size") => ColumnKind::Size,
+                    Some(b"CompressedSize") => ColumnKind::Packed,
+                    _ => continue,
+                };
+                let key = String::from_utf8_lossy(key.as_bytes()).into_owned();
+                let name = match self.resolve_key(&f, "N") {
+                    Object::String { bytes, .. } => text_string(&bytes),
+                    _ => key.clone(),
+                };
+                let visible = !matches!(self.resolve_key(&f, "V"), Object::Bool(false));
+                let order = self.resolve_key(&f, "O").as_number().unwrap_or(f64::MAX);
+                columns.push((
+                    order,
+                    PortfolioColumn {
+                        key,
+                        name,
+                        kind,
+                        visible,
+                    },
+                ));
+            }
+        }
+        // Stable, so columns without an order keep the schema's.
+        columns.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let mut columns: Vec<PortfolioColumn> = columns.into_iter().map(|(_, c)| c).collect();
+        if !columns.iter().any(|c| c.kind == ColumnKind::Name) {
+            columns.insert(
+                0,
+                PortfolioColumn {
+                    key: String::new(),
+                    name: String::new(),
+                    kind: ColumnKind::Name,
+                    visible: true,
+                },
+            );
+        }
+        let mut sort = Vec::new();
+        if let Object::Dict(s) = self.resolve_key(&c, "Sort") {
+            let keys: Vec<String> = match self.resolve_key(&s, "S") {
+                Object::Name(n) => vec![String::from_utf8_lossy(n.as_bytes()).into_owned()],
+                Object::Array(a) => a
+                    .iter()
+                    .filter_map(|o| match self.resolve(o) {
+                        Object::Name(n) => Some(String::from_utf8_lossy(n.as_bytes()).into_owned()),
+                        _ => None,
+                    })
+                    .collect(),
+                _ => Vec::new(),
+            };
+            let up: Vec<bool> = match self.resolve_key(&s, "A") {
+                Object::Bool(b) => vec![b],
+                Object::Array(a) => a
+                    .iter()
+                    .map(|o| !matches!(self.resolve(o), Object::Bool(false)))
+                    .collect(),
+                _ => Vec::new(),
+            };
+            for (i, key) in keys.into_iter().enumerate() {
+                let ascending = up.get(i).or(up.last()).copied().unwrap_or(true);
+                sort.push((key, ascending));
+            }
+        }
+        let initial = match self.resolve_key(&c, "D") {
+            Object::String { bytes, .. } => Some(text_string(&bytes)),
+            _ => None,
+        };
+        let view = match c.name("View") {
+            Some(b"T") => PortfolioView::Tiles,
+            Some(b"H") => PortfolioView::Hidden,
+            Some(b"C") => PortfolioView::Custom,
+            _ => PortfolioView::Details,
+        };
+        Some(Portfolio {
+            columns,
+            sort,
+            initial,
+            view,
+        })
     }
 
     /// The bytes of attachment `a`.
