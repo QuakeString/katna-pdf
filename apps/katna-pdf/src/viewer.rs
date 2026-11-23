@@ -106,6 +106,7 @@ actions!(
         RotateViewRight,
         RotateViewLeft,
         ZoomToArea,
+        Loupe,
         Snapshot,
         ActualSize,
         NextSpread,
@@ -1404,7 +1405,8 @@ impl Viewer {
             cx.notify();
             return;
         }
-        if self.area_drag(event.position, cx)
+        if self.loupe_move(event.position, cx)
+            || self.area_drag(event.position, cx)
             || self.measure_move(event.position, cx)
             || self.design_drag(event.position, cx)
             || self.redact_drag(event.position, cx)
@@ -3408,6 +3410,7 @@ impl Viewer {
             .children(overlays)
             .children(links)
             .children(fields)
+            .children(self.lens_overlay(page))
             .child({
                 // Notes where the page is, for the pointer: where it is
                 // painted, as the list may lay a page out elsewhere first.
@@ -3895,6 +3898,9 @@ impl Render for Viewer {
             }))
             .on_action(cx.listener(|this, _: &Snapshot, _, cx| {
                 this.toggle_area_tool(area::AreaKind::Snapshot, cx)
+            }))
+            .on_action(cx.listener(|this, _: &Loupe, _, cx| {
+                this.toggle_area_tool(area::AreaKind::Loupe, cx)
             }))
             .on_action(
                 cx.listener(|this, _: &ActualSize, _, cx| this.set_zoom(Zoom::Fixed(1.0), cx)),

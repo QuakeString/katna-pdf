@@ -2,7 +2,7 @@
 
 //! The comments tab: the list of annotations with their replies under
 //! them, each one's review status, lock, hidden and printed flags, a
-//! filter by kind, author and status, deleting all on a page or in the
+//! filter by kind, author, status and words in them, deleting all on a page or in the
 //! file, and the comments saved as text to read.
 
 use std::path::Path;
@@ -33,6 +33,8 @@ pub(super) struct CommentFilter {
     pub kind: Option<KindGroup>,
     pub author: Option<String>,
     pub status: Option<StatusPick>,
+    /// Words to look for in the comments, their replies and authors.
+    pub words: Option<(Entity<TextInput>, Subscription)>,
 }
 
 /// Kinds of annotation, as the filter groups them.
@@ -98,6 +100,32 @@ fn state_message(state: &str) -> &'static str {
     }
 }
 
+/// Whether `words` are in annotation `a` or its author, or in
+/// any reply to it on its page, matched as the find bar matches (case and
+/// accents ignored; "in quotes" for whole words).
+fn thread_says(a: &Annotation, annots: &[Annotation], words: &str) -> bool {
+    let says = |a: &Annotation| {
+        let text = format!("{}\n{}", a.contents, a.author);
+        let page = katna_pdf_render::text::PageText {
+            boxes: vec![[0.0; 4]; text.chars().count()],
+            text,
+        };
+        !page.find(words).is_empty()
+    };
+    let mut thread = vec![a];
+    let mut i = 0;
+    while let Some(&at) = thread.get(i) {
+        if says(at) {
+            return true;
+        }
+        if let Some(id) = at.id {
+            thread.extend(annots.iter().filter(|r| r.reply_to == Some(id)));
+        }
+        i += 1;
+    }
+    false
+}
+
 impl Viewer {
     /// Whether annotation `a` passes the filter.
     fn passes(&self, a: &Annotation, all: &[Vec<Annotation>]) -> bool {
@@ -123,10 +151,29 @@ impl Viewer {
         true
     }
 
+    /// The words the comments are searched for, if any.
+    fn comment_words(&self, cx: &Context<Self>) -> Option<String> {
+        let (input, _) = self.comment_filter.words.as_ref()?;
+        let words = input.read(cx).text().trim().to_owned();
+        (!words.is_empty()).then_some(words)
+    }
+
     pub(super) fn toggle_comment_filter(&mut self, cx: &mut Context<Self>) {
         self.comment_filter.shown = !self.comment_filter.shown;
         if !self.comment_filter.shown {
             self.comment_filter = Default::default();
+        } else {
+            let accent = gpui::rgba(self.theme.katna.accent).into();
+            let input = cx.new(|cx| {
+                let mut input = TextInput::new(t("comments-search", &[]), cx);
+                input.set_accent(accent);
+                input
+            });
+            let sub = cx.subscribe(&input, |this, _, event, cx| match event {
+                InputEvent::Cancel => this.toggle_comment_filter(cx),
+                InputEvent::Submit | InputEvent::Changed => cx.notify(),
+            });
+            self.comment_filter.words = Some((input, sub));
         }
         cx.notify();
     }
@@ -493,6 +540,22 @@ impl Viewer {
             .py(px(space::S1))
             .border_b_1()
             .border_color(th.line)
+            .children(f.words.as_ref().map(|(input, _)| {
+                div().px(px(space::S2)).py(px(space::S1)).child(
+                    div()
+                        .h(px(30.0))
+                        .flex()
+                        .items_center()
+                        .px(px(space::S2))
+                        .rounded(px(radius::SM))
+                        .border_1()
+                        .border_color(th.line)
+                        .bg(th.card)
+                        .text_size(px(text::SMALL))
+                        .text_color(th.text)
+                        .child(input.clone()),
+                )
+            }))
             .child(kinds)
             .when(authors.len() > 1, |d| d.child(by))
             .child(statuses)
@@ -515,6 +578,7 @@ impl Viewer {
             .gap(px(space::S1));
         let mut any = false;
         let mut hidden_by_filter = 0;
+        let words = self.comment_words(cx);
         for (page, annots) in all.iter().enumerate() {
             for a in annots {
                 let Some(id) = a.id else {
@@ -524,7 +588,9 @@ impl Viewer {
                     continue;
                 }
                 any = true;
-                if !self.passes(a, &all) {
+                if !self.passes(a, &all)
+                    || words.as_deref().is_some_and(|w| !thread_says(a, annots, w))
+                {
                     hidden_by_filter += 1;
                     continue;
                 }
