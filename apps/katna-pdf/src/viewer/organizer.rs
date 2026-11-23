@@ -7,7 +7,8 @@
 use std::sync::Arc;
 
 use gpui::{
-    AnyElement, ClickEvent, Context, ImageSource, RenderImage, Window, div, img, prelude::*,
+    AnyElement, ClickEvent, Context, FontWeight, ImageSource, RenderImage, Window, div, img,
+    prelude::*,
 };
 use katna_ui::tokens::{radius, space, text};
 use katna_ui::{px, unpx};
@@ -24,7 +25,7 @@ const BOX_W: f32 = thumbnails::DRAWN;
 const BOX_H: f32 = BOX_W * 1.42;
 /// A cell: the box, its padding and the page number.
 const CELL_W: f32 = BOX_W + 2.0 * space::S5;
-const ROW_H: f32 = BOX_H + 2.0 * space::S3 + space::S2 + 20.0;
+const ROW_H: f32 = BOX_H + 8.0 + 2.0 * space::S3 + space::S2 + 20.0;
 /// Rows laid out beyond the ones on screen.
 const SPARE_ROWS: usize = 1;
 
@@ -248,9 +249,14 @@ impl Viewer {
         };
         let tray = float::tray("pages-tray", &th)
             .child(
-                button("pages-insert", "plus", "pages-insert", self.setup.is_some())
-                    .when(self.changing_pages, |b| b.opacity(0.4))
-                    .on_click(cx.listener(|this, _, _, cx| this.toggle_setup(cx))),
+                button(
+                    "pages-insert",
+                    "plus",
+                    "pages-insert",
+                    self.setup.as_ref().is_some_and(|s| s.tab != 4),
+                )
+                .when(self.changing_pages, |b| b.opacity(0.4))
+                .on_click(cx.listener(|this, _, _, cx| this.toggle_setup(cx))),
             )
             .child(op(
                 "pages-left",
@@ -273,6 +279,23 @@ impl Viewer {
                     .when(!some, |b| b.opacity(0.4))
                     .on_click(cx.listener(|this, _, _, cx| this.choose_extract(cx))),
             )
+            .child({
+                let on = self.setup.as_ref().is_some_and(|s| s.tab == 4);
+                float::dk(
+                    "pages-split",
+                    "scissors",
+                    on.then(|| t("pages-card-tab-split", &[]).into()),
+                    t("pages-card-tab-split", &[]),
+                    if on {
+                        float::Pressed::Tool
+                    } else {
+                        float::Pressed::No
+                    },
+                    &th,
+                )
+                .when(self.changing_pages, |b| b.opacity(0.4))
+                .on_click(cx.listener(|this, _, _, cx| this.open_setup_at(4, cx)))
+            })
             .child(
                 button("pages-crop", "crop", "pages-crop", self.cropping)
                     .when(self.changing_pages, |b| b.opacity(0.4))
@@ -340,7 +363,6 @@ impl Viewer {
             .py(px(space::S3))
             .rounded(px(radius::SM))
             .cursor_pointer()
-            .when(picked, |d| d.bg(th.field))
             .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
                 if event.click_count() >= 2 {
                     this.organizer = false;
@@ -370,25 +392,34 @@ impl Viewer {
                 this.drop_pages(dragged, page, cx)
             }))
             .child(
-                div().h(px(BOX_H)).flex().items_center().child(
+                div().h(px(BOX_H + 8.0)).flex().items_center().child(
+                    // A ring a little off the page marks it picked.
                     div()
-                        .w(px(w * fit))
-                        .h(px(h * fit))
-                        .bg(self.paper())
-                        .shadow_sm()
+                        .p(px(2.0))
+                        .rounded(px(radius::SM))
                         .border_2()
                         .border_color(if picked {
                             gpui::rgba(accent).into()
                         } else {
                             gpui::transparent_black()
                         })
-                        .children(image.map(|image| img(ImageSource::Render(image)).size_full())),
+                        .child(
+                            div()
+                                .w(px(w * fit))
+                                .h(px(h * fit))
+                                .bg(self.paper())
+                                .shadow_sm()
+                                .children(
+                                    image.map(|image| img(ImageSource::Render(image)).size_full()),
+                                ),
+                        ),
                 ),
             )
             .child(
                 div()
                     .text_size(px(text::CAPTION))
-                    .text_color(if picked { th.text } else { th.dim })
+                    .when(picked, |d| d.font_weight(FontWeight::SEMIBOLD))
+                    .text_color(if picked { th.accent_text } else { th.dim })
                     .child((page + 1).to_string()),
             )
             .into_any_element()

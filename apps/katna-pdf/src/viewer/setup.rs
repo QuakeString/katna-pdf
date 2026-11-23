@@ -32,7 +32,7 @@ const PRESETS: [(&str, f32, f32); 6] = [
 /// The Pages card.
 pub(super) struct PageSetup {
     /// The tab shown: 0 add, 1 replace, 2 page size, 3 margins, 4 split.
-    tab: usize,
+    pub(super) tab: usize,
     /// Which of [`PRESETS`], or `PRESETS.len()` for the page shown's own
     /// size.
     preset: usize,
@@ -45,6 +45,15 @@ pub(super) struct PageSetup {
     margins: [Entity<TextInput>; 4],
     /// Pages a file split off holds.
     every: Entity<TextInput>,
+    /// How the file is split (P03): 0 every so many pages, 1 at the top
+    /// bookmarks, 2 at the pages named, 3 when a file reaches a size.
+    split_by: usize,
+    /// The pages that start a file, as people write page lists.
+    split_pages: Entity<TextInput>,
+    /// The most megabytes a file split off may hold.
+    split_size: Entity<TextInput>,
+    /// The split files' names: `{name}` and `{n}`.
+    split_names: Entity<TextInput>,
     /// What is added: 0 blank pages, 1 a PDF's pages, 2 pictures.
     source: usize,
     /// All of [`PRESETS`] shown, not only the usual few.
@@ -58,6 +67,22 @@ pub(super) struct PageSetup {
 
 impl Viewer {
     /// Opens the Pages card, or closes it.
+    /// Opens the Pages card on tab `tab` (Split from the tray's
+    /// scissors), or closes it when it is open there already.
+    pub(super) fn open_setup_at(&mut self, tab: usize, cx: &mut Context<Self>) {
+        match self.setup.as_mut() {
+            Some(setup) if setup.tab == tab => self.setup = None,
+            Some(setup) => setup.tab = tab,
+            None => {
+                self.toggle_setup(cx);
+                if let Some(setup) = self.setup.as_mut() {
+                    setup.tab = tab;
+                }
+            }
+        }
+        cx.notify();
+    }
+
     pub(super) fn toggle_setup(&mut self, cx: &mut Context<Self>) {
         if self.setup.take().is_some() {
             cx.notify();
@@ -81,6 +106,15 @@ impl Viewer {
         let count = input("1", cx);
         let margins = [0, 1, 2, 3].map(|_| input("0", cx));
         let every = input("1", cx);
+        let split_pages = input("", cx);
+        let split_size = input("5", cx);
+        let stem = self
+            .path
+            .as_ref()
+            .and_then(|p| p.file_stem())
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "{name}".into());
+        let split_names = input(&format!("{stem} — part {{n}}.pdf"), cx);
         let after = organize::insert_at(self.page_count(), &self.picked);
         let at = input(&after.max(1).to_string(), cx);
         let mut inputs = Vec::new();
@@ -116,6 +150,10 @@ impl Viewer {
             scale: true,
             margins,
             every,
+            split_by: 0,
+            split_pages,
+            split_size,
+            split_names,
             _inputs: inputs,
         });
         cx.notify();
@@ -355,19 +393,73 @@ impl Viewer {
         );
     }
 
-    /// Asks for a folder to split the file into, so many pages a file.
+    /// The pages starting each split file, where the card alone knows
+    /// them: every so many pages, or the pages named. `None` for the
+    /// ways that need the file read (bookmarks, size).
+    fn split_starts(&self, cx: &Context<Self>) -> Option<Result<Vec<usize>, String>> {
+        let setup = self.setup.as_ref()?;
+        let count = self.page_count();
+        match setup.split_by {
+            0 => {
+                let every = setup
+                    .every
+                    .read(cx)
+                    .text()
+                    .trim()
+                    .parse::<usize>()
+                    .unwrap_or(0);
+                Some(Ok(organize::every_starts(count, every.max(1))))
+            }
+            2 => Some(katna_pdf_cos::ranges::parse(
+                setup.split_pages.read(cx).text(),
+                count,
+            )),
+            _ => None,
+        }
+    }
+
+    /// The top bookmarks' pages: where a split at bookmarks starts files.
+    fn bookmark_starts(&self) -> Vec<usize> {
+        let Some(contents) = &self.contents else {
+            return Vec::new();
+        };
+        contents
+            .items
+            .iter()
+            .filter_map(|item| item.dest.map(|d| d.page))
+            .collect()
+    }
+
+    /// Asks for a folder and splits the file into it, the card's way.
     fn choose_split(&mut self, cx: &mut Context<Self>) {
         let Some(setup) = self.setup.as_ref() else {
             return;
         };
-        let every = setup
-            .every
+        let by = setup.split_by;
+        let starts = match by {
+            1 => Ok(self.bookmark_starts()),
+            3 => Ok(Vec::new()),
+            _ => self.split_starts(cx).unwrap_or(Ok(Vec::new())),
+        };
+        let starts = match starts {
+            Ok(starts) => starts,
+            Err(error) => {
+                self.notice = Some(super::said("pages-failed", &[("error", &error)]));
+                cx.notify();
+                return;
+            }
+        };
+        let limit = setup
+            .split_size
             .read(cx)
             .text()
             .trim()
-            .parse::<usize>()
-            .unwrap_or(0)
-            .max(1);
+            .replace(',', ".")
+            .parse::<f64>()
+            .unwrap_or(5.0)
+            .max(0.01);
+        let limit = (limit * 1024.0 * 1024.0) as usize;
+        let names = setup.split_names.read(cx).text().to_string();
         let key = self.key.clone();
         let Some(path) = self.path.clone() else {
             return;
@@ -399,9 +491,8 @@ impl Viewer {
                     };
                     let doc = super::cos(bytes, key.as_deref()).map_err(|e| e.to_string())?;
                     let count = doc.pages().len();
-                    let mut files = 0;
-                    for (k, start) in (0..count).step_by(every).enumerate() {
-                        let sources: Vec<_> = (start..(start + every).min(count))
+                    let compose = |pages: std::ops::Range<usize>| {
+                        let sources: Vec<_> = pages
                             .map(|page| katna_pdf_cos::PageSource {
                                 doc: &doc,
                                 page,
@@ -409,9 +500,35 @@ impl Viewer {
                                 crop: None,
                             })
                             .collect();
-                        let out =
-                            katna_pdf_cos::compose(None, &sources).map_err(|e| e.to_string())?;
-                        let target = folder.join(format!("{stem}-{}.pdf", k + 1));
+                        katna_pdf_cos::compose(None, &sources).map_err(|e| e.to_string())
+                    };
+                    let mut outs = Vec::new();
+                    if by == 3 {
+                        // Pages are added to a file while it stays under
+                        // the size; a page bigger alone gets a file.
+                        let mut start = 0;
+                        while start < count {
+                            let mut end = start + 1;
+                            let mut out = compose(start..end)?;
+                            while end < count {
+                                let more = compose(start..end + 1)?;
+                                if more.len() > limit {
+                                    break;
+                                }
+                                out = more;
+                                end += 1;
+                            }
+                            outs.push(out);
+                            start = end;
+                        }
+                    } else {
+                        for pages in organize::split_at(count, &starts) {
+                            outs.push(compose(pages)?);
+                        }
+                    }
+                    let mut files = 0;
+                    for (k, out) in outs.into_iter().enumerate() {
+                        let target = folder.join(organize::split_name(&names, &stem, k + 1));
                         std::fs::write(&target, out).map_err(|e| e.to_string())?;
                         files += 1;
                     }
@@ -789,24 +906,111 @@ impl Viewer {
                     .on_click(cx.listener(|this, _, _, cx| this.crop_by_margins(cx))),
                 ),
             ),
-            _ => (
-                row()
-                    .child(label("pages-card-every"))
-                    .child(field(&setup.every, 64.0))
-                    .child(label("pages-card-pages-each")),
-                row().child(
-                    act("pages-card-split", t("pages-card-split", &[]), true, !busy)
-                        .on_click(cx.listener(|this, _, _, cx| this.choose_split(cx))),
-                ),
-            ),
+            _ => {
+                let by = setup.split_by;
+                let files = match by {
+                    1 => Some(organize::split_at(self.page_count(), &self.bookmark_starts()).len()),
+                    _ => match self.split_starts(cx) {
+                        Some(Ok(starts)) => {
+                            Some(organize::split_at(self.page_count(), &starts).len())
+                        }
+                        _ => None,
+                    },
+                };
+                let makes = |words: String| {
+                    let files = files.map(|n| match n {
+                        1 => t("pages-card-makes-one", &[]),
+                        n => t("pages-card-makes", &[("count", &n.to_string())]),
+                    });
+                    div()
+                        .text_size(px(text::SMALL))
+                        .text_color(th.dim)
+                        .child(match files {
+                            Some(files) if !words.is_empty() => format!("{words} · {files}"),
+                            Some(files) => files,
+                            None => words,
+                        })
+                };
+                let way = |i: usize, id: &'static str| {
+                    div()
+                        .id(("pages-card-split-by", i))
+                        .flex()
+                        .items_center()
+                        .gap(px(space::S3))
+                        .py(px(space::S1))
+                        .cursor_pointer()
+                        .child(float::radio(by == i, &th))
+                        .child(
+                            div()
+                                .text_size(px(text::BODY))
+                                .text_color(th.text)
+                                .child(t(id, &[])),
+                        )
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            if let Some(s) = this.setup.as_mut() {
+                                s.split_by = i;
+                            }
+                            cx.notify();
+                        }))
+                };
+                let under = |el: gpui::AnyElement| row().pl(px(28.0)).child(el);
+                let mut body = div().flex().flex_col().gap(px(space::S1));
+                body = body.child(way(0, "pages-card-split-every"));
+                if by == 0 {
+                    body = body.child(under(
+                        row()
+                            .child(field(&setup.every, 64.0))
+                            .child(makes(t("pages-card-pages-each", &[])))
+                            .into_any_element(),
+                    ));
+                }
+                body = body.child(way(1, "pages-card-split-bookmarks"));
+                if by == 1 {
+                    body = body.child(under(makes(String::new()).into_any_element()));
+                }
+                body = body.child(way(2, "pages-card-split-pages"));
+                if by == 2 {
+                    body = body.child(under(
+                        row()
+                            .child(field(&setup.split_pages, 160.0))
+                            .child(makes(t("pages-card-split-pages-hint", &[])))
+                            .into_any_element(),
+                    ));
+                }
+                body = body.child(way(3, "pages-card-split-size"));
+                if by == 3 {
+                    body = body.child(under(
+                        row()
+                            .child(field(&setup.split_size, 64.0))
+                            .child(label("pages-card-split-mb"))
+                            .into_any_element(),
+                    ));
+                }
+                body = body.child(
+                    div()
+                        .pt(px(space::S2))
+                        .flex()
+                        .flex_col()
+                        .gap(px(space::S1))
+                        .child(heading("pages-card-split-names"))
+                        .child(field(&setup.split_names, 400.0)),
+                );
+                (
+                    body,
+                    row().child(
+                        act("pages-card-split", t("pages-card-split", &[]), true, !busy)
+                            .on_click(cx.listener(|this, _, _, cx| this.choose_split(cx))),
+                    ),
+                )
+            }
         };
         Some(
             div()
                 .id("pages-card-card")
                 .occlude()
                 .w(px(520.0))
-                // One height for every tab, so the tabs stay put.
-                .h(px(420.0))
+                // Tall enough for most tabs, so they mostly stay put.
+                .min_h(px(240.0))
                 .max_h_full()
                 .flex()
                 .flex_col()
@@ -831,7 +1035,7 @@ impl Viewer {
                                 .child(t("pages-card-title", &[])),
                         )
                         .child(div().flex().flex_wrap().gap(px(space::S1)).children(tabs))
-                        .when(tab > 0, |d| d.child(label("pages-card-hint")))
+                        .when(tab > 0 && tab < 4, |d| d.child(label("pages-card-hint")))
                         .child(body),
                 )
                 .child(

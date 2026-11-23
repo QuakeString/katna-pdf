@@ -10,10 +10,10 @@ use katna_pdf_cos::{Attachment, Layer, Ref};
 use katna_ui::px;
 use katna_ui::text_input::{InputEvent, TextInput};
 use katna_ui::tokens::{radius, space, text};
-use katna_ui::widgets::{self, Tip};
+use katna_ui::widgets::Tip;
 
 use super::Viewer;
-use super::sign::check_box;
+use crate::float;
 use crate::text::t;
 
 /// What the two panes show and have chosen.
@@ -25,6 +25,8 @@ pub(super) struct Extras {
     chosen_layer: Option<usize>,
     /// A name being typed for a file or a layer.
     renaming: Option<Renaming>,
+    /// The menu right-clicking a file or a layer opens, and where.
+    menu: Option<(Named, gpui::Point<gpui::Pixels>)>,
 }
 
 struct Renaming {
@@ -48,6 +50,7 @@ impl Extras {
         self.chosen_file = self.chosen_file.filter(|i| *i < self.attachments.len());
         self.chosen_layer = self.chosen_layer.filter(|i| *i < self.layers.len());
         self.renaming = None;
+        self.menu = None;
     }
 }
 
@@ -68,9 +71,10 @@ impl Viewer {
             .id("files-list")
             .size_full()
             .overflow_y_scroll()
-            .py(px(space::S2))
+            .p(px(space::S2))
             .flex()
-            .flex_col();
+            .flex_col()
+            .gap(px(2.0));
         for (i, a) in extras.attachments.iter().enumerate() {
             let on = extras.chosen_file == Some(i);
             let name: AnyElement = match &extras.renaming {
@@ -83,6 +87,7 @@ impl Viewer {
                     .whitespace_nowrap()
                     .text_size(px(text::BODY))
                     .text_color(th.text)
+                    .when(on, |d| d.font_weight(gpui::FontWeight::SEMIBOLD))
                     .child(a.name.clone())
                     .into_any_element(),
             };
@@ -93,103 +98,240 @@ impl Viewer {
             if !a.description.is_empty() {
                 details.push(a.description.clone());
             }
-            list = list.child(
-                div()
-                    .id(("file-row", i))
-                    .flex()
-                    .items_start()
-                    .gap(px(space::S2))
-                    .px(px(space::S3))
-                    .py(px(space::S2))
-                    .mx(px(space::S2))
-                    .rounded(px(radius::SM))
-                    .cursor_pointer()
-                    .when(on, |d| d.bg(th.field))
-                    .hover(move |s| s.bg(th.hover))
-                    .on_click(
-                        cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
-                            this.extras.chosen_file = Some(i);
-                            if event.click_count() >= 2 {
-                                this.open_attachment(window, cx);
-                            }
-                            cx.notify();
+            let hover = th.hover;
+            let row = div()
+                .id(("file-row", i))
+                .flex()
+                .items_center()
+                .gap(px(10.0))
+                .px(px(space::S3))
+                .py(px(space::S2))
+                .rounded(px(radius::SM))
+                .cursor_pointer()
+                .when(on, |d| d.bg(th.accent_soft))
+                .when(!on, |d| d.hover(move |s| s.bg(hover)))
+                .on_click(
+                    cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
+                        this.extras.chosen_file = Some(i);
+                        if event.click_count() >= 2 {
+                            this.open_attachment(window, cx);
+                        }
+                        cx.notify();
+                    }),
+                )
+                .on_mouse_down(
+                    gpui::MouseButton::Right,
+                    cx.listener(move |this, event: &gpui::MouseDownEvent, _, cx| {
+                        this.extras.chosen_file = Some(i);
+                        this.extras.menu = Some((Named::File(i), event.position));
+                        cx.notify();
+                    }),
+                )
+                .child(float::icon(
+                    "file",
+                    18.0,
+                    if on { th.accent_text } else { th.text2 },
+                ))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .flex()
+                        .flex_col()
+                        .gap(px(2.0))
+                        .child(name)
+                        .when(!details.is_empty(), |d| {
+                            d.child(
+                                div()
+                                    .text_size(px(text::CAPTION))
+                                    .text_color(th.dim)
+                                    .child(details.join(" · ")),
+                            )
                         }),
-                    )
-                    .child(
-                        gpui::svg()
-                            .path("icons/attachment.svg")
-                            .size(px(18.0))
-                            .flex_none()
-                            .mt(px(2.0))
-                            .text_color(th.dim),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .flex()
-                            .flex_col()
-                            .gap(px(2.0))
-                            .child(name)
-                            .when(!details.is_empty(), |d| {
-                                d.child(
-                                    div()
-                                        .text_size(px(text::SMALL))
-                                        .text_color(th.dim)
-                                        .child(details.join(" · ")),
-                                )
-                            }),
-                    ),
-            );
+                );
+            list = list.child(row);
+            if on && extras.renaming.is_none() {
+                list = list.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(space::S2))
+                        .px(px(space::S2))
+                        .py(px(space::S2))
+                        .child(
+                            float::button("file-open", t("files-open-short", &[]), false, &th)
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.open_attachment(window, cx)
+                                })),
+                        )
+                        .child(
+                            float::button("file-save", t("files-save-short", &[]), false, &th)
+                                .on_click(cx.listener(|this, _, _, cx| this.save_kept_file(cx))),
+                        )
+                        .child(
+                            float::sized_ib(
+                                "file-delete",
+                                "trash",
+                                28.0,
+                                16.0,
+                                t("files-delete", &[]),
+                                false,
+                                &th,
+                            )
+                            .on_click(cx.listener(|this, _, _, cx| this.delete_attachment(cx))),
+                        ),
+                );
+            }
         }
+        list = list.children(self.pane_menu(cx));
         list.into_any_element()
     }
 
-    /// The Files pane's buttons.
+    /// The Files pane's head: what it lists, and a button to add.
     pub(super) fn files_actions(&self, cx: &mut Context<Self>) -> AnyElement {
+        self.pane_head(
+            "files-head",
+            "file-add",
+            "files-add",
+            cx.listener(|this, _, _, cx| this.add_attachments(cx)),
+        )
+    }
+
+    /// A pane's head (R22, R23): its name in small capitals and a plus.
+    fn pane_head(
+        &self,
+        head: &str,
+        id: &'static str,
+        tip: &str,
+        add: impl Fn(&gpui::ClickEvent, &mut Window, &mut gpui::App) + 'static,
+    ) -> AnyElement {
         let th = self.theme;
-        let picked = self.extras.chosen_file.is_some();
-        let button = |id: &'static str, icon: &'static str, tip: &str, enabled: bool| {
-            widgets::icon_button(id, icon, 16.0, &th.katna)
-                .size(px(28.0))
-                .tip(t(tip, &[]), &th.katna)
-                .when(!enabled, |b| b.opacity(0.4))
-        };
         div()
             .h(px(40.0))
             .flex_shrink_0()
             .flex()
             .items_center()
             .justify_between()
-            .px(px(space::S2))
-            .border_b_1()
-            .border_color(th.line_soft)
+            .pl(px(space::S3))
+            .pr(px(space::S2))
             .child(
-                button("file-add", "upload", "files-add", true)
-                    .on_click(cx.listener(|this, _, _, cx| this.add_attachments(cx))),
+                div()
+                    .text_size(px(text::MICRO))
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .text_color(th.dim)
+                    .child(t(head, &[]).to_uppercase()),
             )
-            .child(
-                button("file-open", "folder", "files-open", picked)
-                    .on_click(cx.listener(|this, _, window, cx| this.open_attachment(window, cx))),
-            )
-            .child(
-                button("file-save", "download", "files-save", picked)
-                    .on_click(cx.listener(|this, _, _, cx| this.save_kept_file(cx))),
-            )
-            .child(
-                button("file-rename", "rename", "files-rename", picked).on_click(cx.listener(
-                    |this, _, window, cx| {
-                        if let Some(i) = this.extras.chosen_file {
-                            this.start_naming(Named::File(i), window, cx);
-                        }
-                    },
-                )),
-            )
-            .child(
-                button("file-delete", "trash", "files-delete", picked)
-                    .on_click(cx.listener(|this, _, _, cx| this.delete_attachment(cx))),
-            )
+            .child(float::sized_ib(id, "plus", 28.0, 16.0, t(tip, &[]), false, &th).on_click(add))
             .into_any_element()
+    }
+
+    /// The menu right-clicking a file or a layer opens.
+    fn pane_menu(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let (what, at) = self.extras.menu?;
+        let th = self.theme;
+        let close = |this: &mut Viewer| this.extras.menu = None;
+        let item = |id: &'static str, glyph: Option<&'static str>| {
+            float::menu_item(id, glyph, t(id, &[]), None, &th)
+        };
+        let hover = th.hover;
+        let danger = |id: &'static str| {
+            div()
+                .id(id)
+                .h(px(32.0))
+                .flex()
+                .items_center()
+                .gap(px(10.0))
+                .px(px(10.0))
+                .rounded(px(5.0))
+                .text_size(px(text::SMALL))
+                .text_color(th.error)
+                .cursor_pointer()
+                .hover(move |s| s.bg(hover))
+                .child(float::icon("trash", 16.0, th.error))
+                .child(t(id, &[]))
+        };
+        let mut menu = float::menu("pane-menu", 260.0, &th).on_mouse_down_out(cx.listener(
+            |this, _, _, cx| {
+                this.extras.menu = None;
+                cx.notify();
+            },
+        ));
+        match what {
+            Named::File(i) => {
+                menu = menu
+                    .child(item("files-menu-open", Some("eye")).on_click(cx.listener(
+                        move |this, _, window, cx| {
+                            close(this);
+                            this.open_attachment(window, cx);
+                        },
+                    )))
+                    .child(
+                        item("files-menu-save", Some("download")).on_click(cx.listener(
+                            move |this, _, _, cx| {
+                                close(this);
+                                this.save_kept_file(cx);
+                            },
+                        )),
+                    )
+                    .child(
+                        item("files-menu-rename", Some("edit")).on_click(cx.listener(
+                            move |this, _, window, cx| {
+                                close(this);
+                                this.start_naming(Named::File(i), window, cx);
+                            },
+                        )),
+                    )
+                    .child(float::menu_sep(&th))
+                    .child(danger("files-menu-delete").on_click(cx.listener(
+                        move |this, _, _, cx| {
+                            close(this);
+                            this.delete_attachment(cx);
+                        },
+                    )));
+            }
+            Named::Layer(i) => {
+                let shown = self.extras.layers.get(i).is_some_and(|l| l.on);
+                let id = self.extras.layers.get(i).map(|l| l.id);
+                menu = menu
+                    .child(
+                        item("files-menu-rename", Some("edit")).on_click(cx.listener(
+                            move |this, _, window, cx| {
+                                close(this);
+                                this.start_naming(Named::Layer(i), window, cx);
+                            },
+                        )),
+                    )
+                    .child(
+                        item(
+                            if shown { "layers-hide" } else { "layers-show" },
+                            Some(if shown { "eyeoff" } else { "eye" }),
+                        )
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            close(this);
+                            if let Some(id) = id {
+                                this.show_layer(id, !shown, cx);
+                            }
+                        })),
+                    )
+                    .child(float::menu_sep(&th))
+                    .child(danger("layers-menu-delete").on_click(cx.listener(
+                        move |this, _, _, cx| {
+                            close(this);
+                            this.delete_layer(cx);
+                        },
+                    )));
+            }
+        }
+        Some(
+            gpui::deferred(
+                katna_ui::anchored()
+                    .position(at)
+                    .snap_to_window()
+                    .child(float::appear("pane-menu-in", menu, -4.0)),
+            )
+            .with_priority(3)
+            .into_any_element(),
+        )
     }
 
     /// Asks which files to keep in the document, and keeps them.
@@ -453,9 +595,10 @@ impl Viewer {
             .id("layers-list")
             .size_full()
             .overflow_y_scroll()
-            .py(px(space::S2))
+            .p(px(space::S2))
             .flex()
-            .flex_col();
+            .flex_col()
+            .gap(px(2.0));
         for (i, layer) in extras.layers.iter().enumerate() {
             let on = extras.chosen_layer == Some(i);
             let id = layer.id;
@@ -473,29 +616,44 @@ impl Viewer {
                     .text_ellipsis()
                     .whitespace_nowrap()
                     .text_size(px(text::BODY))
-                    .text_color(if shown { th.text } else { th.dim })
+                    .text_color(if on {
+                        th.accent_text
+                    } else if shown {
+                        th.text
+                    } else {
+                        th.dim
+                    })
+                    .when(on, |d| d.font_weight(gpui::FontWeight::SEMIBOLD))
                     .child(layer.name.clone())
                     .into_any_element(),
             };
+            let hover = th.hover;
             list = list.child(
                 div()
                     .id(("layer-row", i))
                     .flex()
                     .items_center()
-                    .gap(px(space::S2))
+                    .gap(px(10.0))
                     .h(px(36.0))
                     .px(px(space::S3))
-                    .mx(px(space::S2))
                     .rounded(px(radius::SM))
                     .cursor_pointer()
-                    .when(on, |d| d.bg(th.field))
-                    .hover(move |s| s.bg(th.hover))
+                    .when(on, |d| d.bg(th.accent_soft))
+                    .when(!on, |d| d.hover(move |s| s.bg(hover)))
                     .on_click(
                         cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
                             this.extras.chosen_layer = Some(i);
                             if event.click_count() >= 2 {
                                 this.start_naming(Named::Layer(i), window, cx);
                             }
+                            cx.notify();
+                        }),
+                    )
+                    .on_mouse_down(
+                        gpui::MouseButton::Right,
+                        cx.listener(move |this, event: &gpui::MouseDownEvent, _, cx| {
+                            this.extras.chosen_layer = Some(i);
+                            this.extras.menu = Some((Named::Layer(i), event.position));
                             cx.notify();
                         }),
                     )
@@ -512,51 +670,33 @@ impl Viewer {
                                 cx.stop_propagation();
                                 this.show_layer(id, !shown, cx);
                             }))
-                            .child(check_box(shown, th)),
+                            .child(float::icon(
+                                if shown { "eye" } else { "eyeoff" },
+                                16.0,
+                                if on {
+                                    th.accent_text
+                                } else if shown {
+                                    th.text2
+                                } else {
+                                    th.dim
+                                },
+                            )),
                     )
                     .child(name),
             );
         }
+        list = list.children(self.pane_menu(cx));
         list.into_any_element()
     }
 
-    /// The Layers pane's buttons.
+    /// The Layers pane's head: what it lists, and a button to add.
     pub(super) fn layers_actions(&self, cx: &mut Context<Self>) -> AnyElement {
-        let th = self.theme;
-        let picked = self.extras.chosen_layer.is_some();
-        let button = |id: &'static str, icon: &'static str, tip: &str, enabled: bool| {
-            widgets::icon_button(id, icon, 16.0, &th.katna)
-                .size(px(28.0))
-                .tip(t(tip, &[]), &th.katna)
-                .when(!enabled, |b| b.opacity(0.4))
-        };
-        div()
-            .h(px(40.0))
-            .flex_shrink_0()
-            .flex()
-            .items_center()
-            .justify_between()
-            .px(px(space::S2))
-            .border_b_1()
-            .border_color(th.line_soft)
-            .child(
-                button("layer-add", "plus", "layers-add", true)
-                    .on_click(cx.listener(|this, _, _, cx| this.add_layer(None, cx))),
-            )
-            .child(
-                button("layer-rename", "rename", "layers-rename", picked).on_click(cx.listener(
-                    |this, _, window, cx| {
-                        if let Some(i) = this.extras.chosen_layer {
-                            this.start_naming(Named::Layer(i), window, cx);
-                        }
-                    },
-                )),
-            )
-            .child(
-                button("layer-delete", "trash", "layers-delete", picked)
-                    .on_click(cx.listener(|this, _, _, cx| this.delete_layer(cx))),
-            )
-            .into_any_element()
+        self.pane_head(
+            "layers-head",
+            "layer-add",
+            "layers-add",
+            cx.listener(|this, _, _, cx| this.add_layer(None, cx)),
+        )
     }
 
     /// Shows or hides layer `id` on every page.

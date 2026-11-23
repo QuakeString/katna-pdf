@@ -738,6 +738,9 @@ pub struct Viewer {
     thumbs: Thumbs,
     /// The organizer shows in place of the pages (`organizer.rs`).
     organizer: bool,
+    /// The side pane beside the organizer, which hides it at first so
+    /// the grid has the window (P01).
+    pane_pages: bool,
     /// A box dragged on a page crops it (`crop.rs`).
     cropping: bool,
     crop_box: Option<crop::CropBox>,
@@ -943,6 +946,7 @@ impl Viewer {
             tab: PaneTab::Pages,
             thumbs: Thumbs::new(),
             organizer: false,
+            pane_pages: false,
             cropping: false,
             crop_box: None,
             crop_grip: None,
@@ -1265,7 +1269,7 @@ impl Viewer {
                     this.links = Some(Arc::new(links));
                     cx.notify();
                 }
-                if show && !outline.is_empty() {
+                if show && !outline.is_empty() && this.comparing.is_none() {
                     this.pane = true;
                     this.tab = PaneTab::Contents;
                 }
@@ -1307,7 +1311,11 @@ impl Viewer {
     /// Shows or hides the side pane, once a document is open.
     fn toggle_pane(&mut self, cx: &mut Context<Self>) {
         if matches!(self.content, Content::Ready(_)) {
-            self.pane = !self.pane;
+            if self.organizer {
+                self.pane_pages = !self.pane_pages;
+            } else {
+                self.pane = !self.pane;
+            }
             cx.notify();
         }
     }
@@ -1753,7 +1761,12 @@ impl Viewer {
 
     /// Whether the side pane is shown now.
     fn pane_shown(&self) -> bool {
-        self.pane && matches!(self.content, Content::Ready(_))
+        matches!(self.content, Content::Ready(_))
+            && if self.organizer {
+                self.pane_pages
+            } else {
+                self.pane
+            }
     }
 
     /// Page `page`'s thumbnail, asked for if it is not drawn yet.
@@ -4339,6 +4352,7 @@ impl Render for Viewer {
         let initials_card = self.initials_card(cx);
         let design_card = self.design_card(side_room, cx);
         let find_bar = self.find_bar(cx);
+        let compare_banner = self.compare_banner(cx);
         let notice = self.notice.clone().map(|notice| {
             let (bg, fg, glyph, mark) = if notice.error {
                 (th.error_soft, th.error, "alert", th.error)
@@ -4682,6 +4696,17 @@ impl Render for Viewer {
                     .gap(px(space::S3))
                     .children(signatures_line.map(floating(th))),
             )
+            .children(compare_banner.map(|banner| {
+                div()
+                    .absolute()
+                    .top(px(space::S2))
+                    .left(px(pane_room + float::GAP))
+                    .right(px(float::GAP))
+                    .flex()
+                    .justify_center()
+                    .child(float::appear("compare-banner-in", banner, -4.0))
+                    .into_any_element()
+            }))
             .children(find_bar.map(|bar| {
                 div()
                     .absolute()
