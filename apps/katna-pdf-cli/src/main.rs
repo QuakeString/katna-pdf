@@ -221,6 +221,13 @@ usage: katna-pdf-cli COMMAND [--json] ...
                                   long-term validation data added to a signed file,
                                   and a document timestamp with --tsa (renews B-LTA)
   tokens [--module LIB]           the signing tokens plugged in (ePass2003 and others)
+  make-id -o OUT.pfx --name NAME [--email E] [--org O] [--unit U] [--country CC]
+          (--password-env VAR | --password-file F | --password PW)
+                                  a digital ID of your own: a new RSA key and a
+                                  certificate it signs itself (good for 5 years),
+                                  locked with the password; its certificate
+                                  beside it as OUT.cer, to give to whoever should
+                                  trust your signatures
   token-check                     why a token does not show: whether it is plugged
                                   in, the card service runs, and each driver sees it
   verify FILE [--trust PATH] [--online] [--report OUT.pdf]
@@ -368,6 +375,7 @@ fn main() -> ExitCode {
         "ltv" => ltv(rest, json),
         "revisions" => revisions(rest, json),
         "tokens" => tokens(rest, json),
+        "make-id" => make_id(rest, json),
         "token-check" => token_check(rest, json),
         "text" => text(rest, json),
         "find" => find(rest, json),
@@ -482,6 +490,10 @@ impl<'a> Args<'a> {
                     | "--field"
                     | "--picture"
                     | "--name"
+                    | "--email"
+                    | "--org"
+                    | "--unit"
+                    | "--country"
                     | "--report"
                     | "--place"
                     | "--title"
@@ -1107,31 +1119,7 @@ fn sign(args: &[String], json: bool) -> Done {
             "sign with a certificate file (--p12) or a token (--token)".into(),
         ));
     }
-    let password = match (
-        args.option("--password"),
-        args.option("--password-env"),
-        args.option("--password-file"),
-    ) {
-        (Some(p), None, None) => p.to_owned(),
-        (None, Some(var), None) => {
-            std::env::var(var).map_err(|_| failed(format!("the environment has no {var}")))?
-        }
-        (None, None, Some(path)) => {
-            let text = if path == "-" {
-                std::io::read_to_string(std::io::stdin())
-            } else {
-                std::fs::read_to_string(path)
-            }
-            .map_err(|e| failed(format!("{path}: {e}")))?;
-            text.trim_end_matches(['\r', '\n']).to_owned()
-        }
-        _ => {
-            return Err(Failure::Usage(
-                "give the password with one of --password-env, --password-file and --password"
-                    .into(),
-            ));
-        }
-    };
+    let password = password_arg(&args)?;
     let digest = match args.option("--digest") {
         None | Some("256") => Digest::Sha256,
         Some("384") => Digest::Sha384,
@@ -3609,6 +3597,73 @@ fn token_identity(
     } else {
         format!("no token labelled {label} is plugged in")
     }))
+}
+
+/// The password given by --password, --password-env or --password-file.
+fn password_arg(args: &Args<'_>) -> Result<String, Failure> {
+    match (
+        args.option("--password"),
+        args.option("--password-env"),
+        args.option("--password-file"),
+    ) {
+        (Some(p), None, None) => Ok(p.to_owned()),
+        (None, Some(var), None) => {
+            std::env::var(var).map_err(|_| failed(format!("the environment has no {var}")))
+        }
+        (None, None, Some(path)) => {
+            let text = if path == "-" {
+                std::io::read_to_string(std::io::stdin())
+            } else {
+                std::fs::read_to_string(path)
+            }
+            .map_err(|e| failed(format!("{path}: {e}")))?;
+            Ok(text.trim_end_matches(['\r', '\n']).to_owned())
+        }
+        _ => Err(Failure::Usage(
+            "give the password with one of --password-env, --password-file and --password".into(),
+        )),
+    }
+}
+
+/// A new digital ID of one's own, and its certificate beside it.
+fn make_id(args: &[String], json: bool) -> Done {
+    use katna_pdf_sign::selfsigned::{IdName, new_id};
+    let args = Args::parse(args)?;
+    let [] = args.words()?;
+    let out = args.output()?;
+    let who = IdName {
+        name: args
+            .option("--name")
+            .ok_or_else(|| Failure::Usage("give the ID a --name".into()))?
+            .to_owned(),
+        email: args.option("--email").unwrap_or_default().to_owned(),
+        organisation: args.option("--org").unwrap_or_default().to_owned(),
+        unit: args.option("--unit").unwrap_or_default().to_owned(),
+        country: args.option("--country").unwrap_or_default().to_owned(),
+    };
+    let password = password_arg(&args)?;
+    let id = new_id(&who, &password).map_err(|e| failed(e.to_string()))?;
+    std::fs::write(&out, &id.file).map_err(|e| failed(format!("{}: {e}", out.display())))?;
+    let cer = out.with_extension("cer");
+    std::fs::write(&cer, katna_pdf_sign::certview::pem(&id.certificate))
+        .map_err(|e| failed(format!("{}: {e}", cer.display())))?;
+    let subject = id.certificate.tbs_certificate.subject.to_string();
+    Ok(if json {
+        format!(
+            "{{\"file\":{},\"certificate\":{},\"subject\":{}}}\n",
+            string(&out.to_string_lossy()),
+            string(&cer.to_string_lossy()),
+            string(&subject)
+        )
+    } else {
+        format!(
+            "made {} ({subject}), good for {} years; its certificate, to give to whoever \
+             should trust it: {}\n",
+            out.display(),
+            katna_pdf_sign::selfsigned::YEARS,
+            cer.display()
+        )
+    })
 }
 
 fn tokens(args: &[String], json: bool) -> Done {

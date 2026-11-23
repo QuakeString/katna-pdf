@@ -16,6 +16,7 @@ mod oid;
 pub mod p12;
 pub mod pkcs11;
 pub mod revocation;
+pub mod selfsigned;
 pub mod trust;
 pub mod tsa;
 mod walk;
