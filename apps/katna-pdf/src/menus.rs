@@ -110,6 +110,7 @@ pub const MENUS: &[(&str, &[Entry])] = &[
 
 /// Keys no menu item shows: the words' id and the keys.
 pub const MORE_KEYS: &[(&str, &str)] = &[
+    ("shortcut-command", "Ctrl K"),
     ("shortcut-undo", "Ctrl Z"),
     ("shortcut-redo", "Ctrl Shift Z, Ctrl Y"),
     ("shortcut-select-all", "Ctrl A"),
