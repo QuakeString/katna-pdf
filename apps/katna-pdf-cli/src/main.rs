@@ -219,6 +219,11 @@ usage: katna-pdf-cli COMMAND [--json] ...
                                   the text each page draws, in runs (a line's worth
                                   in one font), numbered PAGE:RUN, with font and place;
                                   with --blocks, in paragraphs, numbered PAGE:BLOCK
+  find FILE QUERY [--pages PAGES] [--case] [--words] [--accents] [--fuzzy]
+                                  where QUERY is on the pages, with the words around
+                                  it; ignores case and accents unless asked, --words
+                                  for whole words, --fuzzy for close spellings too;
+                                  \"QUERY\" in quotes is an exact phrase
   edit-text FILE -o OUT (--run PAGE:RUN | --block PAGE:BLOCK | --replace OLD) --to NEW
             [--pages PAGES]       change a run's text, a paragraph's (its words wrapped
                                   to its width, a line break in NEW starting a line),
@@ -344,6 +349,7 @@ fn main() -> ExitCode {
         "tokens" => tokens(rest, json),
         "token-check" => token_check(rest, json),
         "text" => text(rest, json),
+        "find" => find(rest, json),
         "edit-text" => edit_text(rest, json),
         "annots" => annots(rest, json),
         "attachments" => attachments(rest, json),
@@ -549,6 +555,10 @@ impl<'a> Args<'a> {
                 "--forms",
                 "--comments",
                 "--no-scripts",
+                "--case",
+                "--words",
+                "--accents",
+                "--fuzzy",
             ]
             .contains(&a.as_str())
             {
@@ -4370,6 +4380,54 @@ fn annots(args: &[String], json: bool) -> Done {
     }
     if json {
         out = format!("{{\"annotations\":[{}]}}\n", items.join(","));
+    }
+    Ok(out)
+}
+
+fn find(args: &[String], json: bool) -> Done {
+    use katna_pdf_render::Engine as _;
+    use katna_pdf_render::text::FindOptions;
+    let args = Args::parse(args)?;
+    let [file, query] = args.words()?;
+    let doc = open(file)?;
+    let count = doc.pages().len();
+    let pages = match args.option("--pages") {
+        Some(spec) => ranges::parse(spec, count).map_err(failed)?,
+        None => (0..count).collect(),
+    };
+    let password = std::env::var("KATNA_PDF_OPEN_PASSWORD").unwrap_or_default();
+    let drawn = katna_pdf_render::Hayro
+        .open(std::sync::Arc::new(doc.bytes().to_vec()), &password)
+        .map_err(|e| failed(format!("{file}: {e}")))?;
+    let options = FindOptions {
+        match_case: args.flag("--case"),
+        whole_words: args.flag("--words"),
+        match_accents: args.flag("--accents"),
+        fuzzy: args.flag("--fuzzy"),
+    };
+    let (mut out, mut items) = (String::new(), Vec::new());
+    for page in pages {
+        let text = drawn.text(page);
+        for range in text.find_with(query, options) {
+            let (before, found, after) = text.context(range);
+            if json {
+                items.push(format!(
+                    "{{\"page\":{},\"found\":{},\"before\":{},\"after\":{}}}",
+                    page + 1,
+                    string(&found),
+                    string(&before),
+                    string(&after)
+                ));
+            } else {
+                let _ = writeln!(out, "{:<5} {before}[{found}]{after}", page + 1);
+            }
+        }
+    }
+    if json {
+        return Ok(format!("{{\"matches\":[{}]}}\n", items.join(",")));
+    }
+    if out.is_empty() {
+        out.push_str("no matches\n");
     }
     Ok(out)
 }

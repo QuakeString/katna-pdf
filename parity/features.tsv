@@ -118,9 +118,11 @@ view.model-tree	view	3D model tree panel	reader	n	skip	-	-		acrobat
 view.page-labels-display	view	Show page labels (i, ii, 1, 2...)	reader	n	shipped	P0	#73		acrobat
 view.find	view	Find text across the document	reader	y	shipped	P0	Ctrl+F		acrobat
 view.find-next-previous	view	Find next / previous match	reader	y	shipped	P0	F3 / Shift+F3		acrobat
-view.find-options	view	Find options: whole words, case-sensitive	reader	y	todo	P0	-	ignores case and spacing; no whole-word or match-case switch	acrobat
+view.find-options	view	Find options: whole words, case-sensitive	reader	y	shipped	P0	text.rs find_with; CLI find	match case, whole words, accents; "quotes" for an exact phrase	acrobat
 view.find-in-comments-bookmarks	view	Find in comments and bookmarks	reader	y	todo	P2	-		acrobat
-view.find-results-panel	view	Find results list	reader	y	partial	P0	search.rs	count and next/previous; no list	acrobat
+view.find-results-panel	view	Find results list	reader	y	shipped	P0	viewer/find.rs	every match with the words around it, a click goes to it	acrobat
+view.find-fuzzy	view	Find close spellings: typing mistakes and a letter or two off	-	n	shipped	P1	text.rs find_with; CLI find --fuzzy	one change per four letters, at most two; swapped letters count once	katna
+view.find-hyphenated	view	Find words hyphenated over two lines, and soft hyphens, whole	-	n	shipped	P1	text.rs Folded		katna
 view.advanced-search	view	Advanced search window	reader	p	shipped	P1	#78 library search		acrobat
 view.search-folder	view	Search all PDFs in a folder	reader	n	shipped	P1	#78 library watched folders		acrobat
 view.search-boolean	view	Boolean, proximity and stemming search	reader	n	partial	P2	#76 SQLite FTS5 syntax		acrobat

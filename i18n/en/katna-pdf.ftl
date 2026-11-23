@@ -597,13 +597,24 @@ pdfa-saved-left = Wrote { $name }, but it is still not PDF/A: { $left }
 pdfa-failed = The PDF/A copy could not be made: { $error }
 
 ## Find in the document
-search-placeholder = Find in the document
+search-placeholder = Find; "in quotes" for exact words
 search-count = { $current } of { $total }
 search-searching = Searching…
 search-none = No matches
 search-previous = Previous match (Shift+F3)
 search-next = Next match (F3)
 search-close = Close (Esc)
+search-match-case = Match case
+search-match-case-tip = Capitals only match capitals
+search-whole-words = Whole words
+search-whole-words-tip = Only whole words match, not parts of longer ones
+search-accents = Accents
+search-accents-tip = Letters with accents only match the same accents; otherwise é finds e
+search-fuzzy = Close spellings
+search-fuzzy-tip = Also find words a letter or two off, such as typing mistakes
+search-list = All results
+search-page = p. { $page }
+search-more = { $count } more; add words to narrow the search
 
 ## The side pane beside the pages
 pane-pages = Pages

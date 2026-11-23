@@ -40,6 +40,9 @@ only in a much weaker form. Each has a row in [features.tsv](features.tsv); the
   app down (`view.worker-isolation`, #38).
 - Read aloud on Linux through Speech Dispatcher or espeak-ng (#85); KDE global
   menu (#43).
+- Find with close spellings, so typing mistakes still find the word
+  (`view.find-fuzzy`), and words hyphenated over two lines found whole
+  (`view.find-hyphenated`).
 
 **Safer by design**
 - Form totals and number, date and percent formats done in Rust from Acrobat's

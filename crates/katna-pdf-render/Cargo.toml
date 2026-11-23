@@ -13,6 +13,7 @@ hayro.workspace = true
 flate2.workspace = true
 jpeg-encoder.workspace = true
 similar.workspace = true
+unicode-normalization.workspace = true
 
 [dev-dependencies]
 katna-pdf-cos.workspace = true

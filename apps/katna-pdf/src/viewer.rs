@@ -43,6 +43,7 @@ mod design;
 mod dock;
 mod export;
 mod files;
+mod find;
 mod fonts;
 mod initials;
 mod insert;
@@ -456,6 +457,10 @@ pub struct Viewer {
     texts: Option<Texts>,
     /// The find bar, while open.
     search: Option<SearchBar>,
+    /// How the find bar matches, kept while the window is open.
+    find_options: katna_pdf_render::text::FindOptions,
+    /// Whether the find bar lists every match.
+    find_list: bool,
     /// The password field, while a file asks for one, and whether to put
     /// the keys in it on the next frame.
     password: Option<(Entity<TextInput>, Subscription)>,
@@ -700,6 +705,8 @@ impl Viewer {
             links: None,
             texts: None,
             search: None,
+            find_options: Default::default(),
+            find_list: false,
             password: None,
             focus_password: false,
             key: None,
@@ -1178,13 +1185,14 @@ impl Viewer {
             return;
         }
         let (doc, generation) = (opened.doc.clone(), bar.generation.clone());
+        let options = self.find_options;
         let (sender, receiver) = async_channel::unbounded();
         cx.background_executor()
             .spawn(async move {
                 search::run(
                     doc.as_ref(),
                     &texts,
-                    &query,
+                    (&query, options),
                     from,
                     &generation,
                     mine,
@@ -1243,83 +1251,6 @@ impl Viewer {
             offset_in_item: gap + below,
         });
         cx.notify();
-    }
-
-    /// The find bar under the toolbar.
-    fn find_bar(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let bar = self.search.as_ref()?;
-        let th = self.theme;
-        let found = &bar.found;
-        let status = if found.hits.is_empty() {
-            if bar.input.read(cx).text().trim().is_empty() {
-                String::new()
-            } else if found.done() {
-                t("search-none", &[])
-            } else {
-                t("search-searching", &[])
-            }
-        } else {
-            let current = found.current.map_or(0, |c| c + 1).to_string();
-            let total = found.hits.len().to_string();
-            let count = t("search-count", &[("current", &current), ("total", &total)]);
-            if found.done() {
-                count
-            } else {
-                format!("{count}…")
-            }
-        };
-        Some(
-            div()
-                .flex()
-                .items_center()
-                .gap(px(space::S2))
-                .p(px(space::S3))
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .h(px(32.0))
-                        .flex()
-                        .items_center()
-                        .gap(px(space::S3))
-                        .px(px(10.0))
-                        .rounded(px(7.0))
-                        .border_1()
-                        .border_color(th.accent)
-                        .bg(th.card)
-                        .text_size(px(text::SMALL))
-                        .text_color(th.text)
-                        .child(float::icon("search", 15.0, th.dim))
-                        .child(div().flex_1().min_w_0().child(bar.input.clone()))
-                        .child(
-                            div()
-                                .flex_none()
-                                .text_size(px(text::MICRO))
-                                .text_color(th.dim)
-                                .whitespace_nowrap()
-                                .child(status),
-                        ),
-                )
-                .child(
-                    float::ib(
-                        "find-previous",
-                        "chevu",
-                        t("search-previous", &[]),
-                        false,
-                        &th,
-                    )
-                    .on_click(cx.listener(|this, _, _, cx| this.step_search(false, cx))),
-                )
-                .child(
-                    float::ib("find-next", "chev", t("search-next", &[]), false, &th)
-                        .on_click(cx.listener(|this, _, _, cx| this.step_search(true, cx))),
-                )
-                .child(
-                    float::ib("find-close", "x", t("search-close", &[]), false, &th)
-                        .on_click(cx.listener(|this, _, window, cx| this.close_search(window, cx))),
-                )
-                .into_any_element(),
-        )
     }
 
     /// The page and character under `position` in the window, if a page
