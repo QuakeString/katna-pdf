@@ -393,6 +393,8 @@ impl Viewer {
         let handle = input.focus_handle(cx);
         window.focus(&handle, cx);
         cx.defer_in(window, move |_, window, cx| window.focus(&handle, cx));
+        // One thing is edited at a time: a picture or shape picked lets go.
+        self.picked_object = None;
         self.typing = Some(Typing {
             page,
             target,
@@ -562,8 +564,8 @@ impl Viewer {
                 match written {
                     Ok((bytes, doc, cos, told)) => {
                         this.key = kept;
-                        if told.is_some() {
-                            this.notice = told;
+                        if let Some(told) = told {
+                            this.notice = Some(super::Notice::error(told));
                         }
                         this.forget_runs();
                         let design = this
@@ -576,11 +578,11 @@ impl Viewer {
                             this.design_changed(read, cx);
                         }
                         if let Some(marks) = marks {
-                            this.marks_changed(marks);
+                            this.marks_changed(marks, cx);
                         }
                     }
                     Err(error) => {
-                        this.notice = Some(t(failed, &[("error", &error)]));
+                        this.notice = Some(super::said(failed, &[("error", &error)]));
                     }
                 }
                 cx.notify();
@@ -600,15 +602,23 @@ impl Viewer {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Vec<AnyElement> {
-        if !self.text_editing {
-            return Vec::new();
+        // The tools' own boxes, shown in any mode.
+        let tools = |this: &Self| {
+            let mut out = this.redact_overlay(page);
+            out.extend(this.link_overlay(page));
+            out.extend(this.design_overlay(page));
+            out
+        };
+        // While cropping, presses on paragraphs make the box.
+        if !self.text_editing || self.cropping {
+            return tools(self);
         }
         let Some(transform) = transform else {
-            return Vec::new();
+            return tools(self);
         };
         let Some(blocks) = self.runs.pages.get(&page).cloned() else {
             self.read_runs(page, cx);
-            return Vec::new();
+            return tools(self);
         };
         if let Some((_, [x, y], next)) = self.runs.next.take_if(|(p, _, _)| *p == page)
             && let Some(i) = blocks.iter().position(|b| {
@@ -725,9 +735,7 @@ impl Viewer {
         }
         out.extend(self.objects_overlay(page, cx));
         out.extend(self.insert_preview(page));
-        out.extend(self.redact_overlay(page));
-        out.extend(self.link_overlay(page));
-        out.extend(self.design_overlay(page));
+        out.extend(tools(self));
         out
     }
 

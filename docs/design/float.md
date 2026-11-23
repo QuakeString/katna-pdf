@@ -162,6 +162,26 @@ under it whether a token is plugged in, looked for each time the menu
 opens, with a way to Settings > Signing. Settings… is Ctrl+, and About
 Katna PDF opens Settings > About.
 
+## Menus and motion
+
+The ⋯ menu lists File, Edit, View, Go and Help; the one pointed at opens
+its items on its left, as the menu sits at the window's right edge.
+Help has Settings…, Keyboard Shortcuts, Report a Problem… (the issue
+tracker) and About Katna PDF; KDE's global menu shows the same.
+
+Things come on with a little motion, none when the desktop asks for
+less (GPUI's reduce motion): menus and popovers fade in as they drop
+4 px, cards and trays 6 px, dialogs rise 8 px over a fading scrim
+(`float::appear`, `appear_over`, 180 ms ease-out). The side card slides
+in and out on a `motion::SLIDE` spring; the outline's arrows turn on
+`SMOOTH` and its lines grow to their height as their parent opens.
+
+Hover is the text colour over whatever is under it (9 % by day, 12 % at
+night), so it shows on the grey title bar and on cards alike; a picked
+row is the accent at 20 % (30 % at night). With System colours the
+accent is the desktop's (the portal's `accent-color`, KDE's
+`kdeglobals`), read again when the desktop says it changed.
+
 ## Still to come
 
 Pages at night in the scheme's own card colour, and a side pane that

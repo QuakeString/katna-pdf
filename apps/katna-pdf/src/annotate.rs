@@ -370,28 +370,6 @@ pub fn at(annots: &[Annotation], point: [f32; 2]) -> Option<usize> {
     })
 }
 
-/// What the comments list calls an annotation: its comment, or what
-/// kind it is when it has none.
-pub fn kind_message(kind: &AnnotKind) -> &'static str {
-    match kind {
-        AnnotKind::Markup(MarkupStyle::Highlight, _) => "tool-highlight",
-        AnnotKind::Markup(MarkupStyle::Underline, _) => "tool-underline",
-        AnnotKind::Markup(MarkupStyle::StrikeOut, _) => "tool-strikeout",
-        AnnotKind::Markup(MarkupStyle::Squiggly, _) => "tool-squiggly",
-        AnnotKind::Note => "tool-note",
-        AnnotKind::FreeText { .. } => "tool-free-text",
-        AnnotKind::Ink(_) => "tool-ink",
-        AnnotKind::Square { .. } => "tool-rectangle",
-        AnnotKind::Circle { .. } => "tool-ellipse",
-        AnnotKind::Line { arrow: false, .. } => "tool-line",
-        AnnotKind::Line { arrow: true, .. } => "tool-arrow",
-        AnnotKind::Polygon(_) | AnnotKind::PolyLine(_) => "annot-shape",
-        AnnotKind::Stamp(_) => "tool-stamp",
-        AnnotKind::FileAttachment { .. } => "tool-attach",
-        AnnotKind::Other(_) => "annot-other",
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

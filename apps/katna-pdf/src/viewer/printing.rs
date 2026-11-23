@@ -9,16 +9,16 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use gpui::{AnyElement, Context, Entity, Subscription, div, prelude::*};
+use gpui::{AnyElement, App, Context, Entity, Subscription, div, prelude::*};
 use katna_pdf_cos::{AnnotChanges, AnnotKind, Parity, Sheet, SheetLayout, SheetScale};
 use katna_pdf_render::export::scanned_page;
 use katna_ui::px;
 use katna_ui::text_input::{InputEvent, TextInput};
-use katna_ui::tokens::{radius, space, text};
-use katna_ui::widgets;
+use katna_ui::tokens::{space, text};
 
 use super::sign::check_box;
 use super::{Content, Viewer};
+use crate::float;
 use crate::text::t;
 
 /// The layouts offered, with the sheet on its side for those that want
@@ -57,7 +57,11 @@ const LAYOUTS: [(&str, Option<SheetLayout>, bool); 8] = [
         false,
     ),
 ];
-const PAPERS: [(&str, (f32, f32)); 2] = [("print-a4", Sheet::A4), ("print-letter", Sheet::LETTER)];
+const PAPERS: [(&str, (f32, f32)); 3] = [
+    ("print-a4", Sheet::A4),
+    ("print-letter", Sheet::LETTER),
+    ("print-a3", (842.0, 1191.0)),
+];
 /// Which pages, as chips.
 const PARITIES: [(&str, Parity); 3] = [
     ("print-all-pages", Parity::All),
@@ -102,13 +106,40 @@ pub(super) struct Printing {
     reverse: bool,
     content: usize,
     size: usize,
+    /// Which pages: all, the one shown, or those typed.
+    which: Which,
+    /// The page shown when the dialog opened.
+    shown: usize,
     pages: Entity<TextInput>,
     working: bool,
+    /// The sheets as they will print, for the preview.
+    preview: Option<Preview>,
+    /// Bumped with each change, so an older preview is dropped.
+    asked: u64,
     _sub: Subscription,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Which {
+    All,
+    Shown,
+    These,
+}
+
+/// The sheets laid out as asked, and the one shown.
+struct Preview {
+    doc: Arc<dyn katna_pdf_render::Document>,
+    count: usize,
+    sheet: usize,
+    image: Option<Arc<gpui::RenderImage>>,
+}
+
+/// The preview's room, in points of screen.
+const PREVIEW_W: f32 = 300.0;
+const PREVIEW_H: f32 = 380.0;
+
 impl Viewer {
-    /// Opens the print card, or closes it.
+    /// Opens the print dialog, or closes it.
     pub(super) fn toggle_printing(&mut self, cx: &mut Context<Self>) {
         if self.printing.take().is_some() {
             cx.notify();
@@ -130,10 +161,15 @@ impl Viewer {
             input.set_accent(accent);
             input
         });
-        let sub = cx.subscribe(&pages, |this, _, event, cx| {
-            if let InputEvent::Submit = event {
-                this.print_sheets(None, cx);
+        let sub = cx.subscribe(&pages, |this, _, event, cx| match event {
+            InputEvent::Submit => this.print_sheets(None, cx),
+            InputEvent::Changed => {
+                if let Some(p) = this.printing.as_mut() {
+                    p.which = Which::These;
+                }
+                this.preview_sheets(cx);
             }
+            InputEvent::Cancel => {}
         });
         self.printing = Some(Printing {
             layout: 0,
@@ -143,78 +179,160 @@ impl Viewer {
             reverse: false,
             content: 0,
             size: 0,
+            which: Which::All,
+            shown: self.current_page(),
             pages,
             working: false,
+            preview: None,
+            asked: 0,
             _sub: sub,
         });
+        self.preview_sheets(cx);
         cx.notify();
     }
 
-    pub(super) fn print_card(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+    /// Lays the sheets out again as the dialog now asks, and draws the
+    /// first (or the one shown, if there still is one) for the preview.
+    fn preview_sheets(&mut self, cx: &mut Context<Self>) {
+        let Some(mut job) = self.sheets_quietly(cx) else {
+            return;
+        };
+        // The preview is the same either way, and pictures are slow.
+        job.pictures = false;
+        let Some(printing) = self.printing.as_mut() else {
+            return;
+        };
+        printing.asked += 1;
+        let asked = printing.asked;
+        let keep = printing.preview.as_ref().map_or(0, |p| p.sheet);
+        cx.spawn(async move |this, cx| {
+            let made = cx
+                .background_executor()
+                .spawn(async move {
+                    let bytes = sheets(&job).ok()?;
+                    let doc = crate::engine::engine().open(Arc::new(bytes), "").ok()?;
+                    let count = doc.page_count();
+                    let sheet = keep.min(count.saturating_sub(1));
+                    let image = draw_sheet(doc.as_ref(), sheet);
+                    Some(Preview {
+                        doc,
+                        count,
+                        sheet,
+                        image,
+                    })
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                if let Some(p) = this.printing.as_mut()
+                    && p.asked == asked
+                {
+                    p.preview = made;
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Shows sheet `sheet` in the preview.
+    fn preview_sheet(&mut self, sheet: usize, cx: &mut Context<Self>) {
+        let Some(preview) = self.printing.as_mut().and_then(|p| p.preview.as_mut()) else {
+            return;
+        };
+        if sheet >= preview.count || sheet == preview.sheet {
+            return;
+        }
+        preview.sheet = sheet;
+        let doc = preview.doc.clone();
+        cx.spawn(async move |this, cx| {
+            let image = cx
+                .background_executor()
+                .spawn(async move { draw_sheet(doc.as_ref(), sheet) })
+                .await;
+            this.update(cx, |this, cx| {
+                if let Some(p) = this.printing.as_mut().and_then(|p| p.preview.as_mut())
+                    && p.sheet == sheet
+                {
+                    p.image = image;
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
+        cx.notify();
+    }
+
+    /// The print dialog (R19): the sheets as they will print on the
+    /// left, a sheet at a time; how to print them on the right.
+    pub(super) fn print_card(
+        &self,
+        window: &gpui::Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
         let printing = self.printing.as_ref()?;
         let th = self.theme;
         let label = |id: &str| {
             div()
+                .pt(px(space::S2))
                 .text_size(px(text::SMALL))
+                .font_weight(gpui::FontWeight::MEDIUM)
                 .text_color(th.dim)
                 .child(t(id, &[]))
         };
-        let chip = |id: gpui::ElementId, label: String, on: bool| {
-            let chip = if on {
-                widgets::filled_button(id, label, &th.katna)
-            } else {
-                widgets::outlined_button(id, label, &th.katna)
-            };
-            chip.h(px(28.0))
-                .px(px(space::S3))
-                .text_size(px(text::SMALL))
-        };
-        let mut layouts = div().flex().flex_wrap().gap(px(space::S1));
-        for (i, (id, _, _)) in LAYOUTS.into_iter().enumerate() {
-            layouts = layouts.child(
-                chip(("print-layout", i).into(), t(id, &[]), printing.layout == i).on_click(
+        let layouts = div().flex().flex_wrap().gap(px(space::S2)).children(
+            LAYOUTS.into_iter().enumerate().map(|(i, (id, _, _))| {
+                float::chip(("print-layout", i), t(id, &[]), printing.layout == i, &th).on_click(
                     cx.listener(move |this, _, _, cx| {
                         if let Some(p) = this.printing.as_mut() {
                             p.layout = i;
                         }
+                        this.preview_sheets(cx);
                         cx.notify();
                     }),
-                ),
-            );
-        }
-        let mut papers = div().flex().gap(px(space::S1));
+                )
+            }),
+        );
+        let mut papers = float::seg(&th);
         for (i, (id, _)) in PAPERS.into_iter().enumerate() {
             papers = papers.child(
-                chip(("print-paper", i).into(), t(id, &[]), printing.paper == i).on_click(
-                    cx.listener(move |this, _, _, cx| {
-                        if let Some(p) = this.printing.as_mut() {
-                            p.paper = i;
-                        }
-                        cx.notify();
-                    }),
-                ),
+                float::seg_item(
+                    ("print-paper", i),
+                    None,
+                    Some(t(id, &[]).into()),
+                    printing.paper == i,
+                    &th,
+                )
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if let Some(p) = this.printing.as_mut() {
+                        p.paper = i;
+                    }
+                    this.preview_sheets(cx);
+                    cx.notify();
+                })),
             );
         }
         // A row of chips setting one of the card's choices.
-        let row =
-            |name: &'static str,
-             items: &[&'static str],
-             on: usize,
-             set: fn(&mut Printing, usize),
-             cx: &mut Context<Self>| {
-                let mut row = div().flex().flex_wrap().gap(px(space::S1));
-                for (i, id) in items.iter().enumerate() {
-                    row = row.child(chip((name, i).into(), t(id, &[]), on == i).on_click(
-                        cx.listener(move |this, _, _, cx| {
-                            if let Some(p) = this.printing.as_mut() {
-                                set(p, i);
-                            }
-                            cx.notify();
-                        }),
-                    ));
-                }
-                row
-            };
+        let row = |name: &'static str,
+                   items: &[&'static str],
+                   on: usize,
+                   set: fn(&mut Printing, usize),
+                   cx: &mut Context<Self>| {
+            let mut row = div().flex().flex_wrap().gap(px(space::S1));
+            for (i, id) in items.iter().enumerate() {
+                row = row.child(float::chip((name, i), t(id, &[]), on == i, &th).on_click(
+                    cx.listener(move |this, _, _, cx| {
+                        if let Some(p) = this.printing.as_mut() {
+                            set(p, i);
+                        }
+                        this.preview_sheets(cx);
+                        cx.notify();
+                    }),
+                ));
+            }
+            row
+        };
         let sizes = row(
             "print-size",
             &SIZES.map(|(id, _)| id),
@@ -236,7 +354,6 @@ impl Viewer {
             |p, i| p.parity = i,
             cx,
         );
-        let reverse = printing.reverse;
         let parities = parities.child(
             div()
                 .id("print-reverse")
@@ -249,9 +366,10 @@ impl Viewer {
                     if let Some(p) = this.printing.as_mut() {
                         p.reverse = !p.reverse;
                     }
+                    this.preview_sheets(cx);
                     cx.notify();
                 }))
-                .child(check_box(reverse, th))
+                .child(check_box(printing.reverse, th))
                 .child(
                     div()
                         .text_size(px(text::SMALL))
@@ -259,89 +377,140 @@ impl Viewer {
                         .child(t("print-reverse", &[])),
                 ),
         );
-        let pictures = printing.pictures;
-        let mut card = div()
-            .id("print-card")
-            .w(px(480.0))
-            .p(px(space::S4))
+        let count = self.page_count().to_string();
+        let shown = (printing.shown + 1).to_string();
+        let choice = |which: Which, words: String| {
+            let on = printing.which == which;
+            div()
+                .id(("print-which", which as usize))
+                .flex()
+                .items_center()
+                .gap(px(space::S2))
+                .cursor_pointer()
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if let Some(p) = this.printing.as_mut() {
+                        p.which = which;
+                    }
+                    this.preview_sheets(cx);
+                    cx.notify();
+                }))
+                .child(float::radio(on, &th))
+                .child(
+                    div()
+                        .text_size(px(text::BODY))
+                        .text_color(th.text)
+                        .child(words),
+                )
+        };
+        let which = div()
+            .flex()
+            .items_center()
+            .gap(px(space::S4))
+            .child(choice(Which::All, t("print-all", &[("count", &count)])))
+            .child(choice(Which::Shown, t("print-shown", &[("page", &shown)])))
+            .child(choice(Which::These, t("print-these", &[])))
+            .child(div().flex_1().min_w_0().child(float::input_box(
+                &printing.pages,
+                window,
+                cx,
+                &th,
+            )));
+        let pictures = div()
+            .id("print-pictures")
+            .flex()
+            .items_center()
+            .gap(px(space::S2))
+            .cursor_pointer()
+            .on_click(cx.listener(|this, _, _, cx| {
+                if let Some(p) = this.printing.as_mut() {
+                    p.pictures = !p.pictures;
+                }
+                cx.notify();
+            }))
+            .child(check_box(printing.pictures, th))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .text_size(px(text::BODY))
+                    .text_color(th.text)
+                    .child(t("print-pictures", &[])),
+            );
+        let settings = div()
+            .flex_1()
+            .min_w_0()
             .flex()
             .flex_col()
-            .gap(px(space::S2))
-            .rounded(px(10.0))
-            .bg(th.card)
-            .shadow(th.lifted())
-            .when(th.dark, |d| d.border_1().border_color(th.line))
-            .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .child(
                 div()
-                    .text_size(px(text::BODY))
-                    .font_weight(gpui::FontWeight::SEMIBOLD)
-                    .text_color(th.text)
-                    .child(t("print-title", &[])),
-            )
-            .child(label("print-layout-label"))
-            .child(layouts);
-        if printing.layout == 0 {
-            card = card.child(label("print-size-label")).child(sizes);
-        }
-        if printing.layout > 0 || printing.size > 0 {
-            card = card.child(label("print-paper-label")).child(papers);
-        }
-        card = card.child(label("print-content-label")).child(contents);
-        card = card
-            .child(
-                div()
-                    .id("print-pictures")
                     .flex()
                     .items_center()
-                    .gap(px(space::S2))
-                    .cursor_pointer()
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        if let Some(p) = this.printing.as_mut() {
-                            p.pictures = !p.pictures;
-                        }
-                        cx.notify();
-                    }))
-                    .child(check_box(pictures, th))
+                    .px(px(space::S5))
+                    .pt(px(space::S4))
                     .child(
                         div()
                             .flex_1()
-                            .min_w_0()
-                            .text_size(px(text::BODY))
+                            .text_size(px(text::SUBTITLE))
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
                             .text_color(th.text)
-                            .child(t("print-pictures", &[])),
+                            .child(t("print-title", &[])),
+                    )
+                    .child(float::kbd("Ctrl P", &th)),
+            )
+            .child(
+                div()
+                    .id("print-settings")
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .px(px(space::S5))
+                    .py(px(space::S2))
+                    .flex()
+                    .flex_col()
+                    .gap(px(space::S2))
+                    .child(label("print-layout-label"))
+                    .child(layouts)
+                    .when(printing.layout == 0, |d| {
+                        d.child(label("print-size-label")).child(sizes)
+                    })
+                    .when(printing.layout > 0 || printing.size > 0, |d| {
+                        d.child(label("print-paper-label"))
+                            .child(div().flex().child(papers))
+                    })
+                    .child(label("print-content-label"))
+                    .child(contents)
+                    .child(label("print-pages-label"))
+                    .child(which)
+                    .child(parities)
+                    .child(div().pt(px(space::S2)).child(pictures))
+                    .child(
+                        div()
+                            .pt(px(space::S2))
+                            .text_size(px(text::SMALL))
+                            .text_color(th.dim)
+                            .child(t("print-hint", &[])),
                     ),
             )
-            .child(label("print-pages-label"))
             .child(
                 div()
-                    .h(px(36.0))
                     .flex()
                     .items_center()
-                    .px(px(space::S3))
-                    .rounded(px(radius::SM))
-                    .bg(th.field)
-                    .text_size(px(text::BODY))
-                    .text_color(th.text)
-                    .child(printing.pages.clone()),
-            )
-            .child(parities)
-            .child(label("print-hint"))
-            .child(
-                div()
-                    .flex()
-                    .justify_end()
                     .gap(px(space::S2))
+                    .px(px(space::S5))
+                    .py(px(space::S3))
+                    .border_t_1()
+                    .border_color(th.line)
                     .child(
-                        widgets::outlined_button("print-cancel", t("print-cancel", &[]), &th.katna)
+                        float::button("print-save", t("print-save", &[]), false, &th)
+                            .on_click(cx.listener(|this, _, _, cx| this.save_sheets(cx))),
+                    )
+                    .child(div().flex_1())
+                    .child(
+                        float::button("print-cancel", t("print-cancel", &[]), false, &th)
                             .on_click(cx.listener(|this, _, _, cx| this.toggle_printing(cx))),
                     )
                     .child(
-                        widgets::outlined_button("print-save", t("print-save", &[]), &th.katna)
-                            .on_click(cx.listener(|this, _, _, cx| this.save_sheets(cx))),
-                    )
-                    .child(
-                        widgets::filled_button(
+                        float::button(
                             "print-go",
                             t(
                                 if printing.working {
@@ -351,23 +520,133 @@ impl Viewer {
                                 },
                                 &[],
                             ),
-                            &th.katna,
+                            true,
+                            &th,
                         )
+                        .child(float::icon("print", 14.0, th.on_accent))
+                        .flex_row_reverse()
                         .on_click(cx.listener(|this, _, _, cx| this.print_sheets(None, cx))),
                     ),
             );
+        let card = div()
+            .id("print-card")
+            .w(px(820.0))
+            .h(px(540.0))
+            .flex()
+            .overflow_hidden()
+            .rounded(px(12.0))
+            .bg(th.card)
+            .shadow(th.lifted())
+            .when(th.dark, |d| d.border_1().border_color(th.line))
+            .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .child(self.print_preview(printing, cx))
+            .child(div().w(px(1.0)).h_full().bg(th.line))
+            .child(settings);
         Some(card.into_any_element())
     }
 
-    /// What the card asks for, or `None` when the pages list is wrong
-    /// (said in the notice).
-    fn sheets_asked(&mut self, cx: &mut Context<Self>) -> Option<Job> {
+    /// The left side: the sheet shown, and the way to the others.
+    fn print_preview(&self, printing: &Printing, cx: &mut Context<Self>) -> AnyElement {
+        let th = self.theme;
+        let (sheet, count, image, aspect) = match &printing.preview {
+            Some(p) => {
+                let (w, h) = p.doc.page_size(p.sheet).unwrap_or((595.0, 842.0));
+                (p.sheet, p.count, p.image.clone(), w / h)
+            }
+            None => (0, 0, None, 595.0 / 842.0),
+        };
+        let (w, h) = if aspect > PREVIEW_W / PREVIEW_H {
+            (PREVIEW_W, PREVIEW_W / aspect)
+        } else {
+            (PREVIEW_H * aspect, PREVIEW_H)
+        };
+        let arrow = |id: &'static str, glyph: &'static str, to: Option<usize>| {
+            float::sized_ib(id, glyph, 28.0, 14.0, t(id, &[]), false, &th)
+                .when(to.is_none(), |d| d.opacity(0.35))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if let Some(to) = to {
+                        this.preview_sheet(to, cx);
+                    }
+                }))
+        };
+        div()
+            .w(px(380.0))
+            .flex_none()
+            .h_full()
+            .flex()
+            .flex_col()
+            .items_center()
+            .justify_center()
+            .gap(px(space::S3))
+            .bg(if th.dark { th.sunk } else { th.field })
+            .child(
+                div()
+                    .w(px(w))
+                    .h(px(h))
+                    .bg(gpui::white())
+                    .shadow(th.lifted())
+                    .children(
+                        image.map(|image| gpui::img(gpui::ImageSource::Render(image)).size_full()),
+                    ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(space::S2))
+                    .child(arrow("print-back", "chevl", sheet.checked_sub(1)))
+                    .child(
+                        div()
+                            .min_w(px(96.0))
+                            .flex()
+                            .justify_center()
+                            .text_size(px(text::CAPTION))
+                            .text_color(th.dim)
+                            .child(if count == 0 {
+                                t("print-preview-working", &[])
+                            } else {
+                                t(
+                                    "print-sheet-of",
+                                    &[
+                                        ("sheet", &(sheet + 1).to_string()),
+                                        ("count", &count.to_string()),
+                                    ],
+                                )
+                            }),
+                    )
+                    .child(arrow(
+                        "print-next",
+                        "chevr",
+                        (sheet + 1 < count).then_some(sheet + 1),
+                    )),
+            )
+            .into_any_element()
+    }
+
+    /// The pages asked for, or `None` when the list typed is wrong.
+    fn chosen_pages(&self, cx: &App) -> Result<(Vec<usize>, bool), String> {
+        let printing = self.printing.as_ref().ok_or_else(String::new)?;
+        let count = self.page_count();
+        let spec = printing.pages.read(cx).text().trim().to_owned();
+        match printing.which {
+            Which::All => Ok(((0..count).collect(), true)),
+            Which::Shown => Ok((vec![printing.shown.min(count.saturating_sub(1))], false)),
+            Which::These if spec.is_empty() => Ok(((0..count).collect(), true)),
+            Which::These => katna_pdf_cos::ranges::parse(&spec, count)
+                .map(|p| (p, false))
+                .map_err(|e| e.to_string()),
+        }
+    }
+
+    /// What the dialog asks for, without telling of a wrong list.
+    fn sheets_quietly(&self, cx: &App) -> Option<Job> {
         let (Some(printing), Some(path), Content::Ready(opened)) =
             (self.printing.as_ref(), self.path.clone(), &self.content)
         else {
             return None;
         };
-        if printing.working {
+        let (pages, all_pages) = self.chosen_pages(cx).ok()?;
+        if pages.is_empty() {
             return None;
         }
         let (_, layout, sideways) = LAYOUTS[printing.layout];
@@ -376,23 +655,12 @@ impl Viewer {
             (None, Some(scale)) => (Some(SheetLayout::NUp { across: 1, down: 1 }), scale),
             (layout, _) => (layout, SheetScale::Fit),
         };
-        let count = opened.plain.page_count();
-        let spec = printing.pages.read(cx).text().trim().to_owned();
-        let pages: Vec<usize> = if spec.is_empty() {
-            (0..count).collect()
-        } else {
-            match katna_pdf_cos::ranges::parse(&spec, count) {
-                Ok(pages) => pages,
-                Err(error) => {
-                    self.notice = Some(t("print-failed", &[("error", &error.to_string())]));
-                    cx.notify();
-                    return None;
-                }
-            }
-        };
         let (parity, reverse) = (PARITIES[printing.parity].1, printing.reverse);
-        let all_pages = spec.is_empty() && parity == Parity::All && !reverse;
+        let all_pages = all_pages && parity == Parity::All && !reverse;
         let pages = katna_pdf_cos::print_order(&pages, parity, reverse);
+        if pages.is_empty() {
+            return None;
+        }
         Some(Job {
             layout,
             sheet: Sheet {
@@ -411,6 +679,20 @@ impl Viewer {
             path,
             title: opened.name.clone(),
         })
+    }
+
+    /// What the dialog asks for, or `None` when the pages list is wrong
+    /// (said in the notice).
+    fn sheets_asked(&mut self, cx: &mut Context<Self>) -> Option<Job> {
+        if self.printing.as_ref().is_none_or(|p| p.working) {
+            return None;
+        }
+        if let Err(error) = self.chosen_pages(cx) {
+            self.notice = Some(super::said("print-failed", &[("error", &error)]));
+            cx.notify();
+            return None;
+        }
+        self.sheets_quietly(cx)
     }
 
     /// Asks where to save the sheets as a PDF, and writes them there.
@@ -476,7 +758,7 @@ impl Viewer {
                         if let Some(p) = this.printing.as_mut() {
                             p.working = false;
                         }
-                        this.notice = Some(t("print-failed", &[("error", &error)]));
+                        this.notice = Some(super::said("print-failed", &[("error", &error)]));
                         cx.notify();
                     })
                     .ok();
@@ -495,13 +777,16 @@ impl Viewer {
                 return;
             }
             let notice = if save_is(&target) {
-                Some(t("print-saved", &[("name", &super::file_name(&target))]))
+                Some(super::said(
+                    "print-saved",
+                    &[("name", &super::file_name(&target))],
+                ))
             } else {
                 match crate::print::print(&title, &target).await {
                     crate::print::Printed::Done => None,
-                    crate::print::Printed::NoDialog => Some(t("print-no-dialog", &[])),
+                    crate::print::Printed::NoDialog => Some(super::said("print-no-dialog", &[])),
                     crate::print::Printed::Failed(error) => {
-                        Some(t("print-failed", &[("error", &error)]))
+                        Some(super::said("print-failed", &[("error", &error)]))
                     }
                 }
             };
@@ -513,6 +798,21 @@ impl Viewer {
         })
         .detach();
     }
+}
+
+/// A sheet drawn for the preview, sharp on a screen twice as dense.
+fn draw_sheet(
+    doc: &dyn katna_pdf_render::Document,
+    sheet: usize,
+) -> Option<Arc<gpui::RenderImage>> {
+    let (w, h) = doc.page_size(sheet)?;
+    let scale = (PREVIEW_W / w).min(PREVIEW_H / h) * 2.0;
+    super::draw(
+        doc,
+        sheet,
+        scale,
+        katna_pdf_render::recolor::PageColors::Normal,
+    )
 }
 
 /// Whether `target` was chosen to keep, not made to print.

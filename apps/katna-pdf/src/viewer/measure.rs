@@ -586,7 +586,7 @@ impl Viewer {
                 self.notice = None;
                 self.fill_scale(cx);
             }
-            None => self.notice = Some(t("measure-real-length-bad", &[("text", &typed)])),
+            None => self.notice = Some(super::said("measure-real-length-bad", &[("text", &typed)])),
         }
         cx.notify();
     }

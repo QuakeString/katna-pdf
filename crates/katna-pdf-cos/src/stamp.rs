@@ -35,6 +35,8 @@ pub enum StampPlace {
     Across,
     /// In the middle, level.
     Middle,
+    /// In the middle, turned a quarter to read upwards.
+    Upright,
 }
 
 /// Numbers that run on from page to page, for legal papers: `prefix`,
@@ -132,6 +134,7 @@ impl StampPlace {
             StampPlace::BottomRight => "BottomRight",
             StampPlace::Across => "Across",
             StampPlace::Middle => "Middle",
+            StampPlace::Upright => "Upright",
         }
     }
 
@@ -145,6 +148,7 @@ impl StampPlace {
             "BottomRight" => StampPlace::BottomRight,
             "Across" => StampPlace::Across,
             "Middle" => StampPlace::Middle,
+            "Upright" => StampPlace::Upright,
             _ => return None,
         })
     }
@@ -154,7 +158,7 @@ impl StampPlace {
         match self {
             StampPlace::TopLeft | StampPlace::TopCentre | StampPlace::TopRight => "Header",
             StampPlace::BottomLeft | StampPlace::BottomCentre | StampPlace::BottomRight => "Footer",
-            StampPlace::Across | StampPlace::Middle => "Watermark",
+            StampPlace::Across | StampPlace::Middle | StampPlace::Upright => "Watermark",
         }
     }
 }
@@ -529,6 +533,7 @@ impl Document {
                 }
                 StampPlace::Middle => (h / 2.0 + tall / 2.0 - size * 0.35, 0.0),
                 StampPlace::Across => (tall / 2.0 - size * 0.35, h.atan2(w)),
+                StampPlace::Upright => (tall / 2.0 - size * 0.35, std::f32::consts::FRAC_PI_2),
             };
             let mut out = Vec::new();
             artifact(&mut out, stamp.place.artifact(), &props);
@@ -536,7 +541,7 @@ impl Document {
             if let Some(state) = &state {
                 let _ = write!(out, "/{state} gs ");
             }
-            if stamp.place == StampPlace::Across {
+            if matches!(stamp.place, StampPlace::Across | StampPlace::Upright) {
                 let (s, c) = angle.sin_cos();
                 let _ = write!(out, "{} cm ", nums(&[c, s, -s, c, w / 2.0, h / 2.0]));
             }
@@ -546,7 +551,7 @@ impl Document {
                 let x = match stamp.place {
                     StampPlace::TopLeft | StampPlace::BottomLeft => m,
                     StampPlace::TopRight | StampPlace::BottomRight => w - m - wide,
-                    StampPlace::Across => -wide / 2.0,
+                    StampPlace::Across | StampPlace::Upright => -wide / 2.0,
                     _ => (w - wide) / 2.0,
                 };
                 let y = top - lead * i as f32;

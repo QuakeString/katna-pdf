@@ -470,7 +470,7 @@ pub fn popover(menu: impl IntoElement, above: bool, right: bool) -> AnyElement {
                 katna_ui::anchored().anchor(anchor).snap_to_window().child(
                     div()
                         .map(|d| if above { d.mb(px(8.0)) } else { d.mt(px(6.0)) })
-                        .child(menu),
+                        .child(appear("popover", menu, if above { 4.0 } else { -4.0 })),
                 ),
             )
             .with_priority(2),
@@ -486,6 +486,219 @@ pub fn initials(name: &str) -> String {
         (Some(a), None) => a.to_uppercase().collect(),
         _ => "?".into(),
     }
+}
+
+/// `el` coming on: faded in and risen `rise` pixels into place over a
+/// moment (none when the desktop asks for less motion). Runs each time
+/// the element comes back after being gone.
+pub fn appear(id: impl Into<ElementId>, el: impl IntoElement, rise: f32) -> AnyElement {
+    use gpui::{Animation, AnimationExt, ease_out_quint};
+    div()
+        .relative()
+        .child(el)
+        .with_animation(
+            id,
+            Animation::new(katna_ui::motion::time(std::time::Duration::from_millis(
+                180,
+            )))
+            .with_easing(ease_out_quint()),
+            move |d, t| d.opacity(t).top(px(rise * (1.0 - t))),
+        )
+        .into_any_element()
+}
+
+/// [`appear`] for a card placed with `absolute()`: the motion is laid
+/// over the whole room, so the card keeps its own place in it.
+pub fn appear_over(id: impl Into<ElementId>, el: impl IntoElement, rise: f32) -> AnyElement {
+    use gpui::{Animation, AnimationExt, ease_out_quint};
+    div()
+        .absolute()
+        .inset_0()
+        .child(el)
+        .with_animation(
+            id,
+            Animation::new(katna_ui::motion::time(std::time::Duration::from_millis(
+                180,
+            )))
+            .with_easing(ease_out_quint()),
+            move |d, t| d.opacity(t).top(px(rise * (1.0 - t))),
+        )
+        .into_any_element()
+}
+
+/// A text field's box (`.input`): a line round it, the accent's line
+/// and a soft ring round that while it has the keys, so it reads as a
+/// place to type rather than a grey bar.
+pub fn input_box(
+    input: &gpui::Entity<katna_ui::text_input::TextInput>,
+    window: &gpui::Window,
+    cx: &gpui::App,
+    th: &Theme,
+) -> Div {
+    use gpui::Focusable;
+    let focused = input.focus_handle(cx).is_focused(window);
+    div()
+        .h(px(36.0))
+        .flex()
+        .items_center()
+        .px(px(space::S3))
+        .rounded(px(7.0))
+        .border_1()
+        .bg(if th.dark { th.field } else { th.card })
+        .text_size(px(text::BODY))
+        .text_color(th.text)
+        .map(|d| {
+            if focused {
+                d.border_color(th.accent).shadow(vec![gpui::BoxShadow {
+                    color: th.accent.opacity(0.22),
+                    offset: gpui::point(px(0.0), px(0.0)),
+                    blur_radius: px(0.0),
+                    spread_radius: px(3.0),
+                    inset: false,
+                }])
+            } else {
+                d.border_color(th.line)
+            }
+        })
+        .child(input.clone())
+}
+
+/// A round choice (`.radio`), filled when it is the one chosen.
+pub fn radio(on: bool, th: &Theme) -> Div {
+    div()
+        .size(px(16.0))
+        .flex()
+        .flex_none()
+        .items_center()
+        .justify_center()
+        .rounded(px(8.0))
+        .border_1()
+        .border_color(if on { th.accent } else { th.dim })
+        .when(on, |d| {
+            d.child(div().size(px(8.0)).rounded(px(4.0)).bg(th.accent))
+        })
+}
+
+/// Keys as a dialog's heading shows them (`.kbd`).
+pub fn kbd(keys: impl Into<SharedString>, th: &Theme) -> Div {
+    div()
+        .flex_none()
+        .px(px(space::S2))
+        .py(px(2.0))
+        .rounded(px(radius::XS))
+        .border_1()
+        .border_color(th.line)
+        .text_size(px(text::MICRO))
+        .text_color(th.dim)
+        .child(keys.into())
+}
+
+/// A dialog's frame (`.dlg`): the card, rounded, lifted, with its
+/// heading (and keys) at the top and `foot` along the bottom, the body
+/// between them.
+pub fn dialog_card(
+    id: impl Into<ElementId>,
+    title: impl Into<SharedString>,
+    keys: Option<&str>,
+    width: f32,
+    body: impl IntoElement,
+    foot: impl IntoElement,
+    th: &Theme,
+) -> Stateful<Div> {
+    div()
+        .id(id)
+        .w(px(width))
+        .flex()
+        .flex_col()
+        .overflow_hidden()
+        .rounded(px(12.0))
+        .bg(th.card)
+        .shadow(th.lifted())
+        .when(th.dark, |d| d.border_1().border_color(th.line))
+        .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .px(px(space::S5))
+                .pt(px(space::S4))
+                .pb(px(space::S2))
+                .child(
+                    div()
+                        .flex_1()
+                        .text_size(px(text::SUBTITLE))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(th.text)
+                        .child(title.into()),
+                )
+                .children(keys.map(|k| kbd(k.to_owned(), th))),
+        )
+        .child(
+            div()
+                .px(px(space::S5))
+                .pb(px(space::S4))
+                .flex()
+                .flex_col()
+                .gap(px(space::S2))
+                .child(body),
+        )
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .justify_end()
+                .gap(px(space::S2))
+                .px(px(space::S5))
+                .py(px(space::S3))
+                .border_t_1()
+                .border_color(th.line)
+                .child(foot),
+        )
+}
+
+/// A choice shown as a small card (`.opt`): its name and a line under
+/// it, the accent's line round it when chosen.
+pub fn option_card(
+    id: impl Into<ElementId>,
+    name: impl Into<SharedString>,
+    detail: impl Into<SharedString>,
+    on: bool,
+    th: &Theme,
+) -> Stateful<Div> {
+    let hover = th.hover;
+    div()
+        .id(id)
+        .flex_1()
+        .min_w_0()
+        .min_h(px(52.0))
+        .px(px(10.0))
+        .py(px(space::S2))
+        .flex()
+        .flex_col()
+        .gap(px(2.0))
+        .rounded(px(7.0))
+        .border_1()
+        .cursor_pointer()
+        .map(|d| {
+            if on {
+                d.border_color(th.accent).bg(th.accent_soft.opacity(0.5))
+            } else {
+                d.border_color(th.line).hover(move |s| s.bg(hover))
+            }
+        })
+        .child(
+            div()
+                .text_size(px(text::SMALL))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(th.text)
+                .child(name.into()),
+        )
+        .child(
+            div()
+                .text_size(px(text::CAPTION))
+                .text_color(th.dim)
+                .child(detail.into()),
+        )
 }
 
 #[cfg(test)]

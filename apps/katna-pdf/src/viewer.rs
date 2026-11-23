@@ -12,13 +12,14 @@
 //! so the viewer only says when it is asked to ([`ViewerEvent`]).
 
 use std::cell::RefCell;
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use gpui::AnimationExt as _;
 use gpui::{
     AnyElement, App, ClickEvent, Context, Entity, EventEmitter, ExternalPaths, FocusHandle,
     Focusable, ImageSource, KeyBinding, ListAlignment, ListOffset, ListState, RenderImage,
@@ -84,7 +85,10 @@ actions!(
     katna_pdf,
     [
         Open,
+        NewWindow,
         OpenSettings,
+        ShowAbout,
+        ReportProblem,
         ReopenSession,
         Compare,
         Export,
@@ -158,6 +162,49 @@ actions!(
 );
 
 /// Our object layer's copy of `bytes`, a locked file opened with `key`.
+/// What to do with changes not saved when the tab closes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CloseAnswer {
+    Cancel,
+    Leave,
+    Save,
+}
+
+/// A line in the notice bar, and whether it tells of something that
+/// went wrong (in the error's colours) or only what happened.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Notice {
+    words: String,
+    error: bool,
+}
+
+impl Notice {
+    /// Something that went wrong, in words not from an id.
+    pub(crate) fn error(words: String) -> Self {
+        Notice { words, error: true }
+    }
+}
+
+/// The notice message `id` says, with `args`: an error when its id says
+/// something failed, was refused or is missing.
+pub(super) fn said(id: &str, args: &[(&str, &str)]) -> Notice {
+    const WRONG: [&str; 9] = [
+        "failed",
+        "-bad",
+        "-no-",
+        "gone",
+        "unsupported",
+        "-there",
+        "partial",
+        "unsaved",
+        "error",
+    ];
+    Notice {
+        words: t(id, args),
+        error: WRONG.iter().any(|w| id.contains(w)),
+    }
+}
+
 pub(crate) fn cos(bytes: Vec<u8>, key: Option<&str>) -> Result<katna_pdf_cos::Document, String> {
     let mut doc = katna_pdf_cos::Document::load(bytes).map_err(|e| e.to_string())?;
     // A file anyone can open is open already, but only its owner's
@@ -198,6 +245,7 @@ pub fn bind_keys(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("ctrl-o", Open, None),
         KeyBinding::new("ctrl-,", OpenSettings, None),
+        KeyBinding::new("ctrl-n", NewWindow, None),
         KeyBinding::new("ctrl-p", Print, None),
         KeyBinding::new("ctrl-s", Save, None),
         KeyBinding::new("ctrl-z", Undo, Some(READING)),
@@ -328,6 +376,8 @@ pub enum ViewerEvent {
     Dropped(Vec<PathBuf>),
     /// The library button was pressed.
     ShowLibrary,
+    /// The tab is to close: its changes were saved, or left.
+    Close,
 }
 
 /// A change to the pages, as [`Viewer::change_pages`] writes it.
@@ -347,6 +397,8 @@ pub(super) enum Pages {
         pages: BTreeSet<usize>,
         crop: Option<[f32; 4]>,
     },
+    /// Each page cropped to its own box, in its user space.
+    Crops(BTreeMap<usize, [f32; 4]>),
     /// `pages` cropped by margins (top, right, bottom, left, in points
     /// as each page shows) from their media boxes.
     Margins {
@@ -549,14 +601,21 @@ pub struct Viewer {
     /// the keys in it on the next frame.
     password: Option<(Entity<TextInput>, Subscription)>,
     focus_password: bool,
+    /// The password typed is shown, not dotted.
+    password_shown: bool,
     /// The password the file was opened with, for our object layer's
     /// copies too.
     key: Option<Arc<str>>,
     /// A line shown under the toolbar until dismissed, such as why
     /// printing failed.
-    notice: Option<String>,
+    notice: Option<Notice>,
     /// The form's changes the person was told closing would lose.
     close_warned: Option<u64>,
+    /// Closing was asked with changes not saved: the dialog asks what
+    /// to do with them.
+    asking_close: bool,
+    /// The tab closes once the save under way is done.
+    close_after_save: bool,
     /// The text selected with the pointer, and whether it is being
     /// dragged out now.
     selection: Option<Selection>,
@@ -647,6 +706,8 @@ pub struct Viewer {
     /// A reply being typed, and which comments the list shows.
     reply: Option<comments::Reply>,
     comment_filter: comments::CommentFilter,
+    /// The comments tab's menu is open.
+    comments_menu: bool,
     /// Whether the form's fields are tinted so they can be found.
     highlight_fields: bool,
     /// The stamp the stamp tool puts on, and the ones typed in.
@@ -666,12 +727,19 @@ pub struct Viewer {
     open_comment: bool,
     /// Whether the side pane is shown, and which of its tabs.
     pane: bool,
+    /// The side card sliding in (1) or out (0).
+    pane_slide: katna_ui::motion::Spring,
     tab: PaneTab,
     thumbs: Thumbs,
     /// The organizer shows in place of the pages (`organizer.rs`).
     organizer: bool,
     /// A box dragged on a page crops it (`crop.rs`).
     cropping: bool,
+    crop_box: Option<crop::CropBox>,
+    crop_grip: Option<crop::Grip>,
+    crop_which: crop::Which,
+    /// White margins being found.
+    crop_finding: bool,
     /// The file's signatures, checked, once read; and signing, while
     /// under way (`sign.rs`).
     signatures: Option<sign::Rows>,
@@ -801,9 +869,12 @@ impl Viewer {
             turn: 0,
             password: None,
             focus_password: false,
+            password_shown: false,
             key: None,
             notice: None,
             close_warned: None,
+            asking_close: false,
+            close_after_save: false,
             selection: None,
             selecting: false,
             hand: false,
@@ -851,6 +922,7 @@ impl Viewer {
             comment: None,
             reply: None,
             comment_filter: Default::default(),
+            comments_menu: false,
             highlight_fields: true,
             stamp: "Approved".into(),
             custom_stamps: stamps::load_custom(),
@@ -861,10 +933,15 @@ impl Viewer {
             comment_next: false,
             open_comment: false,
             pane: false,
+            pane_slide: katna_ui::motion::Spring::new(katna_ui::motion::SLIDE, 0.0),
             tab: PaneTab::Pages,
             thumbs: Thumbs::new(),
             organizer: false,
             cropping: false,
+            crop_box: None,
+            crop_grip: None,
+            crop_which: crop::Which::default(),
+            crop_finding: false,
             signatures: None,
             signable: Arc::default(),
             signing: None,
@@ -892,6 +969,15 @@ impl Viewer {
     }
 
     /// The file shown or being opened.
+    /// Shows `words` in the notice bar.
+    pub(crate) fn tell(&mut self, words: String, cx: &mut Context<Self>) {
+        self.notice = Some(Notice {
+            words,
+            error: false,
+        });
+        cx.notify();
+    }
+
     pub fn path(&self) -> Option<&Path> {
         self.path.as_deref()
     }
@@ -989,6 +1075,7 @@ impl Viewer {
         self.picked.clear();
         self.organizer = false;
         self.cropping = false;
+        self.crop_box = None;
         self.text_editing = false;
         self.typing = None;
         self.adding = None;
@@ -1422,6 +1509,7 @@ impl Viewer {
         self.finish_typing(true, cx);
         window.focus(&self.focus, cx);
         if self.area_press(event.position, cx)
+            || self.crop_press(event.position, cx)
             || self.measure_press(event, cx)
             || self.sign_press(event.position, cx)
             || self.design_press(event.position, cx)
@@ -1430,7 +1518,6 @@ impl Viewer {
             || self.insert_press(event.position, window, cx)
             || self.object_press(event, cx)
             || self.text_edit_press(cx)
-            || self.crop_press(event.position, cx)
             || self.annot_press(event.position, cx)
         {
             return;
@@ -1466,6 +1553,7 @@ impl Viewer {
         }
         if self.loupe_move(event.position, cx)
             || self.area_drag(event.position, cx)
+            || self.crop_drag(event.position, cx)
             || self.measure_move(event.position, cx)
             || self.design_drag(event.position, cx)
             || self.redact_drag(event.position, cx)
@@ -1832,9 +1920,12 @@ impl Viewer {
     /// The side pane: its tabs in a header lined up with the toolbar,
     /// then the page thumbnails or the outline.
     fn pane(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
-        if !self.pane_shown() {
+        if !matches!(self.content, Content::Ready(_))
+            || (!self.pane && self.pane_slide.value() < 0.01)
+        {
             return None;
         }
+        let slide = self.pane_slide.value().clamp(0.0, 1.0);
         let th = self.theme;
         let thumb = th.katna.text_dim & 0xffff_ff00 | 0x99;
         // Contents only when the file has an outline.
@@ -2024,7 +2115,10 @@ impl Viewer {
                 .id("side-card")
                 .occlude()
                 .absolute()
-                .left(px(float::GAP))
+                .left(px(
+                    float::GAP - (1.0 - slide) * (contents::WIDTH + float::GAP)
+                ))
+                .opacity(slide)
                 .top(px(space::S2))
                 .bottom(px(float::GAP))
                 .w(px(contents::WIDTH))
@@ -2205,7 +2299,7 @@ impl Viewer {
         .map(|(_, id)| t(id, &[]))
         .collect();
         if !barred.is_empty() && self.notice.is_none() {
-            self.notice = Some(t("restricted", &[("what", &barred.join(", "))]));
+            self.notice = Some(said("restricted", &[("what", &barred.join(", "))]));
         }
     }
 
@@ -2222,7 +2316,7 @@ impl Viewer {
             Allow::Assemble => (p.assemble, "restricted-assemble"),
         };
         if !on {
-            self.notice = Some(t("restricted-refused", &[("what", &t(id, &[]))]));
+            self.notice = Some(said("restricted-refused", &[("what", &t(id, &[]))]));
             cx.notify();
         }
         on
@@ -2401,7 +2495,7 @@ impl Viewer {
                     "FirstPage" => 0,
                     "LastPage" => last,
                     _ => {
-                        self.notice = Some(t("form-action-unsupported", &[("what", &name)]));
+                        self.notice = Some(said("form-action-unsupported", &[("what", &name)]));
                         cx.notify();
                         return;
                     }
@@ -2414,7 +2508,7 @@ impl Viewer {
                 } else {
                     "JavaScript (Settings > Editing)"
                 };
-                self.notice = Some(t("form-action-unsupported", &[("what", what)]));
+                self.notice = Some(said("form-action-unsupported", &[("what", what)]));
                 cx.notify();
             }
         }
@@ -2429,7 +2523,7 @@ impl Viewer {
     ) {
         let lower = url.trim().to_ascii_lowercase();
         if !lower.starts_with("https://") && !lower.starts_with("http://") {
-            self.notice = Some(t("form-send-failed", &[("error", &url)]));
+            self.notice = Some(said("form-send-failed", &[("error", &url)]));
             cx.notify();
             return;
         }
@@ -2440,7 +2534,7 @@ impl Viewer {
         let current = self.unsaved();
         let key = self.key.clone();
         let name = file_name(&path);
-        self.notice = Some(t("form-sending", &[]));
+        self.notice = Some(said("form-sending", &[]));
         cx.notify();
         cx.spawn(async move |this, cx| {
             let sent = cx
@@ -2463,9 +2557,9 @@ impl Viewer {
                 .await;
             this.update(cx, |this, cx| {
                 this.notice = Some(match sent {
-                    Ok(status) if (200..300).contains(&status) => t("form-sent", &[]),
-                    Ok(status) => t("form-send-failed", &[("error", &status.to_string())]),
-                    Err(error) => t("form-send-failed", &[("error", &error)]),
+                    Ok(status) if (200..300).contains(&status) => said("form-sent", &[]),
+                    Ok(status) => said("form-send-failed", &[("error", &status.to_string())]),
+                    Err(error) => said("form-send-failed", &[("error", &error)]),
                 });
                 cx.notify();
             })
@@ -2516,7 +2610,7 @@ impl Viewer {
             self.refill(field, cx);
         }
         if !done.alerts.is_empty() {
-            self.notice = Some(t("form-says", &[("message", &done.alerts.join(" "))]));
+            self.notice = Some(said("form-says", &[("message", &done.alerts.join(" "))]));
             cx.notify();
         }
         for request in done.requests {
@@ -2576,7 +2670,7 @@ impl Viewer {
                         this.swap_doc(doc, &pages);
                     }
                     Err(error) => {
-                        this.notice = Some(t("form-failed", &[("error", &error)]));
+                        this.notice = Some(said("form-failed", &[("error", &error)]));
                     }
                 }
                 cx.notify();
@@ -2613,8 +2707,8 @@ impl Viewer {
             offset_in_item: px(0.0),
         });
         self.notice = Some(match self.turn {
-            0 => t("turn-view-upright", &[]),
-            turn => t(
+            0 => said("turn-view-upright", &[]),
+            turn => said(
                 "turn-view-notice",
                 &[("degrees", &(u32::from(turn) * 90).to_string())],
             ),
@@ -2767,7 +2861,7 @@ impl Viewer {
                 && let Some(file) = paths.into_iter().next()
             {
                 this.update(cx, |this, cx| {
-                    let at = organize::insert_at(this.page_count(), &this.picked);
+                    let at = this.insert_point(cx);
                     this.change_pages(
                         Pages::Insert {
                             from: PagesFrom::File(file),
@@ -2829,8 +2923,8 @@ impl Viewer {
                 .await;
             this.update(cx, |this, cx| {
                 this.notice = Some(match written {
-                    Ok(target) => t("pages-extracted", &[("name", &file_name(&target))]),
-                    Err(error) => t("pages-failed", &[("error", &error)]),
+                    Ok(target) => said("pages-extracted", &[("name", &file_name(&target))]),
+                    Err(error) => said("pages-failed", &[("error", &error)]),
                 });
                 cx.notify();
             })
@@ -2887,6 +2981,10 @@ impl Viewer {
                                     crops.insert(page, to);
                                 }
                             }
+                            (all().collect(), None)
+                        }
+                        Pages::Crops(each) => {
+                            crops.extend(each);
                             (all().collect(), None)
                         }
                         Pages::Margins { pages, margins } => {
@@ -2951,7 +3049,7 @@ impl Viewer {
                 this.changing_pages = false;
                 match changed {
                     Ok((bytes, doc, cos)) => this.show_changed(name, bytes, doc, cos, picked),
-                    Err(error) => this.notice = Some(t("pages-failed", &[("error", &error)])),
+                    Err(error) => this.notice = Some(said("pages-failed", &[("error", &error)])),
                 }
                 cx.notify();
             })
@@ -2975,17 +3073,39 @@ impl Viewer {
             .copied()
             .unwrap_or_else(|| self.current_page())
             .min(count.saturating_sub(1));
-        self.forget_pages();
+        // The same pages at the same sizes (an undo, a redo, most edits):
+        // the drawn pages stay on screen until drawn again, and the view
+        // stays where it is, so nothing blinks.
+        let same = match &self.content {
+            Content::Ready(shown) => {
+                shown.doc.page_count() == count
+                    && (0..count).all(|p| shown.doc.page_size(p) == doc.page_size(p))
+            }
+            _ => false,
+        };
         self.forget_runs();
         self.revision += 1;
-        self.list.reset(self.spread.rows(count));
-        self.list.scroll_to(ListOffset {
-            item_ix: self.spread.row_of(page),
-            offset_in_item: px(0.0),
-        });
-        self.visible = page..page + 1;
-        let old = self.thumbs.reset(count);
-        self.released.extend(old);
+        if same {
+            for drawn in self.pages.values_mut() {
+                drawn.scale = 0.0;
+            }
+            self.drawing.clear();
+            self.queue.clear();
+            self.forget_sharp(None);
+            for p in 0..count {
+                self.released.extend(self.thumbs.forget(p));
+            }
+        } else {
+            self.forget_pages();
+            self.list.reset(self.spread.rows(count));
+            self.list.scroll_to(ListOffset {
+                item_ix: self.spread.row_of(page),
+                offset_in_item: px(0.0),
+            });
+            self.visible = page..page + 1;
+            let old = self.thumbs.reset(count);
+            self.released.extend(old);
+        }
         self.texts = Some(search::texts(count));
         if let Some(bar) = self.search.as_mut() {
             bar.generation.fetch_add(1, Ordering::Relaxed);
@@ -3091,7 +3211,7 @@ impl Viewer {
                             this.edited = None;
                         }
                     }
-                    Err(error) => this.notice = Some(t("undo-failed", &[("error", &error)])),
+                    Err(error) => this.notice = Some(said("undo-failed", &[("error", &error)])),
                 }
                 cx.notify();
             })
@@ -3121,14 +3241,109 @@ impl Viewer {
         if !self.dirty() {
             return true;
         }
-        let mark = self.revision + self.form.as_ref().map_or(0, |f| f.generation << 32);
+        let mark = self.change_mark();
         if self.close_warned == Some(mark) {
             return true;
         }
-        self.close_warned = Some(mark);
-        self.notice = Some(t("unsaved-close", &[]));
+        self.asking_close = true;
         cx.notify();
         false
+    }
+
+    /// What the unsaved dialog was answered with.
+    fn answer_close(&mut self, answer: CloseAnswer, cx: &mut Context<Self>) {
+        self.asking_close = false;
+        match answer {
+            CloseAnswer::Cancel => {}
+            CloseAnswer::Leave => {
+                self.close_warned = Some(self.change_mark());
+                cx.emit(ViewerEvent::Close);
+            }
+            CloseAnswer::Save => {
+                self.close_after_save = true;
+                self.save(cx);
+            }
+        }
+        cx.notify();
+    }
+
+    /// The dialog asking what to do with changes not saved (S07).
+    fn unsaved_card(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if !self.asking_close {
+            return None;
+        }
+        let th = self.theme;
+        let name = match &self.content {
+            Content::Ready(opened) => opened.name.clone(),
+            _ => self.path.as_deref().map(file_name).unwrap_or_default(),
+        };
+        let quiet = |id: &'static str, words: String| {
+            float::button(id, words, false, &th)
+                .border_color(gpui::transparent_black())
+                .bg(gpui::transparent_black())
+        };
+        Some(
+            div()
+                .id("unsaved-card")
+                .w(px(400.0))
+                .flex()
+                .flex_col()
+                .overflow_hidden()
+                .rounded(px(12.0))
+                .bg(th.card)
+                .shadow(th.lifted())
+                .when(th.dark, |d| d.border_1().border_color(th.line))
+                .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .child(
+                    div()
+                        .px(px(space::S4))
+                        .pt(px(space::S4))
+                        .pb(px(space::S4))
+                        .flex()
+                        .flex_col()
+                        .gap(px(space::S2))
+                        .child(
+                            div()
+                                .text_size(px(text::SUBTITLE))
+                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                .text_color(th.text)
+                                .child(t("unsaved-title", &[("name", &name)])),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(text::SMALL))
+                                .text_color(th.text2)
+                                .child(t("unsaved-detail", &[])),
+                        ),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(space::S2))
+                        .px(px(space::S4))
+                        .py(px(space::S3))
+                        .border_t_1()
+                        .border_color(th.line)
+                        .child(quiet("unsaved-leave", t("unsaved-leave", &[])).on_click(
+                            cx.listener(|this, _, _, cx| this.answer_close(CloseAnswer::Leave, cx)),
+                        ))
+                        .child(div().flex_1())
+                        .child(
+                            float::button("unsaved-cancel", t("unsaved-cancel", &[]), false, &th)
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.answer_close(CloseAnswer::Cancel, cx)
+                                })),
+                        )
+                        .child(
+                            float::button("unsaved-save", t("unsaved-save", &[]), true, &th)
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.answer_close(CloseAnswer::Save, cx)
+                                })),
+                        ),
+                )
+                .into_any_element(),
+        )
     }
 
     /// Which changes the file has: moves on with each one.
@@ -3186,7 +3401,7 @@ impl Viewer {
         }
         if let Some(bytes) = self.recover_after.take() {
             self.restore(Some(bytes), cx);
-            self.notice = Some(t("recovered", &[]));
+            self.notice = Some(said("recovered", &[]));
         }
     }
 
@@ -3200,7 +3415,7 @@ impl Viewer {
                 self.kept = Some((copy.path, u64::MAX));
             }
             Err(err) => {
-                self.notice = Some(t(
+                self.notice = Some(said(
                     "error-read",
                     &[
                         ("name", &file_name(&copy.path)),
@@ -3218,14 +3433,14 @@ impl Viewer {
         self.finish_typing(false, cx);
         self.finish_text_edit(false, cx);
         if !self.dirty() {
-            self.notice = Some(t("revert-nothing", &[]));
+            self.notice = Some(said("revert-nothing", &[]));
             cx.notify();
             return;
         }
         self.record_change();
         self.redo.clear();
         self.restore(None, cx);
-        self.notice = Some(t("reverted", &[]));
+        self.notice = Some(said("reverted", &[]));
         cx.notify();
     }
 
@@ -3272,8 +3487,15 @@ impl Viewer {
                         }
                         this.notice = None;
                         back = true;
+                        if std::mem::take(&mut this.close_after_save) {
+                            this.close_warned = Some(this.change_mark());
+                            cx.emit(ViewerEvent::Close);
+                        }
                     }
-                    Err(error) => this.notice = Some(t("save-failed", &[("error", &error)])),
+                    Err(error) => {
+                        this.close_after_save = false;
+                        this.notice = Some(said("save-failed", &[("error", &error)]));
+                    }
                 }
                 cx.notify();
             })
@@ -3295,7 +3517,7 @@ impl Viewer {
         origin: crate::drives::Origin,
         cx: &mut Context<Self>,
     ) {
-        self.notice = Some(t("drive-saving", &[]));
+        self.notice = Some(said("drive-saving", &[]));
         cx.notify();
         cx.spawn(async move |this, cx| {
             let done = cx
@@ -3307,9 +3529,9 @@ impl Viewer {
                 .await;
             this.update(cx, |this, cx| {
                 let notice = match done {
-                    (Ok(()), drive) => t("drive-saved", &[("drive", &drive)]),
+                    (Ok(()), drive) => said("drive-saved", &[("drive", &drive)]),
                     (Err(error), drive) => {
-                        t("drive-save-failed", &[("drive", &drive), ("error", &error)])
+                        said("drive-save-failed", &[("drive", &drive), ("error", &error)])
                     }
                 };
                 this.notice = Some(notice);
@@ -3333,9 +3555,9 @@ impl Viewer {
             let printed = crate::print::print(&title, &path).await;
             let notice = match printed {
                 crate::print::Printed::Done => None,
-                crate::print::Printed::NoDialog => Some(t("print-no-dialog", &[])),
+                crate::print::Printed::NoDialog => Some(said("print-no-dialog", &[])),
                 crate::print::Printed::Failed(error) => {
-                    Some(t("print-failed", &[("error", &error)]))
+                    Some(said("print-failed", &[("error", &error)]))
                 }
             };
             this.update(cx, |this, cx| {
@@ -3742,7 +3964,7 @@ impl Viewer {
     /// The bar of tools, `width` points wide: when that is too little for
     /// every button, the ones with keys of their own (fit to width and
     /// page, facing pages, print) are left out rather than cut off.
-    fn message(&self, cx: &mut Context<Self>) -> AnyElement {
+    fn message(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         if matches!(self.content, Content::Empty) {
             return self.start_screen(cx);
         }
@@ -3755,50 +3977,125 @@ impl Viewer {
             .max_w(px(420.0));
         let body = match &self.content {
             Content::Locked { name, wrong } => {
+                let wrong = *wrong;
+                let shown = self.password_shown;
                 let field = self.password.as_ref().map(|(input, _)| {
-                    div()
-                        .w(px(280.0))
-                        .h(px(36.0))
-                        .flex()
-                        .items_center()
-                        .px(px(space::S3))
-                        .rounded(px(radius::SM))
-                        .bg(th.field)
-                        .text_size(px(text::BODY))
-                        .text_color(th.text)
-                        .child(input.clone())
+                    float::input_box(input, window, cx, &th)
+                        .w_full()
+                        .gap(px(space::S2))
+                        .when(wrong, |d| d.border_color(th.error))
+                        .child(div().flex_1())
+                        .child(
+                            float::sized_ib(
+                                "password-eye",
+                                if shown { "eyeoff" } else { "eye" },
+                                26.0,
+                                15.0,
+                                t(if shown { "locked-hide" } else { "locked-show" }, &[]),
+                                false,
+                                &th,
+                            )
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.password_shown = !this.password_shown;
+                                let masked = !this.password_shown;
+                                if let Some((input, _)) = &this.password {
+                                    input.update(cx, |i, cx| i.set_masked(masked, cx));
+                                }
+                                cx.notify();
+                            })),
+                        )
                 });
-                body.child(
-                    svg()
-                        .path("icons/lock.svg")
-                        .size(px(48.0))
-                        .text_color(th.dim),
-                )
-                .child(
-                    div()
-                        .text_size(px(text::TITLE))
-                        .text_color(th.text)
-                        .text_center()
-                        .child(t("locked-title", &[("name", name)])),
-                )
-                .child(
-                    div()
-                        .text_size(px(text::SMALL))
-                        .text_color(if *wrong { th.error } else { th.dim })
-                        .child(t(
-                            if *wrong {
-                                "locked-wrong"
-                            } else {
-                                "locked-detail"
-                            },
-                            &[],
-                        )),
-                )
-                .children(field)
-                .child(
-                    widgets::filled_button("unlock", t("locked-open", &[]), &th.katna)
-                        .on_click(cx.listener(|this, _, _, cx| this.unlock(cx))),
-                )
+                let field = div()
+                    .w_full()
+                    .relative()
+                    .children(field.map(|f| f.pl(px(34.0))))
+                    .child(
+                        div()
+                            .absolute()
+                            .left(px(space::S3))
+                            .top(px(10.0))
+                            .child(float::icon("key", 15.0, th.dim)),
+                    );
+                let card = div()
+                    .id("locked-card")
+                    .w(px(340.0))
+                    .flex()
+                    .flex_col()
+                    .overflow_hidden()
+                    .rounded(px(12.0))
+                    .bg(th.card)
+                    .shadow(th.lifted())
+                    .when(th.dark, |d| d.border_1().border_color(th.line))
+                    .child(
+                        div()
+                            .px(px(space::S4))
+                            .pt(px(space::S5))
+                            .pb(px(space::S4))
+                            .flex()
+                            .flex_col()
+                            .items_center()
+                            .gap(px(space::S2))
+                            .child(
+                                div()
+                                    .size(px(48.0))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .rounded(px(10.0))
+                                    .bg(th.accent_soft)
+                                    .child(float::icon("lock", 20.0, th.accent_text)),
+                            )
+                            .child(
+                                div()
+                                    .pt(px(space::S2))
+                                    .text_size(px(text::SUBTITLE))
+                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .text_color(th.text)
+                                    .text_center()
+                                    .child(t("locked-title", &[("name", name)])),
+                            )
+                            .child(
+                                div()
+                                    .pb(px(space::S3))
+                                    .text_size(px(text::SMALL))
+                                    .text_color(th.text2)
+                                    .text_center()
+                                    .child(t("locked-detail", &[])),
+                            )
+                            .child(field)
+                            .when(wrong, |d| {
+                                d.child(
+                                    div()
+                                        .w_full()
+                                        .text_size(px(text::CAPTION))
+                                        .text_color(th.error)
+                                        .child(t("locked-wrong", &[])),
+                                )
+                            }),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .px(px(space::S4))
+                            .py(px(space::S3))
+                            .border_t_1()
+                            .border_color(th.line)
+                            .child(
+                                float::button("locked-cancel", t("locked-cancel", &[]), false, &th)
+                                    .border_color(gpui::transparent_black())
+                                    .bg(gpui::transparent_black())
+                                    .on_click(|_, window, cx| {
+                                        window.dispatch_action(Box::new(CloseTab), cx);
+                                    }),
+                            )
+                            .child(div().flex_1())
+                            .child(
+                                float::button("unlock", t("locked-open", &[]), true, &th)
+                                    .on_click(cx.listener(|this, _, _, cx| this.unlock(cx))),
+                            ),
+                    );
+                body.child(card)
             }
             Content::Opening(name) => body.child(
                 div()
@@ -3806,13 +4103,57 @@ impl Viewer {
                     .text_color(th.dim)
                     .child(t("opening", &[("name", name)])),
             ),
-            Content::Failed(message) => body.child(
-                div()
-                    .text_size(px(text::BODY))
-                    .text_color(th.error)
-                    .text_center()
-                    .child(message.clone()),
-            ),
+            Content::Failed(message) => {
+                let path = self.path.clone();
+                body.child(
+                    div()
+                        .size(px(56.0))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded(px(12.0))
+                        .bg(th.error_soft)
+                        .child(float::icon("alert", 22.0, th.error)),
+                )
+                .child(
+                    div()
+                        .text_size(px(text::TITLE))
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .text_color(th.text)
+                        .text_center()
+                        .child(message.clone()),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .gap(px(space::S2))
+                        .when_some(path, |d, path| {
+                            d.child(
+                                float::button(
+                                    "failed-folder",
+                                    t("failed-show-folder", &[]),
+                                    false,
+                                    &th,
+                                )
+                                .on_click(move |_, _, cx| cx.reveal_path(&path)),
+                            )
+                        })
+                        .child(
+                            float::button("failed-open", t("failed-open-another", &[]), false, &th)
+                                .on_click(cx.listener(|_, _, _, cx| {
+                                    cx.emit(ViewerEvent::ChooseFiles);
+                                })),
+                        )
+                        .child(
+                            float::button("failed-close", t("failed-close-tab", &[]), false, &th)
+                                .border_color(gpui::transparent_black())
+                                .bg(gpui::transparent_black())
+                                .on_click(|_, window, cx| {
+                                    window.dispatch_action(Box::new(CloseTab), cx);
+                                }),
+                        ),
+                )
+            }
             _ => body,
         };
         div()
@@ -3946,8 +4287,11 @@ impl Render for Viewer {
         self.focus_signing(window, cx);
         self.focus_calibrating(window, cx);
         self.focus_initials_field(window, cx);
+        self.pane_slide
+            .set(if self.pane_shown() { 1.0 } else { 0.0 });
+        self.pane_slide.tick(window, cx.reduce_motion());
         let pane = self.pane(window, cx);
-        let pane_room = if pane.is_some() {
+        let pane_room = if self.pane_shown() {
             contents::WIDTH + float::GAP
         } else {
             0.0
@@ -3959,26 +4303,28 @@ impl Render for Viewer {
             .or_else(|| self.pages_tray(cx))
             .or_else(|| self.forms_tray(cx))
             .or_else(|| self.sign_tray(cx));
-        let object_row = self.object_row();
+        let object_row = self.crop_bar(cx).or_else(|| self.object_row());
         let measure_bar = self.measure_bar(cx);
         let stamp_bar = self.stamp_bar(cx);
         let initials_bar = self.initials_bar(cx);
         let reading_bar = self.reading_bar(cx);
         let signatures_line = self.signatures_line(cx);
         let signing_card = self.signing_card(cx);
-        let marks_card = self.marks_card(cx);
-        let redact_card = self.redact_card(cx);
-        let export_card = self.export_card(cx);
-        let print_card = self.print_card(cx);
+        let marks_card = self.marks_card(window, cx);
+        let unsaved_card = self.unsaved_card(cx);
+        let redact_card = self.redact_card(window, cx);
+        let redact_confirm = self.redact_confirm_card(window, cx);
+        let export_card = self.export_card(window, cx);
+        let print_card = self.print_card(window, cx);
         let link_card = self.link_card(window, cx);
-        let numbering_card = self.numbering_card(cx);
-        let paste_many_card = self.paste_many_card(cx);
+        let numbering_card = self.numbering_card(window, cx);
+        let paste_many_card = self.paste_many_card(window, cx);
         let setup_card = self.setup_card(cx);
         // The properties card scrolls when the window is shorter than it.
         let card_height = unpx(window.viewport_size().height) * katna_ui::scale::scale()
             - 48.0
             - 4.0 * katna_ui::tokens::space::S3;
-        let properties_card = self.properties_card(card_height, cx);
+        let properties_card = self.properties_card(card_height, window, cx);
         // Cards at the top right stop short of the dock.
         let side_room = card_height - 120.0;
         let object_card = self.object_card(side_room, cx);
@@ -3987,6 +4333,11 @@ impl Render for Viewer {
         let design_card = self.design_card(side_room, cx);
         let find_bar = self.find_bar(cx);
         let notice = self.notice.clone().map(|notice| {
+            let (bg, fg, glyph, mark) = if notice.error {
+                (th.error_soft, th.error, "alert", th.error)
+            } else {
+                (th.card, th.text, "info", th.accent)
+            };
             div()
                 .id("notice")
                 .occlude()
@@ -3998,12 +4349,13 @@ impl Render for Viewer {
                 .pr(px(space::S2))
                 .py(px(space::S1))
                 .rounded(px(radius::SM))
-                .bg(th.error_soft)
+                .bg(bg)
                 .shadow(th.shadow())
                 .text_size(px(12.5))
-                .text_color(th.error)
-                .child(float::icon("alert", 15.0, th.error))
-                .child(div().flex_1().min_w_0().child(notice))
+                .text_color(fg)
+                .when(!notice.error, |d| d.border_1().border_color(th.line))
+                .child(float::icon(glyph, 15.0, mark))
+                .child(div().flex_1().min_w_0().child(notice.words))
                 .child(icon_button(
                     "notice-close",
                     "close",
@@ -4143,7 +4495,7 @@ impl Render for Viewer {
                     ))
                     .into_any_element()
             }
-            _ => self.message(cx).into_any_element(),
+            _ => self.message(window, cx).into_any_element(),
         };
         div()
             .id("katna-pdf")
@@ -4348,15 +4700,34 @@ impl Render for Viewer {
                     .children(stamp_bar)
                     .children(initials_bar.map(floating(th)))
                     .children(notice)
-                    .children(tools)
+                    .children(tools.map(|t| float::appear("tools-row", t, -6.0)))
                     .children(reading_bar.or(dock)),
             )
-            .children(object_card)
-            .children(measure_card)
+            .children(object_card.map(|c| float::appear_over("object_card", c, -6.0)))
+            .children(measure_card.map(|c| float::appear_over("measure_card", c, -6.0)))
             .children(initials_card)
-            .children(signing_card)
-            .children(marks_card)
-            .children(redact_card)
+            .children(signing_card.map(|c| float::appear_over("signing_card", c, -6.0)))
+            .children(marks_card.map(|card| {
+                dialog(
+                    th,
+                    card,
+                    cx.listener(|this, _, _, cx| {
+                        this.marking = None;
+                        cx.notify();
+                    }),
+                )
+            }))
+            .children(redact_card.map(|c| float::appear_over("redact_card", c, -6.0)))
+            .children(redact_confirm.map(|card| {
+                dialog(
+                    th,
+                    card,
+                    cx.listener(|this, _, _, cx| {
+                        this.close_redact_confirm();
+                        cx.notify();
+                    }),
+                )
+            }))
             .children(export_card.map(|card| {
                 dialog(
                     th,
@@ -4377,9 +4748,26 @@ impl Render for Viewer {
                     }),
                 )
             }))
-            .children(link_card)
-            .children(numbering_card)
-            .children(paste_many_card)
+            .children(link_card.map(|c| float::appear_over("link_card", c, -6.0)))
+            .children(numbering_card.map(|card| {
+                dialog(
+                    th,
+                    card,
+                    cx.listener(|this, _, _, cx| {
+                        this.numbering = None;
+                        cx.notify();
+                    }),
+                )
+            }))
+            .children(paste_many_card.map(|card| {
+                dialog(
+                    th,
+                    card,
+                    cx.listener(|this, _, window, cx| {
+                        this.toggle_paste_many(window, cx);
+                    }),
+                )
+            }))
             .children(setup_card.map(|card| {
                 dialog(
                     th,
@@ -4390,7 +4778,14 @@ impl Render for Viewer {
                     }),
                 )
             }))
-            .children(design_card)
+            .children(design_card.map(|c| float::appear_over("design_card", c, -6.0)))
+            .children(unsaved_card.map(|card| {
+                dialog(
+                    th,
+                    card,
+                    cx.listener(|this, _, _, cx| this.answer_close(CloseAnswer::Cancel, cx)),
+                )
+            }))
             .children(properties_card.map(|card| {
                 dialog(
                     th,
@@ -4422,7 +4817,14 @@ fn dialog(
         .items_center()
         .justify_center()
         .on_mouse_down(gpui::MouseButton::Left, close)
-        .child(card)
+        .child(float::appear("dialog-card", card, 8.0))
+        .with_animation(
+            "dialog-scrim",
+            gpui::Animation::new(katna_ui::motion::time(std::time::Duration::from_millis(
+                140,
+            ))),
+            |d, t| d.opacity(t),
+        )
         .into_any_element()
 }
 
@@ -4552,7 +4954,7 @@ pub(super) fn file_name(path: &Path) -> String {
 }
 
 /// Page `page` drawn at `scale` in `colors`, ready to show.
-fn draw(
+pub(super) fn draw(
     doc: &dyn Document,
     page: usize,
     scale: f32,

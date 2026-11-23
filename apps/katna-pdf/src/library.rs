@@ -30,6 +30,7 @@ use katna_ui::tokens::{radius, space, text};
 use katna_ui::widgets::{self, Tip};
 use katna_ui::{px, unpx};
 
+mod context;
 mod drive;
 mod mail;
 
@@ -59,6 +60,8 @@ const SIDE_WIDTH: f32 = 248.0;
 pub enum LibraryEvent {
     /// Open a file, at a page when given (from 0).
     Open(PathBuf, Option<usize>),
+    /// Open a file in a window of its own.
+    OpenWindow(PathBuf),
     /// Back to the documents.
     Close,
     /// Sign these files together, starting from the first.
@@ -166,6 +169,8 @@ pub struct LibraryView {
     mail: Option<mail::MailView>,
     /// Watches the folders; dropped and made again when they change.
     watcher: Option<notify::RecommendedWatcher>,
+    /// The right-click menu open, and where.
+    context: Option<(context::Clicked, gpui::Point<gpui::Pixels>)>,
     _inputs: [Subscription; 4],
     _folders: Subscription,
 }
@@ -274,6 +279,7 @@ impl LibraryView {
             mail_pdfs: Vec::new(),
             mail: None,
             watcher: None,
+            context: None,
             _inputs: [searching, tagging, adding, naming],
             _folders: cx.observe_global::<FoldersChanged>(|this, cx| {
                 this.reload(cx);
@@ -1109,6 +1115,7 @@ impl Render for LibraryView {
             .bg(th.page)
             .child(self.side(cx))
             .child(self.main(cx))
+            .children(self.context_menu(cx))
             .text_color(th.text)
     }
 }
@@ -1754,6 +1761,12 @@ impl LibraryView {
             .cursor_pointer()
             .when(selected, |d| d.bg(th.accent_soft))
             .when(!selected, |d| d.hover(move |s| s.bg(th.hover)))
+            .on_mouse_down(
+                gpui::MouseButton::Right,
+                cx.listener(move |this, e: &gpui::MouseDownEvent, _, cx| {
+                    this.show_context(context::Clicked::Doc(id), e.position, cx)
+                }),
+            )
             .on_click(
                 cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
                     // Away from the search, so Ctrl+A chooses every document.

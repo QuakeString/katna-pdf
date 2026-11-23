@@ -776,7 +776,7 @@ impl Viewer {
                         }
                     }
                     Err(error) => {
-                        this.notice = Some(t("text-edit-failed", &[("error", &error)]));
+                        this.notice = Some(super::said("text-edit-failed", &[("error", &error)]));
                     }
                 }
                 cx.notify();
@@ -841,7 +841,7 @@ impl Viewer {
         cx: &mut Context<Self>,
     ) {
         let Some(initial) = self.chosen_initial() else {
-            self.notice = Some(t("initials-none", &[]));
+            self.notice = Some(super::said("initials-none", &[]));
             cx.notify();
             return;
         };
@@ -853,7 +853,7 @@ impl Viewer {
             ),
             Ok(_) => {}
             Err(error) => {
-                self.notice = Some(t("text-edit-failed", &[("error", &error)]));
+                self.notice = Some(super::said("text-edit-failed", &[("error", &error)]));
                 cx.notify();
             }
         }
@@ -894,7 +894,7 @@ impl Viewer {
             match self.initials_items(&initial, page, None, at) {
                 Ok(items) => changes.push((page, items)),
                 Err(error) => {
-                    self.notice = Some(t("text-edit-failed", &[("error", &error)]));
+                    self.notice = Some(super::said("text-edit-failed", &[("error", &error)]));
                     cx.notify();
                     return;
                 }

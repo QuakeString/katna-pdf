@@ -145,6 +145,29 @@ impl Viewer {
                         ),
                     );
                 }
+                // Last, a way to the person's own.
+                grid = grid.child(
+                    div()
+                        .id("stamp-make-own")
+                        .w(px(124.0))
+                        .h(px(36.0))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded(px(4.0))
+                        .border_1()
+                        .border_dashed()
+                        .border_color(th.line)
+                        .text_size(px(text::CAPTION))
+                        .text_color(th.text2)
+                        .cursor_pointer()
+                        .hover(|s| s.bg(th.hover))
+                        .child(t("stamp-make-own", &[]))
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.stamp_tab = 2;
+                            cx.notify();
+                        })),
+                );
             }
             1 => {
                 let under = t("stamp-dated-under", &[]);
@@ -324,7 +347,9 @@ impl Viewer {
                             cx,
                         );
                     }
-                    Err(error) => this.notice = Some(t("attach-failed", &[("error", &error)])),
+                    Err(error) => {
+                        this.notice = Some(super::said("attach-failed", &[("error", &error)]))
+                    }
                 }
                 cx.notify();
             })
@@ -372,11 +397,11 @@ impl Viewer {
                 .await;
             this.update(cx, |this, cx| {
                 this.notice = Some(match written {
-                    Ok(target) => t(
+                    Ok(target) => super::said(
                         "comment-saved-file",
                         &[("name", &super::file_name(&target))],
                     ),
-                    Err(error) => t("comments-failed", &[("error", &error)]),
+                    Err(error) => super::said("comments-failed", &[("error", &error)]),
                 });
                 cx.notify();
             })

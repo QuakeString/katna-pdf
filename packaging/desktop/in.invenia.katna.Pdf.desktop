@@ -12,3 +12,8 @@ MimeType=application/pdf;
 Keywords=pdf;document;reader;viewer;drawing;
 StartupNotify=true
 StartupWMClass=in.invenia.katna.Pdf
+Actions=new-window;
+
+[Desktop Action new-window]
+Name=New Window
+Exec=katna-pdf --new-window

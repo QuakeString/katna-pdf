@@ -69,6 +69,9 @@ impl Tabs {
         } else {
             Some(which)
         };
+        if self.menu == Some(TopMenu::App) {
+            self.app_open = None;
+        }
         cx.notify();
     }
 
@@ -267,6 +270,94 @@ impl Tabs {
         bar.into_any_element()
     }
 
+    /// A tab's right-click menu: move it to a window of its own, its
+    /// file's place, and closing it or the others.
+    pub(crate) fn tab_menu(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let (i, at) = self.tab_menu?;
+        let tab = self.tabs.get(i)?;
+        let th = self.theme;
+        let path = tab.viewer.read(cx).path().map(std::path::Path::to_path_buf);
+        let many = self.tabs.len() > 1;
+        let right = i + 1 < self.tabs.len();
+        let item = |id: &'static str, glyph: Option<&'static str>, keys: Option<&'static str>| {
+            // Rows without an icon line up with those with one.
+            menu_item(id, glyph, t(id, &[]), keys.map(Into::into), &th)
+                .when(glyph.is_none(), |d| d.pl(px(36.0)))
+        };
+        let done = |this: &mut Self, cx: &mut Context<Self>| {
+            this.tab_menu = None;
+            cx.notify();
+        };
+        let mut list = menu("tab-menu", 240.0, &th)
+            .on_mouse_down_out(cx.listener(move |this, _, _, cx| done(this, cx)))
+            .child(
+                item("tab-new-window", Some("tabs"), None).on_click(cx.listener(
+                    move |this, _, window, cx| {
+                        done(this, cx);
+                        this.move_to_window(i, window, cx);
+                    },
+                )),
+            );
+        if let Some(path) = path {
+            let copy = path.clone();
+            list = list
+                .child(
+                    item("tab-copy-path", Some("copy"), None).on_click(cx.listener(
+                        move |this, _, _, cx| {
+                            done(this, cx);
+                            cx.write_to_clipboard(gpui::ClipboardItem::new_string(
+                                copy.display().to_string(),
+                            ));
+                        },
+                    )),
+                )
+                .child(
+                    item("tab-show-folder", Some("folder"), None).on_click(cx.listener(
+                        move |this, _, _, cx| {
+                            done(this, cx);
+                            cx.reveal_path(&path);
+                        },
+                    )),
+                );
+        }
+        list = list
+            .child(menu_sep(&th))
+            .child(
+                item("tab-close", Some("x"), Some("Ctrl W")).on_click(cx.listener(
+                    move |this, _, window, cx| {
+                        done(this, cx);
+                        this.close(i, window, cx);
+                    },
+                )),
+            )
+            .when(many, |d| {
+                d.child(item("tab-close-others", None, None).on_click(cx.listener(
+                    move |this, _, window, cx| {
+                        done(this, cx);
+                        this.close_others(i, window, cx);
+                    },
+                )))
+            })
+            .when(right, |d| {
+                d.child(item("tab-close-right", None, None).on_click(cx.listener(
+                    move |this, _, window, cx| {
+                        done(this, cx);
+                        this.close_right(i, window, cx);
+                    },
+                )))
+            });
+        Some(
+            gpui::deferred(
+                katna_ui::anchored()
+                    .position(at)
+                    .snap_to_window()
+                    .child(float::appear("tab-menu-in", list, -4.0)),
+            )
+            .with_priority(3)
+            .into_any_element(),
+        )
+    }
+
     /// The tabs, in the title bar, when two files or more are open.
     fn title_tabs(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let th = self.theme;
@@ -276,6 +367,10 @@ impl Tabs {
             .min_w_0()
             .flex()
             .gap(px(space::S2))
+            // Room for the chosen tab's shadow, which the scrolling
+            // strip would cut off.
+            .py(px(6.0))
+            .px(px(3.0))
             .overflow_x_scroll()
             .children(self.tabs.iter().enumerate().map(|(i, tab)| {
                 let on = i == self.active;
@@ -309,6 +404,15 @@ impl Tabs {
                     .on_mouse_down(
                         MouseButton::Middle,
                         cx.listener(move |this, _, window, cx| this.close(i, window, cx)),
+                    )
+                    .on_mouse_down(
+                        MouseButton::Right,
+                        cx.listener(move |this, e: &gpui::MouseDownEvent, _, cx| {
+                            cx.stop_propagation();
+                            this.menu = None;
+                            this.tab_menu = Some((i, e.position));
+                            cx.notify();
+                        }),
                     )
                     .child(div().min_w_0().truncate().child(title))
                     .when(dirty, |d| {
@@ -392,29 +496,31 @@ impl Tabs {
         )
     }
 
-    /// The application menu: File, Edit, View, Go, each opening beside
-    /// it (S09).
+    /// The application menu: File, Edit, View, Go under the button; the
+    /// one pointed at opens its items beside it, on the left, as the
+    /// menu sits at the window's right edge (S09).
     fn app_menu(&self, cx: &mut Context<Self>) -> AnyElement {
         let th = self.theme;
         let open = self.app_open;
+        let open_at = open.unwrap_or(usize::MAX);
         let titles = MENUS.iter().enumerate().map(|(i, (title, _))| {
             menu_item(("app-menu", i), None, plain(&t(title, &[])), None, &th)
-                .when(i == open, |d| {
+                .when(i == open_at, |d| {
                     d.bg(th.accent_soft).text_color(th.accent_text)
                 })
                 .child(float::icon("chevr", 13.0, th.dim))
                 .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
-                    if *hovered && this.app_open != i {
-                        this.app_open = i;
+                    if *hovered && this.app_open != Some(i) {
+                        this.app_open = Some(i);
                         cx.notify();
                     }
                 }))
                 .on_click(cx.listener(move |this, _, _, cx| {
-                    this.app_open = i;
+                    this.app_open = Some(i);
                     cx.notify();
                 }))
         });
-        let (_, entries) = MENUS[open.min(MENUS.len() - 1)];
+        let entries = open.and_then(|o| MENUS.get(o)).map_or(&[][..], |(_, e)| *e);
         let items = entries.iter().enumerate().map(|(i, entry)| match entry {
             None => menu_sep(&th).into_any_element(),
             Some((id, keys)) => {
@@ -443,8 +549,13 @@ impl Tabs {
                 .items_start()
                 .gap(px(space::S2))
                 .on_mouse_down_out(cx.listener(|this, _, _, cx| this.close_menu(cx)))
-                .child(menu("app-menu-titles", 190.0, &th).children(titles))
-                .child(menu("app-menu-items", 290.0, &th).children(items)),
+                .children(open.map(|o| {
+                    // Level with the title it belongs to.
+                    menu("app-menu-items", 290.0, &th)
+                        .mt(px(o as f32 * 32.0))
+                        .children(items)
+                }))
+                .child(menu("app-menu-titles", 190.0, &th).children(titles)),
             false,
             true,
         )

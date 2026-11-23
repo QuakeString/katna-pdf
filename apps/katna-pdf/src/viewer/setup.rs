@@ -45,6 +45,14 @@ pub(super) struct PageSetup {
     margins: [Entity<TextInput>; 4],
     /// Pages a file split off holds.
     every: Entity<TextInput>,
+    /// What is added: 0 blank pages, 1 a PDF's pages, 2 pictures.
+    source: usize,
+    /// All of [`PRESETS`] shown, not only the usual few.
+    other: bool,
+    /// Added before the page named, not after it.
+    before: bool,
+    /// The page added before or after: a number, first or last.
+    at: Entity<TextInput>,
     _inputs: Vec<Subscription>,
 }
 
@@ -73,6 +81,8 @@ impl Viewer {
         let count = input("1", cx);
         let margins = [0, 1, 2, 3].map(|_| input("0", cx));
         let every = input("1", cx);
+        let after = organize::insert_at(self.page_count(), &self.picked);
+        let at = input(&after.max(1).to_string(), cx);
         let mut inputs = Vec::new();
         inputs.push(cx.subscribe(&count, |this, _, event, cx| {
             if let InputEvent::Submit = event {
@@ -88,8 +98,17 @@ impl Viewer {
         }
         // The page shown's size is the first choice, as it is what most
         // files add pages in.
+        inputs.push(cx.subscribe(&at, |this, _, event, cx| {
+            if let InputEvent::Submit = event {
+                this.add_pages(cx);
+            }
+        }));
         let (w, h) = self.page_size_unrotated(self.current_page());
         self.setup = Some(PageSetup {
+            source: 0,
+            other: false,
+            before: false,
+            at,
             tab: 0,
             preset: PRESETS.len(),
             landscape: w > h,
@@ -156,8 +175,33 @@ impl Viewer {
         }
     }
 
-    /// Adds blank pages of the chosen size after the pages picked, or at
-    /// the end.
+    /// Where pages added go: before or after the page the card names,
+    /// or, with the card closed, after the pages picked or at the end.
+    pub(super) fn insert_point(&self, cx: &gpui::App) -> usize {
+        let count = self.page_count();
+        let Some(setup) = self.setup.as_ref() else {
+            return organize::insert_at(count, &self.picked);
+        };
+        let typed = setup.at.read(cx).text().trim().to_ascii_lowercase();
+        let page = match typed.as_str() {
+            "first" => 1,
+            "last" | "" => count,
+            n => n.parse::<usize>().unwrap_or(count).clamp(1, count.max(1)),
+        };
+        if setup.before { page - 1 } else { page }.min(count)
+    }
+
+    /// Adds what the Add tab says.
+    fn add_pages(&mut self, cx: &mut Context<Self>) {
+        match self.setup.as_ref().map(|s| s.source) {
+            Some(0) => self.add_blank_pages(cx),
+            Some(1) => self.choose_insert(cx),
+            Some(_) => self.choose_pictures(cx),
+            None => {}
+        }
+    }
+
+    /// Adds blank pages of the chosen size where the card says.
     fn add_blank_pages(&mut self, cx: &mut Context<Self>) {
         let Some(setup) = self.setup.as_ref() else {
             return;
@@ -171,7 +215,7 @@ impl Viewer {
             .unwrap_or(0)
             .clamp(1, 500);
         let size = self.setup_size();
-        let at = organize::insert_at(self.page_count(), &self.picked);
+        let at = self.insert_point(cx);
         self.change_pages(
             Pages::Insert {
                 from: PagesFrom::Blank(vec![size; count]),
@@ -198,7 +242,7 @@ impl Viewer {
                 && !paths.is_empty()
             {
                 this.update(cx, |this, cx| {
-                    let at = organize::insert_at(this.page_count(), &this.picked);
+                    let at = this.insert_point(cx);
                     let n = paths.len();
                     this.change_pages(
                         Pages::Insert {
@@ -295,7 +339,7 @@ impl Viewer {
             .map(|m| length(m.read(cx).text()).filter(|v| *v >= 0.0))
             .collect();
         let Some(&[top, right, bottom, left]) = typed.as_deref() else {
-            self.notice = Some(t("pages-card-bad-margins", &[]));
+            self.notice = Some(super::said("pages-card-bad-margins", &[]));
             cx.notify();
             return;
         };
@@ -376,14 +420,14 @@ impl Viewer {
                 .await;
             this.update(cx, |this, cx| {
                 this.notice = Some(match written {
-                    Ok((files, folder)) => t(
+                    Ok((files, folder)) => super::said(
                         "pages-card-split-done",
                         &[
                             ("count", &files.to_string()),
                             ("folder", &file_name(&folder)),
                         ],
                     ),
-                    Err(error) => t("pages-failed", &[("error", &error)]),
+                    Err(error) => super::said("pages-failed", &[("error", &error)]),
                 });
                 cx.notify();
             })
@@ -540,50 +584,146 @@ impl Viewer {
         });
         let row = || div().flex().flex_wrap().items_center().gap(px(space::S2));
         let (body, actions): (gpui::Div, gpui::Div) = match tab {
-            0 => (
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(space::S3))
-                    .child(
-                        row()
-                            .child(label("pages-card-how-many"))
-                            .child(field(&setup.count, 64.0)),
+            0 => {
+                let mut sources = float::seg(&th);
+                for (i, id) in [
+                    "pages-card-source-blank",
+                    "pages-card-source-file",
+                    "pages-card-source-pictures",
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    sources = sources.child(
+                        float::seg_item(
+                            ("pages-card-source", i),
+                            None,
+                            Some(t(id, &[]).into()),
+                            setup.source == i,
+                            &th,
+                        )
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            if let Some(s) = this.setup.as_mut() {
+                                s.source = i;
+                            }
+                            cx.notify();
+                        })),
+                    );
+                }
+                let shown = (self.current_page() + 1).to_string();
+                let mut quick = float::seg(&th);
+                let usual = [
+                    (PRESETS.len(), t("pages-card-like", &[("page", &shown)])),
+                    (0, "A4".to_owned()),
+                    (3, "Letter".to_owned()),
+                ];
+                for (i, (preset, words)) in usual.into_iter().enumerate() {
+                    let on = !setup.other && setup.preset == preset;
+                    quick = quick.child(
+                        float::seg_item(("pages-card-quick", i), None, Some(words.into()), on, &th)
+                            .flex_none()
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                if let Some(s) = this.setup.as_mut() {
+                                    s.preset = preset;
+                                    s.other = false;
+                                }
+                                cx.notify();
+                            })),
+                    );
+                }
+                let usual_on = [PRESETS.len(), 0, 3].contains(&setup.preset);
+                quick = quick.child(
+                    float::seg_item(
+                        "pages-card-other",
+                        None,
+                        Some(t("pages-card-other", &[]).into()),
+                        setup.other || !usual_on,
+                        &th,
                     )
-                    .child(size_section)
+                    .flex_none()
+                    .on_click(set(|s| s.other = true)),
+                );
+                let column = |id: &str, el: gpui::AnyElement| {
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(space::S1))
+                        .child(label(id))
+                        .child(el)
+                };
+                let before = setup.before;
+                let place = |on_before: bool, id: &'static str| {
+                    div()
+                        .id(id)
+                        .flex()
+                        .items_center()
+                        .gap(px(space::S2))
+                        .cursor_pointer()
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            if let Some(s) = this.setup.as_mut() {
+                                s.before = on_before;
+                            }
+                            cx.notify();
+                        }))
+                        .child(float::radio(before == on_before, &th))
+                        .child(
+                            div()
+                                .text_size(px(text::BODY))
+                                .text_color(th.text)
+                                .child(t(id, &[])),
+                        )
+                };
+                let where_row = row()
+                    .gap(px(space::S4))
+                    .child(place(true, "pages-card-before"))
+                    .child(place(false, "pages-card-after"))
+                    .child(field(&setup.at, 72.0))
                     .child(
+                        div()
+                            .text_size(px(text::CAPTION))
+                            .text_color(th.dim)
+                            .child(t("pages-card-at-hint", &[])),
+                    );
+                let mut body = div().flex().flex_col().gap(px(space::S3)).child(sources);
+                if setup.source == 0 {
+                    body = body.child(
                         row()
-                            .pt(px(space::S2))
-                            .child(label("pages-card-or"))
-                            .child(
-                                act(
-                                    "pages-card-add-pictures",
-                                    t("pages-card-add-pictures", &[]),
-                                    false,
-                                    !busy,
-                                )
-                                .on_click(cx.listener(|this, _, _, cx| this.choose_pictures(cx))),
-                            )
-                            .child(
-                                act(
-                                    "pages-card-add-file",
-                                    t("pages-card-add-file", &[]),
-                                    false,
-                                    !busy,
-                                )
-                                .on_click(cx.listener(|this, _, _, cx| this.choose_insert(cx))),
-                            ),
+                            .items_start()
+                            .gap(px(space::S4))
+                            .child(column(
+                                "pages-card-how-many",
+                                field(&setup.count, 64.0).into_any_element(),
+                            ))
+                            .child(column("pages-card-size-heading", quick.into_any_element())),
+                    );
+                    if setup.other || !usual_on {
+                        body = body.child(size_section);
+                    }
+                }
+                body = body.child(column("pages-card-where", where_row.into_any_element()));
+                let count = setup
+                    .count
+                    .read(cx)
+                    .text()
+                    .trim()
+                    .parse::<usize>()
+                    .unwrap_or(1)
+                    .clamp(1, 500)
+                    .to_string();
+                let go = match setup.source {
+                    0 if count == "1" => t("pages-card-add-one", &[]),
+                    0 => t("pages-card-add-n", &[("count", &count)]),
+                    1 => t("pages-card-add-file", &[]),
+                    _ => t("pages-card-add-pictures", &[]),
+                };
+                (
+                    body,
+                    row().child(
+                        act("pages-card-add", go, true, !busy)
+                            .on_click(cx.listener(|this, _, _, cx| this.add_pages(cx))),
                     ),
-                row().child(
-                    act(
-                        "pages-card-add-blank",
-                        t("pages-card-add-blank", &[]),
-                        true,
-                        !busy,
-                    )
-                    .on_click(cx.listener(|this, _, _, cx| this.add_blank_pages(cx))),
-                ),
-            ),
+                )
+            }
             1 => (
                 div().child(label("pages-card-replace-detail")),
                 row().child(
@@ -691,7 +831,7 @@ impl Viewer {
                                 .child(t("pages-card-title", &[])),
                         )
                         .child(div().flex().flex_wrap().gap(px(space::S1)).children(tabs))
-                        .child(label("pages-card-hint"))
+                        .when(tab > 0, |d| d.child(label("pages-card-hint")))
                         .child(body),
                 )
                 .child(

@@ -18,16 +18,15 @@
 //! down. The changes go into the page's content
 //! (`katna_pdf_cos::objects`).
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use gpui::{AnyElement, Context, Entity, Focusable, Subscription, Window, div, prelude::*};
+use gpui::{AnyElement, App, Context, Entity, Focusable, Subscription, Window, div, prelude::*};
 use katna_pdf_cos::{ObjectChange, ObjectCopy, ObjectKind, PageObject, PictureFile, ShapeStyle};
 use katna_ui::px;
 use katna_ui::scale::desktop_px;
 use katna_ui::text_input::{InputEvent, TextInput};
-use katna_ui::tokens::{radius, space, text};
-use katna_ui::widgets;
+use katna_ui::tokens::{space, text};
 
 use super::Viewer;
 use crate::float::{self, FloatTip};
@@ -59,6 +58,8 @@ const COPIED_MARK: &str = "katna-pdf: objects copied";
 
 /// Objects copied, for any open file to paste.
 static COPIED: Mutex<Vec<ObjectCopy>> = Mutex::new(Vec::new());
+/// The file and page the objects copied came from.
+static COPIED_FROM: Mutex<Option<(PathBuf, usize)>> = Mutex::new(None);
 
 /// The objects picked: their page and places in the page's list (the
 /// last picked last), and the inspector's fields (left, top, width,
@@ -77,6 +78,10 @@ pub(super) struct Picked {
 /// The card asking which pages the copied objects go on.
 pub(super) struct PastingMany {
     pages: Entity<TextInput>,
+    /// The pages typed, not all of them.
+    these: bool,
+    /// The page the objects were copied from is left out.
+    skip: bool,
     _sub: Subscription,
 }
 
@@ -459,6 +464,9 @@ impl Viewer {
     /// Picks objects `indices` of page `page`, their numbers in the
     /// inspector.
     fn pick_object(&mut self, page: usize, indices: Vec<usize>, cx: &mut Context<Self>) {
+        // One thing is edited at a time: a paragraph being typed in is
+        // written first.
+        self.finish_text_edit(true, cx);
         let accent = gpui::rgba(self.theme.katna.accent).into();
         let fields = [0, 1, 2, 3, 4, 5].map(|_| {
             cx.new(|cx| {
@@ -1109,7 +1117,7 @@ impl Viewer {
                 Ok(read) => read,
                 Err(error) => {
                     this.update(cx, |this, cx| {
-                        this.notice = Some(t("object-save-failed", &[("error", &error)]));
+                        this.notice = Some(super::said("object-save-failed", &[("error", &error)]));
                         cx.notify();
                     })
                     .ok();
@@ -1133,11 +1141,11 @@ impl Viewer {
                 .await;
             this.update(cx, |this, cx| {
                 this.notice = Some(match written {
-                    Ok(target) => t(
+                    Ok(target) => super::said(
                         "object-saved-picture",
                         &[("name", &super::file_name(&target))],
                     ),
-                    Err(error) => t("object-save-failed", &[("error", &error)]),
+                    Err(error) => super::said("object-save-failed", &[("error", &error)]),
                 });
                 cx.notify();
             })
@@ -1232,10 +1240,11 @@ impl Viewer {
             let Some(copies) = copies else {
                 return;
             };
-            this.update(cx, |_, cx| {
+            this.update(cx, |this, cx| {
                 if let Ok(mut copied) = COPIED.lock() {
                     *copied = copies;
                 }
+                copied_from(this.path.clone(), page);
                 cx.write_to_clipboard(gpui::ClipboardItem::new_string(COPIED_MARK.into()));
             })
             .ok();
@@ -1271,8 +1280,9 @@ impl Viewer {
                 if let Ok(mut copied) = COPIED.lock() {
                     *copied = vec![copy];
                 }
+                copied_from(this.path.clone(), page);
                 cx.write_to_clipboard(gpui::ClipboardItem::new_string(COPIED_MARK.into()));
-                this.notice = Some(t("text-copied", &[]));
+                this.notice = Some(super::said("text-copied", &[]));
                 cx.notify();
             })
             .ok();
@@ -1380,94 +1390,160 @@ impl Viewer {
                 window.focus(&this.focus, cx);
                 cx.notify();
             }
-            _ => {}
+            InputEvent::Changed => {
+                if let Some(p) = this.pasting_many.as_mut() {
+                    p.these = true;
+                }
+                cx.notify();
+            }
         });
         let handle = pages.focus_handle(cx);
         window.focus(&handle, cx);
         cx.defer_in(window, move |_, window, cx| window.focus(&handle, cx));
-        self.pasting_many = Some(PastingMany { pages, _sub: sub });
+        self.pasting_many = Some(PastingMany {
+            pages,
+            these: false,
+            skip: false,
+            _sub: sub,
+        });
         cx.notify();
         true
     }
 
-    /// The card asking which pages the copied objects go on.
-    pub(super) fn paste_many_card(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+    /// The page in this file the objects copied came from, if they did.
+    fn copied_here(&self) -> Option<usize> {
+        let from = COPIED_FROM.lock().ok()?.clone()?;
+        (Some(&from.0) == self.path.as_ref()).then_some(from.1)
+    }
+
+    /// The pages the card names, or why they can't be read.
+    fn paste_pages(&self, pasting: &PastingMany, cx: &App) -> Result<Vec<usize>, String> {
+        let count = self.page_count();
+        let spec = pasting.pages.read(cx).text().trim().to_owned();
+        let mut pages: Vec<usize> = if !pasting.these || spec.is_empty() {
+            (0..count).collect()
+        } else {
+            katna_pdf_cos::ranges::parse(&spec, count).map_err(|e| e.to_string())?
+        };
+        if pasting.skip
+            && let Some(from) = self.copied_here()
+        {
+            pages.retain(|p| *p != from);
+        }
+        Ok(pages)
+    }
+
+    /// The dialog asking which pages the copied objects go on (E15).
+    pub(super) fn paste_many_card(
+        &self,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
         let pasting = self.pasting_many.as_ref()?;
         let th = self.theme;
-        let count = COPIED.lock().map_or(0, |c| c.len());
-        Some(
+        let count = self.page_count();
+        let chosen = self.paste_pages(pasting, cx).map(|p| p.len()).ok();
+        let choice = |these: bool, words: String| {
             div()
-                .id("paste-many-card")
-                .absolute()
-                .top(px(space::S3))
-                .right(px(space::S5))
-                .w(px(320.0))
-                .p(px(space::S4))
+                .id(("paste-many-which", these as usize))
+                .h(px(30.0))
                 .flex()
-                .flex_col()
+                .items_center()
                 .gap(px(space::S2))
-                .rounded(px(10.0))
-                .bg(th.card)
-                .shadow(th.lifted())
-                .when(th.dark, |d| d.border_1().border_color(th.line))
-                .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .cursor_pointer()
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if let Some(p) = this.pasting_many.as_mut() {
+                        p.these = these;
+                    }
+                    cx.notify();
+                }))
+                .child(float::radio(pasting.these == these, &th))
                 .child(
                     div()
                         .text_size(px(text::BODY))
-                        .font_weight(gpui::FontWeight::SEMIBOLD)
                         .text_color(th.text)
-                        .child(t("paste-many-title", &[("count", &count.to_string())])),
+                        .child(words),
                 )
-                .child(
+        };
+        let from = self.copied_here();
+        let body = div()
+            .flex()
+            .flex_col()
+            .gap(px(space::S1))
+            .child(
+                div()
+                    .pb(px(space::S1))
+                    .text_size(px(text::SMALL))
+                    .text_color(th.text2)
+                    .child(t("paste-many-hint", &[])),
+            )
+            .child(choice(
+                false,
+                t("paste-many-all", &[("count", &count.to_string())]),
+            ))
+            .child(choice(true, t("paste-many-these", &[])))
+            .child(
+                div()
+                    .pl(px(24.0))
+                    .child(float::input_box(&pasting.pages, window, cx, &th)),
+            )
+            .when_some(from, |d, from| {
+                let skip = pasting.skip;
+                d.child(
                     div()
-                        .text_size(px(text::SMALL))
-                        .text_color(th.dim)
-                        .child(t("paste-many-hint", &[])),
-                )
-                .child(
-                    div()
-                        .h(px(36.0))
+                        .id("paste-many-skip")
+                        .pt(px(space::S2))
                         .flex()
                         .items_center()
-                        .px(px(space::S3))
-                        .rounded(px(radius::SM))
-                        .bg(th.field)
-                        .text_size(px(text::BODY))
-                        .text_color(th.text)
-                        .child(pasting.pages.clone()),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .justify_end()
                         .gap(px(space::S2))
+                        .cursor_pointer()
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            if let Some(p) = this.pasting_many.as_mut() {
+                                p.skip = !p.skip;
+                            }
+                            cx.notify();
+                        }))
+                        .child(super::sign::check_box(skip, th))
                         .child(
-                            widgets::outlined_button(
-                                "paste-many-cancel",
-                                t("paste-many-cancel", &[]),
-                                &th.katna,
-                            )
-                            .on_click(cx.listener(
-                                |this, _, window, cx| {
-                                    this.toggle_paste_many(window, cx);
-                                },
-                            )),
-                        )
-                        .child(
-                            widgets::filled_button(
-                                "paste-many-go",
-                                t("paste-many-go", &[]),
-                                &th.katna,
-                            )
-                            .on_click(cx.listener(
-                                |this, _, window, cx| {
-                                    window.focus(&this.focus, cx);
-                                    this.paste_to_pages(cx);
-                                },
-                            )),
+                            div()
+                                .text_size(px(text::BODY))
+                                .text_color(th.text)
+                                .child(t("paste-many-skip", &[("page", &self.page_label(from))])),
                         ),
                 )
-                .into_any_element(),
+            });
+        let go = match chosen {
+            Some(n) if n > 0 => t("paste-many-go-n", &[("count", &n.to_string())]),
+            _ => t("paste-many-go", &[]),
+        };
+        let foot = div()
+            .flex()
+            .gap(px(space::S2))
+            .child(
+                float::button("paste-many-cancel", t("paste-many-cancel", &[]), false, &th)
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.toggle_paste_many(window, cx);
+                    })),
+            )
+            .child(
+                float::button("paste-many-go", go, true, &th)
+                    .when(!chosen.is_some_and(|n| n > 0), |b| b.opacity(0.5))
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        window.focus(&this.focus, cx);
+                        this.paste_to_pages(cx);
+                    })),
+            );
+        Some(
+            float::dialog_card(
+                "paste-many-card",
+                t("paste-many-title", &[]),
+                Some("Ctrl Alt V"),
+                380.0,
+                body,
+                foot,
+                &th,
+            )
+            .into_any_element(),
         )
     }
 
@@ -1482,18 +1558,12 @@ impl Viewer {
             Ok(copied) if !copied.is_empty() => copied.clone(),
             _ => return,
         };
-        let count = self.page_count();
-        let spec = pasting.pages.read(cx).text().trim().to_owned();
-        let pages: Vec<usize> = if spec.is_empty() {
-            (0..count).collect()
-        } else {
-            match katna_pdf_cos::ranges::parse(&spec, count) {
-                Ok(pages) => pages,
-                Err(error) => {
-                    self.notice = Some(t("paste-many-failed", &[("error", &error.to_string())]));
-                    cx.notify();
-                    return;
-                }
+        let pages = match self.paste_pages(&pasting, cx) {
+            Ok(pages) => pages,
+            Err(error) => {
+                self.notice = Some(super::said("paste-many-failed", &[("error", &error)]));
+                cx.notify();
+                return;
             }
         };
         if pages.is_empty() {
@@ -1526,7 +1596,7 @@ impl Viewer {
             },
             cx,
         );
-        self.notice = Some(t(
+        self.notice = Some(super::said(
             "paste-many-done",
             &[
                 ("count", &copied.to_string()),
@@ -1539,6 +1609,9 @@ impl Viewer {
     /// `page`, where they are being dragged to while they are; the band
     /// being dragged over the page; and the grid when shown.
     pub(super) fn objects_overlay(&self, page: usize, cx: &Context<Self>) -> Vec<AnyElement> {
+        if self.cropping {
+            return Vec::new();
+        }
         let shown = self.shown;
         // The frame and handles take the press themselves, so a
         // paragraph's box under them does not.
@@ -2403,6 +2476,13 @@ fn snap(
             }
             ([l, t, r, bo], [x.map(|x| x.1), y.map(|y| y.1)])
         }
+    }
+}
+
+/// Notes where the objects just copied came from.
+fn copied_from(path: Option<PathBuf>, page: usize) {
+    if let Ok(mut from) = COPIED_FROM.lock() {
+        *from = path.map(|p| (p, page));
     }
 }
 

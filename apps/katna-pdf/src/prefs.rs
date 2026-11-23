@@ -58,6 +58,9 @@ pub struct Prefs {
     pub layout: Spread,
     /// Open the last session's files when the app starts with none.
     pub reopen_session: bool,
+    /// Files opened from outside (a file manager, a second launch) get
+    /// a window of their own rather than a tab.
+    pub new_window: bool,
     /// Draw pages in worker processes (from the next start).
     pub workers: bool,
     pub units: Units,
@@ -97,6 +100,7 @@ impl Default for Prefs {
             zoom: StartZoom::default(),
             layout: Spread::default(),
             reopen_session: false,
+            new_window: false,
             workers: true,
             units: Units::default(),
             grid: false,
@@ -151,6 +155,7 @@ impl Prefs {
                     }
                 }
                 "reopen-session" => prefs.reopen_session = on,
+                "new-window" => prefs.new_window = on,
                 "workers" => prefs.workers = value != "off",
                 "units" => {
                     prefs.units = match value {
@@ -205,9 +210,10 @@ impl Prefs {
             .find(|(c, _)| *c == self.night_pages)
             .map_or("night", |(_, w)| w);
         format!(
-            "open-at={}\nzoom={zoom}\nlayout={layout}\nreopen-session={}\nworkers={}\nunits={}\ngrid={}\nread-speed={}\nnight-pages={night}\nsize={}\ndock-labels={}\nform-scripts={}\nrecovery={}\n",
+            "open-at={}\nzoom={zoom}\nlayout={layout}\nreopen-session={}\nnew-window={}\nworkers={}\nunits={}\ngrid={}\nread-speed={}\nnight-pages={night}\nsize={}\ndock-labels={}\nform-scripts={}\nrecovery={}\n",
             if self.open_at_last { "last" } else { "first" },
             on(self.reopen_session),
+            on(self.new_window),
             on(self.workers),
             self.units.suffix(),
             on(self.grid),
@@ -255,6 +261,7 @@ mod tests {
             zoom: StartZoom::FitPage,
             layout: Spread::Book,
             reopen_session: true,
+            new_window: true,
             workers: false,
             units: Units::Millimetres,
             grid: true,

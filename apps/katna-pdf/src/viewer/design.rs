@@ -1243,6 +1243,8 @@ impl Viewer {
         let th = self.theme;
         let label = |id: &str| {
             div()
+                .flex_none()
+                .pt(px(space::S1))
                 .text_size(px(text::SMALL))
                 .text_color(th.dim)
                 .child(t(id, &[]))
@@ -1251,6 +1253,7 @@ impl Viewer {
             |id: (&'static str, usize), on: bool, label: String| float::chip(id, label, on, &th);
         let input = |entity: Entity<TextInput>| {
             div()
+                .flex_none()
                 .h(px(32.0))
                 .flex()
                 .items_center()
@@ -1265,6 +1268,7 @@ impl Viewer {
         };
         let toggle = |i: usize, on: bool, id: &str| {
             div()
+                .flex_none()
                 .min_h(px(32.0))
                 .flex()
                 .items_center()
@@ -1287,7 +1291,7 @@ impl Viewer {
             .absolute()
             .top(px(space::S2))
             .right(px(float::GAP))
-            .w(px(300.0))
+            .w(px(290.0))
             .max_h(px(room))
             .overflow_y_scroll()
             .p(px(space::S4))
@@ -1336,13 +1340,13 @@ impl Viewer {
                         .child(float::icon(KIND_GLYPHS[kind], 18.0, th.accent))
                         .child(
                             div()
-                                .text_size(px(text::BODY))
-                                .font_weight(gpui::FontWeight::BOLD)
+                                .text_size(px(text::SUBTITLE))
+                                .font_weight(gpui::FontWeight::SEMIBOLD)
                                 .text_color(th.text)
                                 .child(t(KINDS[kind].0, &[])),
                         ),
                 )
-                .child(div().flex().gap(px(space::S1)).children(tabs));
+                .child(div().flex_none().flex().gap(px(space::S1)).children(tabs));
             if tab == 0 {
                 card = card
                     .child(label("form-name"))
@@ -1372,16 +1376,44 @@ impl Viewer {
                     card = card
                         .child(toggle(2, multiline, "form-multiline"))
                         .child(toggle(3, password, "form-password"))
-                        .child(toggle(4, comb, "form-comb"))
-                        .child(label("form-max-len"))
-                        .child(input(designing.max_len.clone()));
+                        .child(
+                            div()
+                                .flex_none()
+                                .flex()
+                                .items_center()
+                                .gap(px(space::S2))
+                                .child(
+                                    div()
+                                        .text_size(px(text::SMALL))
+                                        .text_color(th.text)
+                                        .child(t("form-max-len", &[])),
+                                )
+                                .child(input(designing.max_len.clone()).w(px(64.0)))
+                                .child(div().flex_1())
+                                .child(
+                                    div()
+                                        .text_size(px(text::SMALL))
+                                        .text_color(th.text)
+                                        .child(t("form-comb", &[])),
+                                )
+                                .child(float::switch(("form-flag", 4usize), comb, &th).on_click(
+                                    cx.listener(move |this, _, _, cx| this.toggle_flag(4, cx)),
+                                )),
+                        );
                     let scripts = designing.scripts.get(&field.id);
                     let now = scripts.and_then(|s| s.format.as_ref());
-                    let mut shown = div().flex().flex_wrap().gap(px(space::S1));
+                    let mut shown = float::seg(&th).flex_none();
                     for (i, id) in SHOWN.iter().enumerate() {
                         shown = shown.child(
-                            chip(("form-shown", i), shown_index(now) == Some(i), t(id, &[]))
-                                .on_click(cx.listener(move |this, _, _, cx| this.set_shown(i, cx))),
+                            float::seg_item(
+                                ("form-shown", i),
+                                None,
+                                Some(t(id, &[]).into()),
+                                shown_index(now) == Some(i),
+                                &th,
+                            )
+                            .px(px(6.0))
+                            .on_click(cx.listener(move |this, _, _, cx| this.set_shown(i, cx))),
                         );
                     }
                     card = card.child(label("form-shown")).child(shown);
@@ -1397,15 +1429,32 @@ impl Viewer {
             }
             if tab == 2 {
                 let (now, _) = action_index(designing.actions.get(&field.id));
-                let mut actions = div().flex().flex_wrap().gap(px(space::S1));
+                let hover = th.hover;
+                let mut actions = div().flex_none().flex().flex_col();
                 for (i, id) in ACTIONS.iter().enumerate() {
                     actions = actions.child(
-                        float::chip(("form-action", i), t(id, &[]), now == i, &th)
+                        div()
+                            .id(("form-action", i))
+                            .h(px(28.0))
+                            .flex()
+                            .items_center()
+                            .gap(px(space::S2))
+                            .px(px(space::S1))
+                            .rounded(px(radius::SM))
+                            .cursor_pointer()
+                            .hover(move |s| s.bg(hover))
+                            .child(float::radio(now == i, &th))
+                            .child(
+                                div()
+                                    .text_size(px(text::SMALL))
+                                    .text_color(th.text)
+                                    .child(t(id, &[])),
+                            )
                             .on_click(cx.listener(move |this, _, _, cx| this.set_action(i, cx))),
                     );
                 }
                 card = card.child(actions);
-                if (1..=6).contains(&now) {
+                if matches!(now, 1 | 2 | 4 | 5 | 6) {
                     card = card.child(input(designing.action_arg.clone()));
                 }
             }
@@ -1526,25 +1575,55 @@ impl Viewer {
                     card = card.child(label("form-text")).child(texts);
                 }
             }
-            card = card.child(
-                div()
-                    .pt(px(space::S1))
-                    .flex()
-                    .flex_wrap()
-                    .gap(px(space::S2))
-                    .child(
-                        float::button("form-every-page", t("form-every-page", &[]), false, &th)
-                            .on_click(cx.listener(|this, _, _, cx| this.copy_to_every_page(cx))),
-                    )
-                    .child(
-                        float::button("form-delete", t("form-delete", &[]), false, &th)
+            let small = |id: &'static str, primary: bool| {
+                float::button(id, t(id, &[]), primary, &th)
+                    .h(px(30.0))
+                    .px(px(space::S3))
+            };
+            card = card
+                .child(
+                    div()
+                        .flex_none()
+                        .pt(px(space::S2))
+                        .flex()
+                        .flex_wrap()
+                        .items_center()
+                        .gap(px(space::S2))
+                        .child(
+                            small("form-every-page", false).on_click(
+                                cx.listener(|this, _, _, cx| this.copy_to_every_page(cx)),
+                            ),
+                        )
+                        .when(order.is_some(), |d| {
+                            d.child(small("form-tab-order-button", false).on_click(cx.listener(
+                                |this, _, _, cx| {
+                                    if let Some(d) = this.designing.as_mut() {
+                                        d.chosen = None;
+                                    }
+                                    cx.notify();
+                                },
+                            )))
+                        })
+                        .child(div().flex_1())
+                        .child(
+                            float::sized_ib(
+                                "form-delete",
+                                "trash",
+                                30.0,
+                                16.0,
+                                t("form-delete", &[]),
+                                false,
+                                &th,
+                            )
                             .on_click(cx.listener(|this, _, _, cx| this.remove_field(cx))),
-                    )
-                    .child(
-                        float::button("form-save", t("form-save", &[]), true, &th)
-                            .on_click(cx.listener(|this, _, _, cx| this.apply_field_edit(cx))),
-                    ),
-            );
+                        ),
+                )
+                .child(
+                    small("form-save", true)
+                        .flex_none()
+                        .w_full()
+                        .on_click(cx.listener(|this, _, _, cx| this.apply_field_edit(cx))),
+                );
         }
         // The Tab order of the page shown, while no field is chosen.
         let names: HashMap<Ref, &str> = designing
@@ -1758,8 +1837,10 @@ impl Viewer {
                 .await;
             this.update(cx, |this, cx| {
                 this.notice = Some(match written {
-                    Ok(target) => t("form-exported", &[("name", &super::file_name(&target))]),
-                    Err(error) => t("form-design-failed", &[("error", &error)]),
+                    Ok(target) => {
+                        super::said("form-exported", &[("name", &super::file_name(&target))])
+                    }
+                    Err(error) => super::said("form-design-failed", &[("error", &error)]),
                 });
                 cx.notify();
             })
