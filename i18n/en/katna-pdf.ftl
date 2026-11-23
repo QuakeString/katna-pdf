@@ -1356,6 +1356,7 @@ menu-next-page = _Next Page
 menu-previous-page = _Previous Page
 menu-previous-view = Previous _View
 menu-go-to-page = Go to page…
+menu-read-mode = Read _Mode
 menu-cursor-coordinates = _Cursor Coordinates
 menu-auto-scroll = Scroll by itself
 menu-next-view = Ne_xt View
@@ -1722,3 +1723,10 @@ autoscroll-end = Reached the end.
 # Cursor coordinates (View > Cursor Coordinates)
 coords-at = Page { $page }: x { $x }, y { $y } { $unit } (of { $width } × { $height })
 coords-off-page = Point at a page to see where on it
+
+# The open file changed on disk
+file-changed-reloaded = The file was changed by another program. Showing it as it is now.
+file-changed-kept = The file was changed by another program. Your changes here are kept; File > Revert shows the new one instead.
+
+# Read mode (Ctrl+H)
+read-mode-on = Read mode: just the pages. Ctrl+H or Escape brings the tools back.

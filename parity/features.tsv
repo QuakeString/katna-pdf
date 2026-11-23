@@ -51,7 +51,7 @@ core.dirty-indicator	core	Unsaved-changes marker on document tabs	reader	y	shipp
 core.close-document	core	Close a document	reader	y	shipped	P0	Ctrl+W		acrobat
 core.close-all	core	Close all documents	reader	n	shipped	P1	#141	Ctrl+Shift+W, File menu; stops at a file with changes not saved	acrobat
 core.revert	core	Revert to the last saved version	reader	n	shipped	P1	#141	File > Revert to Saved; Undo brings the changes back	acrobat
-core.reload-changed-files	core	Reload a document when its file changes on disk	reader	n	partial	P1	tabs.rs	library watches folders; open tabs not reloaded	acrobat
+core.reload-changed-files	core	Reload a document when its file changes on disk	reader	n	shipped	P1	#161	Open file shown again when changed on disk; with unsaved changes, a notice and Revert	acrobat
 core.signed-save-policy	core	Force incremental saves for signed documents	reader	n	shipped	P0	cos sign.rs		acrobat
 core.drag-drop-open	core	Open files by drag and drop	reader	y	shipped	P0	Phase 1		acrobat
 core.recent-files	core	Local recent-files list	reader	y	shipped	P0	Phase 1 history.rs		acrobat
@@ -91,7 +91,7 @@ view.loupe	view	Loupe magnifier tool	reader	n	shipped	P1	#140	zoom card or View 
 view.pan-and-zoom	view	Pan and zoom overview window	reader	n	todo	P2	-		acrobat
 view.hand-tool	view	Hand tool for panning	reader	y	shipped	P0	#93		acrobat
 view.rotate-view	view	Rotate the view without changing the file	reader	y	shipped	P0	#139	Ctrl+R, Ctrl+Shift+R; render turned.rs	acrobat
-view.read-mode	view	Read mode (hide tool chrome)	reader	n	partial	P1	-	tab bar hides with one file; no read mode toggle	acrobat
+view.read-mode	view	Read mode (hide tool chrome)	reader	n	shipped	P1	#161	Ctrl+H or View > Read Mode: only the pages; Escape leaves	acrobat
 view.full-screen	view	Full screen mode	reader	y	shipped	P1	#86 F5		acrobat
 view.full-screen-presentation	view	Full-screen presentation options (auto-advance, loop, click to advance)	reader	n	shipped	P1	#86 present.rs	/Trans, /Dur, black/white screen	acrobat
 view.reflow	view	Reflow text to the window width	reader	n	todo	P2	-		acrobat

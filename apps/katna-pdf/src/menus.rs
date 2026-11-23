@@ -11,9 +11,9 @@ use crate::viewer::{
     CursorCoordinates, Export, Find, FindNext, FindPrevious, FitHeight, FitPage, FitWidth,
     GoToPage, Loupe, NewWindow, NextPage, NextSpread, NextTab, NextView, Open, OpenSettings,
     Organize, Present, PreviousPage, PreviousTab, PreviousView, Print, Properties, Quit, ReadAloud,
-    Redo, ReopenSession, ReportProblem, Revert, RotateViewLeft, RotateViewRight, Save, SelectAll,
-    Shortcuts, ShowAbout, ShowLibrary, Sign, Snapshot, ToggleContents, ToggleNight, Undo, ZoomIn,
-    ZoomOut, ZoomToArea,
+    ReadMode, Redo, ReopenSession, ReportProblem, Revert, RotateViewLeft, RotateViewRight, Save,
+    SelectAll, Shortcuts, ShowAbout, ShowLibrary, Sign, Snapshot, ToggleContents, ToggleNight,
+    Undo, ZoomIn, ZoomOut, ZoomToArea,
 };
 
 /// An item: its id (and the id of its words), and its keys as
@@ -81,6 +81,7 @@ pub const MENUS: &[(&str, &[Entry])] = &[
             Some(("menu-layout", &["Control", "3"])),
             None,
             Some(("menu-side-pane", &["F7"])),
+            Some(("menu-read-mode", &["Control", "H"])),
             Some(("menu-night", &["Control", "Shift", "N"])),
             Some(("menu-read-aloud", &["Control", "Shift", "Y"])),
             Some(("menu-auto-scroll", &["Control", "Shift", "H"])),
@@ -175,6 +176,7 @@ pub fn action(id: &str) -> Option<Box<dyn Action>> {
         "menu-snapshot" => Box::new(Snapshot),
         "menu-layout" => Box::new(NextSpread),
         "menu-side-pane" => Box::new(ToggleContents),
+        "menu-read-mode" => Box::new(ReadMode),
         "menu-night" => Box::new(ToggleNight),
         "menu-read-aloud" => Box::new(ReadAloud),
         "menu-present" => Box::new(Present),
