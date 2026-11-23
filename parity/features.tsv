@@ -576,7 +576,7 @@ sign.signatures-panel	sign	Signatures panel with per-revision tree	reader	y	ship
 sign.status-icons	sign	Signature status (valid, unknown, invalid)	reader	y	shipped	P0	#40		acrobat
 sign.validation-banner	sign	Signed/certified document message bar	reader	y	shipped	P0	#40		acrobat
 sign.signature-properties	sign	Signature properties (validity summary, signer, time)	reader	y	shipped	P0	#40		acrobat
-sign.certificate-viewer	sign	Certificate viewer	reader	y	partial	P1	#40	chain shown	acrobat
+sign.certificate-viewer	sign	Certificate viewer	reader	y	shipped	P1	#183		acrobat
 sign.trust-store	sign	Trusted certificates store	reader	y	shipped	P0	#46 trust.rs		acrobat
 sign.trust-import	sign	Import trusted certificates and set trust	reader	y	shipped	P1	#46 Trust button		acrobat
 sign.eutl	sign	EU Trusted Lists	reader	n	todo	P2	-		acrobat

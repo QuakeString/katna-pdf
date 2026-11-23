@@ -6,7 +6,9 @@
 //! with what was checked, its certificate and what can be done (G07–G09).
 
 use gpui::{AnyElement, Context, Hsla, div, prelude::*};
-use katna_pdf_sign::{Revocation, common_name};
+use std::sync::Arc;
+
+use katna_pdf_sign::{Certificate, Revocation, common_name};
 use katna_ui::px;
 use katna_ui::tokens::{radius, space, text};
 
@@ -97,9 +99,10 @@ impl Viewer {
         }
     }
 
-    fn close_signature_card(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn close_signature_card(&mut self, cx: &mut Context<Self>) {
         self.sig_open = None;
         self.sig_certificate = false;
+        self.sig_cert_pick = 0;
         cx.notify();
     }
 
@@ -127,6 +130,7 @@ impl Viewer {
             .or_else(|| Self::counted(&rows).first().map(|(i, _)| *i));
         self.sig_open = first;
         self.sig_certificate = false;
+        self.sig_cert_pick = 0;
         cx.notify();
     }
 
@@ -405,6 +409,7 @@ impl Viewer {
                     Some(i)
                 };
                 this.sig_certificate = false;
+                this.sig_cert_pick = 0;
                 if let Some(page) = page.filter(|_| this.sig_open.is_some()) {
                     this.go_to(katna_pdf_cos::Destination { page, top: None }, cx);
                 }
@@ -446,7 +451,7 @@ impl Viewer {
 
     /// The card of the signature opened in the pane (G07–G09), beside
     /// the pane: what was checked, row by row, and what can be done.
-    pub(super) fn signature_card(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+    pub(super) fn signature_card(&self, room: f32, cx: &mut Context<Self>) -> Option<AnyElement> {
         let i = self.sig_open?;
         if !(self.pane_shown() && self.tab == PaneTab::Signatures) {
             return None;
@@ -557,62 +562,16 @@ impl Viewer {
         if !row.kind.is_empty() {
             shown("signature-card-kind", row.kind.clone(), None);
         }
-        if self.sig_certificate
-            && let Some(cert) = &row.certificate
-        {
-            let tbs = &cert.tbs_certificate;
-            // The day is enough.
-            let day = |time: std::time::SystemTime| {
-                katna_pdf_sign::shown_date(time)
-                    .split(' ')
-                    .next()
-                    .unwrap_or_default()
-                    .to_owned()
-            };
-            shown("certificate-to", common_name(&tbs.subject), None);
-            shown("certificate-by", common_name(&tbs.issuer), None);
-            shown(
-                "certificate-valid",
-                t(
-                    "certificate-valid-dates",
-                    &[
-                        ("from", &day(tbs.validity.not_before.to_system_time())),
-                        ("until", &day(tbs.validity.not_after.to_system_time())),
-                    ],
-                ),
-                None,
-            );
-            shown(
-                "certificate-serial",
-                katna_pdf_sign::serial_text(cert),
-                None,
-            );
-            shown("certificate-key", katna_pdf_sign::key_text(cert), None);
-            shown(
-                "certificate-fingerprint",
-                katna_pdf_sign::fingerprint(cert),
-                None,
-            );
-        }
-        let table =
-            div()
-                .flex()
-                .flex_col()
-                .gap(px(space::S2))
-                .children(rows_shown.into_iter().map(|(key, value, tint)| {
-                    div()
-                        .flex()
-                        .gap(px(space::S4))
-                        .text_size(px(text::SMALL))
-                        .child(div().w(px(130.0)).flex_none().text_color(th.dim).child(key))
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .text_color(tint.unwrap_or(th.text))
-                                .child(value),
-                        )
-                }));
+        let pick = self
+            .sig_cert_pick
+            .min(row.certificates.len().saturating_sub(1));
+        let picked = row
+            .certificates
+            .get(pick)
+            .or(row.certificate.as_ref())
+            .cloned()
+            .filter(|_| self.sig_certificate);
+        let table = rows_table(rows_shown, &th);
         // Who signed can't be confirmed (G08): why, and the chain.
         let unsure = (mood == Mood::Unsure).then(|| {
             let (why, root) = match &row.vouched {
@@ -710,6 +669,26 @@ impl Viewer {
                 );
         }
         body = body.child(table);
+        if let Some(cert) = picked.clone() {
+            let mut cert_rows: Vec<(String, String, Option<Hsla>)> = Vec::new();
+            certificate_rows(
+                &cert,
+                &mut |key: &str, value: String, tint: Option<Hsla>| {
+                    cert_rows.push((t(key, &[]), value, tint));
+                },
+            );
+            body = body.child(
+                div()
+                    .pt(px(space::S4))
+                    .border_t_1()
+                    .border_color(th.line_soft)
+                    .flex()
+                    .flex_col()
+                    .gap(px(space::S3))
+                    .child(self.chain_list(&row, pick, cert, cx))
+                    .child(rows_table(cert_rows, &th)),
+            );
+        }
         // What can be done.
         let mut left = div().flex().items_center().gap(px(space::S2));
         let mut right = div().flex().items_center().gap(px(space::S2));
@@ -718,6 +697,29 @@ impl Viewer {
                 .bg(gpui::transparent_black())
         };
         let signer_name = signer.clone();
+        if row.certificate.is_some() {
+            let showing = self.sig_certificate;
+            left = left.child(
+                float::button(
+                    "signature-certificate",
+                    t(
+                        if showing {
+                            "signature-hide-certificate"
+                        } else {
+                            "signature-see-certificate"
+                        },
+                        &[],
+                    ),
+                    false,
+                    &th,
+                )
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.sig_certificate = !showing;
+                    this.sig_cert_pick = 0;
+                    cx.notify();
+                })),
+            );
+        }
         match &unsure {
             Some((_, _, _, root, whole)) => {
                 if !whole && let Some(path) = self.path.clone() {
@@ -772,28 +774,6 @@ impl Viewer {
                 );
             }
             None => {
-                if row.certificate.is_some() {
-                    let showing = self.sig_certificate;
-                    left = left.child(
-                        float::button(
-                            "signature-certificate",
-                            t(
-                                if showing {
-                                    "signature-hide-certificate"
-                                } else {
-                                    "signature-see-certificate"
-                                },
-                                &[],
-                            ),
-                            false,
-                            &th,
-                        )
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.sig_certificate = !showing;
-                            cx.notify();
-                        })),
-                    );
-                }
                 if let Some(end) = row.revision {
                     left = left.child(
                         float::button(
@@ -828,8 +808,8 @@ impl Viewer {
                 .id("signature-card")
                 .w(px(CARD_W))
                 .max_w_full()
-                .max_h(px(560.0))
-                .overflow_y_scroll()
+                .max_h(px(room.max(240.0)))
+                .overflow_hidden()
                 .flex()
                 .flex_col()
                 .rounded(px(radius::MD))
@@ -838,8 +818,15 @@ impl Viewer {
                 .border_color(th.line)
                 .shadow(th.lifted())
                 .occlude()
-                .child(body)
-                .child(footer)
+                .child(
+                    div()
+                        .id("signature-card-body")
+                        .flex_1()
+                        .min_h_0()
+                        .overflow_y_scroll()
+                        .child(body),
+                )
+                .child(div().flex_none().child(footer))
                 .into_any_element(),
         )
     }
@@ -877,6 +864,336 @@ fn capital(words: &str) -> String {
         Some(first) => first.to_uppercase().chain(letters).collect(),
         None => String::new(),
     }
+}
+
+/// The rows of the certificate view for `cert`: who it was issued to and
+/// by, when it holds, what its key may do and is for, its policies, where
+/// its revocation is checked, and its fingerprints.
+fn certificate_rows(cert: &Certificate, shown: &mut impl FnMut(&str, String, Option<Hsla>)) {
+    use katna_pdf_sign::certview::{NamePart, details};
+    let tbs = &cert.tbs_certificate;
+    let d = details(cert);
+    // In the order asked for, whatever the name's own order.
+    let of = |parts: &[(NamePart, String)], want: &[NamePart]| -> String {
+        want.iter()
+            .flat_map(|w| parts.iter().filter(move |(p, _)| p == w))
+            .map(|(_, v)| v.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    // The day is enough.
+    let day = |time: std::time::SystemTime| {
+        katna_pdf_sign::shown_date(time)
+            .split(' ')
+            .next()
+            .unwrap_or_default()
+            .to_owned()
+    };
+    let mut row = |key: &str, value: String| {
+        if !value.is_empty() {
+            shown(key, value, None);
+        }
+    };
+    row("certificate-to", common_name(&tbs.subject));
+    row(
+        "certificate-org",
+        of(&d.subject, &[NamePart::Organization, NamePart::Unit]),
+    );
+    row(
+        "certificate-place",
+        of(
+            &d.subject,
+            &[
+                NamePart::Locality,
+                NamePart::State,
+                NamePart::PostalCode,
+                NamePart::Country,
+            ],
+        ),
+    );
+    let mut emails: Vec<String> = d
+        .subject
+        .iter()
+        .filter(|(p, _)| *p == NamePart::Email)
+        .map(|(_, v)| v.clone())
+        .collect();
+    for email in &d.emails {
+        if !emails.contains(email) {
+            emails.push(email.clone());
+        }
+    }
+    row("certificate-email", emails.join(", "));
+    row("certificate-by", common_name(&tbs.issuer));
+    row(
+        "certificate-by-org",
+        of(&d.issuer, &[NamePart::Organization, NamePart::Country]),
+    );
+    row(
+        "certificate-valid",
+        t(
+            "certificate-valid-dates",
+            &[
+                ("from", &day(tbs.validity.not_before.to_system_time())),
+                ("until", &day(tbs.validity.not_after.to_system_time())),
+            ],
+        ),
+    );
+    row("certificate-serial", katna_pdf_sign::serial_text(cert));
+    row("certificate-key", katna_pdf_sign::key_text(cert));
+    row(
+        "certificate-algorithm",
+        t(
+            "certificate-algorithm-text",
+            &[
+                ("algorithm", &d.algorithm),
+                ("version", &d.version.to_string()),
+            ],
+        ),
+    );
+    row(
+        "certificate-key-use",
+        d.key_use
+            .iter()
+            .map(|u| t(key_use_id(*u), &[]))
+            .collect::<Vec<_>>()
+            .join(", "),
+    );
+    row(
+        "certificate-purposes",
+        d.purposes
+            .iter()
+            .map(purpose_text)
+            .collect::<Vec<_>>()
+            .join(", "),
+    );
+    if let Some(below) = d.authority {
+        row(
+            "certificate-authority",
+            match below {
+                Some(n) => t("certificate-authority-depth", &[("count", &n.to_string())]),
+                None => t("certificate-authority-yes", &[]),
+            },
+        );
+    }
+    row("certificate-policies", d.policies.join(", "));
+    row(
+        "certificate-checked-at",
+        d.ocsp
+            .iter()
+            .chain(&d.crls)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(", "),
+    );
+    row("certificate-issuer-at", d.issuer_urls.join(", "));
+    row("certificate-fingerprint", katna_pdf_sign::fingerprint(cert));
+    row("certificate-sha1", d.sha1);
+}
+
+fn key_use_id(u: katna_pdf_sign::certview::KeyUse) -> &'static str {
+    use katna_pdf_sign::certview::KeyUse;
+    match u {
+        KeyUse::DigitalSignature => "certificate-use-signing",
+        KeyUse::NonRepudiation => "certificate-use-non-repudiation",
+        KeyUse::KeyEncipherment => "certificate-use-key-encipherment",
+        KeyUse::DataEncipherment => "certificate-use-data-encipherment",
+        KeyUse::KeyAgreement => "certificate-use-key-agreement",
+        KeyUse::CertificateSigning => "certificate-use-cert-signing",
+        KeyUse::CrlSigning => "certificate-use-crl-signing",
+    }
+}
+
+fn purpose_text(p: &katna_pdf_sign::certview::Purpose) -> String {
+    use katna_pdf_sign::certview::Purpose;
+    let id = match p {
+        Purpose::ServerAuth => "certificate-for-servers",
+        Purpose::ClientAuth => "certificate-for-clients",
+        Purpose::CodeSigning => "certificate-for-code",
+        Purpose::EmailProtection => "certificate-for-email",
+        Purpose::TimeStamping => "certificate-for-timestamps",
+        Purpose::OcspSigning => "certificate-for-ocsp",
+        Purpose::DocumentSigning => "certificate-for-documents",
+        Purpose::AdobeDocuments => "certificate-for-adobe",
+        Purpose::Any => "certificate-for-any",
+        Purpose::Other(oid) => return oid.clone(),
+    };
+    t(id, &[])
+}
+
+impl Viewer {
+    /// The certificates from the signer up, each a row to show it, the
+    /// one shown marked; then who issued the last, when not sent.
+    fn chain_list(
+        &self,
+        row: &SigRow,
+        pick: usize,
+        cert: Arc<Certificate>,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let th = self.theme;
+        let hover = th.hover;
+        let copy = cert.clone();
+        let mut list = div().flex().flex_col().gap(px(2.0)).child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(space::S2))
+                .child(
+                    div()
+                        .flex_1()
+                        .text_size(px(text::CAPTION))
+                        .text_color(th.dim)
+                        .child(t("certificate-chain", &[])),
+                )
+                .child(
+                    float::button("certificate-copy", t("certificate-copy", &[]), false, &th)
+                        .ftip(t("certificate-copy-tip", &[]), &th)
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.copy_certificate(&copy, cx);
+                        })),
+                )
+                .child(
+                    float::button("certificate-save", t("certificate-save", &[]), false, &th)
+                        .ftip(t("certificate-save-tip", &[]), &th)
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.save_certificate(cert.clone(), cx);
+                        })),
+                ),
+        );
+        for (i, cert) in row.certificates.iter().enumerate() {
+            let on = i == pick;
+            list = list.child(
+                div()
+                    .id(("certificate-chain-row", i))
+                    .pl(px(space::S2 + space::S3 * i as f32))
+                    .pr(px(space::S2))
+                    .py(px(space::S1))
+                    .rounded(px(radius::SM))
+                    .flex()
+                    .items_center()
+                    .gap(px(space::S2))
+                    .cursor_pointer()
+                    .text_size(px(text::SMALL))
+                    .text_color(th.text)
+                    .map(|d| {
+                        if on {
+                            d.bg(th.accent_soft)
+                        } else {
+                            d.hover(move |s| s.bg(hover))
+                        }
+                    })
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.sig_cert_pick = i;
+                        cx.notify();
+                    }))
+                    .child(float::icon(
+                        "shield",
+                        12.0,
+                        if on { th.accent } else { th.dim },
+                    ))
+                    .child(
+                        div()
+                            .min_w_0()
+                            .truncate()
+                            .child(common_name(&cert.tbs_certificate.subject)),
+                    ),
+            );
+        }
+        if let Some(last) = row.certificates.last() {
+            let tbs = &last.tbs_certificate;
+            if tbs.issuer != tbs.subject {
+                list = list.child(
+                    div()
+                        .pl(px(space::S2 + space::S3 * row.certificates.len() as f32))
+                        .py(px(space::S1))
+                        .text_size(px(text::SMALL))
+                        .text_color(th.dim)
+                        .child(t(
+                            "certificate-chain-not-sent",
+                            &[("name", &common_name(&tbs.issuer))],
+                        )),
+                );
+            }
+        }
+        list.into_any_element()
+    }
+
+    /// Puts `cert` on the clipboard as PEM text.
+    fn copy_certificate(&mut self, cert: &Certificate, cx: &mut Context<Self>) {
+        let pem = katna_pdf_sign::certview::pem(cert);
+        cx.write_to_clipboard(gpui::ClipboardItem::new_string(pem));
+        self.notice = Some(super::said(
+            "certificate-copied",
+            &[("name", &common_name(&cert.tbs_certificate.subject))],
+        ));
+        cx.notify();
+    }
+
+    /// Asks where, and writes `cert` there as a PEM `.cer` file.
+    fn save_certificate(&mut self, cert: Arc<Certificate>, cx: &mut Context<Self>) {
+        let folder = self
+            .path
+            .as_ref()
+            .and_then(|p| p.parent())
+            .map(std::path::Path::to_path_buf)
+            .unwrap_or_default();
+        let name = common_name(&cert.tbs_certificate.subject);
+        let file: String = name
+            .chars()
+            .map(|c| {
+                if c.is_alphanumeric() || c == '-' {
+                    c
+                } else {
+                    '-'
+                }
+            })
+            .collect();
+        let file = format!("{}.cer", file.trim_matches('-'));
+        cx.spawn(async move |this, cx| {
+            let Ok(chosen) = this.update(cx, |_, cx| cx.prompt_for_new_path(&folder, Some(&file)))
+            else {
+                return;
+            };
+            let Ok(Ok(Some(target))) = chosen.await else {
+                return;
+            };
+            let pem = katna_pdf_sign::certview::pem(&cert);
+            let written = std::fs::write(&target, pem);
+            this.update(cx, |this, cx| {
+                this.notice = Some(match written {
+                    Ok(()) => {
+                        super::said("certificate-saved", &[("file", &target.to_string_lossy())])
+                    }
+                    Err(e) => super::said("certificate-save-failed", &[("error", &e.to_string())]),
+                });
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+}
+
+/// Rows of a key and its value, the keys in a column of their own.
+fn rows_table(rows: Vec<(String, String, Option<Hsla>)>, th: &crate::theme::Theme) -> gpui::Div {
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(space::S2))
+        .children(rows.into_iter().map(|(key, value, tint)| {
+            div()
+                .flex()
+                .gap(px(space::S4))
+                .text_size(px(text::SMALL))
+                .child(div().w(px(130.0)).flex_none().text_color(th.dim).child(key))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .text_color(tint.unwrap_or(th.text))
+                        .child(value),
+                )
+        }))
 }
 
 #[cfg(test)]

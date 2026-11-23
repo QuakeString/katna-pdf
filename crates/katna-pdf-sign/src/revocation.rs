@@ -231,7 +231,7 @@ fn certificates(bytes: &[u8]) -> Vec<Certificate> {
 
 /// The HTTP addresses `cert`'s Authority Information Access gives for
 /// `method` (OCSP, or its issuer's certificate).
-fn urls(cert: &Certificate, method: const_oid::ObjectIdentifier) -> Vec<String> {
+pub(crate) fn urls(cert: &Certificate, method: const_oid::ObjectIdentifier) -> Vec<String> {
     let Some(aia) = extension::<AuthorityInfoAccessSyntax>(cert, oid::AUTHORITY_INFO_ACCESS) else {
         return Vec::new();
     };
@@ -243,7 +243,7 @@ fn urls(cert: &Certificate, method: const_oid::ObjectIdentifier) -> Vec<String> 
 }
 
 /// Where `cert`'s CRLs are, over HTTP.
-fn crl_urls(cert: &Certificate) -> Vec<String> {
+pub(crate) fn crl_urls(cert: &Certificate) -> Vec<String> {
     let Some(points) = extension::<CrlDistributionPoints>(cert, oid::CRL_DISTRIBUTION_POINTS)
     else {
         return Vec::new();
@@ -271,7 +271,7 @@ fn uri(name: &GeneralName) -> Option<String> {
 }
 
 /// `cert`'s extension `id`, read as `T`.
-fn extension<T: for<'a> Decode<'a>>(
+pub(crate) fn extension<T: for<'a> Decode<'a>>(
     cert: &Certificate,
     id: const_oid::ObjectIdentifier,
 ) -> Option<T> {

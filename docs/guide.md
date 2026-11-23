@@ -64,7 +64,7 @@ The grid in the dock shows every page. Drag pages to reorder them; choose some t
 
 ## Signing
 
-The signing card signs with a certificate file (.pfx or .p12) or a USB token such as an ePass2003, with or without a timestamp, and can certify a file so only the changes you allow are made after. The Signatures pane checks every signature: whether the file changed since, whether the signer's certificate chains to a trusted root (India's CCA roots are built in), and whether it was revoked.
+The signing card signs with a certificate file (.pfx or .p12) or a USB token such as an ePass2003, with or without a timestamp, and can certify a file so only the changes you allow are made after. The Signatures pane checks every signature: whether the file changed since, whether the signer's certificate chains to a trusted root (India's CCA roots are built in), and whether it was revoked. See the certificate shows each certificate from the signer up to the root, with who it names, what it may do, its policies and fingerprints; Copy and Save take it out as a .cer file. Esc closes the card.
 
 Initials and your signature picture are kept for the next time.
 
