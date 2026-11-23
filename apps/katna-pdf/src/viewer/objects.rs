@@ -1219,7 +1219,7 @@ impl Viewer {
     /// Copies the objects picked, then does `then` once they are.
     fn copy_picked_then(
         &mut self,
-        then: fn(&mut Self, &mut Window, &mut Context<Self>),
+        then: AfterCopy,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -1229,10 +1229,7 @@ impl Viewer {
 
     fn copy_picked(
         &mut self,
-        then: Option<(
-            fn(&mut Self, &mut Window, &mut Context<Self>),
-            gpui::AnyWindowHandle,
-        )>,
+        then: Option<(AfterCopy, gpui::AnyWindowHandle)>,
         cx: &mut Context<Self>,
     ) -> bool {
         let Some((page, indices)) = self.picked_indices() else {
@@ -2565,6 +2562,9 @@ impl Viewer {
             })
     }
 }
+
+/// What is done once objects are copied.
+type AfterCopy = fn(&mut Viewer, &mut Window, &mut Context<Viewer>);
 
 /// A line drawn whole, in dashes or in dots.
 #[derive(Clone, Copy, PartialEq, Eq)]
