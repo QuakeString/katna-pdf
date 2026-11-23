@@ -493,11 +493,8 @@ pub fn initials(name: &str) -> String {
 /// the element comes back after being gone.
 pub fn appear(id: impl Into<ElementId>, el: impl IntoElement, rise: f32) -> AnyElement {
     use gpui::{Animation, AnimationExt, ease_out_quint};
-    // No wider than the room it is in, so a long tray scrolls sideways
-    // rather than running past the window's edges.
     div()
         .relative()
-        .max_w_full()
         .child(el)
         .with_animation(
             id,

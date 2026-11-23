@@ -155,6 +155,14 @@ impl LibraryView {
                     )
                     .child(menu_sep(&th))
                     .child(
+                        item("library-context-copies", Some("copy")).on_click(cx.listener(
+                            move |this, _, _, cx| {
+                                close(this, cx);
+                                this.go(super::Place::Copies, cx);
+                            },
+                        )),
+                    )
+                    .child(
                         menu_item(
                             "library-context-forget",
                             Some("x"),

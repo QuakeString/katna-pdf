@@ -68,7 +68,7 @@ pub use calc::{
 pub use content::{Op, ops};
 pub use crypt::{Permissions, UnlockError};
 pub use design::{FieldEdit, FieldSpec, FormDesign, FormError, NewField};
-pub use document::{Document, Entry, LoadError, Repair, XrefKind};
+pub use document::{Document, Entry, LoadError, XrefKind};
 pub use dss::Dss;
 pub use edit::{EditError, Layout, NewFont, StandIn, TextAlign, TextBlock, TextRun};
 pub use export::{docx, pictures_pdf, plain_text};
@@ -83,7 +83,7 @@ pub use impose::{Parity, Sheet, SheetLayout, SheetScale, impose, print_order};
 pub use insert::{Image, Insert, ShapeKind};
 pub use labels::{LabelRange, LabelStyle, labels_of};
 pub use layers::Layer;
-pub use links::{Link, LinkTarget};
+pub use links::{Link, LinkFit, LinkStyle, LinkTarget};
 pub use lock::LockError;
 pub use mdp::{Allowed, Change, Lock};
 pub use measure::Scale;

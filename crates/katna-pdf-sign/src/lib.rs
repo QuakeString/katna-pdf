@@ -460,6 +460,88 @@ impl SignatureCheck {
     }
 }
 
+/// A certificate's key, in a few words: "RSA 2048", "ECDSA P-256".
+pub fn key_text(cert: &Certificate) -> String {
+    const RSA: const_oid::ObjectIdentifier =
+        const_oid::ObjectIdentifier::new_unwrap("1.2.840.113549.1.1.1");
+    const EC: const_oid::ObjectIdentifier =
+        const_oid::ObjectIdentifier::new_unwrap("1.2.840.10045.2.1");
+    let spki = &cert.tbs_certificate.subject_public_key_info;
+    if spki.algorithm.oid == RSA {
+        use rsa::pkcs1::DecodeRsaPublicKey as _;
+        use rsa::traits::PublicKeyParts as _;
+        return match rsa::RsaPublicKey::from_pkcs1_der(spki.subject_public_key.raw_bytes()) {
+            Ok(key) => format!("RSA {}", key.n().bits()),
+            Err(_) => "RSA".into(),
+        };
+    }
+    if spki.algorithm.oid == EC {
+        let curve = spki
+            .algorithm
+            .parameters
+            .as_ref()
+            .and_then(|p| p.decode_as::<const_oid::ObjectIdentifier>().ok())
+            .map(|oid| oid.to_string());
+        return match curve.as_deref() {
+            Some("1.2.840.10045.3.1.7") => "ECDSA P-256".into(),
+            Some("1.3.132.0.34") => "ECDSA P-384".into(),
+            Some("1.3.132.0.35") => "ECDSA P-521".into(),
+            _ => "ECDSA".into(),
+        };
+    }
+    spki.algorithm.oid.to_string()
+}
+
+/// A certificate's SHA-256 fingerprint, as pairs of hex digits.
+pub fn fingerprint(cert: &Certificate) -> String {
+    use sha2::Digest as _;
+    let der = cert.to_der().unwrap_or_default();
+    let hash = sha2::Sha256::digest(&der);
+    hash.iter()
+        .map(|b| format!("{b:02X}"))
+        .collect::<Vec<_>>()
+        .join(":")
+}
+
+/// A certificate's serial number, in hex.
+pub fn serial_text(cert: &Certificate) -> String {
+    cert.tbs_certificate
+        .serial_number
+        .as_bytes()
+        .iter()
+        .map(|b| format!("{b:02X}"))
+        .collect()
+}
+
+/// Who issued whom, from the signer up: the common names of the
+/// signer's certificate and each issuer found among `sent`, then, when
+/// the chain stops short of a certificate that issued itself, the name
+/// of the issuer not sent, with `false`.
+pub fn chain_names(signer: &Certificate, sent: &[Certificate]) -> (Vec<String>, bool) {
+    let mut names = vec![common_name(&signer.tbs_certificate.subject)];
+    let mut at = signer;
+    for _ in 0..8 {
+        let tbs = &at.tbs_certificate;
+        if tbs.issuer == tbs.subject {
+            return (names, true);
+        }
+        match sent
+            .iter()
+            .find(|c| c.tbs_certificate.subject == tbs.issuer && *c != at)
+        {
+            Some(next) => {
+                names.push(common_name(&next.tbs_certificate.subject));
+                at = next;
+            }
+            None => {
+                names.push(common_name(&tbs.issuer));
+                return (names, false);
+            }
+        }
+    }
+    (names, true)
+}
+
 /// A kind of change, in a few words.
 pub fn change_text(change: Change) -> &'static str {
     match change {
@@ -711,5 +793,23 @@ mod tests {
         assert_eq!(readable_pdf_date("D:2026"), None);
         let t = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_792_327_845);
         assert_eq!(shown_date(t), "2026-10-18 12:50 UTC");
+    }
+
+    #[test]
+    fn certificates_are_told_in_a_few_words() {
+        let pki = |name: &str| {
+            let bytes = crate::revocation::tests::pki_file(name);
+            Certificate::from_der(&bytes).unwrap()
+        };
+        let (meera, inter, root) = (pki("meera.cer"), pki("inter.cer"), pki("root.cer"));
+        assert!(key_text(&meera).starts_with("RSA ") || key_text(&meera).starts_with("ECDSA"));
+        assert_eq!(fingerprint(&meera).len(), 32 * 3 - 1);
+        let (names, whole) = chain_names(&meera, &[]);
+        assert_eq!(names.len(), 2);
+        assert!(!whole);
+        let (names, whole) = chain_names(&meera, &[root.clone(), inter.clone()]);
+        assert_eq!(names.len(), 3, "{names:?}");
+        assert!(whole);
+        assert_eq!(names[0], "Meera Iyer");
     }
 }

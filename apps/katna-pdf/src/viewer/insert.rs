@@ -236,9 +236,17 @@ impl Viewer {
         }
         // With none picked, how to pick them, as a hint over the tray;
         // the paragraph being typed in has its own bar over it.
-        if self.typing.is_some() || self.adding.is_some() {
+        if self.typing.is_some() || self.adding.is_some() || self.redacting.is_some() {
             return None;
         }
+        if self.linking.as_ref().is_some_and(|l| l.open()) {
+            return None;
+        }
+        let hint = if self.linking.is_some() {
+            "link-hint"
+        } else {
+            "object-row-hint"
+        };
         Some(
             div()
                 .px(px(space::S3))
@@ -247,7 +255,7 @@ impl Viewer {
                 .bg(th.inverse)
                 .text_color(th.on_inverse)
                 .text_size(px(katna_ui::tokens::text::CAPTION))
-                .child(t("object-row-hint", &[]))
+                .child(t(hint, &[]))
                 .into_any_element(),
         )
     }

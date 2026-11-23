@@ -279,59 +279,24 @@ impl Tabs {
         let path = tab.viewer.read(cx).path().map(std::path::Path::to_path_buf);
         let many = self.tabs.len() > 1;
         let right = i + 1 < self.tabs.len();
-        let item = |id: &'static str, glyph: Option<&'static str>, keys: Option<&'static str>| {
-            // Rows without an icon line up with those with one.
-            menu_item(id, glyph, t(id, &[]), keys.map(Into::into), &th)
-                .when(glyph.is_none(), |d| d.pl(px(36.0)))
+        // Plain rows, as S06 shows them.
+        let item = |id: &'static str, keys: Option<&'static str>| {
+            menu_item(id, None, t(id, &[]), keys.map(Into::into), &th)
         };
         let done = |this: &mut Self, cx: &mut Context<Self>| {
             this.tab_menu = None;
             cx.notify();
         };
-        let mut list = menu("tab-menu", 240.0, &th)
+        let mut list = menu("tab-menu", 230.0, &th)
             .on_mouse_down_out(cx.listener(move |this, _, _, cx| done(this, cx)))
-            .child(
-                item("tab-new-window", Some("tabs"), None).on_click(cx.listener(
-                    move |this, _, window, cx| {
-                        done(this, cx);
-                        this.move_to_window(i, window, cx);
-                    },
-                )),
-            );
-        if let Some(path) = path {
-            let copy = path.clone();
-            list = list
-                .child(
-                    item("tab-copy-path", Some("copy"), None).on_click(cx.listener(
-                        move |this, _, _, cx| {
-                            done(this, cx);
-                            cx.write_to_clipboard(gpui::ClipboardItem::new_string(
-                                copy.display().to_string(),
-                            ));
-                        },
-                    )),
-                )
-                .child(
-                    item("tab-show-folder", Some("folder"), None).on_click(cx.listener(
-                        move |this, _, _, cx| {
-                            done(this, cx);
-                            cx.reveal_path(&path);
-                        },
-                    )),
-                );
-        }
-        list = list
-            .child(menu_sep(&th))
-            .child(
-                item("tab-close", Some("x"), Some("Ctrl W")).on_click(cx.listener(
-                    move |this, _, window, cx| {
-                        done(this, cx);
-                        this.close(i, window, cx);
-                    },
-                )),
-            )
+            .child(item("tab-close", Some("Ctrl W")).on_click(cx.listener(
+                move |this, _, window, cx| {
+                    done(this, cx);
+                    this.close(i, window, cx);
+                },
+            )))
             .when(many, |d| {
-                d.child(item("tab-close-others", None, None).on_click(cx.listener(
+                d.child(item("tab-close-others", None).on_click(cx.listener(
                     move |this, _, window, cx| {
                         done(this, cx);
                         this.close_others(i, window, cx);
@@ -339,13 +304,38 @@ impl Tabs {
                 )))
             })
             .when(right, |d| {
-                d.child(item("tab-close-right", None, None).on_click(cx.listener(
+                d.child(item("tab-close-right", None).on_click(cx.listener(
                     move |this, _, window, cx| {
                         done(this, cx);
                         this.close_right(i, window, cx);
                     },
                 )))
-            });
+            })
+            .child(item("tab-new-window", None).on_click(cx.listener(
+                move |this, _, window, cx| {
+                    done(this, cx);
+                    this.move_to_window(i, window, cx);
+                },
+            )));
+        if let Some(path) = path {
+            let copy = path.clone();
+            list = list
+                .child(menu_sep(&th))
+                .child(item("tab-show-folder", None).on_click(cx.listener(
+                    move |this, _, _, cx| {
+                        done(this, cx);
+                        cx.reveal_path(&path);
+                    },
+                )))
+                .child(
+                    item("tab-copy-path", None).on_click(cx.listener(move |this, _, _, cx| {
+                        done(this, cx);
+                        cx.write_to_clipboard(gpui::ClipboardItem::new_string(
+                            copy.display().to_string(),
+                        ));
+                    })),
+                );
+        }
         Some(
             gpui::deferred(
                 katna_ui::anchored()

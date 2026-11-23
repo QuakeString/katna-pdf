@@ -112,6 +112,8 @@ pub struct PageObject {
     /// its x is (`usize::MAX - 1` and `usize::MAX` for a rectangle's
     /// corner and its opposite).
     point_ops: Vec<(usize, usize)>,
+    /// A picture's own size in pixels, across and down, when known.
+    pub pixels: Option<[u32; 2]>,
 }
 
 /// The graphics state read along a page's content, as far as shapes are
@@ -170,6 +172,24 @@ fn scale_of(m: &Matrix) -> f64 {
 }
 
 impl PageObject {
+    /// What a shape looks like it is: a rectangle (`re`), a line (two
+    /// points), or an ellipse (a start and four curves). None for a
+    /// picture, a drawing or any other shape.
+    pub fn shape_kind(&self) -> Option<crate::ShapeKind> {
+        if self.kind != ObjectKind::Path {
+            return None;
+        }
+        let ops = &self.point_ops;
+        if ops.len() == 2 && ops.iter().any(|&(_, k)| k >= usize::MAX - 1) {
+            return Some(crate::ShapeKind::Rectangle);
+        }
+        if ops.len() == 2 {
+            return Some(crate::ShapeKind::Line);
+        }
+        let curves = ops.iter().skip(1).all(|&(_, k)| k == 4);
+        (curves && matches!(ops.len(), 4 | 5)).then_some(crate::ShapeKind::Ellipse)
+    }
+
     /// How far a picture or placed form is turned from upright, in
     /// degrees anticlockwise (0 for a shape, whose points are its own).
     pub fn angle(&self) -> f32 {
@@ -198,6 +218,7 @@ impl Document {
             return Vec::new();
         };
         let forms = self.form_boxes(page);
+        let sizes = self.picture_sizes(page);
         let properties = self.layer_properties(page);
         let states = self.opacity_states(page);
         let mut out = Vec::new();
@@ -332,6 +353,7 @@ impl Document {
                             layer,
                             points: std::mem::take(&mut anchors),
                             point_ops: std::mem::take(&mut anchor_ops),
+                            pixels: None,
                         });
                     }
                     if clipping {
@@ -355,6 +377,9 @@ impl Document {
                         apply(&ctm, rect[0], rect[3]),
                         apply(&ctm, rect[2], rect[3]),
                     ];
+                    let pixels = name
+                        .and_then(|n| sizes.iter().find(|(k, _)| k == n))
+                        .map(|(_, size)| *size);
                     out.push(PageObject {
                         kind,
                         rect: bounds(&corners),
@@ -366,6 +391,7 @@ impl Document {
                         layer,
                         points: Vec::new(),
                         point_ops: Vec::new(),
+                        pixels,
                     });
                 }
                 b"BI" if !in_text => {
@@ -386,6 +412,7 @@ impl Document {
                         layer,
                         points: Vec::new(),
                         point_ops: Vec::new(),
+                        pixels: None,
                     });
                 }
                 _ => {}
@@ -1143,6 +1170,39 @@ impl Document {
                     .map(|v| v.clamp(0.0, 1.0) as f32)
             };
             out.insert(name.as_bytes().to_vec(), (get("ca"), get("CA")));
+        }
+        out
+    }
+
+    /// The size in pixels of each picture page `page`'s resources name.
+    fn picture_sizes(&self, page: usize) -> Vec<(Vec<u8>, [u32; 2])> {
+        let Some(page_ref) = self.pages().get(page).copied() else {
+            return Vec::new();
+        };
+        let dict = page_dict(self, page_ref);
+        let resources = match dict.get("Resources").map(|r| self.resolve(r)) {
+            Some(Object::Dict(d)) => d,
+            _ => Dict::new(),
+        };
+        let Object::Dict(xobjects) = self.resolve_key(&resources, "XObject") else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        for (name, value) in xobjects.iter() {
+            let Object::Stream(s) = self.resolve(value) else {
+                continue;
+            };
+            if s.dict.name("Subtype") != Some(b"Image") {
+                continue;
+            }
+            let side = |key| {
+                self.resolve_key(&s.dict, key)
+                    .as_int()
+                    .and_then(|v| u32::try_from(v).ok())
+            };
+            if let (Some(w), Some(h)) = (side("Width"), side("Height")) {
+                out.push((name.as_bytes().to_vec(), [w, h]));
+            }
         }
         out
     }
