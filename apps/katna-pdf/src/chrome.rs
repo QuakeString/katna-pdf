@@ -124,17 +124,17 @@ impl Tabs {
                 )
             })
             .when(
-                !in_library && (chrome.dirty || chrome.undo || chrome.redo),
+                !in_library && (chrome.dirty || chrome.undo.is_some() || chrome.redo.is_some()),
                 |bar| {
                     bar.child(float::vsep(&th))
                         .child(
-                            ib("bar-undo", "undo", t("undo-tip", &[]), false, &th)
-                                .when(!chrome.undo, |b| b.opacity(0.4))
+                            ib("bar-undo", "undo", undo_tip(chrome.undo), false, &th)
+                                .when(chrome.undo.is_none(), |b| b.opacity(0.4))
                                 .on_click(|_, window, cx| Self::run(Box::new(Undo), window, cx)),
                         )
                         .child(
-                            ib("bar-redo", "redo", t("redo-tip", &[]), false, &th)
-                                .when(!chrome.redo, |b| b.opacity(0.4))
+                            ib("bar-redo", "redo", redo_tip(chrome.redo), false, &th)
+                                .when(chrome.redo.is_none(), |b| b.opacity(0.4))
                                 .on_click(|_, window, cx| Self::run(Box::new(Redo), window, cx)),
                         )
                 },
@@ -521,14 +521,25 @@ impl Tabs {
                 }))
         });
         let entries = open.and_then(|o| MENUS.get(o)).map_or(&[][..], |(_, e)| *e);
+        let chrome = self.viewer(cx).chrome();
         let items = entries.iter().enumerate().map(|(i, entry)| match entry {
             None => menu_sep(&th).into_any_element(),
             Some((id, keys)) => {
                 let id = *id;
+                // Undo and Redo name the change they would take back.
+                let step = match id {
+                    "menu-undo" => Some(chrome.undo),
+                    "menu-redo" => Some(chrome.redo),
+                    _ => None,
+                };
+                let words = match step {
+                    Some(Some(what)) => t(&format!("{id}-named"), &[("what", &t(what, &[]))]),
+                    _ => t(id, &[]),
+                };
                 menu_item(
                     ("app-item", i),
                     None,
-                    plain(&t(id, &[])),
+                    plain(&words),
                     (!keys.is_empty()).then(|| SharedString::from(keys_text(keys))),
                     &th,
                 )
@@ -890,5 +901,21 @@ impl Tabs {
                 .on_click(|_, window, cx| Self::run(Box::new(Quit), window, cx)),
             );
         popover(body, false, true)
+    }
+}
+
+/// The Undo button's tip, naming the change it takes back.
+fn undo_tip(what: Option<&'static str>) -> String {
+    match what {
+        Some(what) => t("undo-tip-named", &[("what", &t(what, &[]))]),
+        None => t("undo-none-tip", &[]),
+    }
+}
+
+/// The Redo button's tip, naming the change it makes again.
+fn redo_tip(what: Option<&'static str>) -> String {
+    match what {
+        Some(what) => t("redo-tip-named", &[("what", &t(what, &[]))]),
+        None => t("redo-none-tip", &[]),
     }
 }

@@ -38,7 +38,7 @@ core.pdf20-dpart	core	PDF 2.0 document parts (DPart)	reader	n	skip	-	-		acrobat
 core.pdf20-namespaces	core	PDF 2.0 structure namespaces	reader	n	todo	P2	-		acrobat
 core.arlington-validation	core	Structural validation against the Arlington PDF model	-	n	todo	P1	-		acrobat
 core.undo-redo	core	Undo and redo every document edit	reader	y	shipped	P0	#96	Ctrl+Z / Ctrl+Shift+Z	acrobat
-core.undo-labels	core	Edit menu names the step to undo or redo	reader	n	todo	P1	-		acrobat
+core.undo-labels	core	Edit menu names the step to undo or redo	reader	n	shipped	P1	#156	Edit menu, Undo and Redo tips and the notice name the step	acrobat
 core.undo-after-save	core	Undo still works after saving	reader	n	partial	P1	#96		acrobat
 core.atomic-batch-edits	core	Multi-step edits are one undo step and all-or-nothing	reader	n	shipped	P1	#96	one step per change	acrobat
 core.history-panel	core	History panel with named snapshots	-	n	todo	P2	-		acrobat
