@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use gpui::{AnyElement, Context, Entity, Subscription, div, prelude::*};
-use katna_pdf_cos::{Sheet, SheetLayout};
+use katna_pdf_cos::{AnnotChanges, AnnotKind, Parity, Sheet, SheetLayout, SheetScale};
 use katna_pdf_render::export::scanned_page;
 use katna_ui::px;
 use katna_ui::text_input::{InputEvent, TextInput};
@@ -58,6 +58,39 @@ const LAYOUTS: [(&str, Option<SheetLayout>, bool); 8] = [
     ),
 ];
 const PAPERS: [(&str, (f32, f32)); 2] = [("print-a4", Sheet::A4), ("print-letter", Sheet::LETTER)];
+/// Which pages, as chips.
+const PARITIES: [(&str, Parity); 3] = [
+    ("print-all-pages", Parity::All),
+    ("print-odd", Parity::Odd),
+    ("print-even", Parity::Even),
+];
+
+/// What goes on the paper.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OnPaper {
+    /// The pages and every comment and markup.
+    All,
+    /// The pages and form fields, no comments.
+    Document,
+    /// The pages, form fields and stamps.
+    Stamps,
+}
+
+const CONTENTS: [(&str, OnPaper); 3] = [
+    ("print-with-comments", OnPaper::All),
+    ("print-document", OnPaper::Document),
+    ("print-with-stamps", OnPaper::Stamps),
+];
+
+/// The size of each page on the paper, when printed as it is: as the
+/// print dialog says, or one of these.
+const SIZES: [(&str, Option<SheetScale>); 4] = [
+    ("print-size-dialog", None),
+    ("print-size-fit", Some(SheetScale::Fit)),
+    ("print-size-actual", Some(SheetScale::Actual)),
+    ("print-size-shrink", Some(SheetScale::Shrink)),
+];
+
 /// Pages printed as pictures are drawn at this many dots to the inch.
 const PICTURE_DPI: f32 = 200.0;
 
@@ -65,6 +98,10 @@ pub(super) struct Printing {
     layout: usize,
     paper: usize,
     pictures: bool,
+    parity: usize,
+    reverse: bool,
+    content: usize,
+    size: usize,
     pages: Entity<TextInput>,
     working: bool,
     _sub: Subscription,
@@ -102,6 +139,10 @@ impl Viewer {
             layout: 0,
             paper: 0,
             pictures: false,
+            parity: 0,
+            reverse: false,
+            content: 0,
+            size: 0,
             pages,
             working: false,
             _sub: sub,
@@ -154,6 +195,70 @@ impl Viewer {
                 ),
             );
         }
+        // A row of chips setting one of the card's choices.
+        let row =
+            |name: &'static str,
+             items: &[&'static str],
+             on: usize,
+             set: fn(&mut Printing, usize),
+             cx: &mut Context<Self>| {
+                let mut row = div().flex().flex_wrap().gap(px(space::S1));
+                for (i, id) in items.iter().enumerate() {
+                    row = row.child(chip((name, i).into(), t(id, &[]), on == i).on_click(
+                        cx.listener(move |this, _, _, cx| {
+                            if let Some(p) = this.printing.as_mut() {
+                                set(p, i);
+                            }
+                            cx.notify();
+                        }),
+                    ));
+                }
+                row
+            };
+        let sizes = row(
+            "print-size",
+            &SIZES.map(|(id, _)| id),
+            printing.size,
+            |p, i| p.size = i,
+            cx,
+        );
+        let contents = row(
+            "print-content",
+            &CONTENTS.map(|(id, _)| id),
+            printing.content,
+            |p, i| p.content = i,
+            cx,
+        );
+        let parities = row(
+            "print-parity",
+            &PARITIES.map(|(id, _)| id),
+            printing.parity,
+            |p, i| p.parity = i,
+            cx,
+        );
+        let reverse = printing.reverse;
+        let parities = parities.child(
+            div()
+                .id("print-reverse")
+                .ml(px(space::S3))
+                .flex()
+                .items_center()
+                .gap(px(space::S2))
+                .cursor_pointer()
+                .on_click(cx.listener(|this, _, _, cx| {
+                    if let Some(p) = this.printing.as_mut() {
+                        p.reverse = !p.reverse;
+                    }
+                    cx.notify();
+                }))
+                .child(check_box(reverse, th))
+                .child(
+                    div()
+                        .text_size(px(text::SMALL))
+                        .text_color(th.text)
+                        .child(t("print-reverse", &[])),
+                ),
+        );
         let pictures = printing.pictures;
         let mut card = div()
             .id("print-card")
@@ -176,9 +281,13 @@ impl Viewer {
             )
             .child(label("print-layout-label"))
             .child(layouts);
-        if printing.layout > 0 {
+        if printing.layout == 0 {
+            card = card.child(label("print-size-label")).child(sizes);
+        }
+        if printing.layout > 0 || printing.size > 0 {
             card = card.child(label("print-paper-label")).child(papers);
         }
+        card = card.child(label("print-content-label")).child(contents);
         card = card
             .child(
                 div()
@@ -216,6 +325,7 @@ impl Viewer {
                     .text_color(th.text)
                     .child(printing.pages.clone()),
             )
+            .child(parities)
             .child(label("print-hint"))
             .child(
                 div()
@@ -261,7 +371,12 @@ impl Viewer {
             return None;
         }
         let (_, layout, sideways) = LAYOUTS[printing.layout];
-        let count = opened.doc.page_count();
+        // One page a sheet, sized as asked, each sheet the page's way up.
+        let (layout, scale) = match (layout, SIZES[printing.size].1) {
+            (None, Some(scale)) => (Some(SheetLayout::NUp { across: 1, down: 1 }), scale),
+            (layout, _) => (layout, SheetScale::Fit),
+        };
+        let count = opened.plain.page_count();
         let spec = printing.pages.read(cx).text().trim().to_owned();
         let pages: Vec<usize> = if spec.is_empty() {
             (0..count).collect()
@@ -275,13 +390,22 @@ impl Viewer {
                 }
             }
         };
+        let (parity, reverse) = (PARITIES[printing.parity].1, printing.reverse);
+        let all_pages = spec.is_empty() && parity == Parity::All && !reverse;
+        let pages = katna_pdf_cos::print_order(&pages, parity, reverse);
         Some(Job {
             layout,
-            sheet: Sheet::of(PAPERS[printing.paper].1, sideways),
+            sheet: Sheet {
+                scale,
+                auto_turn: true,
+                ..Sheet::of(PAPERS[printing.paper].1, sideways)
+            },
             pictures: printing.pictures,
-            all_pages: spec.is_empty(),
+            all_pages,
+            content: CONTENTS[printing.content].1,
             pages,
-            drawn: opened.doc.clone(),
+            // The pages as they are, not as Rotate view shows them.
+            drawn: opened.plain.clone(),
             current: self.unsaved(),
             key: self.key.clone(),
             path,
@@ -316,7 +440,12 @@ impl Viewer {
             return;
         };
         // Nothing to lay out: the file goes as it is.
-        if save.is_none() && job.layout.is_none() && !job.pictures && job.all_pages {
+        if save.is_none()
+            && job.layout.is_none()
+            && !job.pictures
+            && job.all_pages
+            && job.content == OnPaper::All
+        {
             self.printing = None;
             self.print(cx);
             return;
@@ -415,6 +544,7 @@ struct Job {
     sheet: Sheet,
     pictures: bool,
     all_pages: bool,
+    content: OnPaper,
     pages: Vec<usize>,
     drawn: Arc<dyn katna_pdf_render::Document>,
     current: Option<Arc<Vec<u8>>>,
@@ -430,14 +560,39 @@ fn sheets(job: &Job) -> Result<Vec<u8>, String> {
         Some(bytes) => bytes.to_vec(),
         None => std::fs::read(&job.path).map_err(|e| e.to_string())?,
     };
-    let doc = super::cos(bytes, job.key.as_deref())?;
+    let mut doc = super::cos(bytes, job.key.as_deref())?;
+    let mut drawn = job.drawn.clone();
+    // Comments not wanted taken off first.
+    if job.content != OnPaper::All {
+        let remove = doc
+            .annotations()
+            .into_iter()
+            .flatten()
+            .filter(|a| !(job.content == OnPaper::Stamps && matches!(a.kind, AnnotKind::Stamp(_))))
+            .filter_map(|a| a.id)
+            .collect::<Vec<_>>();
+        if !remove.is_empty() {
+            let bytes = doc
+                .annotate(&AnnotChanges {
+                    put: Vec::new(),
+                    remove,
+                })
+                .map_err(|e| e.to_string())?;
+            if job.pictures {
+                drawn = crate::engine::engine()
+                    .open(Arc::new(bytes.clone()), job.key.as_deref().unwrap_or(""))
+                    .map_err(|e| format!("{e:?}"))?;
+            }
+            doc = super::cos(bytes, job.key.as_deref())?;
+        }
+    }
     // Pictures first: the laid-out pages are then the pictures.
     let (doc, pages) = if job.pictures {
         let mut pictures = Vec::new();
         for &page in &job.pages {
-            let (data, width, height) = scanned_page(job.drawn.as_ref(), page, PICTURE_DPI, false)
+            let (data, width, height) = scanned_page(drawn.as_ref(), page, PICTURE_DPI, false)
                 .ok_or_else(|| t("export-undrawn", &[("page", &(page + 1).to_string())]))?;
-            let size = job.drawn.page_size(page).unwrap_or((612.0, 792.0));
+            let size = drawn.page_size(page).unwrap_or((612.0, 792.0));
             pictures.push((
                 katna_pdf_cos::Image::Jpeg {
                     data,

@@ -75,7 +75,8 @@ usage: katna-pdf-cli COMMAND [--json] ...
                                   text or a Word file OUT (a paragraph each, a page
                                   break between pages); or a PDF OUT of the pages as
                                   a scanner would see them (--grey in shades of grey)
-  impose FILE -o OUT (--booklet | --n-up N | --poster AxB) [--pages PAGES]
+  impose FILE -o OUT (--booklet | --n-up N | --poster AxB | --one) [--pages PAGES]
+         [--odd | --even] [--reverse] [--scale fit|actual|shrink]
          [--paper a4|letter|WxH] [--landscape]
                                   the pages laid out on sheets for printing: a
                                   booklet (two a side, in the order that folds),
@@ -83,7 +84,10 @@ usage: katna-pdf-cli COMMAND [--json] ...
                                   over A × B sheets to join as a poster; on A4
                                   unless --paper says (W × H in points), turned
                                   with --landscape (a booklet and 2 or 6 up are
-                                  anyway). Comments and fields are not carried
+                                  anyway). Comments and fields are not carried.
+                                  --one is a page a sheet, each sheet the page's
+                                  way up, sized by --scale (as big as fits, own
+                                  size, or own size unless too big)
   compare OLD NEW [--overlay PAGE -o OUT.png]
                                   what changed from OLD to NEW: words added, removed
                                   and changed (text moved to another page is not a
@@ -513,6 +517,7 @@ impl<'a> Args<'a> {
                     | "--n-up"
                     | "--poster"
                     | "--paper"
+                    | "--scale"
                     | "--dpi"
                     | "--quality"
                     | "--border"
@@ -550,6 +555,10 @@ impl<'a> Args<'a> {
                 "--as-text",
                 "--grey",
                 "--booklet",
+                "--one",
+                "--odd",
+                "--even",
+                "--reverse",
                 "--landscape",
                 "--reset",
                 "--forms",
@@ -1507,7 +1516,7 @@ fn unlock(args: &[String], json: bool) -> Done {
 /// Makes a file smaller.
 /// Lays pages out on sheets for printing.
 fn impose(args: &[String], json: bool) -> Done {
-    use katna_pdf_cos::{Sheet, SheetLayout};
+    use katna_pdf_cos::{Parity, Sheet, SheetLayout, SheetScale};
     let args = Args::parse(args)?;
     let [file] = args.words()?;
     let out = args.output()?;
@@ -1516,6 +1525,23 @@ fn impose(args: &[String], json: bool) -> Done {
     let pages = match args.option("--pages") {
         Some(spec) => ranges::parse(spec, count).map_err(failed)?,
         None => (0..count).collect(),
+    };
+    let parity = match (args.flag("--odd"), args.flag("--even")) {
+        (true, false) => Parity::Odd,
+        (false, true) => Parity::Even,
+        (false, false) => Parity::All,
+        (true, true) => return Err(Failure::Usage("--odd or --even, not both".into())),
+    };
+    let pages = katna_pdf_cos::print_order(&pages, parity, args.flag("--reverse"));
+    let scale = match args.option("--scale") {
+        None | Some("fit") => SheetScale::Fit,
+        Some("actual") => SheetScale::Actual,
+        Some("shrink") => SheetScale::Shrink,
+        Some(other) => {
+            return Err(Failure::Usage(format!(
+                "--scale {other}: fit, actual or shrink"
+            )));
+        }
     };
     let grid = |spec: &str, option: &str| -> Result<(u32, u32), Failure> {
         let (a, b) = spec
@@ -1526,7 +1552,10 @@ fn impose(args: &[String], json: bool) -> Done {
             _ => Err(Failure::Usage(format!("{option} {spec}: 1 to 10 each way"))),
         }
     };
-    let (layout, sideways) = if args.flag("--booklet") {
+    let one = args.flag("--one");
+    let (layout, sideways) = if one {
+        (SheetLayout::NUp { across: 1, down: 1 }, false)
+    } else if args.flag("--booklet") {
         (SheetLayout::Booklet, true)
     } else if let Some(n) = args.option("--n-up") {
         let (across, down) = match n {
@@ -1550,7 +1579,7 @@ fn impose(args: &[String], json: bool) -> Done {
         (SheetLayout::Poster { across, down }, false)
     } else {
         return Err(Failure::Usage(
-            "say the layout: --booklet, --n-up N or --poster AxB".into(),
+            "say the layout: --booklet, --n-up N, --poster AxB or --one".into(),
         ));
     };
     let paper = match args.option("--paper") {
@@ -1569,7 +1598,11 @@ fn impose(args: &[String], json: bool) -> Done {
             (w, h)
         }
     };
-    let sheet = Sheet::of(paper, sideways || args.flag("--landscape"));
+    let sheet = Sheet {
+        scale,
+        auto_turn: one && !args.flag("--landscape"),
+        ..Sheet::of(paper, sideways || args.flag("--landscape"))
+    };
     let bytes = katna_pdf_cos::impose(&doc, &pages, layout, sheet)
         .map_err(|e| failed(format!("{file}: {e}")))?;
     let sheets = katna_pdf_cos::Document::load(bytes.clone())
