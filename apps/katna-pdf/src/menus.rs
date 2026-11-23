@@ -7,9 +7,9 @@
 use gpui::Action;
 
 use crate::viewer::{
-    ActualSize, AddBookmark, Annotate, CloseAll, CloseTab, Compare, CopyText, Export, Find,
-    FindNext, FindPrevious, FitHeight, FitPage, FitWidth, GoToPage, Loupe, NewWindow, NextPage,
-    NextSpread, NextTab, NextView, Open, OpenSettings, Organize, Present, PreviousPage,
+    ActualSize, AddBookmark, Annotate, AutoScroll, CloseAll, CloseTab, Compare, CopyText, Export,
+    Find, FindNext, FindPrevious, FitHeight, FitPage, FitWidth, GoToPage, Loupe, NewWindow,
+    NextPage, NextSpread, NextTab, NextView, Open, OpenSettings, Organize, Present, PreviousPage,
     PreviousTab, PreviousView, Print, Properties, Quit, ReadAloud, ReopenSession, ReportProblem,
     Revert, RotateViewLeft, RotateViewRight, Save, Shortcuts, ShowAbout, ShowLibrary, Sign,
     Snapshot, ToggleContents, ToggleNight, ZoomIn, ZoomOut, ZoomToArea,
@@ -78,6 +78,7 @@ pub const MENUS: &[(&str, &[Entry])] = &[
             Some(("menu-side-pane", &["F7"])),
             Some(("menu-night", &["Control", "Shift", "N"])),
             Some(("menu-read-aloud", &["Control", "Shift", "Y"])),
+            Some(("menu-auto-scroll", &["Control", "Shift", "H"])),
             Some(("menu-present", &["F5"])),
         ],
     ),
@@ -158,6 +159,7 @@ pub fn action(id: &str) -> Option<Box<dyn Action>> {
         "menu-shortcuts" => Box::new(Shortcuts),
         "menu-previous-view" => Box::new(PreviousView),
         "menu-go-to-page" => Box::new(GoToPage),
+        "menu-auto-scroll" => Box::new(AutoScroll),
         "menu-next-view" => Box::new(NextView),
         "menu-loupe" => Box::new(Loupe),
         "menu-rotate-right" => Box::new(RotateViewRight),
