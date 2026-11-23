@@ -49,8 +49,8 @@ core.web-recovery	core	Crash recovery in the web app	-	n	skip	-	-		acrobat
 core.unsaved-changes-prompt	core	Ask before closing or quitting with unsaved changes	reader	y	shipped	P0	app unsaved-close		acrobat
 core.dirty-indicator	core	Unsaved-changes marker on document tabs	reader	y	shipped	P1	tabs.rs		acrobat
 core.close-document	core	Close a document	reader	y	shipped	P0	Ctrl+W		acrobat
-core.close-all	core	Close all documents	reader	n	todo	P1	-		acrobat
-core.revert	core	Revert to the last saved version	reader	n	todo	P1	-		acrobat
+core.close-all	core	Close all documents	reader	n	shipped	P1	#141	Ctrl+Shift+W, File menu; stops at a file with changes not saved	acrobat
+core.revert	core	Revert to the last saved version	reader	n	shipped	P1	#141	File > Revert to Saved; Undo brings the changes back	acrobat
 core.reload-changed-files	core	Reload a document when its file changes on disk	reader	n	partial	P1	tabs.rs	library watches folders; open tabs not reloaded	acrobat
 core.signed-save-policy	core	Force incremental saves for signed documents	reader	n	shipped	P0	cos sign.rs		acrobat
 core.drag-drop-open	core	Open files by drag and drop	reader	y	shipped	P0	Phase 1		acrobat
@@ -146,7 +146,7 @@ view.home-view	view	Home view with recommended tools and recent files	reader	y	s
 view.all-tools	view	All tools catalogue with milestone badges	-	n	skip	-	-		acrobat
 view.command-palette	view	Command palette (⌘K) over every command	-	n	todo	P0	-		acrobat
 view.keyboard-shortcuts	view	Platform keyboard shortcuts for registered commands	reader	y	shipped	P0	-		acrobat
-view.shortcuts-dialog	view	Keyboard shortcuts reference dialog	reader	n	todo	P1	-		acrobat
+view.shortcuts-dialog	view	Keyboard shortcuts reference dialog	reader	n	shipped	P1	#141	F1 or Help menu: Settings > Shortcuts, searchable, with keys no menu shows	acrobat
 view.menus-from-registry	view	Menus generated from the command registry	-	y	shipped	P1	menu.rs	KDE global menu #43	acrobat
 view.about-dialog	view	About dialog	reader	y	todo	P2	-		acrobat
 view.check-for-updates	view	Help ▸ Check for updates	reader	y	shipped	P1	#92 update.rs		acrobat
