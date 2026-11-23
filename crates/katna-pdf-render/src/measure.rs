@@ -38,6 +38,34 @@ pub enum SnapKind {
     OnLine,
 }
 
+/// Which kinds of point the pointer snaps to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SnapTo {
+    pub ends: bool,
+    pub middles: bool,
+    pub crossings: bool,
+}
+
+impl Default for SnapTo {
+    /// Every kind, and along lines too.
+    fn default() -> Self {
+        SnapTo {
+            ends: true,
+            middles: true,
+            crossings: true,
+        }
+    }
+}
+
+impl SnapTo {
+    /// No snapping.
+    pub const OFF: SnapTo = SnapTo {
+        ends: false,
+        middles: false,
+        crossings: false,
+    };
+}
+
 /// A page's segments, in a grid for looking up those near a point.
 #[derive(Debug, Default, Clone)]
 pub struct Snaps {
@@ -105,6 +133,15 @@ impl Snaps {
     /// The point to snap `at` to, within `radius`: an end first, then a
     /// crossing, then a middle, then the nearest point along a line.
     pub fn snap(&self, at: [f32; 2], radius: f32) -> Option<([f32; 2], SnapKind)> {
+        self.snap_to(at, radius, SnapTo::default())
+    }
+
+    /// [`Snaps::snap`] to only the kinds of point `to` says; along a line
+    /// only when it says all of them.
+    pub fn snap_to(&self, at: [f32; 2], radius: f32, to: SnapTo) -> Option<([f32; 2], SnapKind)> {
+        if to == SnapTo::OFF {
+            return None;
+        }
         let near = self.near(at, radius);
         let dist = |p: [f32; 2]| (p[0] - at[0]).hypot(p[1] - at[1]);
         let closest = |points: &mut dyn Iterator<Item = [f32; 2]>| {
@@ -114,7 +151,9 @@ impl Snaps {
                 .min_by(|a, b| a.0.total_cmp(&b.0))
                 .map(|(_, p)| p)
         };
-        if let Some(p) = closest(&mut near.iter().flat_map(|s| [[s[0], s[1]], [s[2], s[3]]])) {
+        if to.ends
+            && let Some(p) = closest(&mut near.iter().flat_map(|s| [[s[0], s[1]], [s[2], s[3]]]))
+        {
             return Some((p, SnapKind::End));
         }
         // Only segments that pass close by can cross close by.
@@ -124,7 +163,8 @@ impl Snaps {
             .filter(|s| dist(nearest_on(s, at)) <= radius)
             .collect();
         let mut crossings = Vec::new();
-        'pairs: for (i, a) in passing.iter().enumerate() {
+        let pairs = if to.crossings { passing.len() } else { 0 };
+        'pairs: for (i, a) in passing.iter().take(pairs).enumerate() {
             for b in &passing[i + 1..] {
                 if crossings.len() >= CROSSINGS {
                     break 'pairs;
@@ -140,8 +180,13 @@ impl Snaps {
         let middles = passing
             .iter()
             .map(|s| [(s[0] + s[2]) / 2.0, (s[1] + s[3]) / 2.0]);
-        if let Some(p) = closest(&mut middles.into_iter()) {
+        if to.middles
+            && let Some(p) = closest(&mut middles.into_iter())
+        {
             return Some((p, SnapKind::Middle));
+        }
+        if to != SnapTo::default() {
+            return None;
         }
         closest(&mut passing.iter().map(|s| nearest_on(s, at))).map(|p| (p, SnapKind::OnLine))
     }
@@ -305,6 +350,29 @@ mod tests {
             border.snap([1200.0, 1203.0], 5.0).map(|s| s.1),
             Some(SnapKind::OnLine)
         );
+    }
+
+    #[test]
+    fn snaps_only_to_the_kinds_asked() {
+        let snaps = Snaps::new(vec![[0.0, 0.0, 100.0, 0.0], [50.0, -50.0, 50.0, 50.0]]);
+        let no_ends = SnapTo {
+            ends: false,
+            ..SnapTo::default()
+        };
+        assert_eq!(
+            snaps.snap_to([98.0, 1.0], 5.0, no_ends).map(|s| s.1),
+            None,
+            "nothing but an end is near, and along lines needs all"
+        );
+        let only_middles = SnapTo {
+            middles: true,
+            ..SnapTo::OFF
+        };
+        assert_eq!(
+            snaps.snap_to([52.0, 2.0], 5.0, only_middles),
+            Some(([50.0, 0.0], SnapKind::Middle))
+        );
+        assert_eq!(snaps.snap_to([100.0, 0.0], 5.0, SnapTo::OFF), None);
     }
 
     #[test]

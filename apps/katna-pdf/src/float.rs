@@ -58,7 +58,7 @@ pub fn ib(
     sized_ib(id, name, 32.0, 18.0, tip, on, th)
 }
 
-fn sized_ib(
+pub fn sized_ib(
     id: impl Into<ElementId>,
     name: &str,
     side: f32,

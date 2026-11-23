@@ -26,9 +26,20 @@ app carries it out.
   the hand tool), zoom in, fit page, the page number, the pages' colours.
 - **Tray** (`float::tray`): the mode's tools float above the dock (C01,
   E01); the tool in hand shows its name on the accent's wash, colours are
-  dots ringed when picked. The bars a tool opens (measure, initials, read
-  aloud) and the stamp card (C05: Standard, With date and name, Mine)
-  float above it too.
+  dots ringed when picked. The bars a tool opens (the initials kept,
+  read aloud) and the stamp card (C05: Standard, With date and name,
+  Mine) float above it too.
+- **Measure card** (C06): at the top right while measuring: the scale
+  as millimetres on paper to a real length (typed, or set from the last
+  line measured), where it comes from with the drawing's ratio (`1:100`;
+  green when the drawing says it), what the pointer snaps to (ends,
+  middles, crossings, or off; `measure::SnapTo`), and Distance,
+  Perimeter and Area.
+- **Your initials** (E08): a dialog with Typed (a face of three),
+  Drawn (a pad, lines kept together scaled to one wide) and A picture;
+  Kept on this computer; Put them on every page, bottom right. Opens by
+  itself the first time the tool is picked; the bar above the tray
+  then lists the ones kept, New initials… and Every page.
 - **Pages mode** (P01, P02): the organizer's grid fills the window; its
   tray adds pages, turns, moves, deletes, saves the pages picked as a
   file, crops and numbers them. The Pages card is a dialog with tabs

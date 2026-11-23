@@ -338,7 +338,7 @@ impl Viewer {
             ((position.x - b.left()) / shown).clamp(0.0, (b.size.width / shown).max(0.0)),
             ((position.y - b.top()) / shown).clamp(0.0, (b.size.height / shown).max(0.0)),
         ];
-        let pencil = self.adding == Some(Adding::Pencil) || self.drawing_initials();
+        let pencil = self.adding == Some(Adding::Pencil);
         if let Some(draft) = self.placing.as_mut() {
             // The pencil keeps the whole way the pointer went; the rest
             // only where it is now.
@@ -366,10 +366,6 @@ impl Viewer {
             return false;
         };
         cx.notify();
-        if self.drawing_initials() {
-            self.keep_drawn_initials(&draft.path, cx);
-            return true;
-        }
         let (Some(adding), Some(inv)) = (self.adding, self.inverse(draft.page)) else {
             return true;
         };
@@ -506,9 +502,22 @@ impl Viewer {
         max_width: f32,
         cx: &mut Context<Self>,
     ) {
-        let Some(inv) = self.inverse(page) else {
-            return;
-        };
+        if let Some(item) = self.picture_item(page, boxed, at, image, max_width) {
+            self.add_to_page(page, item, cx);
+        }
+    }
+
+    /// Picture `image` in `boxed` on page `page`, or with its top left at
+    /// `at`, at most `max_width` wide.
+    pub(super) fn picture_item(
+        &self,
+        page: usize,
+        boxed: Option<[f32; 4]>,
+        at: [f32; 2],
+        image: katna_pdf_cos::Image,
+        max_width: f32,
+    ) -> Option<Insert> {
+        let inv = self.inverse(page)?;
         let (w, h) = match &image {
             katna_pdf_cos::Image::Pixels(p) => (p.width, p.height),
             katna_pdf_cos::Image::Jpeg { width, height, .. } => (*width, *height),
@@ -531,11 +540,10 @@ impl Viewer {
                 [at[0], at[1], at[0] + w, at[1] + w * aspect]
             }
         };
-        let item = Insert::Image {
+        Some(Insert::Image {
             rect: inv.rect(shown),
             image,
-        };
-        self.add_to_page(page, item, cx);
+        })
     }
 
     /// Ctrl+V while Edit text is on: a picture on the clipboard goes on
@@ -654,7 +662,7 @@ impl Viewer {
         };
         let shown = self.shown;
         let ink = self.ink_colour();
-        if matches!(self.adding, Some(Adding::Line | Adding::Pencil)) || self.drawing_initials() {
+        if matches!(self.adding, Some(Adding::Line | Adding::Pencil)) {
             let points: Vec<[f32; 2]> = if self.adding == Some(Adding::Line) {
                 vec![from, to]
             } else {

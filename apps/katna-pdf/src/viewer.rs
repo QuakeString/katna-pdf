@@ -431,6 +431,8 @@ pub struct Viewer {
     measures: measure::Measures,
     /// Puts the keys in the scale field on the next frame.
     focus_calibrating: bool,
+    /// Give the initials card's typing field focus at the next frame.
+    focus_initials: bool,
     /// Presenting, full screen.
     presenting: Option<present::Presenting>,
     /// Reading aloud.
@@ -682,6 +684,7 @@ impl Viewer {
             measuring: None,
             measures: Default::default(),
             focus_calibrating: false,
+            focus_initials: false,
             reading: None,
             presenting: None,
             comparing: None,
@@ -3617,6 +3620,7 @@ impl Render for Viewer {
         self.open_comment_now(window, cx);
         self.focus_signing(window, cx);
         self.focus_calibrating(window, cx);
+        self.focus_initials_field(window, cx);
         let pane = self.pane(window, cx);
         let pane_room = if pane.is_some() {
             contents::WIDTH + float::GAP
@@ -3653,6 +3657,8 @@ impl Render for Viewer {
         // Cards at the top right stop short of the dock.
         let side_room = card_height - 120.0;
         let object_card = self.object_card(side_room, cx);
+        let measure_card = self.measure_card(cx);
+        let initials_card = self.initials_card(cx);
         let design_card = self.design_card(side_room, cx);
         let find_bar = self.find_bar(cx);
         let notice = self.notice.clone().map(|notice| {
@@ -3995,6 +4001,8 @@ impl Render for Viewer {
                     .children(reading_bar.or(dock)),
             )
             .children(object_card)
+            .children(measure_card)
+            .children(initials_card)
             .children(signing_card)
             .children(marks_card)
             .children(redact_card)
@@ -4097,10 +4105,6 @@ fn icon_button(
     widgets::icon_button(id, icon, 18.0, &th.katna)
         .tip(tip, &th.katna)
         .on_click(on_click)
-}
-
-fn separator(th: Theme) -> impl IntoElement {
-    div().w(px(1.0)).h(px(20.0)).mx(px(space::S2)).bg(th.line)
 }
 
 /// The pages on screen once page `page` is laid out, with the list's
