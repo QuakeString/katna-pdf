@@ -751,7 +751,7 @@ print.orientation	print	Auto portrait/landscape	reader	y	shipped	P0	#144	one a s
 print.comments-and-forms	print	Print document, markups, stamps or form fields only	reader	y	shipped	P0	#111, #144, #150	pages and comments, pages only, pages and stamps, form fields only	acrobat
 print.print-with-comment-summary	print	Print with a comments summary	standard	n	todo	P2	-		acrobat
 print.print-preview	print	Print preview	reader	n	partial	P1	#111 card shows the layout		acrobat
-print.grayscale	print	Print in grayscale	reader	y	todo	P1	-		acrobat
+print.grayscale	print	Print in grayscale	reader	y	shipped	P1	#163		acrobat
 print.print-as-image	print	Print as image	reader	y	shipped	P1	#111 print-pictures		acrobat
 print.page-setup	print	Page setup	reader	y	partial	P1	#111 paper		acrobat
 print.print-ready-pdf	print	Produce a print-ready imposed PDF	pro	n	skip	-	-		acrobat
