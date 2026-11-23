@@ -707,6 +707,15 @@ pdfa-saved-left = Wrote { $name }, but it is still not PDF/A: { $left }
 pdfa-failed = The PDF/A copy could not be made: { $error }
 
 ## Find in the document
+command-placeholder = Find a command, a page or words in the file
+command-do = Do
+command-go = Go to
+command-in-file = In this file
+command-page = Page { $page }
+command-page-short = p. { $page }
+command-nothing = Nothing matches.
+command-hint = Ctrl K finds commands, pages and words in one box.
+shortcut-command = Find a command, page or words
 search-placeholder = Find; "in quotes" for exact words
 search-count = { $current } of { $total }
 search-searching = Searching…
