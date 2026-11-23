@@ -314,7 +314,7 @@ organize.bookmark-expand-collapse	organize	Expand and collapse all bookmarks	sta
 organize.bookmarks-from-structure	organize	Generate bookmarks from headings or tags	standard	n	todo	P2	-		acrobat
 organize.attachments-add	organize	Add file attachments	standard	y	shipped	P2	#108		acrobat
 organize.attachments-delete	organize	Delete attachments	standard	y	shipped	P2	#108		acrobat
-organize.attachments-description	organize	Edit attachment descriptions	reader	n	partial	P2	#108 rename		acrobat
+organize.attachments-description	organize	Edit attachment descriptions	reader	n	shipped	P2	#196		acrobat
 organize.associated-files	organize	Associated files with relationships (PDF/A-3, PDF 2.0)	standard	n	todo	P2	-		acrobat
 organize.portfolio-view	organize	View PDF Portfolios as a file list	reader	n	shipped	P1	#191		acrobat
 organize.portfolio-extract	organize	Extract files from a portfolio	reader	n	shipped	P1	#108		acrobat
@@ -369,6 +369,7 @@ comment.reply	comment	Reply to comments	reader	y	shipped	P1	#104		acrobat
 comment.set-status	comment	Set review status (accepted, rejected, cancelled, completed)	reader	y	shipped	P1	#104		acrobat
 comment.checkmark	comment	Mark comments with a checkmark	reader	n	shipped	P2	#194		acrobat
 comment.delete-comment	comment	Delete comments	reader	y	shipped	P0	#32, #104		acrobat
+comment.move-resize	comment	Move comments by dragging and resize them by their corners	reader	y	shipped	P0	#196		acrobat
 comment.edit-comment-text	comment	Edit comment text	reader	y	shipped	P0	#32		acrobat
 comment.copy-comment-text	comment	Copy comment text	reader	n	shipped	P1	#152	copy button on the chosen comment	acrobat
 comment.filter-comments	comment	Filter comments (type, author, status, colour, checkmark)	reader	y	shipped	P1	#104		acrobat

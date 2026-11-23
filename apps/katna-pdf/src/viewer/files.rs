@@ -44,6 +44,8 @@ struct Renaming {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Named {
     File(usize),
+    /// A file's description.
+    Description(usize),
     Layer(usize),
 }
 
@@ -255,6 +257,10 @@ impl Viewer {
                     }
                 }
             }
+            let describing = extras
+                .renaming
+                .as_ref()
+                .is_some_and(|r| r.what == Named::Description(i));
             let hover = th.hover;
             let row = div()
                 .id(("file-row", i))
@@ -297,7 +303,14 @@ impl Viewer {
                         .flex_col()
                         .gap(px(2.0))
                         .child(name)
-                        .when(!details.is_empty(), |d| {
+                        .when_some(
+                            extras
+                                .renaming
+                                .as_ref()
+                                .filter(|r| r.what == Named::Description(i)),
+                            |d, r| d.child(div().h(px(22.0)).child(r.input.clone())),
+                        )
+                        .when(!details.is_empty() && !describing, |d| {
                             d.child(
                                 div()
                                     .text_size(px(text::CAPTION))
@@ -414,7 +427,7 @@ impl Viewer {
             },
         ));
         match what {
-            Named::File(i) => {
+            Named::File(i) | Named::Description(i) => {
                 menu = menu
                     .child(item("files-menu-open", Some("eye")).on_click(cx.listener(
                         move |this, _, window, cx| {
@@ -435,6 +448,14 @@ impl Viewer {
                             move |this, _, window, cx| {
                                 close(this);
                                 this.start_naming(Named::File(i), window, cx);
+                            },
+                        )),
+                    )
+                    .child(
+                        item("files-menu-describe", Some("comment")).on_click(cx.listener(
+                            move |this, _, window, cx| {
+                                close(this);
+                                this.start_naming(Named::Description(i), window, cx);
                             },
                         )),
                     )
@@ -666,6 +687,11 @@ impl Viewer {
     fn start_naming(&mut self, what: Named, window: &mut Window, cx: &mut Context<Self>) {
         let current = match what {
             Named::File(i) => self.extras.attachments.get(i).map(|a| a.name.clone()),
+            Named::Description(i) => self
+                .extras
+                .attachments
+                .get(i)
+                .map(|a| a.description.clone()),
             Named::Layer(i) => self.extras.layers.get(i).map(|l| l.name.clone()),
         };
         let Some(current) = current else {
@@ -673,7 +699,12 @@ impl Viewer {
         };
         let accent = gpui::rgba(self.theme.katna.accent).into();
         let input = cx.new(|cx| {
-            let mut input = TextInput::new(t("files-name", &[]), cx);
+            let hint = if matches!(what, Named::Description(_)) {
+                "files-description"
+            } else {
+                "files-name"
+            };
+            let mut input = TextInput::new(t(hint, &[]), cx);
             input.set_accent(accent);
             input.set_text(current, cx);
             input.select_all_text(cx);
@@ -700,11 +731,30 @@ impl Viewer {
             return;
         };
         let name = renaming.input.read(cx).text().trim().to_owned();
-        if !keep || name.is_empty() {
+        let blank_ok = matches!(renaming.what, Named::Description(_));
+        if !keep || (name.is_empty() && !blank_ok) {
             cx.notify();
             return;
         }
         match renaming.what {
+            Named::Description(i) => {
+                let Some(a) = self.extras.attachments.get(i).cloned() else {
+                    return;
+                };
+                if a.description == name {
+                    cx.notify();
+                    return;
+                }
+                self.change_document(
+                    Vec::new(),
+                    "files-failed",
+                    move |doc| {
+                        doc.rename_attachment(&a, &a.name, &name)
+                            .map_err(|e| e.to_string())
+                    },
+                    cx,
+                );
+            }
             Named::File(i) => {
                 let Some(a) = self.extras.attachments.get(i).cloned() else {
                     return;

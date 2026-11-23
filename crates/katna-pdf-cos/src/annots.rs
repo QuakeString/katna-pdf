@@ -458,6 +458,88 @@ impl Annotation {
         }
     }
 
+    /// Whether it may be dragged to another place: not locked, not a
+    /// state reply, and not text markup, which stays on its words.
+    pub fn movable(&self) -> bool {
+        !self.flags.locked
+            && self.state.is_none()
+            && !matches!(self.kind, AnnotKind::Markup(..) | AnnotKind::Other(_))
+    }
+
+    /// Whether it may be made larger or smaller: movable, and not an
+    /// icon of a fixed size (a note, a kept file, a caret).
+    pub fn resizable(&self) -> bool {
+        self.movable()
+            && !matches!(
+                self.kind,
+                AnnotKind::Note | AnnotKind::FileAttachment { .. } | AnnotKind::Caret
+            )
+    }
+
+    /// It moved by `dx`, `dy` points: its box, its points and its
+    /// callout line all go along.
+    pub fn moved(&self, dx: f32, dy: f32) -> Annotation {
+        let mut a = self.clone();
+        a.map_points(|[x, y]| [x + dx, y + dy], true);
+        a
+    }
+
+    /// It stretched from its box to `to` (left, bottom, right, top):
+    /// its points scale with it. A callout keeps the place it points at.
+    pub fn resized(&self, to: [f32; 4]) -> Annotation {
+        let from = normal(self.rect);
+        let to = normal(to);
+        let sx = (to[2] - to[0]) / (from[2] - from[0]).max(0.01);
+        let sy = (to[3] - to[1]) / (from[3] - from[1]).max(0.01);
+        let mut a = self.clone();
+        a.map_points(
+            |[x, y]| [to[0] + (x - from[0]) * sx, to[1] + (y - from[1]) * sy],
+            false,
+        );
+        a
+    }
+
+    /// Maps every point it is placed by through `f`: its box (kept
+    /// left, bottom, right, top), the points of lines, shapes and ink,
+    /// and a callout's knee and end (its tip too when `tip`).
+    fn map_points(&mut self, f: impl Fn([f32; 2]) -> [f32; 2], tip: bool) {
+        let [x0, y0, x1, y1] = normal(self.rect);
+        let a = f([x0, y0]);
+        let b = f([x1, y1]);
+        self.rect = normal([a[0], a[1], b[0], b[1]]);
+        match &mut self.kind {
+            AnnotKind::Ink(strokes) => {
+                for p in strokes.iter_mut().flatten() {
+                    *p = f(*p);
+                }
+            }
+            AnnotKind::Line { from, to, .. } => {
+                *from = f(*from);
+                *to = f(*to);
+            }
+            AnnotKind::Polygon(points) | AnnotKind::PolyLine(points) => {
+                for p in points {
+                    *p = f(*p);
+                }
+            }
+            AnnotKind::Markup(_, quads) => {
+                for q in quads {
+                    for p in q.as_chunks_mut::<2>().0 {
+                        *p = f(*p);
+                    }
+                }
+            }
+            _ => {}
+        }
+        if let Some(line) = &mut self.callout {
+            for (i, p) in line.iter_mut().enumerate() {
+                if i > 0 || tip {
+                    *p = f(*p);
+                }
+            }
+        }
+    }
+
     /// The box the annotation takes on the page: its `rect`, and for a
     /// callout the line too, with its arrowhead.
     pub fn outer_rect(&self) -> [f32; 4] {

@@ -34,6 +34,7 @@ use katna_ui::tokens::{radius, space, text};
 use katna_ui::widgets::{self, Tip};
 use katna_ui::{ScrollBar, px, unpx};
 
+mod annotmove;
 mod annots;
 mod area;
 mod autoscroll;
@@ -884,6 +885,8 @@ pub struct Viewer {
     guides: guides::Guides,
     /// The text box comment being typed in, in place.
     box_edit: Option<textbox::BoxEdit>,
+    /// A comment being dragged to another place or size.
+    annot_moving: Option<annotmove::AnnotMove>,
     comment: Option<annots::Comment>,
     /// A reply being typed, and which comments the list shows.
     reply: Option<comments::Reply>,
@@ -1164,6 +1167,7 @@ impl Viewer {
             popup_dragging: None,
             guides: guides::Guides::default(),
             box_edit: None,
+            annot_moving: None,
             comment: None,
             reply: None,
             comment_filter: Default::default(),
@@ -1979,6 +1983,7 @@ impl Viewer {
             || self.insert_drag(event.position, cx)
             || self.text_move_drag(event.position, cx)
             || self.object_drag(event, cx)
+            || self.annot_move_drag(event.position, cx)
             || self.annot_drag(event.position, cx)
         {
             return;
@@ -2034,6 +2039,7 @@ impl Viewer {
             || self.link_release(cx)
             || self.insert_release(cx)
             || self.object_release(cx)
+            || self.annot_move_release(cx)
             || self.annot_release(cx)
         {
             return;
@@ -4502,6 +4508,7 @@ impl Viewer {
             _ => Vec::new(),
         };
         let mut overlays = self.annot_overlays(page, transform);
+        overlays.extend(self.annot_move_overlays(page));
         overlays.extend(self.area_overlay(page));
         overlays.extend(self.crop_overlay(page));
         overlays.extend(self.measure_overlay(page));
@@ -5425,7 +5432,7 @@ impl Render for Viewer {
             .on_action(cx.listener(|this, _: &PutToolDown, window, cx| {
                 if this.box_edit.is_some() {
                     this.finish_box_edit(true, cx);
-                } else if this.close_top_card(window, cx) {
+                } else if this.cancel_annot_move(cx) || this.close_top_card(window, cx) {
                 } else if this.read_mode {
                     this.toggle_read_mode(cx);
                 } else if this.auto_scroll.is_some() {
