@@ -80,6 +80,11 @@ pub struct Prefs {
     pub grid: bool,
     /// How fast reading aloud goes, 1.0 the voice's own pace.
     pub speed: f32,
+    /// How high the voice is, from -1 to 1, 0 its own pitch.
+    pub pitch: f32,
+    /// The voice that reads aloud (`speech::Voice::voices`' id); empty
+    /// for the desktop's own.
+    pub voice: String,
     /// The pages' colours when the window is dark (X09).
     pub night_pages: PageColors,
     /// The size of everything, over the desktop's scale.
@@ -146,6 +151,8 @@ impl Default for Prefs {
             units: Units::default(),
             grid: false,
             speed: 1.0,
+            pitch: 0.0,
+            voice: String::new(),
             night_pages: PageColors::Night,
             size: 1.0,
             dock_labels: true,
@@ -225,6 +232,14 @@ impl Prefs {
                         prefs.speed = speed;
                     }
                 }
+                "read-pitch" => {
+                    if let Ok(pitch) = value.parse::<f32>()
+                        && (-1.0..=1.0).contains(&pitch)
+                    {
+                        prefs.pitch = pitch;
+                    }
+                }
+                "read-voice" => value.trim().clone_into(&mut prefs.voice),
                 "night-pages" => {
                     if let Some(&(colors, _)) = PAGE_COLORS.iter().find(|(_, w)| *w == value) {
                         prefs.night_pages = colors;
@@ -304,7 +319,7 @@ impl Prefs {
             Motion::Normal => "normal",
         };
         format!(
-            "open-at={}\nzoom={zoom}\nlayout={layout}\nreopen-session={}\nnew-window={}\nworkers={}\nunits={}\ngrid={}\nread-speed={}\nnight-pages={night}\nsize={}\ndock-labels={}\nform-scripts={}\nrecovery={}\nrecovery-every={}\nrecent={}\ncomment-hover={}\ncomment-every={}\nfield-tint={}\ndate-calendar={}\npresent-seconds={}\npresent-loop={}\nfind-case={}\nfind-words={}\nfind-accents={}\nmotion={motion}\n",
+            "open-at={}\nzoom={zoom}\nlayout={layout}\nreopen-session={}\nnew-window={}\nworkers={}\nunits={}\ngrid={}\nread-speed={}\nnight-pages={night}\nsize={}\ndock-labels={}\nform-scripts={}\nrecovery={}\nrecovery-every={}\nrecent={}\ncomment-hover={}\ncomment-every={}\nfield-tint={}\ndate-calendar={}\npresent-seconds={}\npresent-loop={}\nfind-case={}\nfind-words={}\nfind-accents={}\nmotion={motion}\nread-pitch={}\nread-voice={}\n",
             if self.open_at_last { "last" } else { "first" },
             on(self.reopen_session),
             on(self.new_window),
@@ -327,6 +342,8 @@ impl Prefs {
             on(self.find_case),
             on(self.find_words),
             on(self.find_accents),
+            self.pitch,
+            self.voice.replace('\n', " "),
         )
     }
 
@@ -346,6 +363,7 @@ impl Prefs {
         change(&mut prefs);
         prefs.save();
         crate::speech::set_speed(prefs.speed);
+        crate::speech::set_tone(prefs.pitch, &prefs.voice);
         if prefs.motion != cx.global::<Prefs>().motion {
             apply_motion(prefs.motion, cx);
         }
@@ -394,6 +412,8 @@ mod tests {
             units: Units::Millimetres,
             grid: true,
             speed: 1.25,
+            pitch: -0.5,
+            voice: "en-gb".into(),
             night_pages: PageColors::Sepia,
             size: 1.1,
             dock_labels: false,

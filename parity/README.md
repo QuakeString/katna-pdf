@@ -35,19 +35,19 @@ the feature.
 | Create, convert and export (`create`) | 39 | 7 | 4 | 18 | 2 | 8 |
 | Optimise and standards (`optimize`) | 61 | 10 | 9 | 22 | 0 | 20 |
 | Printing (`print`) | 41 | 16 | 2 | 4 | 0 | 19 |
-| Accessibility (`a11y`) | 62 | 3 | 4 | 49 | 0 | 6 |
+| Accessibility (`a11y`) | 62 | 4 | 3 | 49 | 0 | 6 |
 | Compare, automation, settings, cloud (`misc`) | 101 | 24 | 20 | 25 | 2 | 30 |
 | Library (`library`, ours) | 9 | 9 | 0 | 0 | 0 | 0 |
 | Ideas (`idea`, ours, proposed) | 11 | 0 | 0 | 10 | 1 | 0 |
-| **All** | **961** | **432** | **113** | **253** | **36** | **127** |
+| **All** | **961** | **433** | **112** | **253** | **36** | **127** |
 
 Against each product, counting only what is in scope (not `skip`):
 
 | Against | In scope | Shipped | Partial | To do | Deferred |
 |---|---:|---:|---:|---:|---:|
-| Acrobat Reader (free) | 333 | 238 (71 %) | 41 | 52 | 2 |
-| Acrobat Standard (Reader + Standard) | 553 | 346 (62 %) | 78 | 123 | 6 |
-| Acrobat Pro (everything below Studio) | 737 | 384 (52 %) | 104 | 216 | 33 |
+| Acrobat Reader (free) | 333 | 239 (71 %) | 40 | 52 | 2 |
+| Acrobat Standard (Reader + Standard) | 553 | 347 (62 %) | 77 | 123 | 6 |
+| Acrobat Pro (everything below Studio) | 737 | 385 (52 %) | 103 | 216 | 33 |
 | Master PDF Editor | 437 | 307 (70 %) | 54 | 57 | 19 |
 | Only in Katna PDF | 61 | 32 | 5 | 22 | 2 |
 

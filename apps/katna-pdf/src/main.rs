@@ -145,6 +145,7 @@ fn main() -> ExitCode {
             cx.set_global(profile::Profile::load());
             let prefs = prefs::Prefs::load();
             speech::set_speed(prefs.speed);
+            speech::set_tone(prefs.pitch, &prefs.voice);
             prefs::apply_motion(prefs.motion, cx);
             katna_ui::scale::set_scale(prefs.size);
             cx.set_global(prefs);
