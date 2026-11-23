@@ -21,9 +21,9 @@ use katna_ui::tokens::{radius, space, text};
 use katna_ui::widgets::{self, Tip};
 
 use super::annots::Draft;
-use super::sign::check_box;
 use super::{Content, Viewer};
 use crate::annotate::COLOURS;
+use crate::float;
 use crate::text::t;
 
 /// The date pattern a field gets when it is first shown as a date.
@@ -143,6 +143,34 @@ const KINDS: [(&str, &str, [f32; 2]); 8] = [
     ("form-kind-signature", "Signature", [180.0, 50.0]),
 ];
 
+/// Each of [`KINDS`]' glyph in the tray (`icons/float`).
+const KIND_GLYPHS: [&str; 8] = [
+    "text",
+    "multiline",
+    "checkbox",
+    "radio",
+    "combo",
+    "listv",
+    "button",
+    "sign",
+];
+
+/// Which of [`KINDS`] a field is.
+fn kind_index(kind: &FieldKind) -> usize {
+    match kind {
+        FieldKind::Text {
+            multiline: false, ..
+        } => 0,
+        FieldKind::Text { .. } => 1,
+        FieldKind::CheckBox => 2,
+        FieldKind::Radio => 3,
+        FieldKind::Choice { combo: true, .. } => 4,
+        FieldKind::Choice { .. } => 5,
+        FieldKind::PushButton => 6,
+        FieldKind::Signature => 7,
+    }
+}
+
 /// The ways a text field's value can be shown: plain, a number, an
 /// amount in rupees, a percentage and a date.
 const SHOWN: [&str; 5] = [
@@ -198,6 +226,9 @@ pub(super) struct Designing {
     actions: HashMap<Ref, FieldAction>,
     /// The kind of field (an index into [`KINDS`]) to drag out next.
     adding: Option<usize>,
+    /// The card's tab for the field chosen: 0 field, 1 look, 2 when
+    /// clicked.
+    card_tab: usize,
     drawing: Option<Draft>,
     /// The field chosen, and the name of one to choose once the file is
     /// read again.
@@ -388,6 +419,7 @@ impl Viewer {
             captions: read.captions,
             actions: read.actions,
             adding: None,
+            card_tab: 0,
             drawing: None,
             chosen: None,
             choose_next: None,
@@ -1203,7 +1235,7 @@ impl Viewer {
     }
 
     /// The form card, while the tool is in hand.
-    pub(super) fn design_card(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+    pub(super) fn design_card(&self, room: f32, cx: &mut Context<Self>) -> Option<AnyElement> {
         let designing = self.designing.as_ref()?;
         let th = self.theme;
         let label = |id: &str| {
@@ -1212,73 +1244,48 @@ impl Viewer {
                 .text_color(th.dim)
                 .child(t(id, &[]))
         };
-        let chip = |id: (&'static str, usize), on: bool, label: String| {
-            div()
-                .id(id)
-                .h(px(30.0))
-                .px(px(space::S3))
-                .flex()
-                .items_center()
-                .rounded(px(radius::FULL))
-                .border_1()
-                .border_color(th.line)
-                .text_size(px(text::SMALL))
-                .text_color(th.text)
-                .when(on, |d| {
-                    d.bg(th.field).border_color(gpui::rgba(th.katna.accent))
-                })
-                .hover(move |s| s.bg(th.hover))
-                .cursor_pointer()
-                .child(label)
-        };
-        let mut kinds = div().flex().flex_wrap().gap(px(space::S1));
-        for (i, (id, _, _)) in KINDS.iter().enumerate() {
-            kinds = kinds.child(
-                chip(("form-kind", i), designing.adding == Some(i), t(id, &[])).on_click(
-                    cx.listener(move |this, _, _, cx| {
-                        if let Some(d) = this.designing.as_mut() {
-                            d.adding = if d.adding == Some(i) { None } else { Some(i) };
-                        }
-                        cx.notify();
-                    }),
-                ),
-            );
-        }
+        let chip =
+            |id: (&'static str, usize), on: bool, label: String| float::chip(id, label, on, &th);
         let input = |entity: Entity<TextInput>| {
             div()
-                .h(px(34.0))
+                .h(px(32.0))
                 .flex()
                 .items_center()
                 .px(px(space::S3))
-                .rounded(px(radius::SM))
-                .bg(th.field)
+                .rounded(px(6.0))
+                .border_1()
+                .border_color(th.line)
+                .bg(th.card)
                 .text_size(px(text::BODY))
                 .text_color(th.text)
                 .child(entity)
         };
         let toggle = |i: usize, on: bool, id: &str| {
             div()
-                .id(("form-flag", i))
+                .min_h(px(32.0))
                 .flex()
                 .items_center()
                 .gap(px(space::S2))
-                .cursor_pointer()
-                .on_click(cx.listener(move |this, _, _, cx| this.toggle_flag(i, cx)))
-                .child(check_box(on, th))
                 .child(
                     div()
-                        .text_size(px(text::BODY))
+                        .flex_1()
+                        .text_size(px(text::SMALL))
                         .text_color(th.text)
                         .child(t(id, &[])),
+                )
+                .child(
+                    float::switch(("form-flag", i), on, &th)
+                        .on_click(cx.listener(move |this, _, _, cx| this.toggle_flag(i, cx))),
                 )
         };
         let mut card = div()
             .id("form-card")
+            .occlude()
             .absolute()
-            .top(px(space::S3))
-            .right(px(space::S5))
-            .w(px(340.0))
-            .max_h(px(620.0))
+            .top(px(space::S2))
+            .right(px(float::GAP))
+            .w(px(300.0))
+            .max_h(px(room))
             .overflow_y_scroll()
             .p(px(space::S4))
             .flex()
@@ -1288,90 +1295,116 @@ impl Viewer {
             .bg(th.card)
             .shadow(th.lifted())
             .when(th.dark, |d| d.border_1().border_color(th.line))
-            .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .child(
-                div()
-                    .text_size(px(text::BODY))
-                    .font_weight(gpui::FontWeight::SEMIBOLD)
-                    .text_color(th.text)
-                    .child(t("form-title", &[])),
-            )
-            .child(label(if designing.adding.is_some() {
-                "form-hint-adding"
+            .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation());
+        let field = self.chosen_field();
+        let page = self.current_page();
+        let order = designing.order.get(&page).filter(|o| o.len() > 1);
+        if field.is_none() && order.is_none() {
+            return None;
+        }
+        if let Some(field) = field {
+            let kind = kind_index(&field.kind);
+            let button = field.kind == FieldKind::PushButton;
+            let tab = if designing.card_tab == 2 && !button {
+                0
             } else {
-                "form-hint"
-            }))
-            .child(kinds)
-            .child(
-                div().flex().child(
-                    widgets::outlined_button("form-find", t("form-find", &[]), &th.katna)
-                        .tip(t("form-find-tip", &[]), &th.katna)
-                        .on_click(cx.listener(|this, _, _, cx| this.find_fields(cx))),
-                ),
-            );
-        if let Some(field) = self.chosen_field() {
+                designing.card_tab
+            };
+            let tabs = ["form-card-field", "form-card-look", "form-action"]
+                .into_iter()
+                .enumerate()
+                .filter(|(i, _)| *i < 2 || button)
+                .map(|(i, words)| {
+                    float::chip(("form-card-tab", i), t(words, &[]), tab == i, &th).on_click(
+                        cx.listener(move |this, _, _, cx| {
+                            if let Some(d) = this.designing.as_mut() {
+                                d.card_tab = i;
+                            }
+                            cx.notify();
+                        }),
+                    )
+                });
             card = card
-                .child(div().h(px(1.0)).my(px(space::S1)).bg(th.line))
-                .child(label("form-name"))
-                .child(input(designing.name.clone()))
-                .child(label("form-tip"))
-                .child(input(designing.tip.clone()));
-            if matches!(field.kind, FieldKind::Choice { .. }) {
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(space::S2))
+                        .child(float::icon(KIND_GLYPHS[kind], 18.0, th.accent))
+                        .child(
+                            div()
+                                .text_size(px(text::BODY))
+                                .font_weight(gpui::FontWeight::BOLD)
+                                .text_color(th.text)
+                                .child(t(KINDS[kind].0, &[])),
+                        ),
+                )
+                .child(div().flex().gap(px(space::S1)).children(tabs));
+            if tab == 0 {
                 card = card
-                    .child(label("form-options"))
-                    .child(input(designing.options.clone()));
+                    .child(label("form-name"))
+                    .child(input(designing.name.clone()))
+                    .child(label("form-tip"))
+                    .child(input(designing.tip.clone()));
+                if matches!(field.kind, FieldKind::Choice { .. }) {
+                    card = card
+                        .child(label("form-options"))
+                        .child(input(designing.options.clone()));
+                }
+                if field.kind == FieldKind::PushButton {
+                    card = card
+                        .child(label("form-caption"))
+                        .child(input(designing.caption.clone()));
+                }
+                card = card
+                    .child(toggle(0, field.required, "form-required"))
+                    .child(toggle(1, field.read_only, "form-read-only"));
+                if let FieldKind::Text {
+                    multiline,
+                    password,
+                    comb,
+                    ..
+                } = field.kind
+                {
+                    card = card
+                        .child(toggle(2, multiline, "form-multiline"))
+                        .child(toggle(3, password, "form-password"))
+                        .child(toggle(4, comb, "form-comb"))
+                        .child(label("form-max-len"))
+                        .child(input(designing.max_len.clone()));
+                    let scripts = designing.scripts.get(&field.id);
+                    let now = scripts.and_then(|s| s.format.as_ref());
+                    let mut shown = div().flex().flex_wrap().gap(px(space::S1));
+                    for (i, id) in SHOWN.iter().enumerate() {
+                        shown = shown.child(
+                            chip(("form-shown", i), shown_index(now) == Some(i), t(id, &[]))
+                                .on_click(cx.listener(move |this, _, _, cx| this.set_shown(i, cx))),
+                        );
+                    }
+                    card = card.child(label("form-shown")).child(shown);
+                    if matches!(now, Some(Format::Date(_))) {
+                        card = card
+                            .child(label("form-date-pattern"))
+                            .child(input(designing.pattern.clone()));
+                    }
+                    card = card
+                        .child(label("form-total"))
+                        .child(input(designing.total.clone()));
+                }
             }
-            if field.kind == FieldKind::PushButton {
-                card = card
-                    .child(label("form-caption"))
-                    .child(input(designing.caption.clone()));
+            if tab == 2 {
                 let (now, _) = action_index(designing.actions.get(&field.id));
                 let mut actions = div().flex().flex_wrap().gap(px(space::S1));
                 for (i, id) in ACTIONS.iter().enumerate() {
                     actions = actions.child(
-                        chip(("form-action", i), now == i, t(id, &[]))
+                        float::chip(("form-action", i), t(id, &[]), now == i, &th)
                             .on_click(cx.listener(move |this, _, _, cx| this.set_action(i, cx))),
                     );
                 }
-                card = card.child(label("form-action")).child(actions);
+                card = card.child(actions);
                 if (1..=6).contains(&now) {
                     card = card.child(input(designing.action_arg.clone()));
                 }
-            }
-            card = card
-                .child(toggle(0, field.required, "form-required"))
-                .child(toggle(1, field.read_only, "form-read-only"));
-            if let FieldKind::Text {
-                multiline,
-                password,
-                comb,
-                ..
-            } = field.kind
-            {
-                card = card
-                    .child(toggle(2, multiline, "form-multiline"))
-                    .child(toggle(3, password, "form-password"))
-                    .child(toggle(4, comb, "form-comb"))
-                    .child(label("form-max-len"))
-                    .child(input(designing.max_len.clone()));
-                let scripts = designing.scripts.get(&field.id);
-                let now = scripts.and_then(|s| s.format.as_ref());
-                let mut shown = div().flex().flex_wrap().gap(px(space::S1));
-                for (i, id) in SHOWN.iter().enumerate() {
-                    shown = shown.child(
-                        chip(("form-shown", i), shown_index(now) == Some(i), t(id, &[]))
-                            .on_click(cx.listener(move |this, _, _, cx| this.set_shown(i, cx))),
-                    );
-                }
-                card = card.child(label("form-shown")).child(shown);
-                if matches!(now, Some(Format::Date(_))) {
-                    card = card
-                        .child(label("form-date-pattern"))
-                        .child(input(designing.pattern.clone()));
-                }
-                card = card
-                    .child(label("form-total"))
-                    .child(input(designing.total.clone()));
             }
             // How it is drawn.
             let look = designing.looks.get(&field.id).cloned().unwrap_or_default();
@@ -1479,14 +1512,16 @@ impl Viewer {
                     );
                 }
             }
-            card = card
-                .child(label("form-border"))
-                .child(borders)
-                .child(widths)
-                .child(label("form-fill"))
-                .child(fills);
-            if !matches!(field.kind, FieldKind::Signature) {
-                card = card.child(label("form-text")).child(texts);
+            if tab == 1 {
+                card = card
+                    .child(label("form-border"))
+                    .child(borders)
+                    .child(widths)
+                    .child(label("form-fill"))
+                    .child(fills);
+                if !matches!(field.kind, FieldKind::Signature) {
+                    card = card.child(label("form-text")).child(texts);
+                }
             }
             card = card.child(
                 div()
@@ -1495,34 +1530,33 @@ impl Viewer {
                     .flex_wrap()
                     .gap(px(space::S2))
                     .child(
-                        widgets::outlined_button(
-                            "form-every-page",
-                            t("form-every-page", &[]),
-                            &th.katna,
-                        )
-                        .on_click(cx.listener(|this, _, _, cx| this.copy_to_every_page(cx))),
+                        float::button("form-every-page", t("form-every-page", &[]), false, &th)
+                            .on_click(cx.listener(|this, _, _, cx| this.copy_to_every_page(cx))),
                     )
                     .child(
-                        widgets::outlined_button("form-delete", t("form-delete", &[]), &th.katna)
+                        float::button("form-delete", t("form-delete", &[]), false, &th)
                             .on_click(cx.listener(|this, _, _, cx| this.remove_field(cx))),
                     )
                     .child(
-                        widgets::filled_button("form-save", t("form-save", &[]), &th.katna)
+                        float::button("form-save", t("form-save", &[]), true, &th)
                             .on_click(cx.listener(|this, _, _, cx| this.apply_field_edit(cx))),
                     ),
             );
         }
-        // The Tab order of the page shown.
-        let page = self.current_page();
+        // The Tab order of the page shown, while no field is chosen.
         let names: HashMap<Ref, &str> = designing
             .fields
             .iter()
             .flat_map(|f| f.widgets.iter().map(move |w| (w.id, f.name.as_str())))
             .collect();
-        if let Some(order) = designing.order.get(&page).filter(|o| o.len() > 1) {
-            card = card
-                .child(div().h(px(1.0)).my(px(space::S1)).bg(th.line))
-                .child(label("form-tab-order"));
+        if let Some(order) = order.filter(|_| self.chosen_field().is_none()) {
+            card = card.child(
+                div()
+                    .text_size(px(text::BODY))
+                    .font_weight(gpui::FontWeight::BOLD)
+                    .text_color(th.text)
+                    .child(t("form-tab-order", &[])),
+            );
             for (i, &widget) in order.iter().enumerate() {
                 let field = designing
                     .fields
@@ -1585,33 +1619,106 @@ impl Viewer {
                 );
             }
         }
-        card = card.child(
-            div()
-                .pt(px(space::S2))
-                .flex()
-                .items_center()
-                .gap(px(space::S1))
-                .child(
-                    widgets::icon_button("form-import", "upload", 18.0, &th.katna)
-                        .tip(t("form-import", &[]), &th.katna)
-                        .on_click(cx.listener(|this, _, _, cx| this.import_form_data(cx))),
-                )
-                .child(
-                    widgets::icon_button("form-export", "download", 18.0, &th.katna)
-                        .tip(t("form-export", &[]), &th.katna)
-                        .on_click(cx.listener(|this, _, _, cx| this.export_form_data(cx))),
-                )
-                .child(div().flex_1())
-                .child(
-                    widgets::outlined_button("form-done", t("form-done", &[]), &th.katna).on_click(
-                        cx.listener(|this, _, _, cx| {
-                            this.designing = None;
-                            cx.notify();
-                        }),
-                    ),
-                ),
-        );
         Some(card.into_any_element())
+    }
+
+    /// The Forms mode's tray (F03): the pointer, the kinds of field to
+    /// drag out, finding fields, the form's data in and out, and reset;
+    /// a hint over it.
+    pub(super) fn forms_tray(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let designing = self.designing.as_ref()?;
+        let th = self.theme;
+        let adding = designing.adding;
+        let pressed = |on: bool| {
+            if on {
+                float::Pressed::Tool
+            } else {
+                float::Pressed::No
+            }
+        };
+        let mut tray = float::tray("forms-tray", &th).child(
+            float::dk(
+                "form-pointer",
+                "cursor",
+                None,
+                t("form-pointer", &[]),
+                pressed(adding.is_none()),
+                &th,
+            )
+            .on_click(cx.listener(|this, _, _, cx| {
+                if let Some(d) = this.designing.as_mut() {
+                    d.adding = None;
+                }
+                cx.notify();
+            })),
+        );
+        for (i, (id, _, _)) in KINDS.iter().enumerate() {
+            let on = adding == Some(i);
+            tray = tray.child(
+                float::dk(
+                    ("form-kind", i),
+                    KIND_GLYPHS[i],
+                    on.then(|| gpui::SharedString::from(t(id, &[]))),
+                    t(id, &[]),
+                    pressed(on),
+                    &th,
+                )
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if let Some(d) = this.designing.as_mut() {
+                        d.adding = if d.adding == Some(i) { None } else { Some(i) };
+                    }
+                    cx.notify();
+                })),
+            );
+        }
+        let plain = |id: &'static str, glyph: &'static str, tip: &'static str| {
+            float::dk(id, glyph, None, t(tip, &[]), float::Pressed::No, &th)
+        };
+        tray = tray
+            .child(float::vsep(&th))
+            .child(
+                plain("form-find", "bolt", "form-find-tip")
+                    .on_click(cx.listener(|this, _, _, cx| this.find_fields(cx))),
+            )
+            .child(
+                plain("form-import", "upload", "form-import")
+                    .on_click(cx.listener(|this, _, _, cx| this.import_form_data(cx))),
+            )
+            .child(
+                plain("form-export", "download", "form-export")
+                    .on_click(cx.listener(|this, _, _, cx| this.export_form_data(cx))),
+            )
+            .child(
+                plain("form-reset", "refresh", "form-reset")
+                    .on_click(cx.listener(|this, _, _, cx| this.reset_form(cx))),
+            );
+        let hint = (designing.chosen.is_none()).then(|| {
+            div()
+                .px(px(space::S3))
+                .py(px(6.0))
+                .rounded(px(8.0))
+                .bg(th.inverse)
+                .text_color(th.on_inverse)
+                .text_size(px(text::CAPTION))
+                .child(t(
+                    if adding.is_some() {
+                        "form-hint-adding"
+                    } else {
+                        "form-hint"
+                    },
+                    &[],
+                ))
+        });
+        Some(
+            div()
+                .flex()
+                .flex_col()
+                .items_center()
+                .gap(px(space::S3))
+                .children(hint)
+                .child(tray)
+                .into_any_element(),
+        )
     }
 
     /// Asks where to save the form's data, as JSON (or CSV, XFDF or FDF,

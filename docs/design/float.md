@@ -33,6 +33,15 @@ app carries it out.
   tray adds pages, turns, moves, deletes, saves the pages picked as a
   file, crops and numbers them. The Pages card is a dialog with tabs
   (Add, Replace, Page size, Margins, Split), one height for all.
+- **Forms mode** (F03): the tray holds the pointer, the eight kinds of
+  field (the one in hand shows its name), Find fields, form data in and
+  out, and reset. The field picked gets a card at the top right with
+  Field, Look and (for buttons) When clicked tabs; with none picked the
+  card lists the page's Tab order.
+- **Sign mode** (G01): the tray holds Sign, Sign without a box, the
+  Signatures card and Cancel, with a hint over it until the signature
+  has its place; then the certificate card opens at the top right (USB
+  token or certificate file as a segmented control).
 - **Paragraph bar**: the paragraph being typed in has its font, size,
   bold, italic, alignment, spacing, copy and delete in a bar floating
   just over it (`textedit.rs`).
@@ -70,6 +79,7 @@ line icons (`icons/float/`, served as `icons/f/NAME.svg`), 1.7 px strokes.
 
 ## Still to come
 
-One PR per area of the storyboard: forms and signing (F, G), the
-library (L), and the Settings window with the Profile page and the scheme
-editor (X, T).
+One PR per area of the storyboard: the library (L), and the Settings
+window with the Profile page and the scheme editor (X, T). The signing
+card as a step-by-step dialog (G02-G05) and the token status in the
+profile menu (S14) come with Settings.

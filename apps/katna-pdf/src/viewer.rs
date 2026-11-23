@@ -3567,7 +3567,9 @@ impl Render for Viewer {
         let tools = self
             .tools_row(cx)
             .or_else(|| self.edit_row(cx))
-            .or_else(|| self.pages_tray(cx));
+            .or_else(|| self.pages_tray(cx))
+            .or_else(|| self.forms_tray(cx))
+            .or_else(|| self.sign_tray(cx));
         let object_row = self.object_row();
         let measure_bar = self.measure_bar(cx);
         let stamp_bar = self.stamp_bar(cx);
@@ -3583,13 +3585,15 @@ impl Render for Viewer {
         let numbering_card = self.numbering_card(cx);
         let paste_many_card = self.paste_many_card(cx);
         let setup_card = self.setup_card(cx);
-        let design_card = self.design_card(cx);
         // The properties card scrolls when the window is shorter than it.
         let card_height = unpx(window.viewport_size().height) * katna_ui::scale::scale()
             - 48.0
             - 4.0 * katna_ui::tokens::space::S3;
         let properties_card = self.properties_card(card_height, cx);
-        let object_card = self.object_card(card_height, cx);
+        // Cards at the top right stop short of the dock.
+        let side_room = card_height - 120.0;
+        let object_card = self.object_card(side_room, cx);
+        let design_card = self.design_card(side_room, cx);
         let find_bar = self.find_bar(cx);
         let notice = self.notice.clone().map(|notice| {
             div()
