@@ -308,6 +308,16 @@ pub const DYNAMIC_STAMPS: [&str; 5] = [
     "#DConfidential",
 ];
 
+/// Fill & Sign's quick marks, kept as stamps with these names: a tick,
+/// a cross, a dot, a line and a ring, each drawn as a shape rather than
+/// words.
+pub const MARKS: [&str; 5] = ["#MCheck", "#MCross", "#MDot", "#MLine", "#MCircle"];
+
+/// Whether the stamp named `name` is one of Fill & Sign's quick marks.
+pub fn stamp_is_mark(name: &str) -> bool {
+    name.starts_with("#M")
+}
+
 /// The name of a stamp showing `text` as typed.
 pub fn custom_stamp(text: &str) -> String {
     format!("#C{text}")
@@ -1296,6 +1306,49 @@ pub(crate) fn appearance(a: &Annotation) -> Object {
                 " S\n"
             });
         }
+        AnnotKind::Stamp(name) if stamp_is_mark(name) => {
+            let [x0, y0, x1, y1] = a.rect;
+            let (w, h) = (x1 - x0, y1 - y0);
+            let at = |fx: f32, fy: f32| format!("{:.2} {:.2}", x0 + w * fx, y0 + h * fy);
+            let lw = w.min(h) * 0.12;
+            let _ = write!(c, "{stroke} {fill} {lw:.2} w 1 J 1 j ");
+            match &name[2..] {
+                "Check" => {
+                    let _ = writeln!(
+                        c,
+                        "{} m {} l {} l S",
+                        at(0.15, 0.5),
+                        at(0.4, 0.2),
+                        at(0.85, 0.85)
+                    );
+                }
+                "Cross" => {
+                    let _ = writeln!(
+                        c,
+                        "{} m {} l {} m {} l S",
+                        at(0.2, 0.2),
+                        at(0.8, 0.8),
+                        at(0.2, 0.8),
+                        at(0.8, 0.2)
+                    );
+                }
+                "Dot" => {
+                    let r = w.min(h) * 0.3;
+                    let (cx, cy) = (x0 + w / 2.0, y0 + h / 2.0);
+                    ellipse(&mut c, [cx - r, cy - r, cx + r, cy + r]);
+                    c.push_str(" f\n");
+                }
+                "Line" => {
+                    let _ = writeln!(c, "{} m {} l S", at(0.05, 0.5), at(0.95, 0.5));
+                }
+                _ => {
+                    let r = w.min(h) * 0.4;
+                    let (cx, cy) = (x0 + w / 2.0, y0 + h / 2.0);
+                    ellipse(&mut c, [cx - r, cy - r, cx + r, cy + r]);
+                    c.push_str(" S\n");
+                }
+            }
+        }
         AnnotKind::Stamp(name) => {
             font = true;
             let [x0, y0, x1, y1] = a.rect;
@@ -1438,6 +1491,16 @@ pub(crate) fn appearance(a: &Annotation) -> Object {
 pub fn stamp_label(name: &str) -> String {
     if let Some(text) = name.strip_prefix("#C") {
         return text.to_owned();
+    }
+    if let Some(mark) = name.strip_prefix("#M") {
+        return match mark {
+            "Check" => "✓",
+            "Cross" => "✗",
+            "Dot" => "●",
+            "Line" => "—",
+            _ => "○",
+        }
+        .to_owned();
     }
     let name = name.strip_prefix("#D").unwrap_or(name);
     let mut out = String::new();
@@ -1641,5 +1704,20 @@ mod tests {
         let t = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_792_327_845);
         assert_eq!(pdf_date(t), "D:20261018125045Z");
         assert_eq!(stamp_label("NotApproved"), "NOT APPROVED");
+        assert_eq!(stamp_label("#MCheck"), "✓");
+    }
+
+    #[test]
+    fn marks_are_drawn_as_shapes_not_words() {
+        for name in MARKS {
+            let mut a = Annotation::new(0, AnnotKind::Stamp(name.into()));
+            a.rect = [100.0, 100.0, 116.0, 116.0];
+            let Object::Stream(form) = appearance(&a) else {
+                panic!("no form");
+            };
+            let drawn = String::from_utf8(form.data).unwrap();
+            assert!(!drawn.contains("Tf"), "{name}: {drawn}");
+            assert!(drawn.contains(" m "), "{name}: {drawn}");
+        }
     }
 }

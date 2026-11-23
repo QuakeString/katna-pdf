@@ -27,8 +27,8 @@ the feature.
 | Viewing and navigation (`view`) | 108 | 66 | 11 | 26 | 0 | 5 |
 | Editing content (`edit`) | 83 | 52 | 12 | 16 | 0 | 3 |
 | Pages and document (`organize`) | 83 | 30 | 19 | 28 | 1 | 5 |
-| Comments and review (`comment`) | 77 | 40 | 11 | 18 | 0 | 8 |
-| Forms (`form`) | 89 | 50 | 16 | 11 | 2 | 10 |
+| Comments and review (`comment`) | 77 | 41 | 10 | 18 | 0 | 8 |
+| Forms (`form`) | 89 | 51 | 15 | 11 | 2 | 10 |
 | Security and redaction (`protect`) | 46 | 20 | 9 | 10 | 2 | 5 |
 | Digital signatures (`sign`) | 59 | 40 | 2 | 14 | 0 | 3 |
 | Scanning and OCR (`ocr`) | 31 | 0 | 0 | 3 | 25 | 3 |
@@ -39,21 +39,21 @@ the feature.
 | Compare, automation, settings, cloud (`misc`) | 101 | 15 | 20 | 34 | 2 | 30 |
 | Library (`library`, ours) | 9 | 9 | 0 | 0 | 0 | 0 |
 | Ideas (`idea`, ours, proposed) | 11 | 0 | 0 | 10 | 1 | 0 |
-| **All** | **961** | **391** | **131** | **276** | **36** | **127** |
+| **All** | **961** | **393** | **129** | **276** | **36** | **127** |
 
 Against each product, counting only what is in scope (not `skip`):
 
 | Against | In scope | Shipped | Partial | To do | Deferred |
 |---|---:|---:|---:|---:|---:|
-| Acrobat Reader (free) | 333 | 197 (59 %) | 59 | 75 | 2 |
-| Acrobat Standard (Reader + Standard) | 553 | 305 (55 %) | 96 | 146 | 6 |
-| Acrobat Pro (everything below Studio) | 737 | 343 (46 %) | 122 | 239 | 33 |
-| Master PDF Editor | 437 | 290 (66 %) | 62 | 66 | 19 |
+| Acrobat Reader (free) | 333 | 199 (59 %) | 57 | 75 | 2 |
+| Acrobat Standard (Reader + Standard) | 553 | 307 (55 %) | 94 | 146 | 6 |
+| Acrobat Pro (everything below Studio) | 737 | 345 (46 %) | 120 | 239 | 33 |
+| Master PDF Editor | 437 | 291 (66 %) | 61 | 66 | 19 |
 | Only in Katna PDF | 61 | 32 | 5 | 22 | 2 |
 
 Many of Acrobat Pro's open rows are accessibility tagging (49 rows, nothing built
 yet) and OCR (25 rows, deferred by the owner on 2026-10-17). Without those two
-areas, Pro parity is 341 of 656 shipped (51 %), 69 % with partial rows counted.
+areas, Pro parity is 343 of 656 shipped (52 %), 69 % with partial rows counted.
 
 Out of scope (`skip`): Adobe's cloud services and accounts, shared reviews, Acrobat
 Sign requests, PDF Spaces and the generative AI features, prepress (separations,

@@ -56,9 +56,9 @@ mod xfdf;
 
 pub use actions::{FieldAction, SubmitFormat};
 pub use annots::{
-    AnnotChanges, AnnotFlags, AnnotKind, Annotation, DYNAMIC_STAMPS, MarkupStyle, NOTE_SIZE,
+    AnnotChanges, AnnotFlags, AnnotKind, Annotation, DYNAMIC_STAMPS, MARKS, MarkupStyle, NOTE_SIZE,
     REVIEW_STATES, STAMPS, annotation_status, comments_text, custom_stamp, pdf_date,
-    stamp_is_dynamic, stamp_label,
+    stamp_is_dynamic, stamp_is_mark, stamp_label,
 };
 pub use attachments::Attachment;
 pub use calc::{
